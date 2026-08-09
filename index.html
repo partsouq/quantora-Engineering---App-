@@ -3442,7 +3442,7 @@ function BoqTab({ project }) {
       const { data, error: qErr } = await sb.from("boq_items").select("*").eq("project_id", project.id).order("system_category").order("floor_label");
       if (qErr) throw qErr;
       setRawItems(data || []);
-      const { data: dr, error: drErr } = await sb.from("drawings").select("id, file_name, file_hash, uploaded_at, revision_number").eq("project_id", project.id);
+      const { data: dr, error: drErr } = await sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id);
       if (drErr) throw drErr;
       setDrawingRows(dr || []);
       const { data: er, error: erErr } = await sb.from("engineering_rules").select("*");
