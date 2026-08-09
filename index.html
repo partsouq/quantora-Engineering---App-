@@ -3621,11 +3621,16 @@ function BoqTab({ project }) {
     try { await sb.from("item_comments").insert({ boq_item_id: itemId, comment_type: type, comment: text, resolved: false }); } catch (ex) { /* best-effort */ }
   }
 
+  // statusBadge (2026-08-09 redesign, third pass): now also carries the
+  // item's avg confidence % inline (e.g. "Confirmed · 92%") so the item
+  // table's standalone Confidence column could be dropped without losing
+  // the signal -- it's just folded into this one badge instead of a
+  // separate always-visible column, per the "keep it simple" simplification.
   const statusBadge = (row) => {
     if (row.reviewBucket === "unclassified") return <span className="text-slate-300 text-xs">—</span>;
     const cls = row.reviewBucket === "confirmed" ? "bg-emerald-100 text-emerald-700" : row.reviewBucket === "review_required" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700";
     const text = row.reviewBucket === "confirmed" ? "Confirmed" : row.reviewBucket === "review_required" ? "Review Required" : "Engineer Review";
-    return <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${cls}`}>{text}</span>;
+    return <span title={row.avgConfidence != null ? `AI extraction confidence: ${row.avgConfidence}%` : undefined} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${cls}`}>{text}{row.avgConfidence != null ? ` · ${row.avgConfidence}%` : ""}</span>;
   };
 
   function EvidenceRow({ ev }) {
@@ -3685,10 +3690,16 @@ function BoqTab({ project }) {
   // filter the system-wide Breakdown/Evidence/Zones/Notes panel below the
   // table to just this item (see SystemDetailPanel below), instead of
   // opening an inline detail row under this one.
-  function ConsolidatedRow({ row, index, isFocused, onFocus }) {
+  // ConsolidatedRow (2026-08-09 redesign, third pass -- simplified per the
+  // user's explicit "keep simple takeoff, think like an estimation and
+  // procurement engineer" instruction): trimmed to just what an estimator
+  // scans first -- Item, Spec, Unit, Qty, Status, Action. The row-index and
+  // standalone Confidence columns were dropped; confidence is now folded
+  // into the Status badge itself (statusBadge(row)) instead of a separate
+  // always-visible column, so nothing is lost, it's just one click deeper.
+  function ConsolidatedRow({ row, isFocused, onFocus }) {
     return (
       <tr className={isFocused ? "bg-blue-50" : ""}>
-        <td className="px-3 py-2 text-slate-400">{index != null ? index + 1 : ""}</td>
         <td className="px-3 py-2 font-medium">
           {row.description}
           <div className="text-[10px] font-mono text-slate-400">{row.itemCode}</div>
@@ -3703,7 +3714,6 @@ function BoqTab({ project }) {
             </React.Fragment>
           )}
         </td>
-        <td className="px-3 py-2 text-center"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${confidenceColor(row.avgConfidence)}`}>{row.avgConfidence ?? "—"}%</span></td>
         <td className="px-3 py-2 text-center">{statusBadge(row)}</td>
         <td className="px-3 py-2 text-center">
           <button onClick={()=>onFocus(isFocused ? null : row.key)} className={`text-xs hover:underline ${isFocused ? "text-blue-700 font-semibold" : "text-blue-600"}`} title="View this item's breakdown/evidence/notes below">
@@ -3734,7 +3744,13 @@ function BoqTab({ project }) {
       <div className="bg-white border rounded-xl overflow-hidden mt-4">
         <div className="flex items-center justify-between px-4 pt-3">
           <div className="flex gap-4">
-            {[["breakdown","Breakdown"],["evidence","Drawing Evidence"],...(hasZones?[["zone","Zones"]]:[]),["notes","Notes"]].map(([key,label]) => (
+            {/* 2026-08-09 redesign, third pass ("keep it simple, think like
+                an estimation/procurement engineer"): trimmed from 4 tabs down
+                to 2. Zones now renders inside Breakdown (when present) instead
+                of its own tab; Notes/accessories/quantity-basis now renders
+                inside Evidence (collapsed per-item behind a disclosure, so
+                the numeric detail isn't all dumped inline by default). */}
+            {[["breakdown","Breakdown"],["evidence","Evidence & Notes"]].map(([key,label]) => (
               <button key={key} onClick={()=>setActiveTab(key)} className={`text-sm font-semibold pb-2 border-b-2 ${activeTab===key ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}>{label}</button>
             ))}
           </div>
@@ -3785,6 +3801,15 @@ function BoqTab({ project }) {
                     </table>
                   </div>
                 )}
+                {hasZones && (
+                  <div className="mt-3">
+                    <div className="text-sm font-semibold text-slate-700 mb-2">Breakdown by Zone</div>
+                    <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
+                      <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Item</th><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Zone</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
+                      <tbody className="divide-y">{rows.flatMap(r => r.zoneBreakdown.map((zb,i) => <tr key={r.key+"-"+i}><td className="px-3 py-1.5">{r.description}</td><td className="px-3 py-1.5">{zb.floor_label}</td><td className="px-3 py-1.5">{zb.zone}</td><td className="px-3 py-1.5 text-right">{zb.quantity} {r.unit}</td></tr>))}</tbody>
+                    </table>
+                  </div>
+                )}
               </div>
               <div>
                 <div className="text-sm font-semibold text-slate-700 mb-2">Top Drawing Evidence</div>
@@ -3805,13 +3830,6 @@ function BoqTab({ project }) {
                 )}
               </div>
             </div>
-          )}
-
-          {activeTab === "zone" && hasZones && (
-            <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
-              <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Item</th><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Zone</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
-              <tbody className="divide-y">{rows.flatMap(r => r.zoneBreakdown.map((zb,i) => <tr key={r.key+"-"+i}><td className="px-3 py-1.5">{r.description}</td><td className="px-3 py-1.5">{zb.floor_label}</td><td className="px-3 py-1.5">{zb.zone}</td><td className="px-3 py-1.5 text-right">{zb.quantity} {r.unit}</td></tr>))}</tbody>
-            </table>
           )}
 
           {activeTab === "evidence" && (
@@ -3861,82 +3879,88 @@ function BoqTab({ project }) {
                   </React.Fragment>
                 ))}</tbody>
               </table>
-            </div>
-          )}
 
-          {activeTab === "notes" && (
-            // Merged in from the former Engineering BOQ tab plus the former
-            // standalone "Quantity Basis" tab (2026-08-09 redesign): design
-            // basis / testing & commissioning / accessories / spare-% /
-            // quantity-basis audit trail. Only meaningful per-item, so when
-            // no single item is focused, shows a compact list across items.
-            <div className="space-y-3">
-              {rows.map(row => (
-                <div key={row.key} className="bg-white border rounded-lg p-3 text-xs space-y-2">
-                  <div className="font-semibold text-slate-800">{row.description}</div>
-                  {row.discrepancy && dismissedDiscrepancies[row.key] !== "accepted" && (
-                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-2.5">
-                      <div className="font-semibold text-rose-800 mb-1">⚠ QUANTITY DISCREPANCY — engineer review required</div>
-                      <div className="text-rose-700 mb-2">
-                        Physical count on the drawings: <strong>{row.discrepancy.physicalTotal} {row.unit}</strong>. A schedule/reference source states <strong>{row.discrepancy.scheduleTotal} {row.unit}</strong> ({row.discrepancy.diff > 0 ? `${row.discrepancy.diff} more` : `${-row.discrepancy.diff} fewer`} than what was physically counted). Quantora used the physical count — it never silently adopts the larger number.
-                        {dismissedDiscrepancies[row.key] === "schedule_requested" && <div className="mt-1 italic">Override request logged as a comment for engineer sign-off; the stored quantity has not been changed.</div>}
+              {/* 2026-08-09 redesign, third pass: Notes/accessories/quantity-
+                  basis content merged in from the former standalone "Notes"
+                  tab. Only the discrepancy banner (an active warning) and
+                  the required accessories/spare-qty line stay always
+                  visible -- the heavier numeric audit trail (physical-count
+                  and reference-source tables) is collapsed behind a native
+                  <details> disclosure per item, so the default view stays
+                  clean and the granular numbers are one click deeper. */}
+              <div className="space-y-3 mt-4">
+                {rows.map(row => (
+                  <div key={row.key} className="bg-white border rounded-lg p-3 text-xs space-y-2">
+                    <div className="font-semibold text-slate-800">{row.description}</div>
+                    {row.discrepancy && dismissedDiscrepancies[row.key] !== "accepted" && (
+                      <div className="bg-rose-50 border border-rose-200 rounded-lg p-2.5">
+                        <div className="font-semibold text-rose-800 mb-1">⚠ QUANTITY DISCREPANCY — engineer review required</div>
+                        <div className="text-rose-700 mb-2">
+                          Physical count on the drawings: <strong>{row.discrepancy.physicalTotal} {row.unit}</strong>. A schedule/reference source states <strong>{row.discrepancy.scheduleTotal} {row.unit}</strong> ({row.discrepancy.diff > 0 ? `${row.discrepancy.diff} more` : `${-row.discrepancy.diff} fewer`} than what was physically counted). Quantora used the physical count — it never silently adopts the larger number.
+                          {dismissedDiscrepancies[row.key] === "schedule_requested" && <div className="mt-1 italic">Override request logged as a comment for engineer sign-off; the stored quantity has not been changed.</div>}
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={()=>setDismissedDiscrepancies(d=>({...d,[row.key]:"accepted"}))} className="text-[11px] font-semibold bg-emerald-600 text-white px-2.5 py-1 rounded-lg">Accept Physical Count ({row.discrepancy.physicalTotal})</button>
+                          <button onClick={()=>useScheduleQuantityInstead(row)} className="text-[11px] font-semibold bg-white border border-rose-300 text-rose-700 px-2.5 py-1 rounded-lg">Use Schedule Qty Instead (requires reason)</button>
+                        </div>
                       </div>
-                      <div className="flex gap-2">
-                        <button onClick={()=>setDismissedDiscrepancies(d=>({...d,[row.key]:"accepted"}))} className="text-[11px] font-semibold bg-emerald-600 text-white px-2.5 py-1 rounded-lg">Accept Physical Count ({row.discrepancy.physicalTotal})</button>
-                        <button onClick={()=>useScheduleQuantityInstead(row)} className="text-[11px] font-semibold bg-white border border-rose-300 text-rose-700 px-2.5 py-1 rounded-lg">Use Schedule Qty Instead (requires reason)</button>
-                      </div>
-                    </div>
-                  )}
-                  <div>
-                    <div className="font-semibold text-slate-700 mb-1">Required accessories (procurement)</div>
-                    <div className="text-slate-600">{accessoriesFor(row)}</div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-700 mb-1">Spare allowance &amp; final procurement quantity</div>
-                    {finalProcurementQty(row) ? (
-                      <div className="text-slate-600">Reconciled quantity {row.totalQuantity} {row.unit} + {finalProcurementQty(row).spare}% spare = <strong>{finalProcurementQty(row).final} {row.unit}</strong> to procure.</div>
-                    ) : <div className="text-slate-400 italic">Quantity is TBD / engineer review required — no spare allowance calculated yet.</div>}
-                  </div>
-                  {(row.technical_specification || row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
-                    <div>
-                      <div className="font-semibold text-slate-700 mb-1">Engineering notes</div>
-                      {row.technical_specification && <div className="mb-1"><span className="text-slate-500">Design basis / specification: </span>{row.technical_specification}</div>}
-                      {(row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
-                        <div><span className="text-slate-500">Testing &amp; commissioning: </span>{[row.rawItems[0]?.testing_requirements, row.rawItems[0]?.commissioning_requirements].filter(Boolean).join(" · ")}</div>
-                      )}
-                    </div>
-                  )}
-                  <div>
-                    <div className="font-semibold text-slate-700 mb-1">Quantity basis — physical counts (summed into the total)</div>
-                    {row.evidence.filter(e => e.countedTowardTotal).length === 0 ? (
-                      <div className="text-slate-400 italic">No physical-count source found — quantity is TBD / engineer review required.</div>
-                    ) : (
-                      <table className="w-full border rounded overflow-hidden">
-                        <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Floor</th><th className="text-left px-2 py-1">Basis</th><th className="text-right px-2 py-1">Qty</th></tr></thead>
-                        <tbody className="divide-y">
-                          {row.evidence.filter(e => e.countedTowardTotal).map(e => (
-                            <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.floor_label||"—"}</td><td className="px-2 py-1 text-slate-500">{e.quantityBasisNotes || e.quantitySourceLabel}</td><td className="px-2 py-1 text-right font-semibold">{e.quantity}</td></tr>
-                          ))}
-                          <tr className="font-semibold bg-slate-50"><td className="px-2 py-1" colSpan={3}>Reconciled total</td><td className="px-2 py-1 text-right">{row.totalQuantity} {row.unit}</td></tr>
-                        </tbody>
-                      </table>
                     )}
-                  </div>
-                  {row.evidence.some(e => !e.countedTowardTotal) && (
                     <div>
-                      <div className="font-semibold text-slate-700 mb-1">Reference sources (found, cross-checked, NOT added to the total)</div>
-                      <table className="w-full border rounded overflow-hidden">
-                        <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Type</th><th className="text-right px-2 py-1">Stated Qty</th></tr></thead>
-                        <tbody className="divide-y text-slate-400">
-                          {row.evidence.filter(e => !e.countedTowardTotal).map(e => (
-                            <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.quantitySourceLabel}</td><td className="px-2 py-1 text-right">{e.quantity}</td></tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <div className="font-semibold text-slate-700 mb-1">Required accessories (procurement)</div>
+                      <div className="text-slate-600">{accessoriesFor(row)}</div>
                     </div>
-                  )}
-                </div>
-              ))}
+                    <div>
+                      <div className="font-semibold text-slate-700 mb-1">Spare allowance &amp; final procurement quantity</div>
+                      {finalProcurementQty(row) ? (
+                        <div className="text-slate-600">Reconciled quantity {row.totalQuantity} {row.unit} + {finalProcurementQty(row).spare}% spare = <strong>{finalProcurementQty(row).final} {row.unit}</strong> to procure.</div>
+                      ) : <div className="text-slate-400 italic">Quantity is TBD / engineer review required — no spare allowance calculated yet.</div>}
+                    </div>
+                    <details>
+                      <summary className="font-semibold text-slate-700 cursor-pointer select-none">Quantity basis &amp; engineering notes ▸</summary>
+                      <div className="mt-2 space-y-2">
+                        {(row.technical_specification || row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
+                          <div>
+                            <div className="font-semibold text-slate-700 mb-1">Engineering notes</div>
+                            {row.technical_specification && <div className="mb-1"><span className="text-slate-500">Design basis / specification: </span>{row.technical_specification}</div>}
+                            {(row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
+                              <div><span className="text-slate-500">Testing &amp; commissioning: </span>{[row.rawItems[0]?.testing_requirements, row.rawItems[0]?.commissioning_requirements].filter(Boolean).join(" · ")}</div>
+                            )}
+                          </div>
+                        )}
+                        <div>
+                          <div className="font-semibold text-slate-700 mb-1">Quantity basis — physical counts (summed into the total)</div>
+                          {row.evidence.filter(e => e.countedTowardTotal).length === 0 ? (
+                            <div className="text-slate-400 italic">No physical-count source found — quantity is TBD / engineer review required.</div>
+                          ) : (
+                            <table className="w-full border rounded overflow-hidden">
+                              <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Floor</th><th className="text-left px-2 py-1">Basis</th><th className="text-right px-2 py-1">Qty</th></tr></thead>
+                              <tbody className="divide-y">
+                                {row.evidence.filter(e => e.countedTowardTotal).map(e => (
+                                  <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.floor_label||"—"}</td><td className="px-2 py-1 text-slate-500">{e.quantityBasisNotes || e.quantitySourceLabel}</td><td className="px-2 py-1 text-right font-semibold">{e.quantity}</td></tr>
+                                ))}
+                                <tr className="font-semibold bg-slate-50"><td className="px-2 py-1" colSpan={3}>Reconciled total</td><td className="px-2 py-1 text-right">{row.totalQuantity} {row.unit}</td></tr>
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                        {row.evidence.some(e => !e.countedTowardTotal) && (
+                          <div>
+                            <div className="font-semibold text-slate-700 mb-1">Reference sources (found, cross-checked, NOT added to the total)</div>
+                            <table className="w-full border rounded overflow-hidden">
+                              <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Type</th><th className="text-right px-2 py-1">Stated Qty</th></tr></thead>
+                              <tbody className="divide-y text-slate-400">
+                                {row.evidence.filter(e => !e.countedTowardTotal).map(e => (
+                                  <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.quantitySourceLabel}</td><td className="px-2 py-1 text-right">{e.quantity}</td></tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    </details>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -4107,28 +4131,10 @@ function BoqTab({ project }) {
               </div>
             </div>
 
-            {systemDonut.slices.length > 0 && (
-              <div className="bg-white border rounded-xl p-4">
-                <div className="text-xs font-semibold text-slate-500 uppercase mb-3">BOQ Summary by System</div>
-                <div className="flex items-center gap-4">
-                  <svg viewBox="0 0 42 42" className="w-28 h-28 flex-shrink-0" style={{ transform: "rotate(-90deg)" }}>
-                    <circle cx="21" cy="21" r="15.9155" fill="transparent" stroke="#e2e8f0" strokeWidth="6"></circle>
-                    {systemDonut.slices.map(s => (
-                      <circle key={s.cat} cx="21" cy="21" r="15.9155" fill="transparent" stroke={s.color} strokeWidth="6"
-                        strokeDasharray={`${s.pct} ${100 - s.pct}`} strokeDashoffset={-s.start} />
-                    ))}
-                  </svg>
-                  <div className="flex-1 space-y-1 max-h-32 overflow-y-auto">
-                    {systemDonut.slices.map(s => (
-                      <div key={s.cat} className="flex items-center justify-between text-[11px]">
-                        <span className="flex items-center gap-1.5 text-slate-600"><span className="w-2 h-2 rounded-full inline-block" style={{background:s.color}}></span>{SYSTEM_LABEL(s.cat)}</span>
-                        <span className="text-slate-500">{s.qty} ({s.pct.toFixed(0)}%)</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* "BOQ Summary by System" donut chart removed per explicit user
+                request (2026-08-09, later still) -- systemDonut itself is
+                kept (its .total still feeds the "Total Quantity" summary
+                card above), only this visual block was deleted. */}
           </div>
 
           <div>
@@ -4171,18 +4177,16 @@ function BoqTab({ project }) {
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                         <tr>
-                          <th className="text-left px-3 py-2">#</th>
                           <th className="text-left px-3 py-2">Item</th>
                           <th className="text-left px-3 py-2">Specification</th>
                           <th className="text-left px-3 py-2">Unit</th>
                           <th className="text-right px-3 py-2">Total Qty</th>
-                          <th className="text-center px-3 py-2">Confidence</th>
                           <th className="text-center px-3 py-2">Status</th>
                           <th className="text-center px-3 py-2">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
-                        {pageRows.map((row, i) => <ConsolidatedRow key={row.key + bucketName} row={row} index={pageStart + i} isFocused={focusedItemKey === row.key} onFocus={setFocusedItemKey} />)}
+                        {pageRows.map((row) => <ConsolidatedRow key={row.key + bucketName} row={row} isFocused={focusedItemKey === row.key} onFocus={setFocusedItemKey} />)}
                       </tbody>
                     </table>
                     <div className="flex items-center justify-between px-3 py-2 border-t text-xs text-slate-500">
