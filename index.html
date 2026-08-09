@@ -3426,7 +3426,16 @@ function BoqTab({ project }) {
   // two-panel "BOQ – Group by System" layout from the reference screenshot,
   // replacing the old single long stacked-table layout.
   const [selectedBucket, setSelectedBucket] = useState(null);
-  const [expandedItem, setExpandedItem] = useState(null); // consolidated row key -> "breakdown"|"zone"|"evidence"|"notes" -- matches the Breakdown/Drawing Evidence/Zones/Notes sub-tabs in the reference screenshot
+  // 2026-08-09 redesign, second pass: the Breakdown/Drawing Evidence/Zones/
+  // Notes panel is now a persistent system-wide panel below the item table
+  // (matching the reference screenshot exactly -- a Floor x Item matrix
+  // aggregated across every item in the bucket), not a per-row expand.
+  // `focusedItemKey` narrows that panel to one item when its eye icon is
+  // clicked; `activeSystemTab` is which of the 4 tabs is showing.
+  const [focusedItemKey, setFocusedItemKey] = useState(null);
+  const [activeSystemTab, setActiveSystemTab] = useState("breakdown");
+  const [itemPage, setItemPage] = useState(0);
+  const ITEMS_PER_PAGE = 25;
   const [openComments, setOpenComments] = useState(null);
   const [comments, setComments] = useState({});
   const [commentText, setCommentText] = useState("");
@@ -3532,6 +3541,15 @@ function BoqTab({ project }) {
     if (!bucketEntries.some(([name]) => name === selectedBucket)) setSelectedBucket(bucketEntries[0][0]);
   }, [bucketEntries]);
 
+  // Reset the item-focus/tab/pagination state whenever the selected bucket
+  // changes, so switching systems doesn't leave a stale item focused or a
+  // stale page number showing.
+  useEffect(() => {
+    setFocusedItemKey(null);
+    setActiveSystemTab("breakdown");
+    setItemPage(0);
+  }, [selectedBucket]);
+
   // Former ProcurementBoqTab logic, merged in (2026-08-09) -- required
   // accessories derived from engineering_rules, no separate AI call or tab.
   function accessoriesFor(row) {
@@ -3603,10 +3621,6 @@ function BoqTab({ project }) {
     try { await sb.from("item_comments").insert({ boq_item_id: itemId, comment_type: type, comment: text, resolved: false }); } catch (ex) { /* best-effort */ }
   }
 
-  function toggleExpand(key, view) {
-    setExpandedItem(cur => (cur && cur.key === key && cur.view === view) ? null : { key, view });
-  }
-
   const statusBadge = (row) => {
     if (row.reviewBucket === "unclassified") return <span className="text-slate-300 text-xs">—</span>;
     const cls = row.reviewBucket === "confirmed" ? "bg-emerald-100 text-emerald-700" : row.reviewBucket === "review_required" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700";
@@ -3665,157 +3679,268 @@ function BoqTab({ project }) {
     );
   }
 
-  function ConsolidatedRow({ row, index }) {
-    const isExpanded = expandedItem && expandedItem.key === row.key;
-    const hasZones = row.zoneBreakdown.length > 0;
-    const hasRooms = row.roomBreakdown.length > 0;
+  // ConsolidatedRow (2026-08-09 redesign, second pass): matches the
+  // reference screenshot exactly -- a single plain row per item, NO
+  // per-row expand panel. Clicking the eye icon calls onFocus(row.key) to
+  // filter the system-wide Breakdown/Evidence/Zones/Notes panel below the
+  // table to just this item (see SystemDetailPanel below), instead of
+  // opening an inline detail row under this one.
+  function ConsolidatedRow({ row, index, isFocused, onFocus }) {
     return (
-      <React.Fragment>
-        <tr>
-          <td className="px-3 py-2 text-slate-400">{index != null ? index + 1 : ""}</td>
-          <td className="px-3 py-2 font-medium">
-            {row.description}
-            <div className="text-[10px] font-mono text-slate-400">{row.itemCode}</div>
-          </td>
-          <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={row.technical_specification}>{row.technical_specification || "—"}</td>
-          <td className="px-3 py-2">{row.unit}</td>
-          <td className="px-3 py-2 text-right font-semibold">
-            {row.quantityIsTbd ? <span className="text-amber-600 text-xs font-semibold">TBD — Engineer Review Required</span> : (
-              <React.Fragment>
-                {row.totalQuantity}
-                {row.discrepancy && <span title="Physical count disagrees with a schedule/reference quantity" className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 align-middle">⚠ Discrepancy</span>}
-              </React.Fragment>
-            )}
-          </td>
-          <td className="px-3 py-2 text-center"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${confidenceColor(row.avgConfidence)}`}>{row.avgConfidence ?? "—"}%</span></td>
-          <td className="px-3 py-2 text-center">{statusBadge(row)}</td>
-          <td className="px-3 py-2 text-center">
-            <button onClick={()=>toggleExpand(row.key, "breakdown")} className="text-xs text-blue-600 hover:underline" title="View details">
-              {isExpanded ? "Hide" : "👁 View"}
-            </button>
-          </td>
-        </tr>
-        {isExpanded && (
-          <tr><td colSpan={8} className="bg-slate-50 px-4 py-3">
-            {row.discrepancy && dismissedDiscrepancies[row.key] !== "accepted" && (
-              <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 mb-3 text-xs">
-                <div className="font-semibold text-rose-800 mb-1">⚠ QUANTITY DISCREPANCY — engineer review required</div>
-                <div className="text-rose-700 mb-2">
-                  Physical count on the drawings: <strong>{row.discrepancy.physicalTotal} {row.unit}</strong>. A schedule/reference source states <strong>{row.discrepancy.scheduleTotal} {row.unit}</strong> ({row.discrepancy.diff > 0 ? `${row.discrepancy.diff} more` : `${-row.discrepancy.diff} fewer`} than what was physically counted). Quantora used the physical count — it never silently adopts the larger number.
-                  {dismissedDiscrepancies[row.key] === "schedule_requested" && <div className="mt-1 italic">Override request logged as a comment for engineer sign-off; the stored quantity has not been changed.</div>}
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={()=>setDismissedDiscrepancies(d=>({...d,[row.key]:"accepted"}))} className="text-[11px] font-semibold bg-emerald-600 text-white px-2.5 py-1 rounded-lg">Accept Physical Count ({row.discrepancy.physicalTotal})</button>
-                  <button onClick={()=>useScheduleQuantityInstead(row)} className="text-[11px] font-semibold bg-white border border-rose-300 text-rose-700 px-2.5 py-1 rounded-lg">Use Schedule Qty Instead (requires reason)</button>
-                </div>
-              </div>
-            )}
-            <div className="flex gap-2 mb-3">
-              <button onClick={()=>toggleExpand(row.key,"breakdown")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="breakdown"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Breakdown</button>
-              <button onClick={()=>toggleExpand(row.key,"evidence")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="evidence"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Drawing Evidence</button>
-              {hasZones && <button onClick={()=>toggleExpand(row.key,"zone")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="zone"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Zones</button>}
-              <button onClick={()=>toggleExpand(row.key,"notes")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="notes"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Notes</button>
-            </div>
+      <tr className={isFocused ? "bg-blue-50" : ""}>
+        <td className="px-3 py-2 text-slate-400">{index != null ? index + 1 : ""}</td>
+        <td className="px-3 py-2 font-medium">
+          {row.description}
+          <div className="text-[10px] font-mono text-slate-400">{row.itemCode}</div>
+        </td>
+        <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={row.technical_specification}>{row.technical_specification || "—"}</td>
+        <td className="px-3 py-2">{row.unit}</td>
+        <td className="px-3 py-2 text-right font-semibold">
+          {row.quantityIsTbd ? <span className="text-amber-600 text-xs font-semibold">TBD — Engineer Review Required</span> : (
+            <React.Fragment>
+              {row.totalQuantity}
+              {row.discrepancy && <span title="Physical count disagrees with a schedule/reference quantity" className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 align-middle">⚠ Discrepancy</span>}
+            </React.Fragment>
+          )}
+        </td>
+        <td className="px-3 py-2 text-center"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${confidenceColor(row.avgConfidence)}`}>{row.avgConfidence ?? "—"}%</span></td>
+        <td className="px-3 py-2 text-center">{statusBadge(row)}</td>
+        <td className="px-3 py-2 text-center">
+          <button onClick={()=>onFocus(isFocused ? null : row.key)} className={`text-xs hover:underline ${isFocused ? "text-blue-700 font-semibold" : "text-blue-600"}`} title="View this item's breakdown/evidence/notes below">
+            👁 {isFocused ? "Focused" : "View"}
+          </button>
+        </td>
+      </tr>
+    );
+  }
 
-            {expandedItem.view === "breakdown" && (
-              // Merged Floor + Room breakdown into one "Breakdown" tab (2026-08-09
-              // redesign) -- matches the reference dashboard's single Breakdown tab.
-              <div className="space-y-3">
-                <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
-                  <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Floor</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
-                  <tbody className="divide-y">
-                    {row.floorBreakdown.map(fb => <tr key={fb.floor_label}><td className="px-3 py-1.5">{fb.floor_label}</td><td className="px-3 py-1.5 text-right">{fb.quantity} {row.unit}</td></tr>)}
-                    <tr className="font-semibold bg-slate-50"><td className="px-3 py-1.5">TOTAL</td><td className="px-3 py-1.5 text-right">{row.totalQuantity} {row.unit}</td></tr>
-                  </tbody>
-                </table>
-                {hasRooms && (
-                  <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
-                    <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Room</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
-                    <tbody className="divide-y">{row.roomBreakdown.map((rb,i) => <tr key={i}><td className="px-3 py-1.5">{rb.floor_label}</td><td className="px-3 py-1.5">{rb.room}</td><td className="px-3 py-1.5 text-right">{rb.quantity} {row.unit}</td></tr>)}</tbody>
-                  </table>
+  // SystemDetailPanel (2026-08-09 redesign, second pass): the persistent
+  // Breakdown / Drawing Evidence / Zones / Notes panel that sits below the
+  // item table, matching the reference screenshot exactly -- by default it
+  // aggregates ALL items in the current bucket (e.g. "Breakdown by Floor"
+  // as a Floor x Item matrix, one column per item); clicking an item's eye
+  // icon narrows it to that one item only via `focusedKey`.
+  function SystemDetailPanel({ bucketName, bucketRows, focusedKey, setFocusedKey, activeTab, setActiveTab }) {
+    const rows = focusedKey ? bucketRows.filter(r => r.key === focusedKey) : bucketRows;
+    const focusedRow = focusedKey ? bucketRows.find(r => r.key === focusedKey) : null;
+    const hasZones = rows.some(r => r.zoneBreakdown.length > 0);
+    const allFloors = [...new Set(rows.flatMap(r => r.floorBreakdown.map(fb => fb.floor_label)))];
+    const allEvidence = rows.flatMap(r => r.evidence.map(ev => ({ ...ev, itemDescription: r.description, unit: r.unit })))
+      .sort((a,b) => (b.confidence_score||0) - (a.confidence_score||0));
+    const [showAllEvidence, setShowAllEvidence] = useState(false);
+    const evidenceToShow = showAllEvidence ? allEvidence : allEvidence.slice(0, 5);
+
+    return (
+      <div className="bg-white border rounded-xl overflow-hidden mt-4">
+        <div className="flex items-center justify-between px-4 pt-3">
+          <div className="flex gap-4">
+            {[["breakdown","Breakdown"],["evidence","Drawing Evidence"],...(hasZones?[["zone","Zones"]]:[]),["notes","Notes"]].map(([key,label]) => (
+              <button key={key} onClick={()=>setActiveTab(key)} className={`text-sm font-semibold pb-2 border-b-2 ${activeTab===key ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}>{label}</button>
+            ))}
+          </div>
+          {focusedKey && (
+            <button onClick={()=>setFocusedKey(null)} className="text-[11px] text-slate-500 hover:underline mb-2">Show all items ×</button>
+          )}
+        </div>
+        <div className="p-4">
+          {focusedRow && <div className="text-xs text-slate-500 mb-3">Showing <strong className="text-slate-700">{focusedRow.description}</strong> only.</div>}
+
+          {activeTab === "breakdown" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-700 mb-2">Breakdown by Floor</div>
+                {allFloors.length === 0 ? <div className="text-slate-400 text-xs italic">No floor breakdown available for {focusedRow ? "this item" : "these items"}.</div> : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
+                      <thead className="bg-slate-100 text-slate-500 uppercase">
+                        <tr>
+                          <th className="text-left px-3 py-1.5">Floor</th>
+                          {rows.map(r => <th key={r.key} className="text-right px-3 py-1.5">{r.description} ({r.unit})</th>)}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {allFloors.map(floor => (
+                          <tr key={floor}>
+                            <td className="px-3 py-1.5">{floor}</td>
+                            {rows.map(r => {
+                              const fb = r.floorBreakdown.find(f => f.floor_label === floor);
+                              return <td key={r.key} className="px-3 py-1.5 text-right">{fb ? fb.quantity : "—"}</td>;
+                            })}
+                          </tr>
+                        ))}
+                        <tr className="font-semibold bg-slate-50">
+                          <td className="px-3 py-1.5">Total</td>
+                          {rows.map(r => <td key={r.key} className="px-3 py-1.5 text-right">{r.totalQuantity}</td>)}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {focusedRow && focusedRow.roomBreakdown.length > 0 && (
+                  <div className="mt-3">
+                    <div className="text-sm font-semibold text-slate-700 mb-2">Breakdown by Room</div>
+                    <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
+                      <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Room</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
+                      <tbody className="divide-y">{focusedRow.roomBreakdown.map((rb,i) => <tr key={i}><td className="px-3 py-1.5">{rb.floor_label}</td><td className="px-3 py-1.5">{rb.room}</td><td className="px-3 py-1.5 text-right">{rb.quantity} {focusedRow.unit}</td></tr>)}</tbody>
+                    </table>
+                  </div>
                 )}
               </div>
-            )}
-            {expandedItem.view === "zone" && hasZones && (
-              <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
-                <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Zone</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
-                <tbody className="divide-y">{row.zoneBreakdown.map((zb,i) => <tr key={i}><td className="px-3 py-1.5">{zb.floor_label}</td><td className="px-3 py-1.5">{zb.zone}</td><td className="px-3 py-1.5 text-right">{zb.quantity} {row.unit}</td></tr>)}</tbody>
-              </table>
-            )}
-            {expandedItem.view === "evidence" && (
-              <div className="bg-white border rounded-lg overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-100 text-slate-500 uppercase">
-                    <tr><th className="text-left px-3 py-1.5">Drawing / Page</th><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Zone</th><th className="text-right px-3 py-1.5">Qty</th><th className="text-center px-3 py-1.5">Confidence</th><th className="text-left px-3 py-1.5">Location</th><th className="text-right px-3 py-1.5">Unit Cost</th><th className="text-center px-3 py-1.5">Status</th><th className="text-center px-3 py-1.5">Actions</th></tr>
-                  </thead>
-                  <tbody className="divide-y">{row.evidence.map(ev => <EvidenceRow key={ev.id} ev={ev} />)}</tbody>
-                </table>
+              <div>
+                <div className="text-sm font-semibold text-slate-700 mb-2">Top Drawing Evidence</div>
+                {allEvidence.length === 0 ? <div className="text-slate-400 text-xs italic">No drawing evidence recorded yet.</div> : (
+                  <React.Fragment>
+                    <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
+                      <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Drawing</th><th className="text-left px-3 py-1.5">Page</th><th className="text-right px-3 py-1.5">Detected</th><th className="text-right px-3 py-1.5">Confidence</th></tr></thead>
+                      <tbody className="divide-y">
+                        {evidenceToShow.slice(0,5).map(ev => (
+                          <tr key={ev.id}><td className="px-3 py-1.5">{ev.drawing_name}</td><td className="px-3 py-1.5">{ev.page ?? "—"}</td><td className="px-3 py-1.5 text-right">{ev.quantity} {ev.unit}</td><td className="px-3 py-1.5 text-right">{ev.confidence_score ?? "—"}%</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {allEvidence.length > 5 && (
+                      <button onClick={()=>setActiveTab("evidence")} className="mt-3 w-full text-xs font-semibold bg-blue-600 text-white px-3 py-2 rounded-lg">View All Evidence ({allEvidence.length})</button>
+                    )}
+                  </React.Fragment>
+                )}
               </div>
-            )}
-            {expandedItem.view === "notes" && (
-              // Merged in from the former Engineering BOQ tab plus the former
-              // standalone "Quantity Basis" tab (2026-08-09 redesign): design
-              // basis / testing & commissioning / accessories / spare-% /
-              // quantity-basis audit trail, all in one Notes tab -- matches
-              // the reference dashboard's single Notes tab. All sourced from
-              // data already loaded for this tab, no separate call.
-              <div className="bg-white border rounded-lg p-3 text-xs space-y-3">
-                <div>
-                  <div className="font-semibold text-slate-700 mb-1">Required accessories (procurement)</div>
-                  <div className="text-slate-600">{accessoriesFor(row)}</div>
-                </div>
-                <div>
-                  <div className="font-semibold text-slate-700 mb-1">Spare allowance &amp; final procurement quantity</div>
-                  {finalProcurementQty(row) ? (
-                    <div className="text-slate-600">Reconciled quantity {row.totalQuantity} {row.unit} + {finalProcurementQty(row).spare}% spare = <strong>{finalProcurementQty(row).final} {row.unit}</strong> to procure.</div>
-                  ) : <div className="text-slate-400 italic">Quantity is TBD / engineer review required — no spare allowance calculated yet.</div>}
-                </div>
-                {(row.technical_specification || row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
+            </div>
+          )}
+
+          {activeTab === "zone" && hasZones && (
+            <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
+              <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Item</th><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Zone</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
+              <tbody className="divide-y">{rows.flatMap(r => r.zoneBreakdown.map((zb,i) => <tr key={r.key+"-"+i}><td className="px-3 py-1.5">{r.description}</td><td className="px-3 py-1.5">{zb.floor_label}</td><td className="px-3 py-1.5">{zb.zone}</td><td className="px-3 py-1.5 text-right">{zb.quantity} {r.unit}</td></tr>))}</tbody>
+            </table>
+          )}
+
+          {activeTab === "evidence" && (
+            <div className="bg-white border rounded-lg overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-100 text-slate-500 uppercase">
+                  <tr><th className="text-left px-3 py-1.5">Item</th><th className="text-left px-3 py-1.5">Drawing / Page</th><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Zone</th><th className="text-right px-3 py-1.5">Qty</th><th className="text-center px-3 py-1.5">Confidence</th><th className="text-left px-3 py-1.5">Location</th><th className="text-center px-3 py-1.5">Status</th><th className="text-center px-3 py-1.5">Actions</th></tr>
+                </thead>
+                <tbody className="divide-y">{allEvidence.map(ev => (
+                  <React.Fragment key={ev.id}>
+                    <tr className={`text-xs ${ev.countedTowardTotal ? "bg-white" : "bg-slate-50 text-slate-400"}`}>
+                      <td className="px-3 py-1.5 text-slate-500">{ev.itemDescription}</td>
+                      <td className="px-3 py-1.5 text-slate-600">
+                        {ev.drawing_name}{ev.page ? ` — Page ${ev.page}` : ""}
+                        <div className="mt-0.5">
+                          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${ev.countedTowardTotal ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
+                            {ev.quantitySourceLabel}{!ev.countedTowardTotal ? " — NOT counted" : ""}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-1.5 text-slate-500">{ev.floor_label || "—"}</td>
+                      <td className="px-3 py-1.5 text-slate-500">{ev.zone || "—"}</td>
+                      <td className="px-3 py-1.5 text-right">{ev.quantity}{ev.scheduleQuantityCrosscheck != null ? <span className="text-slate-400"> (schedule: {ev.scheduleQuantityCrosscheck})</span> : ""}</td>
+                      <td className="px-3 py-1.5 text-center"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${confidenceColor(ev.confidence_score)}`}>{ev.confidence_score ?? "—"}%</span></td>
+                      <td className="px-3 py-1.5 text-slate-500">{ev.location || "—"}</td>
+                      <td className="px-3 py-1.5 text-center">
+                        <select value={ev.review_status} onChange={e=>updateStatus(ev.id, e.target.value)} className="text-[11px] border rounded px-1 py-0.5">
+                          <option value="pending">Pending</option><option value="confirmed">Confirmed</option>
+                          <option value="rejected">Rejected</option><option value="needs_correction">Needs Correction</option>
+                        </select>
+                      </td>
+                      <td className="px-3 py-1.5 text-center">
+                        <button onClick={()=>{ setOpenComments(openComments===ev.id?null:ev.id); if (openComments!==ev.id) loadComments(ev.id); }} className="text-[11px] text-blue-600 hover:underline">Comment</button>
+                      </td>
+                    </tr>
+                    {openComments === ev.id && (
+                      <tr><td colSpan={9} className="bg-slate-50 px-3 py-3">
+                        <div className="space-y-2 mb-2">
+                          {(comments[ev.id]||[]).map(c => <div key={c.id} className="text-xs bg-white border rounded px-2 py-1.5"><span className="font-semibold">{c.comment_type}:</span> {c.comment}</div>)}
+                        </div>
+                        <div className="flex gap-2">
+                          <input value={commentText} onChange={e=>setCommentText(e.target.value)} placeholder="e.g. Floor 4 has 12 cameras, not 10" className="flex-1 border rounded-lg px-3 py-1.5 text-xs" />
+                          <button onClick={()=>addComment(ev.id,"missing_item")} className="text-xs bg-slate-900 text-white px-3 py-1.5 rounded-lg">Add & Flag</button>
+                        </div>
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === "notes" && (
+            // Merged in from the former Engineering BOQ tab plus the former
+            // standalone "Quantity Basis" tab (2026-08-09 redesign): design
+            // basis / testing & commissioning / accessories / spare-% /
+            // quantity-basis audit trail. Only meaningful per-item, so when
+            // no single item is focused, shows a compact list across items.
+            <div className="space-y-3">
+              {rows.map(row => (
+                <div key={row.key} className="bg-white border rounded-lg p-3 text-xs space-y-2">
+                  <div className="font-semibold text-slate-800">{row.description}</div>
+                  {row.discrepancy && dismissedDiscrepancies[row.key] !== "accepted" && (
+                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-2.5">
+                      <div className="font-semibold text-rose-800 mb-1">⚠ QUANTITY DISCREPANCY — engineer review required</div>
+                      <div className="text-rose-700 mb-2">
+                        Physical count on the drawings: <strong>{row.discrepancy.physicalTotal} {row.unit}</strong>. A schedule/reference source states <strong>{row.discrepancy.scheduleTotal} {row.unit}</strong> ({row.discrepancy.diff > 0 ? `${row.discrepancy.diff} more` : `${-row.discrepancy.diff} fewer`} than what was physically counted). Quantora used the physical count — it never silently adopts the larger number.
+                        {dismissedDiscrepancies[row.key] === "schedule_requested" && <div className="mt-1 italic">Override request logged as a comment for engineer sign-off; the stored quantity has not been changed.</div>}
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={()=>setDismissedDiscrepancies(d=>({...d,[row.key]:"accepted"}))} className="text-[11px] font-semibold bg-emerald-600 text-white px-2.5 py-1 rounded-lg">Accept Physical Count ({row.discrepancy.physicalTotal})</button>
+                        <button onClick={()=>useScheduleQuantityInstead(row)} className="text-[11px] font-semibold bg-white border border-rose-300 text-rose-700 px-2.5 py-1 rounded-lg">Use Schedule Qty Instead (requires reason)</button>
+                      </div>
+                    </div>
+                  )}
                   <div>
-                    <div className="font-semibold text-slate-700 mb-1">Engineering notes</div>
-                    {row.technical_specification && <div className="mb-1"><span className="text-slate-500">Design basis: </span>{row.technical_specification}</div>}
-                    {(row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
-                      <div><span className="text-slate-500">Testing &amp; commissioning: </span>{[row.rawItems[0]?.testing_requirements, row.rawItems[0]?.commissioning_requirements].filter(Boolean).join(" · ")}</div>
+                    <div className="font-semibold text-slate-700 mb-1">Required accessories (procurement)</div>
+                    <div className="text-slate-600">{accessoriesFor(row)}</div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-slate-700 mb-1">Spare allowance &amp; final procurement quantity</div>
+                    {finalProcurementQty(row) ? (
+                      <div className="text-slate-600">Reconciled quantity {row.totalQuantity} {row.unit} + {finalProcurementQty(row).spare}% spare = <strong>{finalProcurementQty(row).final} {row.unit}</strong> to procure.</div>
+                    ) : <div className="text-slate-400 italic">Quantity is TBD / engineer review required — no spare allowance calculated yet.</div>}
+                  </div>
+                  {(row.technical_specification || row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
+                    <div>
+                      <div className="font-semibold text-slate-700 mb-1">Engineering notes</div>
+                      {row.technical_specification && <div className="mb-1"><span className="text-slate-500">Design basis / specification: </span>{row.technical_specification}</div>}
+                      {(row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
+                        <div><span className="text-slate-500">Testing &amp; commissioning: </span>{[row.rawItems[0]?.testing_requirements, row.rawItems[0]?.commissioning_requirements].filter(Boolean).join(" · ")}</div>
+                      )}
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-semibold text-slate-700 mb-1">Quantity basis — physical counts (summed into the total)</div>
+                    {row.evidence.filter(e => e.countedTowardTotal).length === 0 ? (
+                      <div className="text-slate-400 italic">No physical-count source found — quantity is TBD / engineer review required.</div>
+                    ) : (
+                      <table className="w-full border rounded overflow-hidden">
+                        <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Floor</th><th className="text-left px-2 py-1">Basis</th><th className="text-right px-2 py-1">Qty</th></tr></thead>
+                        <tbody className="divide-y">
+                          {row.evidence.filter(e => e.countedTowardTotal).map(e => (
+                            <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.floor_label||"—"}</td><td className="px-2 py-1 text-slate-500">{e.quantityBasisNotes || e.quantitySourceLabel}</td><td className="px-2 py-1 text-right font-semibold">{e.quantity}</td></tr>
+                          ))}
+                          <tr className="font-semibold bg-slate-50"><td className="px-2 py-1" colSpan={3}>Reconciled total</td><td className="px-2 py-1 text-right">{row.totalQuantity} {row.unit}</td></tr>
+                        </tbody>
+                      </table>
                     )}
                   </div>
-                )}
-                <div>
-                  <div className="font-semibold text-slate-700 mb-1">Quantity basis — physical counts (summed into the total)</div>
-                  {row.evidence.filter(e => e.countedTowardTotal).length === 0 ? (
-                    <div className="text-slate-400 italic">No physical-count source found — quantity is TBD / engineer review required.</div>
-                  ) : (
-                    <table className="w-full border rounded overflow-hidden">
-                      <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Floor</th><th className="text-left px-2 py-1">Basis</th><th className="text-right px-2 py-1">Qty</th></tr></thead>
-                      <tbody className="divide-y">
-                        {row.evidence.filter(e => e.countedTowardTotal).map(e => (
-                          <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.floor_label||"—"}</td><td className="px-2 py-1 text-slate-500">{e.quantityBasisNotes || e.quantitySourceLabel}</td><td className="px-2 py-1 text-right font-semibold">{e.quantity}</td></tr>
-                        ))}
-                        <tr className="font-semibold bg-slate-50"><td className="px-2 py-1" colSpan={3}>Reconciled total</td><td className="px-2 py-1 text-right">{row.totalQuantity} {row.unit}</td></tr>
-                      </tbody>
-                    </table>
+                  {row.evidence.some(e => !e.countedTowardTotal) && (
+                    <div>
+                      <div className="font-semibold text-slate-700 mb-1">Reference sources (found, cross-checked, NOT added to the total)</div>
+                      <table className="w-full border rounded overflow-hidden">
+                        <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Type</th><th className="text-right px-2 py-1">Stated Qty</th></tr></thead>
+                        <tbody className="divide-y text-slate-400">
+                          {row.evidence.filter(e => !e.countedTowardTotal).map(e => (
+                            <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.quantitySourceLabel}</td><td className="px-2 py-1 text-right">{e.quantity}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
-                {row.evidence.some(e => !e.countedTowardTotal) && (
-                  <div>
-                    <div className="font-semibold text-slate-700 mb-1">Reference sources (found, cross-checked, NOT added to the total)</div>
-                    <table className="w-full border rounded overflow-hidden">
-                      <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Type</th><th className="text-right px-2 py-1">Stated Qty</th></tr></thead>
-                      <tbody className="divide-y text-slate-400">
-                        {row.evidence.filter(e => !e.countedTowardTotal).map(e => (
-                          <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.quantitySourceLabel}</td><td className="px-2 py-1 text-right">{e.quantity}</td></tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {row.discrepancy && (
-                  <div className="text-rose-600 font-semibold">⚠ Physical count ({row.discrepancy.physicalTotal}) disagrees with a schedule/reference quantity ({row.discrepancy.scheduleTotal}) — see the discrepancy banner above.</div>
-                )}
-              </div>
-            )}
-          </td></tr>
-        )}
-      </React.Fragment>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -4016,7 +4141,11 @@ function BoqTab({ project }) {
               const avgConf = conf.length ? Math.round(conf.reduce((s,r)=>s+r.avgConfidence,0)/conf.length) : null;
               const totalQty = bucketRows.reduce((s,r)=> s + (r.quantityIsTbd || r.totalQuantity==null ? 0 : r.totalQuantity), 0);
               const needsReview = bucketRows.filter(r=>r.reviewBucket==="review_required"||r.reviewBucket==="engineer_review").length;
-              const units = new Set(bucketRows.map(r=>r.unit)).size;
+              const unitList = [...new Set(bucketRows.map(r=>r.unit).filter(Boolean))];
+              const pageCount = Math.max(1, Math.ceil(sorted.length / ITEMS_PER_PAGE));
+              const clampedPage = Math.min(itemPage, pageCount - 1);
+              const pageStart = clampedPage * ITEMS_PER_PAGE;
+              const pageRows = sorted.slice(pageStart, pageStart + ITEMS_PER_PAGE);
               return (
                 <div key={bucketName}>
                   <div className="bg-white border rounded-xl p-4 mb-4">
@@ -4027,12 +4156,12 @@ function BoqTab({ project }) {
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
                       {[
                         ["Total Quantity", totalQty],
-                        ["Units", units],
+                        ["Units", unitList.join(" / ") || "—"],
                         ["Avg. Confidence", avgConf != null ? `${avgConf}%` : "—"],
                         ["Review Required", needsReview],
                       ].map(([label, val]) => (
                         <div key={label} className="bg-slate-50 rounded-lg py-2">
-                          <div className="text-base font-bold text-slate-800">{val}</div>
+                          <div className={`text-base font-bold ${label==="Review Required" && needsReview>0 ? "text-amber-600" : "text-slate-800"}`}>{val}</div>
                           <div className="text-[10px] text-slate-500 uppercase">{label}</div>
                         </div>
                       ))}
@@ -4053,10 +4182,21 @@ function BoqTab({ project }) {
                         </tr>
                       </thead>
                       <tbody className="divide-y">
-                        {sorted.map((row, i) => <ConsolidatedRow key={row.key + bucketName} row={row} index={i} />)}
+                        {pageRows.map((row, i) => <ConsolidatedRow key={row.key + bucketName} row={row} index={pageStart + i} isFocused={focusedItemKey === row.key} onFocus={setFocusedItemKey} />)}
                       </tbody>
                     </table>
+                    <div className="flex items-center justify-between px-3 py-2 border-t text-xs text-slate-500">
+                      <span>Showing {sorted.length === 0 ? 0 : pageStart + 1} to {Math.min(pageStart + ITEMS_PER_PAGE, sorted.length)} of {sorted.length} item{sorted.length===1?"":"s"}</span>
+                      {pageCount > 1 && (
+                        <div className="flex items-center gap-2">
+                          <button onClick={()=>setItemPage(p=>Math.max(0,p-1))} disabled={clampedPage===0} className="px-2 py-1 border rounded disabled:opacity-30">‹</button>
+                          <span className="font-semibold text-slate-700">{clampedPage+1}</span>
+                          <button onClick={()=>setItemPage(p=>Math.min(pageCount-1,p+1))} disabled={clampedPage>=pageCount-1} className="px-2 py-1 border rounded disabled:opacity-30">›</button>
+                        </div>
+                      )}
+                    </div>
                   </div>
+                  <SystemDetailPanel bucketName={bucketName} bucketRows={sorted} focusedKey={focusedItemKey} setFocusedKey={setFocusedItemKey} activeTab={activeSystemTab} setActiveTab={setActiveSystemTab} />
                 </div>
               );
             })}
