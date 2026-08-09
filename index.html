@@ -443,6 +443,21 @@ const SOURCE_TYPE_LABELS = {
   calculated_quantity: "Calculated Quantity", duplicate_reference: "Duplicate (already counted elsewhere)",
 };
 
+// Master BOQ Engine optimization_status labels/colors (2026-08-09) -- see
+// boq_items.optimization_status's column comment for the full definition of
+// each value; this is just the display layer.
+const OPTIMIZATION_STATUS_LABEL = {
+  drawing_requirement: "Drawing Requirement", engineered: "Engineered", calculated: "Calculated",
+  ai_optimized: "AI Optimized", potential_optimization: "Potential Optimization",
+  review_required: "Review Required", authority_approval_required: "Authority Approval Required",
+};
+const OPTIMIZATION_STATUS_STYLE = {
+  drawing_requirement: "bg-slate-100 text-slate-600", engineered: "bg-blue-100 text-blue-700",
+  calculated: "bg-blue-100 text-blue-700", ai_optimized: "bg-violet-100 text-violet-700",
+  potential_optimization: "bg-amber-100 text-amber-700", review_required: "bg-rose-100 text-rose-700",
+  authority_approval_required: "bg-rose-100 text-rose-700",
+};
+
 // --------------------------------------------------------------------------
 // Active / Passive component classification (added 2026-08-09), applied to
 // every system so a consolidated BOQ reads the way an ELV/MEP engineer
@@ -489,6 +504,7 @@ function classifyComponentType(row) {
 const GROUP_BY_LABELS = {
   system: "System BOQ", floor: "Floor BOQ", project: "Item BOQ",
   category: "Category BOQ", zone: "Zone BOQ", room: "Room BOQ", drawing: "Drawing BOQ",
+  building: "Building BOQ", area: "Area BOQ",
 };
 function GROUP_BY_LABEL(g) { return GROUP_BY_LABELS[g] || "BOQ"; }
 
@@ -585,6 +601,28 @@ function consolidateBoqItems(items, drawingsById) {
       return { floor_label, room, quantity };
     });
 
+    // Building breakdown (multi-building/villa/tower projects only -- the
+    // AI omits "building" entirely for single-building projects, so most
+    // rows will have an empty buildingBreakdown here, same pattern as zone).
+    const buildingMap = new Map();
+    countableRows.forEach(r => {
+      if (!r.building) return;
+      buildingMap.set(r.building, (buildingMap.get(r.building) || 0) + Number(r.quantity || 0));
+    });
+    const buildingBreakdown = [...buildingMap.entries()].map(([building, quantity]) => ({ building, quantity }));
+
+    // Area breakdown (area_label -- distinct from zone/room, e.g. "Basement Parking Area").
+    const areaMap = new Map();
+    countableRows.forEach(r => {
+      if (!r.area_label) return;
+      const aKey = `${r.floor_label || "Unassigned"}::${r.area_label}`;
+      areaMap.set(aKey, (areaMap.get(aKey) || 0) + Number(r.quantity || 0));
+    });
+    const areaBreakdown = [...areaMap.entries()].map(([k, quantity]) => {
+      const [floor_label, area_label] = k.split("::");
+      return { floor_label, area_label, quantity };
+    });
+
     // Drawing evidence -- EVERY source row, including reference-only ones,
     // each explicitly tagged with its classification and whether it counted
     // toward the total. This is the "Quantity Basis" traceability data --
@@ -602,6 +640,9 @@ function consolidateBoqItems(items, drawingsById) {
       countedTowardTotal: isCountableSourceType(r.quantity_source_type),
       scheduleQuantityCrosscheck: r.schedule_quantity_crosscheck ?? null,
       quantityBasisNotes: r.quantity_basis_notes || null,
+      subsystem: r.subsystem || null, building: r.building || null,
+      fromLocation: r.from_location || null, toLocation: r.to_location || null,
+      optimizationStatus: r.optimization_status || null, optimizationNote: r.optimization_note || null,
     }));
 
     // Schedule-quantity discrepancy check (sections 4, 9, 14, 18): compare
@@ -642,15 +683,25 @@ function consolidateBoqItems(items, drawingsById) {
     const itemTotalCents = (r) => (r.unit_cost_cents || 0) * Number(r.quantity || 0) + (r.material_cost_cents || 0) + (r.installation_cost_cents || 0) + (r.testing_cost_cents || 0);
     const totalCostCents = countableRows.reduce((s, r) => s + itemTotalCents(r), 0);
 
+    // Master BOQ Engine fields (2026-08-09): subsystem/building are shown in
+    // the drill-down, not the main table, per the "simple main table + full
+    // detail on drill-down" decision -- pick the most-common non-empty value
+    // the same way description/spec are picked above.
+    const subsystem = pickCanonical("subsystem");
+    const building = rows.find(r => r.building)?.building || null;
+    const optimizationStatuses = [...new Set(rows.map(r => r.optimization_status).filter(Boolean))];
+
     return {
       key: g.key, itemCode: g.itemCode, systemCategory: g.systemCategory, unit: g.unit,
       description, technical_specification, manufacturer, model_number,
+      subsystem: subsystem || null, building,
       totalQuantity: hasAnyQuantity ? totalQuantity : null, // null (not 0) means "quantity not reliably extracted" -- see section 23
       quantityIsTbd: !hasAnyQuantity,
-      floorBreakdown, zoneBreakdown, roomBreakdown, evidence,
+      floorBreakdown, zoneBreakdown, roomBreakdown, buildingBreakdown, areaBreakdown, evidence,
       sourceCount: rows.length, countableSourceCount: countableRows.length, referenceOnlySourceCount: referenceRows.length,
       avgConfidence, worstStatus, approvalStatus, reviewBucket,
       discrepancy, needsEngineerReview: reviewBucket === "engineer_review",
+      optimizationStatuses,
       totalCostCents, sources: [...new Set(rows.map(r => r.source))],
       rawItems: rows,
     };
@@ -706,6 +757,25 @@ function bucketConsolidated(consolidated, groupBy) {
       row.roomBreakdown.forEach(rb => {
         const k = `${rb.floor_label} / ${rb.room}`;
         g[k] = g[k] || []; g[k].push({ ...row, totalQuantity: rb.quantity, quantityIsTbd: row.quantityIsTbd });
+      });
+    });
+    return g;
+  }
+  if (groupBy === "building") {
+    const g = {};
+    consolidated.forEach(row => {
+      row.buildingBreakdown.forEach(bb => {
+        g[bb.building] = g[bb.building] || []; g[bb.building].push({ ...row, totalQuantity: bb.quantity, quantityIsTbd: row.quantityIsTbd });
+      });
+    });
+    return g;
+  }
+  if (groupBy === "area") {
+    const g = {};
+    consolidated.forEach(row => {
+      row.areaBreakdown.forEach(ab => {
+        const k = `${ab.floor_label} / ${ab.area_label}`;
+        g[k] = g[k] || []; g[k].push({ ...row, totalQuantity: ab.quantity, quantityIsTbd: row.quantityIsTbd });
       });
     });
     return g;
@@ -3442,6 +3512,14 @@ function BoqTab({ project }) {
   const [reworking, setReworking] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Master BOQ Engine supporting data (2026-08-09): AI-proposed cost
+  // optimizations, disclosed assumptions, and review-required flags, kept in
+  // their own tables (not boq_items) since they aren't always 1:1 with a
+  // single line item -- see the migration comment on cost_optimizations.
+  const [costOptimizations, setCostOptimizations] = useState([]);
+  const [assumptions, setAssumptions] = useState([]);
+  const [reviewItems, setReviewItems] = useState([]);
+  const [showOptimizationPanel, setShowOptimizationPanel] = useState(false);
 
   useEffect(() => { load(); }, [project.id]);
   async function load() {
@@ -3457,12 +3535,29 @@ function BoqTab({ project }) {
       const { data: er, error: erErr } = await sb.from("engineering_rules").select("*");
       if (erErr) throw erErr;
       setRules(er || []);
+      const [{ data: co }, { data: asm }, { data: rev }] = await Promise.all([
+        sb.from("cost_optimizations").select("*").eq("project_id", project.id).order("created_at", { ascending: false }),
+        sb.from("boq_assumptions").select("*").eq("project_id", project.id).order("created_at", { ascending: false }),
+        sb.from("boq_review_items").select("*").eq("project_id", project.id).order("created_at", { ascending: false }),
+      ]);
+      setCostOptimizations(co || []);
+      setAssumptions(asm || []);
+      setReviewItems(rev || []);
     } catch (e) {
       console.error("BoqTab.load failed:", e);
       setError(e.message || "Could not load the BOQ for this project.");
     } finally {
       setLoading(false);
     }
+  }
+
+  async function setCostOptimizationStatus(id, status) {
+    await sb.from("cost_optimizations").update({ status }).eq("id", id);
+    setCostOptimizations(rows => rows.map(r => r.id === id ? { ...r, status } : r));
+  }
+  async function setReviewItemStatus(id, status) {
+    await sb.from("boq_review_items").update({ status }).eq("id", id);
+    setReviewItems(rows => rows.map(r => r.id === id ? { ...r, status } : r));
   }
 
   async function updateCost(id, field, dollarsStr) {
@@ -3915,6 +4010,24 @@ function BoqTab({ project }) {
                         <div className="text-slate-600">Reconciled quantity {row.totalQuantity} {row.unit} + {finalProcurementQty(row).spare}% spare = <strong>{finalProcurementQty(row).final} {row.unit}</strong> to procure.</div>
                       ) : <div className="text-slate-400 italic">Quantity is TBD / engineer review required — no spare allowance calculated yet.</div>}
                     </div>
+                    {(row.optimizationStatuses.length > 0 || row.subsystem || row.building || row.evidence.some(e => e.fromLocation || e.toLocation)) && (
+                      <div>
+                        <div className="font-semibold text-slate-700 mb-1">Engineering classification</div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {row.subsystem && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">Subsystem: {row.subsystem}</span>}
+                          {row.building && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">Building: {row.building}</span>}
+                          {row.optimizationStatuses.map(s => (
+                            <span key={s} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${OPTIMIZATION_STATUS_STYLE[s] || "bg-slate-100 text-slate-600"}`} title={OPTIMIZATION_STATUS_LABEL[s] || s}>{OPTIMIZATION_STATUS_LABEL[s] || s}</span>
+                          ))}
+                        </div>
+                        {row.rawItems.find(r => r.optimization_note) && (
+                          <div className="text-slate-500 mt-1">{row.rawItems.find(r => r.optimization_note).optimization_note}</div>
+                        )}
+                        {row.evidence.filter(e => e.fromLocation || e.toLocation).map(e => (
+                          <div key={e.id} className="text-slate-500 mt-1">Run: {e.fromLocation || "?"} → {e.toLocation || "?"}</div>
+                        ))}
+                      </div>
+                    )}
                     <details>
                       <summary className="font-semibold text-slate-700 cursor-pointer select-none">Quantity basis &amp; engineering notes ▸</summary>
                       <div className="mt-2 space-y-2">
@@ -4016,6 +4129,81 @@ function BoqTab({ project }) {
         )}
       </div>
 
+      {/* Master BOQ Engine (2026-08-09): cost-optimization proposals,
+          disclosed assumptions, and review-required flags the AI surfaced
+          alongside the BOQ itself. Collapsed by default -- summary line only
+          -- per the "simple main table + full detail one click deeper"
+          decision; nothing here is ever silently applied to a boq_items row,
+          matching the "explicit requirement always wins" rule. */}
+      {(costOptimizations.length > 0 || assumptions.length > 0 || reviewItems.length > 0) && (
+        <div className="bg-white border rounded-xl p-4 mb-4">
+          <button onClick={() => setShowOptimizationPanel(v => !v)} className="w-full flex items-center justify-between text-left">
+            <div className="text-xs font-semibold text-slate-500 uppercase">AI Optimization &amp; Review</div>
+            <div className="text-xs text-slate-600 flex items-center gap-3">
+              {costOptimizations.filter(o => o.status === "proposed").length > 0 && <span className="font-semibold text-amber-700">{costOptimizations.filter(o => o.status === "proposed").length} optimization(s) proposed</span>}
+              {assumptions.length > 0 && <span>{assumptions.length} assumption(s)</span>}
+              {reviewItems.filter(r => r.status === "open").length > 0 && <span className="font-semibold text-rose-700">{reviewItems.filter(r => r.status === "open").length} review item(s)</span>}
+              <span className="text-slate-400">{showOptimizationPanel ? "▲" : "▼"}</span>
+            </div>
+          </button>
+          {showOptimizationPanel && (
+            <div className="mt-3 space-y-4">
+              {costOptimizations.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-slate-700 mb-1.5">Cost Optimization Proposals — never applied automatically</div>
+                  <div className="space-y-2">
+                    {costOptimizations.map(o => (
+                      <div key={o.id} className="border rounded-lg p-2.5 text-xs">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="font-semibold text-slate-800">{o.title}{o.boq_item_id && rawItems.find(i => i.id === o.boq_item_id) ? <span className="font-normal text-slate-400"> — {rawItems.find(i => i.id === o.boq_item_id).description}</span> : ""}</div>
+                          <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${o.status === "accepted" ? "bg-emerald-100 text-emerald-700" : o.status === "rejected" ? "bg-slate-200 text-slate-500" : "bg-amber-100 text-amber-700"}`}>{o.status}</span>
+                        </div>
+                        {o.original_approach && <div className="text-slate-500 mt-1"><span className="font-semibold">Original: </span>{o.original_approach}</div>}
+                        {o.optimized_approach && <div className="text-slate-500"><span className="font-semibold">Optimized: </span>{o.optimized_approach}</div>}
+                        {o.estimated_savings_note && <div className="text-slate-500"><span className="font-semibold">Est. savings: </span>{o.estimated_savings_note}</div>}
+                        {o.status === "proposed" && (
+                          <div className="flex gap-2 mt-2">
+                            <button onClick={() => setCostOptimizationStatus(o.id, "accepted")} className="text-[11px] font-semibold bg-emerald-600 text-white px-2.5 py-1 rounded-lg">Accept</button>
+                            <button onClick={() => setCostOptimizationStatus(o.id, "rejected")} className="text-[11px] font-semibold bg-white border px-2.5 py-1 rounded-lg">Reject</button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {assumptions.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-slate-700 mb-1.5">Assumptions Made</div>
+                  <ul className="text-xs text-slate-600 list-disc pl-4 space-y-1">
+                    {assumptions.map(a => (
+                      <li key={a.id}>{a.assumption_text}{a.boq_item_id && rawItems.find(i => i.id === a.boq_item_id) ? <span className="text-slate-400"> — {rawItems.find(i => i.id === a.boq_item_id).description}</span> : ""}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {reviewItems.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-slate-700 mb-1.5">Engineer Review Required</div>
+                  <div className="space-y-2">
+                    {reviewItems.map(r => (
+                      <div key={r.id} className="border rounded-lg p-2.5 text-xs flex items-start justify-between gap-2">
+                        <div>
+                          <div className="text-slate-700">{r.reason}{r.boq_item_id && rawItems.find(i => i.id === r.boq_item_id) ? <span className="text-slate-400"> — {rawItems.find(i => i.id === r.boq_item_id).description}</span> : ""}</div>
+                        </div>
+                        {r.status === "open" ? (
+                          <button onClick={() => setReviewItemStatus(r.id, "resolved")} className="shrink-0 text-[11px] font-semibold bg-slate-900 text-white px-2.5 py-1 rounded-lg">Mark Resolved</button>
+                        ) : <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">resolved</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {duplicateGroups.length > 0 && (
         <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-4 text-xs text-rose-700">
           <div className="font-semibold mb-1">Duplicate drawing uploads detected — excluded from this BOQ to avoid double-counting</div>
@@ -4036,6 +4224,8 @@ function BoqTab({ project }) {
             <option value="zone">Zone</option>
             <option value="room">Room</option>
             <option value="drawing">Drawing</option>
+            <option value="building">Building / Villa / Tower</option>
+            <option value="area">Area</option>
           </select>
         </div>
         <div>
@@ -4569,11 +4759,14 @@ function ExportTab({ project }) {
   async function exportExcel(kind) {
     setBusy(true);
     try {
-      const [{ data: items }, { data: dr }, { data: rules }, { data: runs }] = await Promise.all([
+      const [{ data: items }, { data: dr }, { data: rules }, { data: runs }, { data: costOpts }, { data: assumps }, { data: reviewRows }] = await Promise.all([
         sb.from("boq_items").select("*").eq("project_id", project.id),
         sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
         sb.from("engineering_rules").select("*"),
         sb.from("analysis_runs").select("*").eq("project_id", project.id).order("created_at"),
+        sb.from("cost_optimizations").select("*").eq("project_id", project.id),
+        sb.from("boq_assumptions").select("*").eq("project_id", project.id),
+        sb.from("boq_review_items").select("*").eq("project_id", project.id),
       ]);
       const drawingsById = {}; (dr||[]).forEach(d => drawingsById[d.id] = d);
       const { excludeDrawingIds, duplicateGroups } = detectDuplicateDrawings(dr || []);
@@ -4612,6 +4805,31 @@ function ExportTab({ project }) {
         ["Item Code","System","Item Name","Specification","Manufacturer","Model","Unit","Total Quantity","Confidence %","Status","Physical Sources","Reference Sources (not counted)","Quantity Discrepancy"],
         ...consolidated.map(r => [r.itemCode, SYSTEM_LABEL(r.systemCategory), r.description, r.technical_specification||"", r.manufacturer||"", r.model_number||"", r.unit, r.quantityIsTbd?"TBD":r.totalQuantity, r.avgConfidence??"", r.reviewBucket, r.countableSourceCount, r.referenceOnlySourceCount, r.discrepancy ? `Physical ${r.discrepancy.physicalTotal} vs schedule ${r.discrepancy.scheduleTotal}` : ""]),
       ], "Consolidated BOQ");
+
+      // 2b. Master BOQ (Full Detail) -- the RFQ-ready, procurement-grade
+      // sheet with every field the Master BOQ Engine tracks (subsystem,
+      // building/villa, floor/zone/room breakdown as text, calculation
+      // basis, optimization status/note, compliance) so nothing is trimmed
+      // for brevity here even though the on-screen table stays simple.
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Item Code","System","Subsystem","Building/Villa","Item Name","Technical Specification","Manufacturer","Model","Floor(s)","Zone(s)","Room(s)","Unit","Total Quantity","Calculation / Quantity Basis","Optimization Status","Optimization Note","Confidence %","Compliance Status","Compliance Notes","Status","Drawing Source(s)","Quantity Discrepancy"],
+        ...consolidated.map(r => {
+          const any = r.rawItems[0];
+          const basisNote = r.rawItems.find(x => x.quantity_basis_notes)?.quantity_basis_notes || "";
+          const optNote = r.rawItems.find(x => x.optimization_note)?.optimization_note || "";
+          return [
+            r.itemCode, SYSTEM_LABEL(r.systemCategory), r.subsystem||"", r.building||"",
+            r.description, r.technical_specification||"", r.manufacturer||"", r.model_number||"",
+            r.floorBreakdown.map(fb=>fb.floor_label).join(", "), r.zoneBreakdown.map(zb=>`${zb.floor_label}/${zb.zone}`).join(", "), r.roomBreakdown.map(rb=>`${rb.floor_label}/${rb.room}`).join(", "),
+            r.unit, r.quantityIsTbd?"TBD":r.totalQuantity, basisNote,
+            r.optimizationStatuses.map(s=>OPTIMIZATION_STATUS_LABEL[s]||s).join(", "), optNote,
+            r.avgConfidence??"", any?.compliance_status||"", any?.compliance_notes||"",
+            r.reviewBucket, [...new Set(r.evidence.map(e=>e.drawing_name))].join(", "),
+            r.discrepancy ? `Physical ${r.discrepancy.physicalTotal} vs schedule ${r.discrepancy.scheduleTotal}` : "",
+          ];
+        }),
+      ], "Master BOQ (Full Detail)");
 
       // 3. System BOQ -- rollup per system, matching section 7/8's summary view.
       const bySystem = {};
@@ -4680,6 +4898,31 @@ function ExportTab({ project }) {
         ["Drawing","Revision","Status","Change Reason","Approval Status","Created"],
         ...(runs||[]).map(r => [drawingsById[r.drawing_id]?.file_name || (r.drawing_id ? r.drawing_id : "System Design"), r.revision_number, r.status, r.change_reason||"", r.approval_status, new Date(r.created_at).toISOString()]),
       ], "Revision History");
+
+      // 12. Cost Optimizations -- AI-proposed, never silently applied; status
+      // shows whether the customer/engineer has accepted or rejected each one.
+      const itemDescByIdX = {}; (items||[]).forEach(i => itemDescByIdX[i.id] = i.description);
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Title","Related Item","Original Approach","Optimized Approach","Estimated Savings","Status"],
+        ...(costOpts||[]).map(o => [o.title, o.boq_item_id ? (itemDescByIdX[o.boq_item_id]||"") : "", o.original_approach||"", o.optimized_approach||"", o.estimated_savings_note||"", o.status]),
+      ], "Cost Optimizations");
+
+      // 13. Assumptions -- disclosed explicitly rather than buried silently.
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Assumption","Related Item"],
+        ...(assumps||[]).map(a => [a.assumption_text, a.boq_item_id ? (itemDescByIdX[a.boq_item_id]||"") : ""]),
+      ], "Assumptions");
+
+      // 14. Engineer Review Items -- from boq_review_items (project/engine-
+      // level flags), distinct from the per-item "Review Required"/"Engineer
+      // Review" confidence-bucket sheets above.
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Reason","Related Item","Status"],
+        ...(reviewRows||[]).map(r => [r.reason, r.boq_item_id ? (itemDescByIdX[r.boq_item_id]||"") : "", r.status]),
+      ], "Engineer Review Items");
 
       XLSX.writeFile(wb, `${project.project_name.replace(/[^a-z0-9]/gi,"_")}_BOQ_${kind}.xlsx`);
     } finally { setBusy(false); }
