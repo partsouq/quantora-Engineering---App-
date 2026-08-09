@@ -800,6 +800,109 @@ function bucketConsolidated(consolidated, groupBy) {
   return { "Project BOQ": consolidated };
 }
 
+// ---------------------------------------------------------------------------
+// Simple flat BOQ list -- a single continuous numbered table across every
+// system (Line / System / Item / Location / Qty / Unit / Status / Remarks),
+// matching a classic professional QS/estimator takeoff format. This is an
+// ALTERNATIVE presentation the user can toggle to alongside the two-panel
+// Group-By dashboard above, not a replacement for it -- selected explicitly
+// over replacing the dashboard. Built entirely from consolidatedAll (no new
+// AI call, no new data), so it's always in sync with the main BOQ.
+// ---------------------------------------------------------------------------
+
+// Discrete/countable units get one line PER real location (unrolled from
+// floor/room breakdown, real summed quantities, never invented); continuous
+// units (m, kg, etc. -- cable/pipe/duct runs) stay one aggregated line,
+// since a run doesn't have a single physical count per floor the way a
+// discrete item does. Matches the distinction in the user's own reference
+// example (cameras listed per floor, cable listed as one range line).
+const SIMPLE_BOQ_DISCRETE_UNITS = new Set(["nos", "no", "ea", "each", "unit", "units", "pc", "pcs", "set", "sets", "assembly", "point", "points"]);
+function isDiscreteUnitForSimpleBoq(unit) {
+  if (!unit) return false;
+  return SIMPLE_BOQ_DISCRETE_UNITS.has(String(unit).trim().toLowerCase().replace(/\.+$/, ""));
+}
+
+// Collapses the engine's richer 7-value optimization_status / review
+// classification down to the 3 values a classic BOQ table uses. Nothing is
+// hidden by this collapse -- the fuller classification (including Review
+// Required / Authority Approval flags) stays visible in the drill-down
+// panel and the Master BOQ (Full Detail) export sheet; this is purely a
+// simplified column for this one view, per explicit user choice.
+function simpleBoqStatusFor(row) {
+  const statuses = row.optimizationStatuses || [];
+  if (statuses.includes("engineered")) return "Engineered";
+  if (statuses.includes("calculated")) return "Calculated";
+  return "Confirmed";
+}
+function simpleBoqRemarksFor(row) {
+  if (row.discrepancy) return `Discrepancy flagged: physical ${row.discrepancy.physicalTotal} vs schedule ${row.discrepancy.scheduleTotal}`;
+  const optNote = row.rawItems.find(r => r.optimization_note)?.optimization_note;
+  if (optNote) return optNote;
+  const basisNote = row.rawItems.find(r => r.quantity_basis_notes)?.quantity_basis_notes;
+  if (basisNote) return basisNote;
+  const status = simpleBoqStatusFor(row);
+  if (status === "Engineered") return "Engineered per accessory/derivation rule";
+  if (status === "Calculated") return "Based on calculated quantity";
+  return "As per drawing";
+}
+// entry is either a floorBreakdown entry ({floor_label, quantity}) or a
+// roomBreakdown entry ({floor_label, room, quantity}) -- both handled here.
+function simpleBoqLocationForEntry(entry) {
+  if (!entry) return "—";
+  const floor = entry.floor_label || "—";
+  return entry.room ? `${floor} – ${entry.room}` : floor;
+}
+function simpleBoqLocationAggregate(row) {
+  const floors = [...new Set((row.floorBreakdown || []).map(f => f.floor_label).filter(Boolean))];
+  const prefix = row.building ? `${row.building} – ` : "";
+  if (floors.length === 0) return row.building || "—";
+  if (floors.length === 1) return prefix + floors[0];
+  if (floors.length <= 3) return prefix + floors.join(", ");
+  return `${prefix}${floors[0]} … ${floors[floors.length - 1]} (${floors.length} floors)`;
+}
+function simpleBoqSumQty(arr) { return arr.reduce((s, e) => s + Number(e.quantity || 0), 0); }
+
+function buildSimpleBoqLines(consolidatedAll) {
+  const bySystem = {};
+  consolidatedAll.forEach(row => {
+    if (row.quantityIsTbd || row.totalQuantity == null) return; // TBD rows have no reliable qty to place on any line
+    (bySystem[row.systemCategory] = bySystem[row.systemCategory] || []).push(row);
+  });
+  const systemOrder = Object.keys(bySystem).sort((a, b) => SYSTEM_LABEL(a).localeCompare(SYSTEM_LABEL(b)));
+  const lines = [];
+  systemOrder.forEach(sysCat => {
+    const sysRows = [...bySystem[sysCat]].sort((a, b) => a.description.localeCompare(b.description));
+    sysRows.forEach(row => {
+      const discrete = isDiscreteUnitForSimpleBoq(row.unit);
+      let breakdown = null;
+      // Only unroll into per-location lines when the breakdown's own sum
+      // exactly reconciles to the row's real total -- if room/floor data is
+      // only partial, fall back to one aggregate line rather than silently
+      // dropping quantity that has nowhere to go in a partial breakdown.
+      if (discrete) {
+        if (row.roomBreakdown.length && Math.abs(simpleBoqSumQty(row.roomBreakdown) - row.totalQuantity) < 0.001) breakdown = row.roomBreakdown;
+        else if (row.floorBreakdown.length > 1 && Math.abs(simpleBoqSumQty(row.floorBreakdown) - row.totalQuantity) < 0.001) breakdown = row.floorBreakdown;
+      }
+      if (breakdown) {
+        breakdown.forEach(entry => {
+          if (!entry.quantity) return;
+          lines.push({
+            key: `${row.key}::${entry.floor_label}::${entry.room || ""}`,
+            system: SYSTEM_LABEL(sysCat), description: row.description, location: simpleBoqLocationForEntry(entry),
+            qty: entry.quantity, unit: row.unit, status: simpleBoqStatusFor(row), remarks: simpleBoqRemarksFor(row),
+          });
+        });
+      } else {
+        lines.push({
+          key: row.key, system: SYSTEM_LABEL(sysCat), description: row.description, location: simpleBoqLocationAggregate(row),
+          qty: row.totalQuantity, unit: row.unit, status: simpleBoqStatusFor(row), remarks: simpleBoqRemarksFor(row),
+        });
+      }
+    });
+  });
+  return lines.map((l, i) => ({ ...l, line: i + 1 }));
+}
+
 async function callEngine(action, payload) {
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(FN_URL, {
@@ -3520,6 +3623,11 @@ function BoqTab({ project }) {
   const [assumptions, setAssumptions] = useState([]);
   const [reviewItems, setReviewItems] = useState([]);
   const [showOptimizationPanel, setShowOptimizationPanel] = useState(false);
+  // Simple flat BOQ list (alternative to the two-panel Group-By dashboard,
+  // toggled by the user, not a replacement -- see buildSimpleBoqLines()).
+  const [boqViewMode, setBoqViewMode] = useState("grouped");
+  const [simpleBoqPage, setSimpleBoqPage] = useState(0);
+  const SIMPLE_BOQ_PAGE_SIZE = 50;
 
   useEffect(() => { load(); }, [project.id]);
   async function load() {
@@ -3628,6 +3736,11 @@ function BoqTab({ project }) {
   // Ordered list of [bucketName, bucketRows] pairs backing the left-hand
   // panel of the merged "BOQ - Group by <groupBy>" layout (2026-08-09).
   const bucketEntries = useMemo(() => Object.entries(buckets), [buckets]);
+  // Simple flat list -- built from `consolidated` (so the System Filter
+  // dropdown still applies), independent of groupBy/selectedBucket, since
+  // this view is one continuous table across every system, not a bucket.
+  const simpleBoqLines = useMemo(() => buildSimpleBoqLines(consolidated), [consolidated]);
+  useEffect(() => { setSimpleBoqPage(0); }, [consolidated, boqViewMode]);
   // Keep selectedBucket valid whenever groupBy/filterSystem/data changes --
   // default to the first bucket so the right-hand panel is never empty when
   // buckets exist, and clear it when there are none.
@@ -4213,21 +4326,33 @@ function BoqTab({ project }) {
         </div>
       )}
 
+      {/* View toggle: the two-panel Group-By dashboard vs. a simple, flat,
+          continuously-numbered BOQ table (Line/System/Item/Location/Qty/
+          Unit/Status/Remarks) matching a classic QS/estimator takeoff --
+          added alongside the dashboard by explicit user choice, not a
+          replacement for it. */}
+      <div className="flex items-center gap-2 mb-3">
+        <button onClick={()=>setBoqViewMode("grouped")} className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${boqViewMode==="grouped" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}>Dashboard View</button>
+        <button onClick={()=>setBoqViewMode("simple")} className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${boqViewMode==="simple" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}>Simple List View</button>
+      </div>
+
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <div>
-          <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">Group By</label>
-          <select className="border rounded-lg px-3 py-1.5 text-sm" value={groupBy} onChange={e=>setGroupBy(e.target.value)}>
-            <option value="system">System BOQ</option>
-            <option value="floor">Floor BOQ</option>
-            <option value="project">Item BOQ (single flat list)</option>
-            <option value="category">Category (ELV / Electrical / HVAC / etc.)</option>
-            <option value="zone">Zone</option>
-            <option value="room">Room</option>
-            <option value="drawing">Drawing</option>
-            <option value="building">Building / Villa / Tower</option>
-            <option value="area">Area</option>
-          </select>
-        </div>
+        {boqViewMode === "grouped" && (
+          <div>
+            <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">Group By</label>
+            <select className="border rounded-lg px-3 py-1.5 text-sm" value={groupBy} onChange={e=>setGroupBy(e.target.value)}>
+              <option value="system">System BOQ</option>
+              <option value="floor">Floor BOQ</option>
+              <option value="project">Item BOQ (single flat list)</option>
+              <option value="category">Category (ELV / Electrical / HVAC / etc.)</option>
+              <option value="zone">Zone</option>
+              <option value="room">Room</option>
+              <option value="drawing">Drawing</option>
+              <option value="building">Building / Villa / Tower</option>
+              <option value="area">Area</option>
+            </select>
+          </div>
+        )}
         <div>
           <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">System Filter</label>
           <select className="border rounded-lg px-3 py-1.5 text-sm" value={filterSystem} onChange={e=>setFilterSystem(e.target.value)}>
@@ -4252,9 +4377,9 @@ function BoqTab({ project }) {
         </div>
       )}
 
-      {bucketEntries.length === 0 && <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet. Analyze a drawing or design a system to generate one.</div>}
+      {boqViewMode === "grouped" && bucketEntries.length === 0 && <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet. Analyze a drawing or design a system to generate one.</div>}
 
-      {bucketEntries.length > 0 && (
+      {boqViewMode === "grouped" && bucketEntries.length > 0 && (
         // Two-panel "BOQ - Group by <groupBy>" layout (2026-08-09 redesign,
         // matched against the reference dashboard): left is a real data
         // table of the current buckets (not just a button list) plus a
@@ -4396,6 +4521,55 @@ function BoqTab({ project }) {
             })}
           </div>
         </div>
+      )}
+
+      {boqViewMode === "simple" && (
+        simpleBoqLines.length === 0 ? (
+          <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet. Analyze a drawing or design a system to generate one.</div>
+        ) : (
+          <div className="qtr-boq-table bg-white border rounded-xl overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                <tr>
+                  <th className="text-right px-3 py-2">Line</th>
+                  <th className="text-left px-3 py-2">System</th>
+                  <th className="text-left px-3 py-2">Item Description</th>
+                  <th className="text-left px-3 py-2">Location</th>
+                  <th className="text-right px-3 py-2">Qty</th>
+                  <th className="text-left px-3 py-2">Unit</th>
+                  <th className="text-left px-3 py-2">Status</th>
+                  <th className="text-left px-3 py-2">Remarks</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {simpleBoqLines.slice(simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE, simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE + SIMPLE_BOQ_PAGE_SIZE).map(l => (
+                  <tr key={l.key}>
+                    <td className="px-3 py-2 text-right text-slate-400">{l.line}</td>
+                    <td className="px-3 py-2 font-medium">{l.system}</td>
+                    <td className="px-3 py-2">{l.description}</td>
+                    <td className="px-3 py-2 text-slate-600">{l.location}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{l.qty}</td>
+                    <td className="px-3 py-2 text-slate-500">{l.unit}</td>
+                    <td className="px-3 py-2">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${l.status === "Confirmed" ? "bg-emerald-100 text-emerald-700" : l.status === "Engineered" ? "bg-blue-100 text-blue-700" : "bg-violet-100 text-violet-700"}`}>{l.status}</span>
+                    </td>
+                    <td className="px-3 py-2 text-slate-500 text-xs">{l.remarks}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="flex items-center justify-between px-3 py-2 border-t text-xs text-slate-500">
+              <span>Showing {simpleBoqLines.length === 0 ? 0 : simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE + 1} to {Math.min(simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE + SIMPLE_BOQ_PAGE_SIZE, simpleBoqLines.length)} of {simpleBoqLines.length} line{simpleBoqLines.length===1?"":"s"}</span>
+              {Math.ceil(simpleBoqLines.length / SIMPLE_BOQ_PAGE_SIZE) > 1 && (
+                <div className="flex items-center gap-2">
+                  <button onClick={()=>setSimpleBoqPage(p=>Math.max(0,p-1))} disabled={simpleBoqPage===0} className="px-2 py-1 border rounded disabled:opacity-30">‹</button>
+                  <span className="font-semibold text-slate-700">{simpleBoqPage+1}</span>
+                  <button onClick={()=>setSimpleBoqPage(p=>Math.min(Math.ceil(simpleBoqLines.length / SIMPLE_BOQ_PAGE_SIZE)-1,p+1))} disabled={simpleBoqPage>=Math.ceil(simpleBoqLines.length / SIMPLE_BOQ_PAGE_SIZE)-1} className="px-2 py-1 border rounded disabled:opacity-30">›</button>
+                </div>
+              )}
+            </div>
+          </div>
+        )
       )}
       </React.Fragment>
       )}
@@ -4830,6 +5004,18 @@ function ExportTab({ project }) {
           ];
         }),
       ], "Master BOQ (Full Detail)");
+
+      // 2c. Simple BOQ -- the flat, continuously-numbered, classic QS/
+      // estimator-format sheet (Line/System/Item/Location/Qty/Unit/Status/
+      // Remarks), built from the exact same buildSimpleBoqLines() helper
+      // that backs the app's "Simple List View" toggle, so the export and
+      // the on-screen table can never drift apart.
+      const simpleLines = buildSimpleBoqLines(consolidated);
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Line","System","Item Description","Location","Qty","Unit","Status","Remarks"],
+        ...simpleLines.map(l => [l.line, l.system, l.description, l.location, l.qty, l.unit, l.status, l.remarks]),
+      ], "Simple BOQ");
 
       // 3. System BOQ -- rollup per system, matching section 7/8's summary view.
       const bySystem = {};
