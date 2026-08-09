@@ -241,6 +241,495 @@ const SOURCE_BADGE = {
   manual: { text: "Manual", cls: "bg-slate-50 text-slate-600" },
 };
 
+// ---------------------------------------------------------------------------
+// BOQ Consolidation Engine
+// ---------------------------------------------------------------------------
+// Deterministic, rules-based (NOT an AI call) normalization + aggregation
+// layer used everywhere the app shows or exports a BOQ: the BOQ tab,
+// Procurement BOQ, Engineering BOQ, and every Excel/PDF sheet. Because it's
+// pure JS running over already-fetched boq_items rows, switching "Group By"
+// or opening a breakdown never re-hits Anthropic -- the AI only runs once,
+// at analysis time; everything downstream of that is free, instant, and
+// re-derivable.
+//
+// DESIGN NOTE on "identity": the spec this was built against asked for
+// manufacturer/model to be part of item identity. That's deliberately NOT
+// done here -- across separate AI analysis calls (different drawings, or a
+// rework), the *same physical cable run* can get a slightly different
+// "suggested manufacturer" string each time (e.g. "CommScope" vs "Panduit
+// or equivalent") purely because it's a suggestion, not a hard spec. Keying
+// identity on that would silently re-fragment the exact "same item counted
+// 20 times" problem this whole engine exists to fix. Manufacturer/model are
+// carried as DISPLAY fields on the consolidated row (first non-null value
+// wins) but never split one real item into two rows. If a project genuinely
+// needs two different mandated brands treated as separate line items, that
+// should show up as a materially different technical_specification, which
+// DOES affect identity below.
+//
+// Extend BOQ_SYNONYMS / BOQ_STOPWORDS / SPEC_TOKEN_PATTERNS as real-world
+// edge cases turn up -- this is intentionally a small, auditable rules set
+// rather than an AI judgment call, per the "deterministic, not AI-assisted"
+// decision for this engine.
+
+const UNIT_CANON = {
+  m: "m", mtr: "m", mtrs: "m", meter: "m", meters: "m", metre: "m", metres: "m", lm: "m",
+  "m2": "m2", sqm: "m2", "sq.m": "m2", "sq m": "m2", "m²": "m2",
+  "m3": "m3", cum: "m3", "m³": "m3",
+  nos: "nos", no: "nos", "no.": "nos", pcs: "nos", pc: "nos", each: "nos", ea: "nos", unit: "nos", units: "nos", set: "set", sets: "set",
+  kg: "kg", kgs: "kg", ton: "ton", tons: "ton", tonne: "ton",
+  box: "box", boxes: "box", roll: "roll", rolls: "roll",
+  ls: "ls", lot: "ls", lots: "ls",
+  hr: "hr", hrs: "hr", hour: "hr", hours: "hr",
+  point: "point", points: "point", pt: "point",
+};
+function normalizeUnit(u) {
+  const key = String(u || "").trim().toLowerCase().replace(/\.$/, "");
+  return UNIT_CANON[key] || key || "nos";
+}
+
+// Phrase-level synonym normalization -- applied in order, on lowercased text
+// with punctuation already collapsed to spaces. Keep additions narrow and
+// well-commented; a synonym that's too broad silently merges materially
+// different items (the #1 failure mode this engine must avoid).
+const BOQ_SYNONYMS = [
+  [/\bcategory\s*6a\b/g, "cat6a"], [/\bcat\s*6a\b/g, "cat6a"],
+  [/\bcategory\s*6\b/g, "cat6"], [/\bcat\s*6\b(?!a)/g, "cat6"],
+  [/\bcategory\s*5e\b/g, "cat5e"], [/\bcat\s*5e\b/g, "cat5e"],
+  [/\bu\s*utp\b/g, "utp"], [/\bs\s*ftp\b/g, "sftp"], [/\bf\s*utp\b/g, "futp"],
+  [/\bsingle\s*mode\b/g, "singlemode"], [/\bmulti\s*mode\b/g, "multimode"],
+  [/\bmega\s*pixel(s)?\b/g, "mp"], [/\bmegapixel(s)?\b/g, "mp"],
+  [/\bmillimeter(s)?\b/g, "mm"], [/\bmillimetre(s)?\b/g, "mm"],
+  [/\bsquare\s*mm\b/g, "mm2"], [/\bmm\s*sq\b/g, "mm2"],
+  [/\baccess\s*point\b/g, "accesspoint"], [/\bfan\s*coil\s*unit\b/g, "fcu"], [/\bair\s*handling\s*unit\b/g, "ahu"],
+  [/\bdata\s*outlet\b/g, "dataoutlet"], [/\bfaceplate\b/g, "faceplate"],
+];
+
+// Generic descriptor words that don't distinguish one procurement item from
+// another once the meaningful spec tokens are already captured -- e.g.
+// "CAT6A Cable" vs "CAT6A Network Cable" vs "CAT6A UTP Cable" should match
+// (utp is captured separately as a spec token below, not stripped -- it's
+// only the pure filler words that get dropped here).
+const BOQ_STOPWORDS = new Set(["cable","cables","wire","wiring","network","cabling","assembly","type","standard","system","unit","item","the","a","an","for","with","and","utp","camera","cameras","detector","detectors","cctv"]);
+
+// Patterns pulled out as explicit, order-independent "spec tokens" that MUST
+// match for two items to consolidate -- this is what keeps CAT6 vs CAT6A,
+// 2.5mm² vs 4mm², or IP65 vs IP67 from ever being merged, no matter what
+// stopword stripping happens to the surrounding description text.
+const SPEC_TOKEN_PATTERNS = [
+  /\bcat\d?[a-z]?\b/g,                    // cat6, cat6a, cat5e (after synonym pass)
+  /\b\d+(\.\d+)?\s*mm2\b/g,               // 2.5mm2, 4mm2 (after synonym pass)
+  /\b\d+\s*c\s*x\s*\d+(\.\d+)?\b/g,       // 4c x 2.5, 3c x 4
+  /\bip\d{2}\b/g,                          // ip65, ip67
+  /\b\d+(\.\d+)?\s*mp\b/g,                 // 5mp, 8mp
+  /\b\d+\s*(v|kv|a|kva|hz)\b/g,            // 230v, 11kv, 32a, 500kva, 50hz
+  /\b(singlemode|multimode|sftp|futp)\b/g,
+  /\b\d+(\.\d+)?\s*(inch|in|mm|cm|m)\b/g,
+  /\bawg\s*\d+\b/g,
+];
+
+function normalizeText(raw) {
+  let s = String(raw || "").toLowerCase();
+  s = s.replace(/[\/,_\-()\[\]]/g, " ").replace(/[²]/g, "2").replace(/\s+/g, " ").trim();
+  BOQ_SYNONYMS.forEach(([re, rep]) => { s = s.replace(re, rep); });
+  s = s.replace(/\s+/g, " ").trim();
+  return s;
+}
+
+function extractSpecTokens(text) {
+  const found = new Set();
+  SPEC_TOKEN_PATTERNS.forEach(re => {
+    const matches = text.match(re);
+    if (matches) matches.forEach(m => found.add(m.replace(/\s+/g, "")));
+  });
+  return [...found].sort();
+}
+
+function bagOfWordsKey(normalized) {
+  return normalized.split(" ").filter(w => w && !BOQ_STOPWORDS.has(w)).sort().join(" ");
+}
+
+// The identity key: two boq_items rows consolidate into one BOQ line ONLY
+// when system, unit, and this key all match exactly. Deliberately does NOT
+// include floor/zone/room/drawing (those become the breakdown, not the
+// identity) or manufacturer/model (see design note above).
+function buildItemIdentity(item) {
+  const normDesc = normalizeText(item.description);
+  const normSpec = normalizeText(item.technical_specification || "");
+  const specTokens = extractSpecTokens(`${normDesc} ${normSpec}`);
+  const descKey = bagOfWordsKey(normDesc);
+  const unitCanon = normalizeUnit(item.unit);
+  return {
+    key: `${item.system_category}::${unitCanon}::${descKey}::${specTokens.join(",")}`,
+    unitCanon, specTokens, descKey,
+  };
+}
+
+// Keep only the latest revision per drawing_id (system-designed items with
+// drawing_id === null are always kept -- there's no revision concept for
+// those). Shared by every consumer (BOQ tab, Procurement, Engineering,
+// Excel/PDF export) so none of them can ever disagree about which revision
+// is "current".
+function filterLatestRevisions(items) {
+  const latestRevByDrawing = {};
+  (items || []).forEach(it => {
+    if (it.drawing_id) latestRevByDrawing[it.drawing_id] = Math.max(latestRevByDrawing[it.drawing_id] || 0, it.revision_number);
+  });
+  return (items || []).filter(it => !it.drawing_id || it.revision_number === latestRevByDrawing[it.drawing_id]);
+}
+
+// Duplicate-drawing detection: if two drawing rows share the same non-null
+// file_hash (computed client-side on upload, see hashFile() in DrawingsTab),
+// they're byte-identical uploads of the same file. Keep only the most
+// recently uploaded one's items in the active BOQ; return the excluded
+// drawing ids + what they duplicate so the UI can show a clear notice
+// instead of silently dropping data.
+function detectDuplicateDrawings(drawings) {
+  const byHash = {};
+  (drawings || []).forEach(d => {
+    if (!d.file_hash) return;
+    byHash[d.file_hash] = byHash[d.file_hash] || [];
+    byHash[d.file_hash].push(d);
+  });
+  const excludeDrawingIds = new Set();
+  const duplicateGroups = [];
+  Object.values(byHash).forEach(group => {
+    if (group.length < 2) return;
+    const sorted = [...group].sort((a, b) => new Date(b.uploaded_at) - new Date(a.uploaded_at));
+    const keep = sorted[0];
+    const drop = sorted.slice(1);
+    drop.forEach(d => excludeDrawingIds.add(d.id));
+    duplicateGroups.push({ keep, drop });
+  });
+  return { excludeDrawingIds, duplicateGroups };
+}
+
+const SYSTEM_ABBR = {
+  cctv: "CCTV", access_control: "ACS", structured_cabling: "SCS", wifi: "WIFI", intercom: "ITC", iptv: "IPTV",
+  public_address: "PA", audio_visual: "AV", parking_management: "PKG", anpr: "ANPR", bms: "BMS", grms: "GRMS",
+  lighting: "LTG", power_distribution: "PWR", db_panels: "DB", cable_sizing: "CBL", containment: "CONT",
+  earthing: "ERT", lightning_protection: "LPS", hvac: "HVAC", fcu: "FCU", ahu: "AHU", chillers: "CHL",
+  ducting: "DUCT", ventilation: "VENT", water_supply: "WS", drainage: "DRN", pumps: "PMP", fixtures: "FIX",
+  fire_alarm: "FA", fire_fighting: "FF", sprinkler: "SPR", fire_pump: "FP", other: "OTH",
+};
+
+// --------------------------------------------------------------------------
+// Quantity-reconciliation engine (added 2026-08-09). Core rule: the actual
+// PHYSICAL installation shown on a drawing is the source of truth for
+// quantity -- a schedule/key-plan/legend/typical-detail/note mentioning the
+// "same" quantity is validation information, not additional equipment, and
+// must NEVER be summed on top of the physical count. Every boq_items row
+// carries an optional quantity_source_type (set by ai-engine v22+; older
+// rows have it as null, which is treated as "physical_count" so nothing
+// historical silently drops out of totals).
+// --------------------------------------------------------------------------
+// Only these source types represent a real, independently-countable
+// physical/engineering quantity. Everything else is reference/validation
+// information and is excluded from the summed total (but still shown in the
+// Quantity Basis drilldown for traceability).
+const COUNTABLE_SOURCE_TYPES = new Set(["physical_count", "calculated_quantity"]);
+const REFERENCE_ONLY_SOURCE_TYPES = new Set([
+  "key_plan_reference", "legend_reference", "typical_detail_reference", "note_reference", "duplicate_reference",
+]);
+function isCountableSourceType(t) {
+  // Backward compatible: null/undefined (every row inserted before this
+  // feature existed) counts as physical_count, same as it always did.
+  if (!t) return true;
+  return COUNTABLE_SOURCE_TYPES.has(t);
+}
+const SOURCE_TYPE_LABELS = {
+  physical_count: "Physical Count", schedule_quantity: "Schedule Reference (validation only)",
+  key_plan_reference: "Key Plan Reference (not counted)", legend_reference: "Legend Reference (not counted)",
+  typical_detail_reference: "Typical/Detail Reference (not counted)", note_reference: "Note Reference (not counted)",
+  calculated_quantity: "Calculated Quantity", duplicate_reference: "Duplicate (already counted elsewhere)",
+};
+
+// --------------------------------------------------------------------------
+// Active / Passive component classification (added 2026-08-09), applied to
+// every system so a consolidated BOQ reads the way an ELV/MEP engineer
+// naturally groups it -- the equipment that does something (has power,
+// electronics, moving parts) listed first, then the cabling/containment/
+// mounting/fittings that just carry or support it. Deliberately a small,
+// auditable keyword list (same "deterministic, not an AI judgment call"
+// design as BOQ_SYNONYMS/BOQ_STOPWORDS above), not a per-system_category
+// hardcoded table -- one shared keyword set covers every discipline (ELV,
+// Electrical, HVAC, Plumbing, Fire) since the active/passive distinction
+// itself is generic ("does it have power/logic" vs "does it just route/
+// support"), only the specific items differ per system.
+// --------------------------------------------------------------------------
+const PASSIVE_KEYWORDS = [
+  "cable", "cables", "wire", "wiring", "conduit", "trunking", "cable tray", "tray", "containment",
+  "duct bank", "raceway", "gland", "bracket", "mount", "mounting", "rack", "cabinet", "enclosure",
+  "gang box", "back box", "junction box", "pull box", "faceplate", "outlet", "socket", "connector",
+  "patch panel", "termination", "pipe", "piping", "ducting", "duct", "damper", "grille", "diffuser",
+  "insulation", "valve", "fitting", "fixture", "flange", "coupling", "clamp", "hanger", "support",
+  "earthing", "earth pit", "earth strip", "lightning air terminal", "down conductor",
+  "trench", "manhole", "sleeve", "chase", "screed",
+];
+const ACTIVE_KEYWORDS = [
+  "camera", "nvr", "dvr", "recorder", "monitor", "workstation", "server", "controller", "reader",
+  "detector", "sounder", "call point", "beacon", "panel", "module", "sensor", "switch", "router",
+  "gateway", "access point", "amplifier", "speaker", "microphone", "intercom", "station",
+  "ups", "battery", "generator", "transformer", "breaker", "db ", "distribution board",
+  "pump", "fan", "chiller", "ahu", "fcu", "vav", "compressor", "motor", "actuator",
+  "lock", "strike", "barrier", "boom", "turnstile", "biometric",
+  "light fixture", "luminaire", "led", "lamp",
+];
+function classifyComponentType(row) {
+  const text = `${row.description || ""} ${row.technical_specification || ""}`.toLowerCase();
+  // Passive checked first: several passive terms (e.g. "cable tray") contain
+  // no active keyword collision risk, but doing passive-first keeps items
+  // like "camera cable" (a cable, not a camera) correctly passive.
+  if (PASSIVE_KEYWORDS.some(k => text.includes(k))) return "passive";
+  if (ACTIVE_KEYWORDS.some(k => text.includes(k))) return "active";
+  return "other";
+}
+
+// Human label for the left-hand bucket-list panel header in the merged BOQ
+// tab, matching the Group By dropdown's option text (2026-08-09).
+const GROUP_BY_LABELS = {
+  system: "System BOQ", floor: "Floor BOQ", project: "Item BOQ",
+  category: "Category BOQ", zone: "Zone BOQ", room: "Room BOQ", drawing: "Drawing BOQ",
+};
+function GROUP_BY_LABEL(g) { return GROUP_BY_LABELS[g] || "BOQ"; }
+
+// The main entry point. Takes raw boq_items rows (already filtered to the
+// latest revision + duplicate-drawing exclusion applied by the caller) plus
+// a drawings lookup map (id -> {file_name, floor_label}) for evidence
+// labels, and returns one consolidated row per unique item identity, each
+// carrying its full floor/zone/room/drawing breakdown for the Level 2 view.
+function consolidateBoqItems(items, drawingsById) {
+  const groups = new Map();
+  let seq = {};
+  items.forEach(it => {
+    const identity = buildItemIdentity(it);
+    if (!groups.has(identity.key)) {
+      seq[it.system_category] = (seq[it.system_category] || 0) + 1;
+      groups.set(identity.key, {
+        key: identity.key,
+        itemCode: `${SYSTEM_ABBR[it.system_category] || "GEN"}-${String(seq[it.system_category]).padStart(3, "0")}`,
+        systemCategory: it.system_category,
+        unit: identity.unitCanon,
+        rawItems: [],
+      });
+    }
+    groups.get(identity.key).rawItems.push(it);
+  });
+
+  return Array.from(groups.values()).map(g => {
+    const rows = g.rawItems;
+    // Canonical display description/spec: the most common exact text among
+    // the merged rows (majority vote), falling back to the longest one --
+    // this keeps the label human-readable instead of showing the bag-of-
+    // words key, while staying deterministic (not "whichever loaded last").
+    const pickCanonical = (field) => {
+      const counts = new Map();
+      rows.forEach(r => { const v = (r[field] || "").trim(); if (v) counts.set(v, (counts.get(v) || 0) + 1); });
+      if (!counts.size) return "";
+      return [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0][0];
+    };
+    const description = pickCanonical("description");
+    const technical_specification = pickCanonical("technical_specification");
+    const manufacturer = rows.find(r => r.manufacturer)?.manufacturer || null;
+    const model_number = rows.find(r => r.model_number)?.model_number || null;
+
+    // Quantity reconciliation: split evidence rows into COUNTABLE (physical
+    // installations + legitimate engineering calculations -- these are the
+    // only rows that ever contribute to the quantity) vs REFERENCE-ONLY
+    // (schedules, key plans, legends, typical/detail callouts, notes,
+    // recognized duplicates -- validation/traceability information that
+    // must NEVER be added on top of the physical count). This is the fix
+    // for the core bug: the same 20 cameras shown on a floor plan AND
+    // restated in a schedule AND shown again on a key plan must total 20,
+    // not 60.
+    const countableRows = rows.filter(r => isCountableSourceType(r.quantity_source_type));
+    const referenceRows = rows.filter(r => !isCountableSourceType(r.quantity_source_type));
+
+    const totalQuantity = countableRows.reduce((s, r) => s + Number(r.quantity || 0), 0);
+    const hasAnyQuantity = countableRows.some(r => Number(r.quantity || 0) > 0);
+
+    // Floor breakdown -- the numbers the UI/Excel must reconcile against.
+    // Built ONLY from countable rows so floor totals always sum to
+    // totalQuantity exactly (section 14's reconciliation requirement).
+    const floorMap = new Map();
+    countableRows.forEach(r => {
+      const label = r.floor_label || "Unassigned";
+      floorMap.set(label, (floorMap.get(label) || 0) + Number(r.quantity || 0));
+    });
+    const floorBreakdown = [...floorMap.entries()]
+      .map(([floor_label, quantity]) => ({ floor_label, quantity }))
+      .sort((a, b) => a.floor_label.localeCompare(b.floor_label, undefined, { numeric: true }));
+
+    // Zone breakdown, nested under floor where both are present.
+    const zoneMap = new Map();
+    countableRows.forEach(r => {
+      if (!r.zone) return;
+      const zKey = `${r.floor_label || "Unassigned"}::${r.zone}`;
+      zoneMap.set(zKey, (zoneMap.get(zKey) || 0) + Number(r.quantity || 0));
+    });
+    const zoneBreakdown = [...zoneMap.entries()].map(([k, quantity]) => {
+      const [floor_label, zone] = k.split("::");
+      return { floor_label, zone, quantity };
+    });
+
+    // Room breakdown -- only meaningful for room-scoped item types (per-room
+    // equipment counts), so callers should skip rendering this when every
+    // row has room === null, rather than force an empty section.
+    const roomMap = new Map();
+    countableRows.forEach(r => {
+      if (!r.room) return;
+      const rKey = `${r.floor_label || "Unassigned"}::${r.room}`;
+      roomMap.set(rKey, (roomMap.get(rKey) || 0) + Number(r.quantity || 0));
+    });
+    const roomBreakdown = [...roomMap.entries()].map(([k, quantity]) => {
+      const [floor_label, room] = k.split("::");
+      return { floor_label, room, quantity };
+    });
+
+    // Drawing evidence -- EVERY source row, including reference-only ones,
+    // each explicitly tagged with its classification and whether it counted
+    // toward the total. This is the "Quantity Basis" traceability data --
+    // an engineer can see a schedule/key-plan row was found and considered,
+    // just not double-added.
+    const evidence = rows.map(r => ({
+      id: r.id, drawing_id: r.drawing_id,
+      drawing_name: r.drawing_id ? (drawingsById[r.drawing_id]?.file_name || "Unknown drawing") : "AI System Design (no drawing)",
+      page: r.coordinates?.page || null,
+      floor_label: r.floor_label, zone: r.zone, room: r.room,
+      quantity: r.quantity, confidence_score: r.confidence_score,
+      location: r.location, source: r.source, review_status: r.review_status,
+      quantitySourceType: r.quantity_source_type || "physical_count",
+      quantitySourceLabel: SOURCE_TYPE_LABELS[r.quantity_source_type || "physical_count"],
+      countedTowardTotal: isCountableSourceType(r.quantity_source_type),
+      scheduleQuantityCrosscheck: r.schedule_quantity_crosscheck ?? null,
+      quantityBasisNotes: r.quantity_basis_notes || null,
+    }));
+
+    // Schedule-quantity discrepancy check (sections 4, 9, 14, 18): compare
+    // every declared schedule number -- whether it arrived as its own
+    // schedule_quantity row, or as a schedule_quantity_crosscheck value
+    // attached to a physical_count row -- against the summed physical
+    // total. NEVER silently take the larger number; only flag it.
+    const declaredScheduleValues = [
+      ...referenceRows.filter(r => r.quantity_source_type === "schedule_quantity").map(r => Number(r.quantity || 0)),
+      ...rows.filter(r => r.schedule_quantity_crosscheck != null).map(r => Number(r.schedule_quantity_crosscheck)),
+    ];
+    let discrepancy = null;
+    if (hasAnyQuantity && declaredScheduleValues.length) {
+      const distinctMismatches = [...new Set(declaredScheduleValues)].filter(v => v !== totalQuantity);
+      if (distinctMismatches.length) {
+        discrepancy = {
+          physicalTotal: totalQuantity,
+          scheduleTotal: distinctMismatches[0],
+          diff: distinctMismatches[0] - totalQuantity,
+          allDeclaredScheduleValues: [...new Set(declaredScheduleValues)],
+        };
+      }
+    }
+
+    const scored = rows.filter(r => r.confidence_score != null);
+    const avgConfidence = scored.length ? Math.round(scored.reduce((s, r) => s + Number(r.confidence_score), 0) / scored.length) : null;
+    const worstStatus = rows.some(r => r.final_status === "red") ? "red" : rows.some(r => r.final_status === "yellow") ? "yellow" : rows.some(r => r.final_status === "green") ? "green" : null;
+    const anyNeedsCorrection = rows.some(r => r.review_status === "needs_correction");
+    const allConfirmed = rows.every(r => r.review_status === "confirmed");
+    const approvalStatus = anyNeedsCorrection ? "needs_correction" : allConfirmed ? "confirmed" : rows.some(r => r.review_status === "rejected") ? "rejected" : "pending";
+    // Approval status per section 13: confidence affects review bucket, never the quantity itself.
+    let reviewBucket = avgConfidence == null ? "unclassified" : avgConfidence >= 90 ? "confirmed" : avgConfidence >= 70 ? "review_required" : "engineer_review";
+    // Quality gate (section 20): an unresolved physical-vs-schedule
+    // discrepancy can never be presented as "Confirmed" -- downgrade to at
+    // least review_required so it surfaces for engineer attention.
+    if (discrepancy && reviewBucket === "confirmed") reviewBucket = "review_required";
+
+    const itemTotalCents = (r) => (r.unit_cost_cents || 0) * Number(r.quantity || 0) + (r.material_cost_cents || 0) + (r.installation_cost_cents || 0) + (r.testing_cost_cents || 0);
+    const totalCostCents = countableRows.reduce((s, r) => s + itemTotalCents(r), 0);
+
+    return {
+      key: g.key, itemCode: g.itemCode, systemCategory: g.systemCategory, unit: g.unit,
+      description, technical_specification, manufacturer, model_number,
+      totalQuantity: hasAnyQuantity ? totalQuantity : null, // null (not 0) means "quantity not reliably extracted" -- see section 23
+      quantityIsTbd: !hasAnyQuantity,
+      floorBreakdown, zoneBreakdown, roomBreakdown, evidence,
+      sourceCount: rows.length, countableSourceCount: countableRows.length, referenceOnlySourceCount: referenceRows.length,
+      avgConfidence, worstStatus, approvalStatus, reviewBucket,
+      discrepancy, needsEngineerReview: reviewBucket === "engineer_review",
+      totalCostCents, sources: [...new Set(rows.map(r => r.source))],
+      rawItems: rows,
+    };
+  }).sort((a, b) => a.description.localeCompare(b.description));
+}
+
+// Generic "Group By" bucketing -- decoupled from consolidation. Consolidate
+// FIRST across the whole eligible item set, THEN bucket the consolidated
+// rows for display. This is what makes "Group By Floor" still show
+// consolidated per-floor quantities (via floorBreakdown) rather than
+// re-fragmenting already-merged items.
+function bucketConsolidated(consolidated, groupBy) {
+  if (groupBy === "project") return { "Project BOQ": consolidated };
+  if (groupBy === "system") {
+    const g = {};
+    consolidated.forEach(row => { const k = SYSTEM_LABEL(row.systemCategory); g[k] = g[k] || []; g[k].push(row); });
+    return g;
+  }
+  if (groupBy === "category") {
+    const g = {};
+    consolidated.forEach(row => {
+      const groupName = Object.entries(SYSTEM_GROUPS).find(([, cats]) => cats.includes(row.systemCategory))?.[0] || "Other";
+      g[groupName] = g[groupName] || []; g[groupName].push(row);
+    });
+    return g;
+  }
+  // Floor / Zone / Room / Drawing: these split a consolidated row back out
+  // per-bucket using its breakdown, so quantities shown per-bucket still
+  // sum back to the row's total (section 9/10/12's math-must-reconcile
+  // requirement), instead of just filtering the whole row in/out.
+  if (groupBy === "floor") {
+    const g = {};
+    consolidated.forEach(row => {
+      (row.floorBreakdown.length ? row.floorBreakdown : [{ floor_label: "Unassigned", quantity: row.totalQuantity }]).forEach(fb => {
+        g[fb.floor_label] = g[fb.floor_label] || []; g[fb.floor_label].push({ ...row, totalQuantity: fb.quantity, quantityIsTbd: row.quantityIsTbd });
+      });
+    });
+    return g;
+  }
+  if (groupBy === "zone") {
+    const g = {};
+    consolidated.forEach(row => {
+      row.zoneBreakdown.forEach(zb => {
+        const k = `${zb.floor_label} / ${zb.zone}`;
+        g[k] = g[k] || []; g[k].push({ ...row, totalQuantity: zb.quantity, quantityIsTbd: row.quantityIsTbd });
+      });
+    });
+    return g;
+  }
+  if (groupBy === "room") {
+    const g = {};
+    consolidated.forEach(row => {
+      row.roomBreakdown.forEach(rb => {
+        const k = `${rb.floor_label} / ${rb.room}`;
+        g[k] = g[k] || []; g[k].push({ ...row, totalQuantity: rb.quantity, quantityIsTbd: row.quantityIsTbd });
+      });
+    });
+    return g;
+  }
+  if (groupBy === "drawing") {
+    const g = {};
+    consolidated.forEach(row => {
+      // Only sum evidence rows that actually counted toward the total
+      // (physical_count / calculated_quantity). Schedule/key-plan/legend/
+      // typical-detail/note/duplicate rows are reference-only -- including
+      // them here would silently re-introduce the double-counting bug this
+      // whole engine exists to prevent, just scoped to "Group By Drawing"
+      // instead of the project total.
+      const byDrawing = new Map();
+      row.evidence.filter(e => e.countedTowardTotal).forEach(e => {
+        byDrawing.set(e.drawing_name, (byDrawing.get(e.drawing_name) || 0) + Number(e.quantity || 0));
+      });
+      byDrawing.forEach((qty, name) => { g[name] = g[name] || []; g[name].push({ ...row, totalQuantity: qty, quantityIsTbd: row.quantityIsTbd }); });
+    });
+    return g;
+  }
+  return { "Project BOQ": consolidated };
+}
+
 async function callEngine(action, payload) {
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(FN_URL, {
@@ -2139,35 +2628,18 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
         {err && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{err}</div>}
         <div className="grid md:grid-cols-2 gap-4">
           <Field label="Project Name" required value={form.project_name} onChange={v=>setForm({...form, project_name:v})} />
-          <Field label="Client Name" value={form.client_name} onChange={v=>setForm({...form, client_name:v})} />
-          <Field label="Consultant Name" value={form.consultant_name} onChange={v=>setForm({...form, consultant_name:v})} />
-          <Field label="Contractor Name" value={form.contractor_name} onChange={v=>setForm({...form, contractor_name:v})} />
+          <Field label="Client" value={form.client_name} onChange={v=>setForm({...form, client_name:v})} />
+          <Field label="Consultant" value={form.consultant_name} onChange={v=>setForm({...form, consultant_name:v})} />
+          <Field label="Contractor" value={form.contractor_name} onChange={v=>setForm({...form, contractor_name:v})} />
           <Field label="Country" required value={form.country} onChange={v=>setForm({...form, country:v})} />
           <Field label="City" required value={form.city} onChange={v=>setForm({...form, city:v})} />
-          <div>
-            <label className="text-xs font-semibold text-slate-600">Building Type</label>
-            <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={form.building_type} onChange={e=>setForm({...form, building_type:e.target.value})}>
-              {BUILDING_TYPES.map(([v,l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          </div>
-          <Field label="Number of Floors" type="number" value={form.number_of_floors} onChange={v=>setForm({...form, number_of_floors:v})} />
           <Field label="Area Size" type="number" value={form.area_size} onChange={v=>setForm({...form, area_size:v})} />
         </div>
-        <div>
-          <label className="text-xs font-semibold text-slate-600">Project Scope</label>
-          <textarea className="w-full border rounded-lg px-3 py-2 text-sm mt-1" rows={3} value={form.project_scope} onChange={e=>setForm({...form, project_scope:e.target.value})} />
-        </div>
-        <div>
-          <label className="text-xs font-semibold text-slate-600 mb-2 block">Required Systems</label>
-          <div className="flex flex-wrap gap-2">
-            {ALL_SYSTEMS.map(sys => (
-              <button type="button" key={sys} onClick={()=>toggleSystem(sys)}
-                className={`text-xs px-3 py-1.5 rounded-full border ${form.required_systems.includes(sys) ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-300"}`}>
-                {SYSTEM_LABEL(sys)}
-              </button>
-            ))}
-          </div>
-        </div>
+        {/* Building Type, Number of Floors, Project Scope, and Required Systems were removed from this
+            form per a direct request to keep project setup minimal -- compliance only needs city/country.
+            The underlying columns/defaults still exist and are still used elsewhere (dashboard cards, AI
+            prompts), they're just no longer collected up front; existing projects keep whatever values
+            they already have. */}
         <div className="flex gap-3 pt-2">
           <button disabled={busy} className="bg-slate-900 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">{busy ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save Changes" : "Create Project")}</button>
           <button type="button" onClick={onCancel} className="px-5 py-2.5 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-100">Cancel</button>
@@ -2191,9 +2663,20 @@ function Field({ label, value, onChange, type="text", required=false }) {
 // ---------------------------------------------------------------------------
 function ProjectWorkspace({ project, onBack, onEdit }) {
   const [tab, setTab] = useState("overview");
+  // 2026-08-09: Procurement BOQ and Engineering BOQ were merged into the
+  // single "BOQ" tab (now a two-panel takeoff view) per the user's explicit
+  // request -- three separate tabs showing the same underlying consolidated
+  // data with slightly different columns was confusing, and made it hard to
+  // trust which one was "the real" quantity. Procurement info (accessories,
+  // spare %, final order qty) and Engineering info (design basis, testing &
+  // commissioning) now live inside the BOQ tab's per-system Notes sub-tab.
+  // ProcurementBoqTab/EngineeringBoqTab components are left defined below
+  // (dead code, unreferenced) rather than deleted outright, to keep this
+  // change low-risk -- they can be fully removed in a later cleanup pass.
   const tabs = [
     ["overview","Overview"], ["drawings","Drawings & AI Analysis"], ["design","System Design (No Drawings)"],
-    ["boq","BOQ Review"], ["compliance","Compliance"], ["products","Product Recommendations"],
+    ["boq","BOQ"],
+    ["compliance","Compliance"], ["products","Product Recommendations"],
     ["export","Export"], ["chat","AI Assistant"],
   ];
   return (
@@ -2257,7 +2740,7 @@ function OverviewTab({ project }) {
 function DrawingsTab({ project }) {
   const [drawings, setDrawings] = useState([]);
   const [discipline, setDiscipline] = useState("architectural");
-  const [floorLabel, setFloorLabel] = useState("");
+  const [pendingFiles, setPendingFiles] = useState([]); // [{file, floorLabel}] -- staged before actual upload, see selectFiles()
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState({});
   const [runs, setRuns] = useState({});
@@ -2320,28 +2803,95 @@ function DrawingsTab({ project }) {
     setRuns(grouped);
   }
 
-  async function upload(e) {
+  // Bug fix: this used to apply ONE shared "Floor Label" text field to every
+  // file in a multi-file selection at once, so uploading a full drawing set
+  // (1F.pdf, 2F.pdf, GF.pdf, B1.pdf, RF.pdf...) tagged every single one with
+  // whatever was typed in that one box -- e.g. all 11 files ending up
+  // labeled "1st Floor" regardless of what floor they actually were. That
+  // wrong label then got fed straight into the AI prompt ("analyze this
+  // drawing for 1st Floor") for every file, which is exactly what produced
+  // mixed-up, missing-by-floor BOQs. Fix: selecting files now only STAGES
+  // them with a best-guess floor label parsed from each filename (editable
+  // per file before the real upload happens) instead of uploading
+  // immediately with one shared value.
+  function guessFloorLabel(fileName) {
+    const base = fileName.replace(/\.[^.]+$/, "").trim();
+    const compact = base.replace(/[\s_-]+/g, "").toUpperCase();
+    if (/^(GF|G|GROUND)$/.test(compact)) return "Ground Floor";
+    if (/^(RF|ROOF)$/.test(compact)) return "Roof Floor";
+    const basement = compact.match(/^B(\d+)$/) || compact.match(/^BASEMENT(\d+)$/);
+    if (basement) return `Basement ${basement[1]}`;
+    if (/^(B|BASEMENT)$/.test(compact)) return "Basement";
+    const floorNum = compact.match(/^(\d+)F$/) || compact.match(/^F(\d+)$/) || compact.match(/^L(\d+)$/) || compact.match(/^FLOOR(\d+)$/) || compact.match(/^LEVEL(\d+)$/);
+    if (floorNum) {
+      const n = parseInt(floorNum[1], 10);
+      const suffix = n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th";
+      return `${n}${suffix} Floor`;
+    }
+    return ""; // no confident guess -- leave blank for the user to fill in, rather than a wrong default
+  }
+
+  function selectFiles(e) {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+    setPendingFiles(files.map(file => ({ file, floorLabel: guessFloorLabel(file.name) })));
+  }
+
+  function updatePendingFloorLabel(idx, value) {
+    setPendingFiles(pf => pf.map((p, i) => i === idx ? { ...p, floorLabel: value } : p));
+  }
+
+  function removePendingFile(idx) {
+    setPendingFiles(pf => pf.filter((_, i) => i !== idx));
+  }
+
+  // SHA-256 of the raw file bytes -- stored on the drawing row so the BOQ
+  // consolidation engine (detectDuplicateDrawings) can recognize "same file
+  // uploaded twice" and exclude the duplicate from the active BOQ instead of
+  // double-counting every item on it. Byte-identical files hash identically
+  // regardless of filename/upload time, so a re-upload (even renamed) is
+  // still caught.
+  async function hashFile(file) {
+    const buf = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", buf);
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2,"0")).join("");
+  }
+
+  async function upload() {
+    if (pendingFiles.length === 0) return;
     setUploading(true); setErr("");
     try {
       const { data: { user } } = await sb.auth.getUser();
-      for (const file of files) {
+      for (const { file, floorLabel } of pendingFiles) {
         const ext = file.name.split(".").pop().toLowerCase();
         const fileType = ["pdf"].includes(ext) ? "pdf" : ["dwg"].includes(ext) ? "dwg" : ["dxf"].includes(ext) ? "dxf"
           : ["rvt"].includes(ext) ? "revit" : ["ifc"].includes(ext) ? "ifc" : ["png","jpg","jpeg"].includes(ext) ? "image" : "scan";
         const path = `${project.id}/${Date.now()}_${file.name}`;
+        let fileHash = null;
+        try { fileHash = await hashFile(file); } catch (hashErr) { console.error("file hash failed (non-fatal):", hashErr); }
         const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
         if (upErr) throw upErr;
         const { error: insErr } = await sb.from("drawings").insert({
           project_id: project.id, file_name: file.name, storage_path: path, file_type: fileType,
-          discipline, floor_label: floorLabel || null, uploaded_by: user.id,
+          discipline, floor_label: (floorLabel || "").trim() || null, uploaded_by: user.id, file_hash: fileHash,
         });
         if (insErr) throw insErr;
       }
-      fileRef.current.value = "";
+      setPendingFiles([]);
+      if (fileRef.current) fileRef.current.value = "";
       await load();
     } catch (ex) { setErr(ex.message); } finally { setUploading(false); }
+  }
+
+  async function deleteDrawing(d) {
+    if (!confirm(`Delete "${d.file_name}"? This removes the file and its analysis history. Any BOQ items already generated from it will be kept but unlinked from this drawing.`)) return;
+    try {
+      await sb.storage.from("drawings").remove([d.storage_path]);
+      if (d.analysis_source_path) await sb.storage.from("drawings").remove([d.analysis_source_path]);
+      const { error } = await sb.from("drawings").delete().eq("id", d.id);
+      if (error) throw error;
+      await load();
+    } catch (ex) { alert("Could not delete drawing: " + ex.message); }
   }
 
   async function analyzeAllPending() {
@@ -2403,16 +2953,28 @@ function DrawingsTab({ project }) {
                 <option key={d} value={d}>{d==="specification" ? "Specification / Requirement Document" : SYSTEM_LABEL(d)}</option>)}
             </select>
           </div>
-          <div>
-            <label className="text-xs font-semibold text-slate-600">Floor Label</label>
-            <input className="w-full border rounded-lg px-3 py-2 text-sm mt-1" placeholder="e.g. Floor 01 (leave blank for specs)" value={floorLabel} onChange={e=>setFloorLabel(e.target.value)} />
-          </div>
           <div className="flex items-end">
-            <input ref={fileRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.dwg,.dxf,.rvt,.ifc" onChange={upload} disabled={uploading} className="text-sm" />
+            <input ref={fileRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.dwg,.dxf,.rvt,.ifc" onChange={selectFiles} disabled={uploading} className="text-sm" />
           </div>
         </div>
-        {uploading && <div className="text-sm text-slate-500">Uploading…</div>}
-        <div className="text-xs text-slate-400">You can select multiple files at once — e.g. every floor plan for one discipline, or a full drawing set. Upload specification/requirement PDFs under "Specification / Requirement Document" so they're kept alongside the drawings for this project. Accepted: PDF, PNG/JPG (scanned or photographed drawings), DWG, DXF, Revit (.rvt), IFC. AI analysis runs directly on PDF, image, <strong>DXF</strong>, and <strong>IFC</strong> files — DXF is parsed as real CAD geometry (exact counts and on-drawing positions), and IFC is parsed as real BIM entity data (exact counts of walls, MEP/ELV equipment, etc. by type — not positions, since that needs full 3D placement resolution, out of scope for now). Neither is a visual estimate. DWG and Revit (.rvt) itself are closed, proprietary formats with no free/reliable parser — they upload and store now, and you can unlock AI analysis for them by attaching a PDF or image export of the same drawing (one click "Export"/"Print to PDF" in any CAD/BIM tool, or export to IFC instead if your tool supports it) using the "Attach export" control shown next to each one below.</div>
+        {pendingFiles.length > 0 && (
+          <div className="border rounded-lg p-3 mb-3 bg-slate-50">
+            <div className="text-xs font-semibold text-slate-600 mb-2">Confirm floor label for each file before uploading (auto-detected from the file name where possible — edit any that are wrong or blank):</div>
+            <div className="space-y-2">
+              {pendingFiles.map((p, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <span className="text-xs flex-1 truncate" title={p.file.name}>{p.file.name}</span>
+                  <input className="border rounded-lg px-2 py-1 text-xs w-40" placeholder="Floor label (blank for specs)" value={p.floorLabel} onChange={e=>updatePendingFloorLabel(idx, e.target.value)} />
+                  <button onClick={()=>removePendingFile(idx)} className="text-xs text-rose-600 hover:underline">Remove</button>
+                </div>
+              ))}
+            </div>
+            <button onClick={upload} disabled={uploading} className="mt-3 text-xs bg-slate-900 text-white px-3 py-2 rounded-lg font-semibold hover:bg-slate-800 disabled:opacity-50">
+              {uploading ? "Uploading…" : `Upload ${pendingFiles.length} file(s)`}
+            </button>
+          </div>
+        )}
+        <div className="text-xs text-slate-400">You can select multiple files at once — e.g. every floor plan for one discipline, or a full drawing set. Upload specification/requirement PDFs under "Specification / Requirement Document" so they're kept alongside the drawings for this project. Accepted: PDF, PNG/JPG (scanned or photographed drawings), DWG, DXF, Revit (.rvt), IFC. AI analysis runs directly on PDF, image, <strong>DXF</strong>, and <strong>IFC</strong> files — for DXF and IFC, the AI reads the actual underlying CAD/BIM exchange-format data (entities, layers, blocks for DXF; building elements for IFC), not a rendered picture, so it works from your real design data rather than a visual guess. It's still an AI-based read of that data (not a hard deterministic parser), and on-drawing markup positions aren't available for DXF/IFC since there's no page image to place a marker on — markup is only shown for PDF/image-based analyses. DWG and Revit (.rvt) itself are closed, proprietary formats with no free/reliable parser — they upload and store now, and you can unlock AI analysis for them by attaching a PDF or image export of the same drawing (one click "Export"/"Print to PDF" in any CAD/BIM tool, or export to IFC instead if your tool supports it) using the "Attach export" control shown next to each one below.</div>
         <div className="mt-3">
           <button onClick={analyzeAllPending} className="text-xs bg-slate-900 text-white px-3 py-2 rounded-lg font-semibold hover:bg-slate-800">Analyze All Un-analyzed Drawings</button>
           <span className="text-xs text-slate-400 ml-2">Runs AI analysis on every uploaded drawing that hasn't been analyzed yet, so a full drawing set produces one complete project BOQ without clicking "Analyze" on each file individually. Each drawing is still its own independent AI call.</span>
@@ -2436,10 +2998,10 @@ function DrawingsTab({ project }) {
                 <div className="font-medium text-sm">{d.file_name}</div>
                 <div className="text-xs text-slate-500">{SYSTEM_LABEL(d.discipline || "unspecified")} · {d.floor_label || "No floor label"} · {d.file_type.toUpperCase()}</div>
                 {d.file_type === "dxf" && (
-                  <div className="text-[10px] text-teal-700 bg-teal-50 inline-block px-2 py-0.5 rounded-full mt-1">Real CAD-data parsing — exact counts, not a visual estimate</div>
+                  <div className="text-[10px] text-teal-700 bg-teal-50 inline-block px-2 py-0.5 rounded-full mt-1">AI reads the real CAD exchange data — no markup positions available</div>
                 )}
                 {d.file_type === "ifc" && (
-                  <div className="text-[10px] text-teal-700 bg-teal-50 inline-block px-2 py-0.5 rounded-full mt-1">Real BIM-data parsing — exact element counts, not a visual estimate</div>
+                  <div className="text-[10px] text-teal-700 bg-teal-50 inline-block px-2 py-0.5 rounded-full mt-1">AI reads the real BIM exchange data — no markup positions available</div>
                 )}
                 {NEEDS_EXPORT_TYPES.includes(d.file_type) && d.analysis_source_path && (
                   <div className="text-[10px] text-blue-700 bg-blue-50 inline-block px-2 py-0.5 rounded-full mt-1">AI analysis via attached export</div>
@@ -2453,6 +3015,7 @@ function DrawingsTab({ project }) {
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={()=>previewDrawing(d.storage_path)} className="text-xs text-slate-600 border px-3 py-2 rounded-lg hover:bg-slate-50">Preview</button>
+                <button onClick={()=>deleteDrawing(d)} className="text-xs text-rose-600 border border-rose-200 px-3 py-2 rounded-lg hover:bg-rose-50">Delete</button>
                 {runs[d.id] && (
                   <button onClick={()=>setMarkupDrawing(d)} className="text-xs text-blue-700 bg-blue-50 px-3 py-2 rounded-lg font-semibold">View Markup</button>
                 )}
@@ -2587,9 +3150,9 @@ function MarkupViewerModal({ drawing, onClose }) {
             {!isImage && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 mb-4">
                 {drawing.file_type === "dxf" ? (
-                  "This DXF was parsed for exact entity coordinates (not a visual estimate), so every instance of an item is listed below with its precise position — but there's no rendered line drawing to overlay them on in this release, so markers aren't shown on an image yet."
+                  "This DXF was analyzed by the AI reading the actual CAD exchange-format text (real entity/layer/block data, not a visual estimate), but there's no rendered drawing image to place markers on, so on-drawing positions aren't shown for DXF items — the item list below is still the AI's real read of your file's data."
                 ) : drawing.file_type === "ifc" ? (
-                  "This IFC (BIM) file was parsed for exact element counts by type (not a visual estimate) — but unlike DXF, on-drawing positions aren't available yet (that needs resolving each element's full 3D placement, out of scope for this release), so no markers are shown on an image. Quantities in the item list below are still exact, machine-counted values."
+                  "This IFC (BIM) file was analyzed by the AI reading the actual BIM exchange-format text (real building element data, not a visual estimate), but there's no rendered drawing image to place markers on, so on-drawing positions aren't shown for IFC items — the item list below is still the AI's real read of your file's data."
                 ) : ["dwg","revit"].includes(drawing.file_type) ? (
                   drawing.analysis_source_path ? (
                     "This file was AI-analyzed via its attached PDF/image export. Marker positions below are captured from that export, not from the original DWG/Revit file directly — inline overlay rendering for this file type is on the roadmap."
@@ -2849,13 +3412,24 @@ function DesignTab({ project }) {
 // BOQ Review tab
 // ---------------------------------------------------------------------------
 function BoqTab({ project }) {
-  const [items, setItems] = useState([]);
-  const [groupBy, setGroupBy] = useState("system_category");
+  const [rawItems, setRawItems] = useState([]);
+  const [drawingRows, setDrawingRows] = useState([]);
+  // engineering_rules -- 2026-08-09: pulled into the merged BOQ tab so the
+  // former Procurement BOQ's "Required Accessories"/Spare %/Final Qty
+  // columns can live here instead of a separate tab, without a second AI or
+  // network round trip (same table ProcurementBoqTab used to load alone).
+  const [rules, setRules] = useState([]);
+  const [groupBy, setGroupBy] = useState("system");
   const [filterSystem, setFilterSystem] = useState("all");
+  // The left-hand bucket list (systems/floors/etc., per groupBy) selects
+  // which bucket's items show in the right-hand detail panel -- this is the
+  // two-panel "BOQ – Group by System" layout from the reference screenshot,
+  // replacing the old single long stacked-table layout.
+  const [selectedBucket, setSelectedBucket] = useState(null);
+  const [expandedItem, setExpandedItem] = useState(null); // consolidated row key -> "floor"|"zone"|"room"|"evidence"|"basis"|"notes"
   const [openComments, setOpenComments] = useState(null);
   const [comments, setComments] = useState({});
   const [commentText, setCommentText] = useState("");
-  const [drawings, setDrawings] = useState({});
   const [reworking, setReworking] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -2867,14 +3441,13 @@ function BoqTab({ project }) {
     try {
       const { data, error: qErr } = await sb.from("boq_items").select("*").eq("project_id", project.id).order("system_category").order("floor_label");
       if (qErr) throw qErr;
-      // Keep only latest revision per drawing_id (system-designed items have drawing_id null, always kept)
-      const latestRevByDrawing = {};
-      (data||[]).forEach(it => { if (it.drawing_id) latestRevByDrawing[it.drawing_id] = Math.max(latestRevByDrawing[it.drawing_id]||0, it.revision_number); });
-      const filtered = (data||[]).filter(it => !it.drawing_id || it.revision_number === latestRevByDrawing[it.drawing_id]);
-      setItems(filtered);
-      const { data: dr, error: drErr } = await sb.from("drawings").select("id, file_name").eq("project_id", project.id);
+      setRawItems(data || []);
+      const { data: dr, error: drErr } = await sb.from("drawings").select("id, file_name, file_hash, uploaded_at, revision_number").eq("project_id", project.id);
       if (drErr) throw drErr;
-      const dmap = {}; (dr||[]).forEach(d => dmap[d.id]=d.file_name); setDrawings(dmap);
+      setDrawingRows(dr || []);
+      const { data: er, error: erErr } = await sb.from("engineering_rules").select("*");
+      if (erErr) throw erErr;
+      setRules(er || []);
     } catch (e) {
       console.error("BoqTab.load failed:", e);
       setError(e.message || "Could not load the BOQ for this project.");
@@ -2887,12 +3460,17 @@ function BoqTab({ project }) {
     const dollars = parseFloat(dollarsStr);
     const cents = Number.isFinite(dollars) ? Math.round(dollars * 100) : null;
     await sb.from("boq_items").update({ [field]: cents }).eq("id", id);
-    setItems(its => its.map(i => i.id===id ? {...i, [field]: cents} : i));
+    setRawItems(its => its.map(i => i.id===id ? {...i, [field]: cents} : i));
   }
 
   async function updateStatus(id, status) {
     await sb.from("boq_items").update({ review_status: status }).eq("id", id);
-    setItems(its => its.map(i => i.id===id ? {...i, review_status: status} : i));
+    setRawItems(its => its.map(i => i.id===id ? {...i, review_status: status} : i));
+  }
+
+  async function updateItemField(id, field, value) {
+    await sb.from("boq_items").update({ [field]: value }).eq("id", id);
+    setRawItems(its => its.map(i => i.id===id ? {...i, [field]: value} : i));
   }
 
   async function loadComments(itemId) {
@@ -2909,10 +3487,14 @@ function BoqTab({ project }) {
     await updateStatus(itemId, "needs_correction");
   }
 
+  // Section 26 (rework): a targeted correction on one drawing's flagged items
+  // regenerates ONLY that drawing's revision via the AI, not the whole
+  // project -- floor/system/project totals then simply recompute from the
+  // new data next render, since they're always derived, never stored.
   async function requestRework(drawingId) {
     setReworking(r => ({...r, [drawingId]: true}));
     try {
-      const flagged = items.filter(i => i.drawing_id === drawingId && i.review_status === "needs_correction");
+      const flagged = rawItems.filter(i => i.drawing_id === drawingId && i.review_status === "needs_correction");
       const allComments = [];
       for (const it of flagged) {
         const { data: cs } = await sb.from("item_comments").select("comment").eq("boq_item_id", it.id).eq("resolved", false);
@@ -2925,24 +3507,311 @@ function BoqTab({ project }) {
     } catch (ex) { alert("Rework failed: " + ex.message); } finally { setReworking(r => ({...r, [drawingId]: false})); }
   }
 
-  const filtered = items.filter(i => filterSystem === "all" || i.system_category === filterSystem);
-  const grouped = useMemo(() => {
-    const g = {};
-    filtered.forEach(it => {
-      const key = groupBy === "system_category" ? SYSTEM_LABEL(it.system_category) : (it.floor_label || "Unassigned Floor");
-      g[key] = g[key] || []; g[key].push(it);
-    });
-    return g;
-  }, [filtered, groupBy]);
+  const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
 
-  const drawingIdsWithFlags = [...new Set(items.filter(i=>i.review_status==="needs_correction" && i.drawing_id).map(i=>i.drawing_id))];
-  const itemTotalCents = (it) => (it.unit_cost_cents||0)*Number(it.quantity||0) + (it.material_cost_cents||0) + (it.installation_cost_cents||0) + (it.testing_cost_cents||0);
-  const grandTotalCents = filtered.reduce((s,it)=>s+itemTotalCents(it), 0);
+  // Pipeline (section 25): filterLatestRevisions and detectDuplicateDrawings
+  // are pure JS over already-loaded data -- no AI call, ever, for any of
+  // this, including when the user just changes Group By.
+  const { excludeDrawingIds, duplicateGroups } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
+  const eligibleItems = useMemo(() => {
+    const latest = filterLatestRevisions(rawItems);
+    return latest.filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+  }, [rawItems, excludeDrawingIds]);
+
+  const consolidatedAll = useMemo(() => consolidateBoqItems(eligibleItems, drawingsById), [eligibleItems, drawingsById]);
+  const consolidated = useMemo(() => filterSystem === "all" ? consolidatedAll : consolidatedAll.filter(r => r.systemCategory === filterSystem), [consolidatedAll, filterSystem]);
+  const buckets = useMemo(() => bucketConsolidated(consolidated, groupBy), [consolidated, groupBy]);
+  // Ordered list of [bucketName, bucketRows] pairs backing the left-hand
+  // panel of the merged "BOQ - Group by <groupBy>" layout (2026-08-09).
+  const bucketEntries = useMemo(() => Object.entries(buckets), [buckets]);
+  // Keep selectedBucket valid whenever groupBy/filterSystem/data changes --
+  // default to the first bucket so the right-hand panel is never empty when
+  // buckets exist, and clear it when there are none.
+  useEffect(() => {
+    if (bucketEntries.length === 0) { setSelectedBucket(null); return; }
+    if (!bucketEntries.some(([name]) => name === selectedBucket)) setSelectedBucket(bucketEntries[0][0]);
+  }, [bucketEntries]);
+
+  // Former ProcurementBoqTab logic, merged in (2026-08-09) -- required
+  // accessories derived from engineering_rules, no separate AI call or tab.
+  function accessoriesFor(row) {
+    const matches = rules.filter(r => r.system_category === row.systemCategory && row.description.toLowerCase().includes((r.trigger_keyword||"").toLowerCase()));
+    if (!matches.length) return "—";
+    return [...new Set(matches.map(m => m.derived_description))].join(", ");
+  }
+  function finalProcurementQty(row) {
+    if (row.quantityIsTbd || row.totalQuantity == null) return null;
+    const pct = sparePercentFor(row.systemCategory);
+    return { spare: pct, final: Math.ceil(row.totalQuantity * (1 + pct / 100)) };
+  }
+
+  const drawingIdsWithFlags = [...new Set(rawItems.filter(i=>i.review_status==="needs_correction" && i.drawing_id).map(i=>i.drawing_id))];
+
+  // Section 20: project BOQ summary strip.
+  const summary = useMemo(() => {
+    const systemsCount = new Set(consolidatedAll.map(r => r.systemCategory)).size;
+    const scored = consolidatedAll.filter(r => r.avgConfidence != null);
+    const avgConf = scored.length ? Math.round(scored.reduce((s,r)=>s+r.avgConfidence,0)/scored.length) : null;
+    return {
+      totalItems: consolidatedAll.length,
+      totalSystems: systemsCount,
+      totalDrawings: drawingRows.length,
+      reviewRequired: consolidatedAll.filter(r => r.reviewBucket === "review_required").length,
+      engineerReview: consolidatedAll.filter(r => r.reviewBucket === "engineer_review").length,
+      discrepancies: consolidatedAll.filter(r => r.discrepancy).length,
+      avgConfidence: avgConf,
+    };
+  }, [consolidatedAll, drawingRows]);
+
+  // Section 18: per-item discrepancy acknowledgement (physical count vs.
+  // schedule-stated count disagree). Purely a UI acknowledgement flag --
+  // it never changes the stored quantity. "Accept physical count" just
+  // dismisses the warning banner for this session; "Use schedule instead"
+  // requires the engineer to type a reason, which is saved as a comment on
+  // the item so there's a durable audit trail instead of a silent overwrite.
+  const [dismissedDiscrepancies, setDismissedDiscrepancies] = useState({});
+  async function useScheduleQuantityInstead(row) {
+    const reason = prompt(`This will NOT change the stored BOQ quantity automatically (Quantora never silently overwrites a physical count). Enter the engineering justification for treating ${row.discrepancy.scheduleTotal} (schedule) as correct instead of ${row.discrepancy.physicalTotal} (physical count). This will be logged as a comment for reconciliation by whoever edits the item.`);
+    if (!reason) return;
+    const target = row.evidence.find(e => e.countedTowardTotal) || row.evidence[0];
+    if (target) await addCommentDirect(target.id, "missing_item", `[Quantity discrepancy override requested] Physical=${row.discrepancy.physicalTotal}, Schedule=${row.discrepancy.scheduleTotal}. Reason: ${reason}`);
+    setDismissedDiscrepancies(d => ({ ...d, [row.key]: "schedule_requested" }));
+  }
+  async function addCommentDirect(itemId, type, text) {
+    try { await sb.from("item_comments").insert({ boq_item_id: itemId, comment_type: type, comment: text, resolved: false }); } catch (ex) { /* best-effort */ }
+  }
+
+  function toggleExpand(key, view) {
+    setExpandedItem(cur => (cur && cur.key === key && cur.view === view) ? null : { key, view });
+  }
+
+  const statusBadge = (row) => {
+    if (row.reviewBucket === "unclassified") return <span className="text-slate-300 text-xs">—</span>;
+    const cls = row.reviewBucket === "confirmed" ? "bg-emerald-100 text-emerald-700" : row.reviewBucket === "review_required" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700";
+    const text = row.reviewBucket === "confirmed" ? "Confirmed" : row.reviewBucket === "review_required" ? "Review Required" : "Engineer Review";
+    return <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${cls}`}>{text}</span>;
+  };
+
+  function EvidenceRow({ ev }) {
+    // Section 16/25: reference-only evidence (schedule/key-plan/legend/
+    // typical-detail/note/duplicate) is shown dimmed with an explicit
+    // "not counted" badge, so an engineer can see the source was found and
+    // considered without mistaking it for an additional physical count.
+    return (
+      <React.Fragment>
+        <tr className={`text-xs ${ev.countedTowardTotal ? "bg-white" : "bg-slate-50 text-slate-400"}`}>
+          <td className="px-3 py-1.5 pl-8 text-slate-600">
+            {ev.drawing_name}{ev.page ? ` — Page ${ev.page}` : ""}
+            <div className="mt-0.5">
+              <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${ev.countedTowardTotal ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
+                {ev.quantitySourceLabel}{!ev.countedTowardTotal ? " — NOT counted" : ""}
+              </span>
+            </div>
+            {ev.quantityBasisNotes && <div className="mt-0.5 text-[10px] text-slate-400 italic">{ev.quantityBasisNotes}</div>}
+          </td>
+          <td className="px-3 py-1.5 text-slate-500">{ev.floor_label || "—"}</td>
+          <td className="px-3 py-1.5 text-slate-500">{ev.zone || "—"}</td>
+          <td className="px-3 py-1.5 text-right">{ev.quantity}{ev.scheduleQuantityCrosscheck != null ? <span className="text-slate-400"> (schedule: {ev.scheduleQuantityCrosscheck})</span> : ""}</td>
+          <td className="px-3 py-1.5 text-center"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${confidenceColor(ev.confidence_score)}`}>{ev.confidence_score ?? "—"}%</span></td>
+          <td className="px-3 py-1.5 text-slate-500">{ev.location || "—"}</td>
+          <td className="px-3 py-1.5 text-right">
+            <input type="number" step="0.01" defaultValue={rawItems.find(r=>r.id===ev.id)?.unit_cost_cents!=null ? (rawItems.find(r=>r.id===ev.id).unit_cost_cents/100).toFixed(2) : ""} placeholder="0.00"
+              onBlur={e=>updateCost(ev.id,"unit_cost_cents",e.target.value)} className="w-20 text-right border rounded px-1.5 py-1 text-[11px]" />
+          </td>
+          <td className="px-3 py-1.5 text-center">
+            <select value={ev.review_status} onChange={e=>updateStatus(ev.id, e.target.value)} className="text-[11px] border rounded px-1 py-0.5">
+              <option value="pending">Pending</option><option value="confirmed">Confirmed</option>
+              <option value="rejected">Rejected</option><option value="needs_correction">Needs Correction</option>
+            </select>
+          </td>
+          <td className="px-3 py-1.5 text-center">
+            <button onClick={()=>{ setOpenComments(openComments===ev.id?null:ev.id); if (openComments!==ev.id) loadComments(ev.id); }} className="text-[11px] text-blue-600 hover:underline">Comment</button>
+          </td>
+        </tr>
+        {openComments === ev.id && (
+          <tr><td colSpan={9} className="bg-slate-50 px-3 py-3">
+            <div className="space-y-2 mb-2">
+              {(comments[ev.id]||[]).map(c => <div key={c.id} className="text-xs bg-white border rounded px-2 py-1.5"><span className="font-semibold">{c.comment_type}:</span> {c.comment}</div>)}
+            </div>
+            <div className="flex gap-2">
+              <input value={commentText} onChange={e=>setCommentText(e.target.value)} placeholder="e.g. Floor 4 has 12 cameras, not 10" className="flex-1 border rounded-lg px-3 py-1.5 text-xs" />
+              <button onClick={()=>addComment(ev.id,"missing_item")} className="text-xs bg-slate-900 text-white px-3 py-1.5 rounded-lg">Add & Flag</button>
+            </div>
+          </td></tr>
+        )}
+      </React.Fragment>
+    );
+  }
+
+  function ConsolidatedRow({ row }) {
+    const isExpanded = expandedItem && expandedItem.key === row.key;
+    const hasZones = row.zoneBreakdown.length > 0;
+    const hasRooms = row.roomBreakdown.length > 0;
+    return (
+      <React.Fragment>
+        <tr>
+          <td className="px-3 py-2"><span className="text-[10px] font-mono text-slate-400">{row.itemCode}</span></td>
+          <td className="px-3 py-2 font-medium">{row.description}</td>
+          <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={row.technical_specification}>{row.technical_specification || "—"}</td>
+          <td className="px-3 py-2 text-slate-500">{row.manufacturer || "—"}{row.model_number ? ` / ${row.model_number}` : ""}</td>
+          <td className="px-3 py-2">{row.unit}</td>
+          <td className="px-3 py-2 text-right font-semibold">
+            {row.quantityIsTbd ? <span className="text-amber-600 text-xs font-semibold">TBD — Engineer Review Required</span> : (
+              <React.Fragment>
+                {row.totalQuantity}
+                {row.discrepancy && <span title="Physical count disagrees with a schedule/reference quantity" className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 align-middle">⚠ Discrepancy</span>}
+              </React.Fragment>
+            )}
+          </td>
+          <td className="px-3 py-2 text-center"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${confidenceColor(row.avgConfidence)}`}>{row.avgConfidence ?? "—"}%</span></td>
+          <td className="px-3 py-2 text-center">{statusBadge(row)}</td>
+          <td className="px-3 py-2 text-center text-slate-500">{row.sourceCount}</td>
+          <td className="px-3 py-2 text-slate-500 max-w-[10rem] truncate" title={accessoriesFor(row)}>{accessoriesFor(row)}</td>
+          <td className="px-3 py-2 text-center text-slate-500">{finalProcurementQty(row) ? `${finalProcurementQty(row).spare}%` : "—"}</td>
+          <td className="px-3 py-2 text-right font-semibold text-slate-700">{finalProcurementQty(row) ? finalProcurementQty(row).final : "—"}</td>
+          <td className="px-3 py-2 text-center">
+            <button onClick={()=>toggleExpand(row.key, "floor")} className="text-xs text-blue-600 hover:underline">
+              {isExpanded ? "Hide" : "View Breakdown"}
+            </button>
+          </td>
+        </tr>
+        {isExpanded && (
+          <tr><td colSpan={13} className="bg-slate-50 px-4 py-3">
+            {row.discrepancy && dismissedDiscrepancies[row.key] !== "accepted" && (
+              <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 mb-3 text-xs">
+                <div className="font-semibold text-rose-800 mb-1">⚠ QUANTITY DISCREPANCY — engineer review required</div>
+                <div className="text-rose-700 mb-2">
+                  Physical count on the drawings: <strong>{row.discrepancy.physicalTotal} {row.unit}</strong>. A schedule/reference source states <strong>{row.discrepancy.scheduleTotal} {row.unit}</strong> ({row.discrepancy.diff > 0 ? `${row.discrepancy.diff} more` : `${-row.discrepancy.diff} fewer`} than what was physically counted). Quantora used the physical count — it never silently adopts the larger number.
+                  {dismissedDiscrepancies[row.key] === "schedule_requested" && <div className="mt-1 italic">Override request logged as a comment for engineer sign-off; the stored quantity has not been changed.</div>}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>setDismissedDiscrepancies(d=>({...d,[row.key]:"accepted"}))} className="text-[11px] font-semibold bg-emerald-600 text-white px-2.5 py-1 rounded-lg">Accept Physical Count ({row.discrepancy.physicalTotal})</button>
+                  <button onClick={()=>useScheduleQuantityInstead(row)} className="text-[11px] font-semibold bg-white border border-rose-300 text-rose-700 px-2.5 py-1 rounded-lg">Use Schedule Qty Instead (requires reason)</button>
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2 mb-3">
+              <button onClick={()=>toggleExpand(row.key,"floor")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="floor"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Floor Breakdown</button>
+              {hasZones && <button onClick={()=>toggleExpand(row.key,"zone")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="zone"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Zone Breakdown</button>}
+              {hasRooms && <button onClick={()=>toggleExpand(row.key,"room")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="room"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Room Breakdown</button>}
+              <button onClick={()=>toggleExpand(row.key,"evidence")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="evidence"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Drawing Evidence</button>
+              <button onClick={()=>toggleExpand(row.key,"basis")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="basis"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Quantity Basis</button>
+              <button onClick={()=>toggleExpand(row.key,"notes")} className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${expandedItem.view==="notes"?"bg-slate-900 text-white":"bg-white border text-slate-600"}`}>Notes & Accessories</button>
+            </div>
+
+            {expandedItem.view === "floor" && (
+              <div>
+                <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
+                  <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Floor</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
+                  <tbody className="divide-y">
+                    {row.floorBreakdown.map(fb => <tr key={fb.floor_label}><td className="px-3 py-1.5">{fb.floor_label}</td><td className="px-3 py-1.5 text-right">{fb.quantity} {row.unit}</td></tr>)}
+                    <tr className="font-semibold bg-slate-50"><td className="px-3 py-1.5">TOTAL</td><td className="px-3 py-1.5 text-right">{row.totalQuantity} {row.unit}</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {expandedItem.view === "zone" && hasZones && (
+              <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
+                <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Zone</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
+                <tbody className="divide-y">{row.zoneBreakdown.map((zb,i) => <tr key={i}><td className="px-3 py-1.5">{zb.floor_label}</td><td className="px-3 py-1.5">{zb.zone}</td><td className="px-3 py-1.5 text-right">{zb.quantity} {row.unit}</td></tr>)}</tbody>
+              </table>
+            )}
+            {expandedItem.view === "room" && hasRooms && (
+              <table className="w-full text-xs bg-white border rounded-lg overflow-hidden">
+                <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Room</th><th className="text-right px-3 py-1.5">Quantity</th></tr></thead>
+                <tbody className="divide-y">{row.roomBreakdown.map((rb,i) => <tr key={i}><td className="px-3 py-1.5">{rb.floor_label}</td><td className="px-3 py-1.5">{rb.room}</td><td className="px-3 py-1.5 text-right">{rb.quantity} {row.unit}</td></tr>)}</tbody>
+              </table>
+            )}
+            {expandedItem.view === "evidence" && (
+              <div className="bg-white border rounded-lg overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-100 text-slate-500 uppercase">
+                    <tr><th className="text-left px-3 py-1.5">Drawing / Page</th><th className="text-left px-3 py-1.5">Floor</th><th className="text-left px-3 py-1.5">Zone</th><th className="text-right px-3 py-1.5">Qty</th><th className="text-center px-3 py-1.5">Confidence</th><th className="text-left px-3 py-1.5">Location</th><th className="text-right px-3 py-1.5">Unit Cost</th><th className="text-center px-3 py-1.5">Status</th><th className="text-center px-3 py-1.5">Actions</th></tr>
+                  </thead>
+                  <tbody className="divide-y">{row.evidence.map(ev => <EvidenceRow key={ev.id} ev={ev} />)}</tbody>
+                </table>
+              </div>
+            )}
+            {expandedItem.view === "basis" && (
+              // Section 15: "Quantity Basis" drilldown -- shows how the
+              // final reconciled quantity was actually derived: which
+              // drawings contributed physical counts, what any
+              // schedule/reference sources stated (explicitly NOT added),
+              // and the final reconciled number, so an engineer never has
+              // to just take the total on faith.
+              <div className="bg-white border rounded-lg p-3 text-xs space-y-3">
+                <div>
+                  <div className="font-semibold text-slate-700 mb-1">Physical counts (summed into the total)</div>
+                  {row.evidence.filter(e => e.countedTowardTotal).length === 0 ? (
+                    <div className="text-slate-400 italic">No physical-count source found — quantity is TBD / engineer review required.</div>
+                  ) : (
+                    <table className="w-full border rounded overflow-hidden">
+                      <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Floor</th><th className="text-left px-2 py-1">Basis</th><th className="text-right px-2 py-1">Qty</th></tr></thead>
+                      <tbody className="divide-y">
+                        {row.evidence.filter(e => e.countedTowardTotal).map(e => (
+                          <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.floor_label||"—"}</td><td className="px-2 py-1 text-slate-500">{e.quantityBasisNotes || e.quantitySourceLabel}</td><td className="px-2 py-1 text-right font-semibold">{e.quantity}</td></tr>
+                        ))}
+                        <tr className="font-semibold bg-slate-50"><td className="px-2 py-1" colSpan={3}>Reconciled total</td><td className="px-2 py-1 text-right">{row.totalQuantity} {row.unit}</td></tr>
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+                {row.evidence.some(e => !e.countedTowardTotal) && (
+                  <div>
+                    <div className="font-semibold text-slate-700 mb-1">Reference sources (found, cross-checked, NOT added to the total)</div>
+                    <table className="w-full border rounded overflow-hidden">
+                      <thead className="bg-slate-100 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Drawing</th><th className="text-left px-2 py-1">Type</th><th className="text-right px-2 py-1">Stated Qty</th></tr></thead>
+                      <tbody className="divide-y text-slate-400">
+                        {row.evidence.filter(e => !e.countedTowardTotal).map(e => (
+                          <tr key={e.id}><td className="px-2 py-1">{e.drawing_name}{e.page?` p.${e.page}`:""}</td><td className="px-2 py-1">{e.quantitySourceLabel}</td><td className="px-2 py-1 text-right">{e.quantity}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {row.discrepancy && (
+                  <div className="text-rose-600 font-semibold">⚠ Physical count ({row.discrepancy.physicalTotal}) disagrees with a schedule/reference quantity ({row.discrepancy.scheduleTotal}) — see the discrepancy banner above.</div>
+                )}
+              </div>
+            )}
+            {expandedItem.view === "notes" && (
+              // Merged in from the former Engineering BOQ tab (2026-08-09):
+              // design basis / testing & commissioning / installation
+              // accessories / consumables, plus the procurement accessories
+              // and spare-% derived above -- all sourced from data already
+              // loaded for this tab, no separate call.
+              <div className="bg-white border rounded-lg p-3 text-xs space-y-3">
+                <div>
+                  <div className="font-semibold text-slate-700 mb-1">Required accessories (procurement)</div>
+                  <div className="text-slate-600">{accessoriesFor(row)}</div>
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-700 mb-1">Spare allowance &amp; final procurement quantity</div>
+                  {finalProcurementQty(row) ? (
+                    <div className="text-slate-600">Reconciled quantity {row.totalQuantity} {row.unit} + {finalProcurementQty(row).spare}% spare = <strong>{finalProcurementQty(row).final} {row.unit}</strong> to procure.</div>
+                  ) : <div className="text-slate-400 italic">Quantity is TBD / engineer review required — no spare allowance calculated yet.</div>}
+                </div>
+                {(row.technical_specification || row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
+                  <div>
+                    <div className="font-semibold text-slate-700 mb-1">Engineering notes</div>
+                    {row.technical_specification && <div className="mb-1"><span className="text-slate-500">Design basis: </span>{row.technical_specification}</div>}
+                    {(row.rawItems[0]?.testing_requirements || row.rawItems[0]?.commissioning_requirements) && (
+                      <div><span className="text-slate-500">Testing &amp; commissioning: </span>{[row.rawItems[0]?.testing_requirements, row.rawItems[0]?.commissioning_requirements].filter(Boolean).join(" · ")}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </td></tr>
+        )}
+      </React.Fragment>
+    );
+  }
 
   return (
     <div>
       <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 mb-4 text-xs text-amber-800">
-        <strong>AI-generated estimate — provided "as is," for informational and preliminary planning purposes only, without warranty of any kind.</strong> This Bill of Quantities is produced by an automated AI system. It does not constitute engineering, quantity-surveying, or professional advice, and no professional relationship is created by its use. It has not been reviewed, verified, certified, or stamped by a licensed engineer or quantity surveyor. You are solely responsible for independently verifying all quantities, specifications, and cost figures before relying on this document for tendering, procurement, permitting, or construction. Quantora and its operators accept no liability for decisions made using this output.
+        <strong>AI-generated estimate — provided "as is," for informational and preliminary planning purposes only, without warranty of any kind.</strong> This Bill of Quantities is produced by an automated AI system. It does not constitute engineering, quantity-surveying, or professional advice, and no professional relationship is created by its use. It has not been reviewed, verified, certified, or stamped by a licensed engineer or quantity surveyor. Confidence scores reflect AI extraction certainty, not independent verification — nothing here should be read as "100% accurate" until a licensed engineer has checked it. You are solely responsible for independently verifying all quantities, specifications, and cost figures before relying on this document for tendering, procurement, permitting, or construction. Quantora and its operators accept no liability for decisions made using this output.
       </div>
 
       {error ? (
@@ -2954,17 +3823,59 @@ function BoqTab({ project }) {
         <div className="text-slate-400 text-sm py-8 text-center">Loading BOQ…</div>
       ) : (
       <React.Fragment>
+
+      {/* Section 20: Project BOQ Summary */}
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="text-xs font-semibold text-slate-500 uppercase mb-2">Project BOQ Summary</div>
+        <div className="text-sm mb-3">{project.project_name} — {project.city}, {project.country}</div>
+        <div className="grid grid-cols-3 md:grid-cols-7 gap-3 text-center">
+          {[
+            ["Consolidated Items", summary.totalItems],
+            ["Systems", summary.totalSystems],
+            ["Drawings", summary.totalDrawings],
+            ["Avg. Confidence", summary.avgConfidence != null ? `${summary.avgConfidence}%` : "—"],
+            ["Review Required", summary.reviewRequired],
+            ["Engineer Review", summary.engineerReview],
+            ["Discrepancies", summary.discrepancies],
+          ].map(([label, val]) => (
+            <div key={label} className="bg-slate-50 rounded-lg py-2">
+              <div className="text-lg font-bold text-slate-800">{val}</div>
+              <div className="text-[10px] text-slate-500 uppercase">{label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {duplicateGroups.length > 0 && (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-4 text-xs text-rose-700">
+          <div className="font-semibold mb-1">Duplicate drawing uploads detected — excluded from this BOQ to avoid double-counting</div>
+          {duplicateGroups.map((g,i) => (
+            <div key={i}>Kept the most recent upload of "{g.keep.file_name}"; excluded {g.drop.length} identical earlier upload(s) of the same file from the active BOQ (still visible in Drawings tab).</div>
+          ))}
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <select className="border rounded-lg px-3 py-1.5 text-sm" value={groupBy} onChange={e=>setGroupBy(e.target.value)}>
-          <option value="system_category">Group by System</option>
-          <option value="floor_label">Group by Floor</option>
-        </select>
-        <select className="border rounded-lg px-3 py-1.5 text-sm" value={filterSystem} onChange={e=>setFilterSystem(e.target.value)}>
-          <option value="all">All Systems</option>
-          {ALL_SYSTEMS.map(s => <option key={s} value={s}>{SYSTEM_LABEL(s)}</option>)}
-        </select>
-        <div className="text-sm text-slate-500 ml-auto">{filtered.length} line items</div>
-        {grandTotalCents > 0 && <div className="text-sm font-semibold text-slate-700">Est. Total: ${(grandTotalCents/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>}
+        <div>
+          <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">Group By</label>
+          <select className="border rounded-lg px-3 py-1.5 text-sm" value={groupBy} onChange={e=>setGroupBy(e.target.value)}>
+            <option value="system">System BOQ</option>
+            <option value="floor">Floor BOQ</option>
+            <option value="project">Item BOQ (single flat list)</option>
+            <option value="category">Category (ELV / Electrical / HVAC / etc.)</option>
+            <option value="zone">Zone</option>
+            <option value="room">Room</option>
+            <option value="drawing">Drawing</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">System Filter</label>
+          <select className="border rounded-lg px-3 py-1.5 text-sm" value={filterSystem} onChange={e=>setFilterSystem(e.target.value)}>
+            <option value="all">All Systems</option>
+            {ALL_SYSTEMS.map(s => <option key={s} value={s}>{SYSTEM_LABEL(s)}</option>)}
+          </select>
+        </div>
+        <div className="text-sm text-slate-500 ml-auto self-end">{consolidated.length} consolidated line{consolidated.length===1?"":"s"} ({consolidated.reduce((s,r)=>s+r.sourceCount,0)} source detections)</div>
       </div>
 
       {drawingIdsWithFlags.length > 0 && (
@@ -2972,7 +3883,7 @@ function BoqTab({ project }) {
           <div className="font-semibold text-amber-800 text-sm mb-2">Drawings with pending corrections</div>
           {drawingIdsWithFlags.map(id => (
             <div key={id} className="flex items-center justify-between py-1">
-              <span className="text-sm text-amber-800">{drawings[id] || id}</span>
+              <span className="text-sm text-amber-800">{drawingsById[id]?.file_name || id}</span>
               <button onClick={()=>requestRework(id)} disabled={reworking[id]} className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50">
                 {reworking[id] ? "AI reworking…" : "AI Rework (apply corrections)"}
               </button>
@@ -2981,80 +3892,287 @@ function BoqTab({ project }) {
         </div>
       )}
 
-      {Object.keys(grouped).length === 0 && <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet. Analyze a drawing or design a system to generate one.</div>}
+      {bucketEntries.length === 0 && <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet. Analyze a drawing or design a system to generate one.</div>}
 
-      {Object.entries(grouped).map(([groupName, groupItems]) => (
-        <div key={groupName} className="mb-6">
-          <h3 className="font-semibold text-slate-800 mb-2">{groupName} <span className="text-slate-400 font-normal text-sm">({groupItems.length})</span></h3>
-          <div className="qtr-boq-table bg-white border rounded-xl overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
-                <tr>
-                  <th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Spec</th>
-                  <th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Unit</th>
-                  <th className="text-left px-3 py-2">Location</th><th className="text-left px-3 py-2">Source</th>
-                  <th className="text-center px-3 py-2">Confidence</th><th className="text-center px-3 py-2">Risk</th>
-                  <th className="text-center px-3 py-2">Compliance</th>
-                  <th className="text-right px-3 py-2">Unit Cost</th><th className="text-right px-3 py-2">Total</th>
-                  <th className="text-center px-3 py-2">Status</th><th className="text-center px-3 py-2">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {groupItems.map(it => (
-                  <React.Fragment key={it.id}>
-                    <tr>
-                      <td className="px-3 py-2">{it.description}</td>
-                      <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={it.technical_specification}>{it.technical_specification || "—"}</td>
-                      <td className="px-3 py-2 text-right">{it.quantity}</td>
-                      <td className="px-3 py-2">{it.unit}</td>
-                      <td className="px-3 py-2 text-slate-500">{it.location || it.floor_label || "—"}</td>
-                      <td className="px-3 py-2"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${(SOURCE_BADGE[it.source]||SOURCE_BADGE.manual).cls}`}>{(SOURCE_BADGE[it.source]||SOURCE_BADGE.manual).text}</span></td>
-                      <td className="px-3 py-2 text-center"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${confidenceColor(it.confidence_score)}`}>{it.confidence_score ?? "—"}%</span></td>
-                      <td className="px-3 py-2 text-center"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${riskLabel(it.confidence_score).cls}`}>{riskLabel(it.confidence_score).text}</span></td>
-                      <td className="px-3 py-2 text-center">
-                        {it.final_status ? (
-                          <span title={it.compliance_notes || ""} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${it.final_status==="green"?"bg-emerald-100 text-emerald-700":it.final_status==="yellow"?"bg-amber-100 text-amber-700":"bg-rose-100 text-rose-700"}`}>
-                            {it.final_status==="green"?"Green":it.final_status==="yellow"?"Yellow":"Red"}{it.compliance_status==="review_needed" ? " • Review" : ""}
-                          </span>
-                        ) : <span className="text-slate-300 text-xs">—</span>}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <input type="number" step="0.01" defaultValue={it.unit_cost_cents!=null ? (it.unit_cost_cents/100).toFixed(2) : ""} placeholder="0.00"
-                          onBlur={e=>updateCost(it.id,"unit_cost_cents",e.target.value)} className="w-20 text-right border rounded px-1.5 py-1 text-xs" />
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-600">
-                        {itemTotalCents(it) > 0 ? `$${(itemTotalCents(it)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"}
-                        {itemTotalCents(it) > 0 && it.cost_is_estimate !== false && <span className="text-[10px] text-slate-400 ml-1">(est.)</span>}
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        <select value={it.review_status} onChange={e=>updateStatus(it.id, e.target.value)} className="text-xs border rounded px-1.5 py-1">
-                          <option value="pending">Pending</option><option value="confirmed">Confirmed</option>
-                          <option value="rejected">Rejected</option><option value="needs_correction">Needs Correction</option>
-                        </select>
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        <button onClick={()=>{ setOpenComments(openComments===it.id?null:it.id); if (openComments!==it.id) loadComments(it.id); }} className="text-xs text-blue-600 hover:underline">Comment</button>
-                      </td>
-                    </tr>
-                    {openComments === it.id && (
-                      <tr><td colSpan={12} className="bg-slate-50 px-3 py-3">
-                        <div className="space-y-2 mb-2">
-                          {(comments[it.id]||[]).map(c => <div key={c.id} className="text-xs bg-white border rounded px-2 py-1.5"><span className="font-semibold">{c.comment_type}:</span> {c.comment}</div>)}
-                        </div>
-                        <div className="flex gap-2">
-                          <input value={commentText} onChange={e=>setCommentText(e.target.value)} placeholder="e.g. Camera missing in this area" className="flex-1 border rounded-lg px-3 py-1.5 text-xs" />
-                          <button onClick={()=>addComment(it.id,"missing_item")} className="text-xs bg-slate-900 text-white px-3 py-1.5 rounded-lg">Add & Flag</button>
-                        </div>
-                      </td></tr>
-                    )}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
+      {bucketEntries.length > 0 && (
+        // Two-panel "BOQ - Group by <groupBy>" layout (2026-08-09): left is a
+        // clickable list of the current buckets (systems/floors/etc.); right
+        // is the selected bucket's items, split into Active Components /
+        // Passive Components / Other so every system reads the same way
+        // (active first, then passive), matching the reference dashboard.
+        <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-4">
+          <div className="bg-white border rounded-xl overflow-hidden self-start">
+            <div className="px-3 py-2 bg-slate-50 border-b text-xs font-semibold text-slate-500 uppercase">
+              {GROUP_BY_LABEL(groupBy)} ({bucketEntries.length})
+            </div>
+            <div className="divide-y max-h-[70vh] overflow-y-auto">
+              {bucketEntries.map(([bucketName, bucketRows]) => {
+                const conf = bucketRows.filter(r=>r.avgConfidence!=null);
+                const avgConf = conf.length ? Math.round(conf.reduce((s,r)=>s+r.avgConfidence,0)/conf.length) : null;
+                const needsReview = bucketRows.filter(r=>r.reviewBucket==="review_required"||r.reviewBucket==="engineer_review").length;
+                const isSel = selectedBucket === bucketName;
+                return (
+                  <button key={bucketName} onClick={()=>setSelectedBucket(bucketName)}
+                    className={`w-full text-left px-3 py-2.5 hover:bg-slate-50 ${isSel ? "bg-slate-100" : ""}`}>
+                    <div className={`text-sm font-semibold ${isSel ? "text-slate-900" : "text-slate-700"}`}>{bucketName}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">
+                      {bucketRows.length} item{bucketRows.length===1?"":"s"}{avgConf!=null && ` · ${avgConf}% conf.`}
+                      {needsReview > 0 && <span className="text-amber-600 font-semibold"> · {needsReview} to review</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            {bucketEntries.filter(([name]) => name === selectedBucket).map(([bucketName, bucketRows]) => {
+              const groups = { active: [], passive: [], other: [] };
+              bucketRows.forEach(row => groups[classifyComponentType(row)].push(row));
+              const sections = [
+                ["active", "Active Components", groups.active],
+                ["passive", "Passive Components", groups.passive],
+                ["other", "Other / General", groups.other],
+              ].filter(([,,rows]) => rows.length > 0);
+              return (
+                <div key={bucketName}>
+                  <h3 className="font-semibold text-slate-800 text-lg mb-3">{bucketName} <span className="text-slate-400 font-normal text-sm">({bucketRows.length} items)</span></h3>
+                  {sections.map(([kind, label, rows]) => (
+                    <div key={kind} className="mb-6">
+                      <div className="flex items-baseline justify-between mb-2">
+                        <h4 className="font-semibold text-slate-700 text-sm">{label} <span className="text-slate-400 font-normal">({rows.length})</span></h4>
+                      </div>
+                      <div className="qtr-boq-table bg-white border rounded-xl overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                            <tr>
+                              <th className="text-left px-3 py-2">Code</th>
+                              <th className="text-left px-3 py-2">Item Name</th>
+                              <th className="text-left px-3 py-2">Specification</th>
+                              <th className="text-left px-3 py-2">Mfr / Model</th>
+                              <th className="text-left px-3 py-2">Unit</th>
+                              <th className="text-right px-3 py-2">Total Qty</th>
+                              <th className="text-center px-3 py-2">Confidence</th>
+                              <th className="text-center px-3 py-2">Status</th>
+                              <th className="text-center px-3 py-2">Sources</th>
+                              <th className="text-left px-3 py-2">Accessories</th>
+                              <th className="text-center px-3 py-2">Spare %</th>
+                              <th className="text-right px-3 py-2">Final Qty</th>
+                              <th className="text-center px-3 py-2">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {rows.map(row => <ConsolidatedRow key={row.key + bucketName} row={row} />)}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
           </div>
         </div>
-      ))}
+      )}
       </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Procurement BOQ -- section 18. Same consolidated data as the BOQ tab, laid
+// out for purchasing: adds a spare-quantity allowance and required
+// accessories (from engineering_rules), and a final procurement quantity.
+// No separate AI call -- built entirely from data already in memory-shape
+// via the same consolidateBoqItems() engine.
+// ---------------------------------------------------------------------------
+const SPARE_PERCENT_BY_CATEGORY = {
+  structured_cabling: 10, cable_sizing: 10, containment: 10, water_supply: 5, drainage: 5,
+  lighting: 5, power_distribution: 5, db_panels: 3, fixtures: 5,
+  cctv: 5, access_control: 5, fire_alarm: 5, fire_fighting: 3, sprinkler: 5,
+};
+function sparePercentFor(systemCategory) { return SPARE_PERCENT_BY_CATEGORY[systemCategory] ?? 5; }
+
+function ProcurementBoqTab({ project }) {
+  const [rawItems, setRawItems] = useState([]);
+  const [drawingRows, setDrawingRows] = useState([]);
+  const [rules, setRules] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { load(); }, [project.id]);
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const [{ data: items, error: iErr }, { data: dr, error: dErr }, { data: er, error: eErr }] = await Promise.all([
+        sb.from("boq_items").select("*").eq("project_id", project.id),
+        sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
+        sb.from("engineering_rules").select("*"),
+      ]);
+      if (iErr) throw iErr; if (dErr) throw dErr; if (eErr) throw eErr;
+      setRawItems(items || []); setDrawingRows(dr || []); setRules(er || []);
+    } catch (e) {
+      console.error("ProcurementBoqTab.load failed:", e);
+      setError(e.message || "Could not load procurement data.");
+    } finally { setLoading(false); }
+  }
+
+  const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
+  const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
+  const consolidated = useMemo(() => {
+    const latest = filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+    return consolidateBoqItems(latest, drawingsById);
+  }, [rawItems, excludeDrawingIds, drawingsById]);
+
+  function accessoriesFor(row) {
+    const matches = rules.filter(r => r.system_category === row.systemCategory && row.description.toLowerCase().includes((r.trigger_keyword||"").toLowerCase()));
+    if (!matches.length) return "—";
+    return [...new Set(matches.map(m => m.derived_description))].join(", ");
+  }
+
+  return (
+    <div>
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 mb-4 text-xs text-amber-800">
+        <strong>Procurement BOQ — AI-generated estimate, not final tender documentation.</strong> Spare % allowances are engineering rule-of-thumb defaults (editable in future revisions), not project-specific waste-factor calculations. Verify final procurement quantities and manufacturer/model selections before issuing a purchase order.
+      </div>
+      {error ? (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-4 flex items-center justify-between">
+          <div className="text-sm text-rose-700">{error}</div>
+          <button onClick={load} className="text-xs font-semibold bg-rose-600 text-white px-3 py-1.5 rounded-lg hover:bg-rose-700">Retry</button>
+        </div>
+      ) : loading ? <div className="text-slate-400 text-sm py-8 text-center">Loading…</div> : consolidated.length === 0 ? (
+        <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet.</div>
+      ) : (
+        <div className="bg-white border rounded-xl overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+              <tr>
+                <th className="text-left px-3 py-2">Item No.</th><th className="text-left px-3 py-2">System</th>
+                <th className="text-left px-3 py-2">Item Name</th><th className="text-left px-3 py-2">Detailed Specification</th>
+                <th className="text-left px-3 py-2">Mfr / Model</th><th className="text-left px-3 py-2">Unit</th>
+                <th className="text-right px-3 py-2">Total Qty</th><th className="text-left px-3 py-2">Required Accessories</th>
+                <th className="text-right px-3 py-2">Spare %</th><th className="text-right px-3 py-2">Final Procurement Qty</th>
+                <th className="text-center px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {consolidated.map(row => {
+                const spare = sparePercentFor(row.systemCategory);
+                const finalQty = row.quantityIsTbd ? null : Math.ceil(row.totalQuantity * (1 + spare/100));
+                return (
+                  <tr key={row.key}>
+                    <td className="px-3 py-2 text-[10px] font-mono text-slate-400">{row.itemCode}</td>
+                    <td className="px-3 py-2">{SYSTEM_LABEL(row.systemCategory)}</td>
+                    <td className="px-3 py-2 font-medium">{row.description}</td>
+                    <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={row.technical_specification}>{row.technical_specification || "—"}</td>
+                    <td className="px-3 py-2 text-slate-500">{row.manufacturer || "—"}{row.model_number ? ` / ${row.model_number}` : ""}</td>
+                    <td className="px-3 py-2">{row.unit}</td>
+                    <td className="px-3 py-2 text-right">{row.quantityIsTbd ? <span className="text-amber-600 text-xs font-semibold">TBD</span> : <React.Fragment>{row.totalQuantity}{row.discrepancy && <span title={`Physical ${row.discrepancy.physicalTotal} vs schedule ${row.discrepancy.scheduleTotal}`} className="ml-1 text-[9px] font-semibold px-1 py-0.5 rounded-full bg-rose-100 text-rose-700">⚠</span>}</React.Fragment>}</td>
+                    <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={accessoriesFor(row)}>{accessoriesFor(row)}</td>
+                    <td className="px-3 py-2 text-right text-slate-500">{spare}%</td>
+                    <td className="px-3 py-2 text-right font-semibold">{finalQty ?? "—"}</td>
+                    <td className="px-3 py-2 text-center">
+                      {row.reviewBucket === "confirmed" ? <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Confirmed</span>
+                        : row.reviewBucket === "review_required" ? <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Review Required</span>
+                        : row.reviewBucket === "engineer_review" ? <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">Engineer Review</span>
+                        : <span className="text-slate-300 text-xs">—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Engineering BOQ -- section 19. Shows the engineering/design basis behind
+// each consolidated item rather than the procurement framing. NOTE (stated
+// plainly rather than fabricated): per-item numeric calculation traces
+// (e.g. "coverage area / camera radius = qty") are not stored as a separate
+// structured field today -- design_system's prompt asks the AI to reflect
+// its reasoning in technical_specification/consumables, which is what's
+// shown here as "Design Basis". A dedicated calculation-trace field would
+// need a schema + ai-engine prompt change beyond this pass; flagged as a
+// remaining gap in the final report rather than papered over.
+// ---------------------------------------------------------------------------
+function EngineeringBoqTab({ project }) {
+  const [rawItems, setRawItems] = useState([]);
+  const [drawingRows, setDrawingRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { load(); }, [project.id]);
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const [{ data: items, error: iErr }, { data: dr, error: dErr }] = await Promise.all([
+        sb.from("boq_items").select("*").eq("project_id", project.id),
+        sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
+      ]);
+      if (iErr) throw iErr; if (dErr) throw dErr;
+      setRawItems(items || []); setDrawingRows(dr || []);
+    } catch (e) {
+      console.error("EngineeringBoqTab.load failed:", e);
+      setError(e.message || "Could not load engineering data.");
+    } finally { setLoading(false); }
+  }
+
+  const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
+  const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
+  const consolidated = useMemo(() => {
+    const latest = filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+    return consolidateBoqItems(latest, drawingsById);
+  }, [rawItems, excludeDrawingIds, drawingsById]);
+
+  return (
+    <div>
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 mb-4 text-xs text-amber-800">
+        <strong>Engineering BOQ — design basis and assumptions behind each item.</strong> "Design Basis" reflects the AI's stated specification/reasoning; it is not a substitute for an independent engineering calculation check.
+      </div>
+      {error ? (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-4 flex items-center justify-between">
+          <div className="text-sm text-rose-700">{error}</div>
+          <button onClick={load} className="text-xs font-semibold bg-rose-600 text-white px-3 py-1.5 rounded-lg hover:bg-rose-700">Retry</button>
+        </div>
+      ) : loading ? <div className="text-slate-400 text-sm py-8 text-center">Loading…</div> : consolidated.length === 0 ? (
+        <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet.</div>
+      ) : (
+        <div className="bg-white border rounded-xl overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+              <tr>
+                <th className="text-left px-3 py-2">System</th><th className="text-left px-3 py-2">Item</th>
+                <th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Unit</th>
+                <th className="text-left px-3 py-2">Design Basis</th><th className="text-left px-3 py-2">Testing / Commissioning</th>
+                <th className="text-center px-3 py-2">Confidence</th><th className="text-left px-3 py-2">Source</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {consolidated.map(row => {
+                const anyRow = row.rawItems[0];
+                return (
+                  <tr key={row.key}>
+                    <td className="px-3 py-2">{SYSTEM_LABEL(row.systemCategory)}</td>
+                    <td className="px-3 py-2 font-medium">{row.description}</td>
+                    <td className="px-3 py-2 text-right">{row.quantityIsTbd ? "TBD" : row.totalQuantity}</td>
+                    <td className="px-3 py-2">{row.unit}</td>
+                    <td className="px-3 py-2 text-slate-500 max-w-sm">{row.technical_specification || "—"}</td>
+                    <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={anyRow?.testing_requirements || anyRow?.commissioning_requirements || ""}>
+                      {[anyRow?.testing_requirements, anyRow?.commissioning_requirements].filter(Boolean).join(" · ") || "—"}
+                    </td>
+                    <td className="px-3 py-2 text-center"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${confidenceColor(row.avgConfidence)}`}>{row.avgConfidence ?? "—"}%</span></td>
+                    <td className="px-3 py-2"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${(SOURCE_BADGE[row.sources[0]]||SOURCE_BADGE.manual).cls}`}>{row.sources.length>1?"Multiple":(SOURCE_BADGE[row.sources[0]]||SOURCE_BADGE.manual).text}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -3203,41 +4321,132 @@ function ExportTab({ project }) {
     setIsTrial(co?.plan === "trial");
   }
 
+  // Multi-sheet workbook built from the SAME consolidateBoqItems() engine
+  // the BOQ/Procurement/Engineering tabs use -- so the export can never
+  // disagree with what the UI shows (section 21/29's "Excel export matches
+  // the UI" requirement). Sheets implemented: Executive Summary,
+  // Consolidated BOQ, System BOQ, Floor Breakdown, Zone Breakdown,
+  // Procurement BOQ, Engineering BOQ, Review Required, Engineer Review,
+  // Drawing Evidence, Revision History. NOT yet implemented as separate
+  // sheets (stated plainly rather than faked): Compliance, Product
+  // Recommendations, Assumptions, and a standalone Calculation/Quantity
+  // Basis sheet -- Compliance/Products already have dedicated tabs in the
+  // app itself; folding them into this export is a reasonable next step,
+  // not done in this pass.
   async function exportExcel(kind) {
     setBusy(true);
     try {
-      const { data: items } = await sb.from("boq_items").select("*").eq("project_id", project.id).order("system_category").order("floor_label");
-      const latestRevByDrawing = {};
-      (items||[]).forEach(it => { if (it.drawing_id) latestRevByDrawing[it.drawing_id] = Math.max(latestRevByDrawing[it.drawing_id]||0, it.revision_number); });
-      const filtered = (items||[]).filter(it => !it.drawing_id || it.revision_number === latestRevByDrawing[it.drawing_id])
-        .filter(it => kind !== "procurement" || it.review_status === "confirmed");
+      const [{ data: items }, { data: dr }, { data: rules }, { data: runs }] = await Promise.all([
+        sb.from("boq_items").select("*").eq("project_id", project.id),
+        sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
+        sb.from("engineering_rules").select("*"),
+        sb.from("analysis_runs").select("*").eq("project_id", project.id).order("created_at"),
+      ]);
+      const drawingsById = {}; (dr||[]).forEach(d => drawingsById[d.id] = d);
+      const { excludeDrawingIds, duplicateGroups } = detectDuplicateDrawings(dr || []);
+      const latest = filterLatestRevisions(items || []).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+      const consolidatedAll = consolidateBoqItems(latest, drawingsById);
+      const consolidated = kind !== "procurement" ? consolidatedAll : consolidatedAll.filter(r => r.reviewBucket === "confirmed");
 
       const wb = XLSX.utils.book_new();
+      const disclaimer = "AI-generated estimate — provided \"as is,\" for informational purposes only, without warranty of any kind. Not a substitute for review, verification, or certification by a licensed engineer. User assumes full responsibility for independently verifying all quantities, specifications, and costs before tendering, procurement, or construction. Quantora accepts no liability for its use.";
+      const trialRow = isTrial ? [["Generated using Quantora Trial Version"], []] : [];
+      const addSheet = (rows, name) => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name.substring(0,31));
+
+      // 1. Executive Summary
+      const systemsCount = new Set(consolidatedAll.map(r=>r.systemCategory)).size;
+      const scored = consolidatedAll.filter(r=>r.avgConfidence!=null);
+      const avgConf = scored.length ? Math.round(scored.reduce((s,r)=>s+r.avgConfidence,0)/scored.length) : null;
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Project", project.project_name], ["Client", project.client_name || ""], ["Consultant", project.consultant_name || ""],
+        ["Contractor", project.contractor_name || ""], ["Location", `${project.city}, ${project.country}`], ["Area", `${project.area_size ?? ""} ${project.area_unit ?? ""}`],
+        ["Export Type", kind], ["Generated", new Date().toISOString()], [],
+        ["Total Consolidated BOQ Items", consolidatedAll.length], ["Total Systems", systemsCount], ["Total Drawings", (dr||[]).length],
+        ["Average AI Confidence", avgConf!=null ? `${avgConf}%` : "n/a"],
+        ["Items Requiring Review", consolidatedAll.filter(r=>r.reviewBucket==="review_required").length],
+        ["Items Requiring Engineer Approval", consolidatedAll.filter(r=>r.reviewBucket==="engineer_review").length],
+        ["Duplicate drawing uploads excluded", duplicateGroups.reduce((s,g)=>s+g.drop.length,0)],
+      ], "Executive Summary");
+
+      // 2. Consolidated BOQ (Level 1 -- the "clean answer"). "Physical Sources" /
+      // "Reference Sources" and "Quantity Discrepancy" columns make the
+      // reconciliation visible in the export itself, not just in the app --
+      // Total Quantity here is ALWAYS the physical/calculated count, never
+      // inflated by the reference-only sources also listed.
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Item Code","System","Item Name","Specification","Manufacturer","Model","Unit","Total Quantity","Confidence %","Status","Physical Sources","Reference Sources (not counted)","Quantity Discrepancy"],
+        ...consolidated.map(r => [r.itemCode, SYSTEM_LABEL(r.systemCategory), r.description, r.technical_specification||"", r.manufacturer||"", r.model_number||"", r.unit, r.quantityIsTbd?"TBD":r.totalQuantity, r.avgConfidence??"", r.reviewBucket, r.countableSourceCount, r.referenceOnlySourceCount, r.discrepancy ? `Physical ${r.discrepancy.physicalTotal} vs schedule ${r.discrepancy.scheduleTotal}` : ""]),
+      ], "Consolidated BOQ");
+
+      // 3. System BOQ -- rollup per system, matching section 7/8's summary view.
       const bySystem = {};
-      filtered.forEach(it => { bySystem[it.system_category] = bySystem[it.system_category] || []; bySystem[it.system_category].push(it); });
+      consolidated.forEach(r => { bySystem[r.systemCategory] = bySystem[r.systemCategory] || []; bySystem[r.systemCategory].push(r); });
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["System","BOQ Items","Confirmed","Review Required","Engineer Review","Avg. Confidence %"],
+        ...Object.entries(bySystem).map(([sys, rows]) => {
+          const sc = rows.filter(r=>r.avgConfidence!=null);
+          const a = sc.length ? Math.round(sc.reduce((s,r)=>s+r.avgConfidence,0)/sc.length) : "";
+          return [SYSTEM_LABEL(sys), rows.length, rows.filter(r=>r.reviewBucket==="confirmed").length, rows.filter(r=>r.reviewBucket==="review_required").length, rows.filter(r=>r.reviewBucket==="engineer_review").length, a];
+        }),
+      ], "System BOQ");
 
-      const itemTotal = (r) => (r.unit_cost_cents||0)*Number(r.quantity||0) + (r.material_cost_cents||0) + (r.installation_cost_cents||0) + (r.testing_cost_cents||0);
-      const grandTotalCents = filtered.reduce((s,r)=>s+itemTotal(r), 0);
-      const disclaimerRow = ["AI-generated estimate — provided \"as is,\" for informational purposes only, without warranty of any kind. Not a substitute for review, verification, or certification by a licensed engineer. User assumes full responsibility for independently verifying all quantities, specifications, and costs before tendering, procurement, or construction. Quantora accepts no liability for its use."];
+      // 4. Floor Breakdown -- flattened, must sum back to Consolidated BOQ's Total Quantity per item.
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Item Code","Item Name","Floor","Quantity","Unit"],
+        ...consolidated.flatMap(r => r.floorBreakdown.map(fb => [r.itemCode, r.description, fb.floor_label, fb.quantity, r.unit])),
+      ], "Floor Breakdown");
 
-      const summaryRows = [
-        ...(isTrial ? [["Generated using Quantora Trial Version"], []] : []),
-        [disclaimerRow[0]], [],
-        ["Project", project.project_name], ["Client", project.client_name], ["Location", `${project.city}, ${project.country}`],
-        ["Building Type", project.building_type], ["Floors", project.number_of_floors], ["Area", `${project.area_size ?? ""} ${project.area_unit ?? ""}`],
-        ["Export Type", kind], ["Generated", new Date().toISOString()],
-        ["Estimated Total Cost (USD)", grandTotalCents > 0 ? (grandTotalCents/100).toFixed(2) : "n/a — no unit costs entered yet"],
-        [], ["System", "Line Items", "Total Qty", "Est. Cost (USD)"]];
-      Object.entries(bySystem).forEach(([sys, rows]) => summaryRows.push([SYSTEM_LABEL(sys), rows.length, rows.reduce((s,r)=>s+Number(r.quantity||0),0), (rows.reduce((s,r)=>s+itemTotal(r),0)/100).toFixed(2)]));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "Summary");
+      // 5. Zone Breakdown
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Item Code","Item Name","Floor","Zone","Quantity","Unit"],
+        ...consolidated.flatMap(r => r.zoneBreakdown.map(zb => [r.itemCode, r.description, zb.floor_label, zb.zone, zb.quantity, r.unit])),
+      ], "Zone Breakdown");
 
-      Object.entries(bySystem).forEach(([sys, rows]) => {
-        const header = ["Item No","Floor","Zone","Room","Area","Description","Technical Specification","Qty","Unit","Length","Location","Accessories","Consumables","Testing","Commissioning","Confidence %","Compliance","Unit Cost (USD)","Est. Total Cost (USD)","Status"];
-        const data = rows.map(r => [r.item_no,r.floor_label,r.zone,r.room,r.area_label,r.description,r.technical_specification,r.quantity,r.unit,r.length_value,r.location,r.installation_accessories,r.consumables,r.testing_requirements,r.commissioning_requirements,r.confidence_score,r.final_status ? `${r.final_status}${r.compliance_status==="review_needed"?" (review needed)":""}` : "", r.unit_cost_cents!=null ? (r.unit_cost_cents/100).toFixed(2) : "", itemTotal(r) > 0 ? (itemTotal(r)/100).toFixed(2) : "", r.review_status]);
-        const sheetRows = isTrial ? [["Generated using Quantora Trial Version"], [disclaimerRow[0]], [], header, ...data] : [[disclaimerRow[0]], [], header, ...data];
-        const ws = XLSX.utils.aoa_to_sheet(sheetRows);
-        XLSX.utils.book_append_sheet(wb, ws, SYSTEM_LABEL(sys).substring(0,31));
-      });
+      // 6. Procurement BOQ
+      const accessoriesFor = (row) => {
+        const matches = (rules||[]).filter(rl => rl.system_category === row.systemCategory && row.description.toLowerCase().includes((rl.trigger_keyword||"").toLowerCase()));
+        return matches.length ? [...new Set(matches.map(m=>m.derived_description))].join(", ") : "";
+      };
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Item No.","System","Item Name","Detailed Specification","Manufacturer","Model","Unit","Total Quantity","Required Accessories","Spare %","Final Procurement Quantity","Status"],
+        ...consolidated.map(r => { const spare = sparePercentFor(r.systemCategory); const finalQty = r.quantityIsTbd ? "" : Math.ceil(r.totalQuantity*(1+spare/100));
+          return [r.itemCode, SYSTEM_LABEL(r.systemCategory), r.description, r.technical_specification||"", r.manufacturer||"", r.model_number||"", r.unit, r.quantityIsTbd?"TBD":r.totalQuantity, accessoriesFor(r), `${spare}%`, finalQty, r.reviewBucket]; }),
+      ], "Procurement BOQ");
+
+      // 7. Engineering BOQ
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["System","Item","Quantity","Unit","Design Basis","Testing / Commissioning","Confidence %","Source"],
+        ...consolidated.map(r => { const any = r.rawItems[0]; return [SYSTEM_LABEL(r.systemCategory), r.description, r.quantityIsTbd?"TBD":r.totalQuantity, r.unit, r.technical_specification||"", [any?.testing_requirements, any?.commissioning_requirements].filter(Boolean).join(" / "), r.avgConfidence??"", r.sources.join(", ")]; }),
+      ], "Engineering BOQ");
+
+      // 8. Review Required / 9. Engineer Review
+      const reviewCols = ["Item Code","System","Item Name","Quantity","Unit","Confidence %","Source Count"];
+      const reviewRow = r => [r.itemCode, SYSTEM_LABEL(r.systemCategory), r.description, r.quantityIsTbd?"TBD":r.totalQuantity, r.unit, r.avgConfidence??"", r.sourceCount];
+      addSheet([...trialRow, [disclaimer], [], reviewCols, ...consolidated.filter(r=>r.reviewBucket==="review_required").map(reviewRow)], "Review Required");
+      addSheet([...trialRow, [disclaimer], [], reviewCols, ...consolidated.filter(r=>r.reviewBucket==="engineer_review").map(reviewRow)], "Engineer Review");
+
+      // 10. Drawing Evidence -- every source detection, individually traceable,
+      // now including the quantity-source classification and whether it
+      // actually counted toward the total (section 15's "Quantity Basis").
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Item Code","Item Name","Drawing","Page","Floor","Zone","Quantity","Source Type","Counted Toward Total?","Confidence %","Location","Basis Notes"],
+        ...consolidated.flatMap(r => r.evidence.map(ev => [r.itemCode, r.description, ev.drawing_name, ev.page||"", ev.floor_label||"", ev.zone||"", ev.quantity, ev.quantitySourceLabel, ev.countedTowardTotal?"Yes":"No", ev.confidence_score??"", ev.location||"", ev.quantityBasisNotes||""])),
+      ], "Drawing Evidence");
+
+      // 11. Revision History -- from analysis_runs directly (not consolidated -- this IS the audit trail of every revision, including superseded ones).
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Drawing","Revision","Status","Change Reason","Approval Status","Created"],
+        ...(runs||[]).map(r => [drawingsById[r.drawing_id]?.file_name || (r.drawing_id ? r.drawing_id : "System Design"), r.revision_number, r.status, r.change_reason||"", r.approval_status, new Date(r.created_at).toISOString()]),
+      ], "Revision History");
 
       XLSX.writeFile(wb, `${project.project_name.replace(/[^a-z0-9]/gi,"_")}_BOQ_${kind}.xlsx`);
     } finally { setBusy(false); }
