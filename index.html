@@ -1156,10 +1156,31 @@ function buildSimpleBoqLines(consolidatedAll, opts) {
   });
   const systemOrder = Object.keys(bySystem).sort((a, b) => SYSTEM_LABEL(a).localeCompare(SYSTEM_LABEL(b)));
   const lines = [];
+  // Sort floor for a row (2026-08-10, later still): floorBreakdown is always
+  // pre-sorted into canonical BF->GF->...->RF order (see its construction
+  // above), so its first entry is this row's earliest/lowest floor -- a
+  // reliable per-row "sort floor" without recomputing normalizeFloorLabel
+  // here. Rows with no floor breakdown (project-level items) sort after
+  // every floor-attributed row within their tier, not before, since "no
+  // floor" isn't earlier than any real floor.
+  function simpleBoqSortFloorLabel(row) {
+    return (row.floorBreakdown && row.floorBreakdown.length) ? row.floorBreakdown[0].floor_label : null;
+  }
   systemOrder.forEach(sysCat => {
     const sysRows = [...bySystem[sysCat]].sort((a, b) => {
       const rankDiff = simpleBoqImportanceRank(a) - simpleBoqImportanceRank(b);
-      return rankDiff !== 0 ? rankDiff : a.description.localeCompare(b.description);
+      if (rankDiff !== 0) return rankDiff;
+      // Within the same importance tier (per the user's 2026-08-10 request
+      // to lead with important items, not racks/cabinets), order by floor
+      // BF->GF->FF->...->RF next, THEN alphabetically by description as the
+      // final tiebreak for same-floor items -- combines both the
+      // importance-first structure and the canonical floor format the user
+      // expects to see within each tier.
+      const floorA = simpleBoqSortFloorLabel(a), floorB = simpleBoqSortFloorLabel(b);
+      if (floorA == null && floorB != null) return 1;
+      if (floorA != null && floorB == null) return -1;
+      const floorDiff = (floorA != null && floorB != null) ? compareFloorLabels(floorA, floorB) : 0;
+      return floorDiff !== 0 ? floorDiff : a.description.localeCompare(b.description);
     });
     sysRows.forEach(row => {
       lines.push({
