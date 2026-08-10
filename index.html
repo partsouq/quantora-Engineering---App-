@@ -3932,7 +3932,9 @@ function ClassifyAndSelectModal({ project, drawing, onClose, onAnalyzed }) {
   const [error, setError] = useState("");
   const [totalPages, setTotalPages] = useState(0);
   const [pages, setPages] = useState([]);
-  const [selectedCategories, setSelectedCategories] = useState({});
+  const [selectedPages, setSelectedPages] = useState({});
+  const [expandedCategories, setExpandedCategories] = useState({});
+  const [batchInputs, setBatchInputs] = useState({});
   const [usage, setUsage] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -3957,17 +3959,41 @@ function ClassifyAndSelectModal({ project, drawing, onClose, onAnalyzed }) {
     bySystem[cat].push(p.page_number);
   });
 
-  function toggleCategory(cat) {
-    setSelectedCategories(s => ({ ...s, [cat]: !s[cat] }));
+  function togglePage(num) {
+    setSelectedPages(s => ({ ...s, [num]: !s[num] }));
   }
 
-  const selectedPageNumbers = Object.entries(bySystem).filter(([cat]) => selectedCategories[cat]).flatMap(([, nums]) => nums);
+  function toggleCategory(cat) {
+    const nums = bySystem[cat] || [];
+    const allSelected = nums.every(n => selectedPages[n]);
+    setSelectedPages(s => {
+      const next = { ...s };
+      nums.forEach(n => { next[n] = !allSelected; });
+      return next;
+    });
+  }
+
+  function toggleExpanded(cat) {
+    setExpandedCategories(s => ({ ...s, [cat]: !s[cat] }));
+  }
+
+  function selectFirstN(cat, n) {
+    const nums = bySystem[cat] || [];
+    const count = Math.max(0, Math.min(n, nums.length));
+    setSelectedPages(s => {
+      const next = { ...s };
+      nums.forEach((num, idx) => { next[num] = idx < count; });
+      return next;
+    });
+  }
+
+  const selectedPageNumbers = Object.entries(selectedPages).filter(([, v]) => v).map(([num]) => Number(num));
   const selectedCount = selectedPageNumbers.length;
   const remaining = usage?.pages?.limit != null ? Math.max(0, usage.pages.limit - (usage.pages.used || 0)) : null;
   const overLimit = remaining != null && selectedCount > remaining;
 
   async function proceed() {
-    if (selectedCount === 0) { setError("Select at least one system to analyze."); return; }
+    if (selectedCount === 0) { setError("Select at least one page to analyze."); return; }
     setSubmitting(true); setError("");
     try {
       const result = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawing.id, page_selection: selectedPageNumbers });
@@ -4000,15 +4026,54 @@ function ClassifyAndSelectModal({ project, drawing, onClose, onAnalyzed }) {
               </div>
             )}
             <div className="space-y-2 my-3">
-              {Object.entries(bySystem).sort((a, b) => b[1].length - a[1].length).map(([cat, nums]) => (
-                <label key={cat} className="flex items-center justify-between border rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-50">
-                  <span className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={!!selectedCategories[cat]} onChange={() => toggleCategory(cat)} />
-                    {SYSTEM_LABEL(cat)}
-                  </span>
-                  <span className="text-xs text-slate-500">{nums.length} pages</span>
-                </label>
-              ))}
+              {Object.entries(bySystem).sort((a, b) => b[1].length - a[1].length).map(([cat, nums]) => {
+                const catSelectedCount = nums.filter(n => selectedPages[n]).length;
+                const allSelected = catSelectedCount === nums.length;
+                const someSelected = catSelectedCount > 0 && !allSelected;
+                const expanded = !!expandedCategories[cat];
+                return (
+                  <div key={cat} className="border rounded-lg px-3 py-2">
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input type="checkbox" checked={allSelected} ref={el => { if (el) el.indeterminate = someSelected; }} onChange={() => toggleCategory(cat)} />
+                        {SYSTEM_LABEL(cat)}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500">{catSelectedCount}/{nums.length} pages</span>
+                        {nums.length > 1 && (
+                          <button type="button" onClick={() => toggleExpanded(cat)} className="text-xs text-violet-700 font-semibold hover:underline">
+                            {expanded ? "Hide pages" : "Pick pages…"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {expanded && nums.length > 1 && (
+                      <div className="mt-2 pt-2 border-t">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs text-slate-500">Quick select first</span>
+                          <input type="number" min="1" max={nums.length} value={batchInputs[cat] ?? Math.min(4, nums.length)}
+                            onChange={e => setBatchInputs(s => ({ ...s, [cat]: e.target.value }))}
+                            className="w-14 border rounded px-1 py-0.5 text-xs" />
+                          <span className="text-xs text-slate-500">pages</span>
+                          <button type="button" onClick={() => selectFirstN(cat, parseInt(batchInputs[cat], 10) || Math.min(4, nums.length))}
+                            className="text-xs bg-violet-100 text-violet-700 font-semibold px-2 py-1 rounded hover:bg-violet-200">
+                            Apply
+                          </button>
+                          <span className="text-xs text-slate-400">(use this to run a large batch in smaller AI calls)</span>
+                        </div>
+                        <div className="grid grid-cols-6 sm:grid-cols-8 gap-1">
+                          {nums.map(num => (
+                            <label key={num} className={`flex items-center justify-center gap-1 text-xs border rounded px-1 py-1 cursor-pointer ${selectedPages[num] ? "bg-violet-50 border-violet-300" : "hover:bg-slate-50"}`}>
+                              <input type="checkbox" checked={!!selectedPages[num]} onChange={() => togglePage(num)} className="hidden" />
+                              {num}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             <div className="flex items-center justify-between border-t pt-3">
               <div className={`text-sm font-semibold ${overLimit ? "text-rose-600" : "text-slate-900"}`}>
@@ -4020,7 +4085,7 @@ function ClassifyAndSelectModal({ project, drawing, onClose, onAnalyzed }) {
               </button>
             </div>
             {overLimit && (
-              <div className="text-xs text-rose-600 mt-2">Your free AI processing limit has been reached — this selection exceeds your remaining pages. Deselect some systems or upgrade your plan.</div>
+              <div className="text-xs text-rose-600 mt-2">Your free AI processing limit has been reached — this selection exceeds your remaining pages. Deselect some pages or upgrade your plan.</div>
             )}
           </>
         )}
