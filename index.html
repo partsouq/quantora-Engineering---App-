@@ -523,31 +523,131 @@ const GROUP_BY_LABELS = {
 };
 function GROUP_BY_LABEL(g) { return GROUP_BY_LABELS[g] || "BOQ"; }
 
-// Canonical vertical floor ordering (Basement -> Ground -> 1st -> 2nd -> ...
-// -> Roof), since floor_label is free text from AI extraction ("B1", "GF",
-// "Ground Floor", "1st Floor", "Level 3", "Roof", "RF", etc.) and a plain
-// alphabetic/numeric sort mixes basements/roof in with the numbered floors
-// in whatever order the labels happen to compare as strings. Deeper
-// basements sort before shallower ones (B2 before B1); anything
-// unrecognized sorts after all recognized floors but before Roof, rather
-// than silently before everything else, so an odd label doesn't jump the
-// whole list.
-function floorSortRank(label) {
-  const s = String(label || "").trim();
-  if (!s || s.toLowerCase() === "unassigned") return 8000;
-  if (/\broof\b|\bterrace\b|\bpenthouse\b|^rf$/i.test(s)) return 100000;
-  let m = s.match(/\bB\s*-?\s*(\d+)\b/i) || s.match(/basement\s*-?\s*(\d+)?/i);
-  if (m) return -1000 - (m[1] ? parseInt(m[1], 10) : 0);
-  if (/\bground\b|^gf$|^gnd$/i.test(s)) return 0;
-  if (/\bmezzanine\b|^mz$/i.test(s)) return 0.5;
-  m = s.match(/\bF\s*-?\s*(\d+)\b/i) || s.match(/\blevel\s*-?\s*(\d+)\b/i) || s.match(/^(\d+)(st|nd|rd|th)?\s*floor\b/i) || s.match(/^(\d+)(st|nd|rd|th)?$/i);
-  if (m) return parseInt(m[1], 10);
-  return 9000; // unrecognized -- after every real floor, before Roof
+// ---------------------------------------------------------------------------
+// Canonical floor normalization (2026-08-10, later still) -- MANDATORY per
+// explicit user spec. floor_label is free text from AI drawing extraction
+// ("B1", "GF", "Ground Floor", "Level 3", "3rd Floor", "RF", "Roof", ...)
+// and the SAME physical floor can arrive under different spellings across
+// different drawings/systems (e.g. "2nd Floor" on one drawing, "Second
+// Floor" on another, "Level 2" on a third). A sort-only fix (the original
+// floorSortRank below, which only ever reordered labels for display) is not
+// enough on its own -- two different spellings of the same floor need to be
+// recognized as the SAME floor for grouping (Group By Floor, floor
+// breakdowns, filters, exports), not just placed next to each other. Every
+// floor label is normalized into one canonical identifier before any BOQ
+// grouping/sorting/display, per this fixed hierarchy:
+//   BF-1, BF-2, BF-3, ... (deepest/most-negative first, NEVER a bare "BF" --
+//   numbered so distinct basement levels never accidentally merge) -> GF ->
+//   MF -> FF -> SF -> TF -> 4F -> 5F -> 6F -> ... -> RF (Roof) -> PH
+//   (Plant/Penthouse)
+// The ORIGINAL raw label is always preserved as sourceLabel (surfaced as
+// `source_floor_label`/`source_floor_labels` on breakdown rows) -- this
+// function decides how items GROUP and SORT, it never discards the source
+// text. A label that cannot be confidently mapped is never guessed into the
+// nearest-looking bucket: it is tagged reviewRequired and canonically named
+// "Unclassified / Review Required", sorting after every real floor (but
+// before Roof/Plant) with its original label kept alongside it, per the
+// user's explicit "do not guess" instruction.
+function normalizeFloorLabel(rawLabel) {
+  const raw = String(rawLabel == null ? "" : rawLabel).trim();
+  if (!raw || raw.toLowerCase() === "unassigned") {
+    return { floorName: "Unassigned", sourceLabel: raw || null, rank: 8000, reviewRequired: false };
+  }
+  if (raw === "Unclassified / Review Required") {
+    return { floorName: raw, sourceLabel: raw, rank: 9000, reviewRequired: true };
+  }
+  // Idempotency guard: re-normalizing one of THIS function's own canonical
+  // outputs (which happens constantly -- e.g. compareFloorLabels sorting
+  // already-canonical floorBreakdown.floor_label values) must be a no-op,
+  // never re-run the heuristic text parse below (which is tuned for messy
+  // free-text drawing labels, not for the short codes this function itself
+  // produces -- "BF-1" or "4F" would otherwise fail every heuristic branch
+  // and wrongly fall through to Unclassified).
+  let m = raw.match(/^BF-(\d+)$/);
+  if (m) return { floorName: raw, sourceLabel: raw, rank: -1000 - parseInt(m[1], 10), reviewRequired: false };
+  if (raw === "GF") return { floorName: "GF", sourceLabel: raw, rank: 0, reviewRequired: false };
+  if (raw === "MF") return { floorName: "MF", sourceLabel: raw, rank: 0.5, reviewRequired: false };
+  if (raw === "FF") return { floorName: "FF", sourceLabel: raw, rank: 1, reviewRequired: false };
+  if (raw === "SF") return { floorName: "SF", sourceLabel: raw, rank: 2, reviewRequired: false };
+  if (raw === "TF") return { floorName: "TF", sourceLabel: raw, rank: 3, reviewRequired: false };
+  // Only floors 4 and up ever come out of THIS function as "NF" (1/2/3 come
+  // out as FF/SF/TF instead) -- so the idempotency short-circuit must only
+  // fire for n>=4. A raw input like "1F"/"2F"/"3F" is a real, legitimate
+  // drawing-label variant a user can type, not one of our own canonical
+  // outputs, and must fall through to the heuristic parse below so it maps
+  // to FF/SF/TF like every other 1st/2nd/3rd-floor spelling.
+  m = raw.match(/^(\d+)F$/);
+  if (m && parseInt(m[1], 10) >= 4) return { floorName: raw, sourceLabel: raw, rank: parseInt(m[1], 10), reviewRequired: false };
+  if (raw === "RF") return { floorName: "RF", sourceLabel: raw, rank: 100000, reviewRequired: false };
+  if (raw === "PH") return { floorName: "PH", sourceLabel: raw, rank: 100001, reviewRequired: false };
+
+  // Heuristic parse of real free-text drawing labels below this point.
+  const s = raw.toLowerCase();
+
+  // Roof / terrace, then Plant / Penthouse -- checked first so e.g. "Roof
+  // Plant Room" resolves to Roof, not Plant, and neither collides with the
+  // numeric-floor patterns further down.
+  if (/\broof\b|\brooftop\b|\bterrace\b|^rf$/i.test(s)) {
+    return { floorName: "RF", sourceLabel: raw, rank: 100000, reviewRequired: false };
+  }
+  if (/\bpenthouse\b|^ph$|\bplant\s*(room|floor|level)?\b/i.test(s)) {
+    return { floorName: "PH", sourceLabel: raw, rank: 100001, reviewRequired: false };
+  }
+
+  // Basement -- ALWAYS numbered (BF-1/BF-2/BF-3...), per the user's explicit
+  // correction, so distinct basement levels never accidentally combine. A
+  // number is pulled from "B1"/"B-1"/"Basement 1"/"Basement Level 2"/
+  // "Sub-basement 2"; a bare "Basement" with no number is the common
+  // single-basement-building label and defaults to BF-1 (the shallowest/
+  // only basement) -- a stated, deliberate default, not a silent guess at
+  // an arbitrary depth.
+  m = s.match(/\bb\s*-?\s*(\d+)\b/i) || s.match(/sub[\s-]?basement\s*(?:level)?\s*-?\s*(\d+)?/i) || s.match(/basement\s*(?:level)?\s*-?\s*(\d+)?/i);
+  if (m) {
+    const n = m[1] ? parseInt(m[1], 10) : 1;
+    return { floorName: `BF-${n}`, sourceLabel: raw, rank: -1000 - n, reviewRequired: false };
+  }
+
+  // Ground
+  if (/\bground\s*(floor)?\b|^gf$|^g$|^gnd$/i.test(s)) {
+    return { floorName: "GF", sourceLabel: raw, rank: 0, reviewRequired: false };
+  }
+  // Mezzanine
+  if (/\bmezzanine\b|\bmezz\b|^mf$|^mz$|^m$/i.test(s)) {
+    return { floorName: "MF", sourceLabel: raw, rank: 0.5, reviewRequired: false };
+  }
+
+  // Ordinal word floors 1st-3rd get their own letter codes per the user's
+  // exact requested scheme (FF/SF/TF), checked before the generic numeric
+  // handling used from the 4th floor upward.
+  if (/\bfirst\s*floor\b|^ff$|\b1st\s*floor\b/i.test(s)) return { floorName: "FF", sourceLabel: raw, rank: 1, reviewRequired: false };
+  if (/\bsecond\s*floor\b|^sf$|\b2nd\s*floor\b/i.test(s)) return { floorName: "SF", sourceLabel: raw, rank: 2, reviewRequired: false };
+  if (/\bthird\s*floor\b|^tf$|\b3rd\s*floor\b/i.test(s)) return { floorName: "TF", sourceLabel: raw, rank: 3, reviewRequired: false };
+
+  // Generic numeric floor: "4F"/"F4"/"Level 4"/"L04"/"L4"/"4th Floor"/bare "4".
+  m = s.match(/^(\d+)\s*-?\s*f$/i) || s.match(/\bf\s*-?\s*(\d+)\b/i) || s.match(/\bl\s*-?\s*0*(\d+)\b/i) || s.match(/\blevel\s*-?\s*(\d+)\b/i) || s.match(/^(\d+)\s*(st|nd|rd|th)?\s*floor\b/i) || s.match(/^(\d+)\s*(st|nd|rd|th)?$/i);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (n === 1) return { floorName: "FF", sourceLabel: raw, rank: 1, reviewRequired: false };
+    if (n === 2) return { floorName: "SF", sourceLabel: raw, rank: 2, reviewRequired: false };
+    if (n === 3) return { floorName: "TF", sourceLabel: raw, rank: 3, reviewRequired: false };
+    return { floorName: `${n}F`, sourceLabel: raw, rank: n, reviewRequired: false };
+  }
+
+  // Nothing matched confidently -- per the user's explicit "do not guess"
+  // instruction, this is flagged for review rather than silently placed
+  // into the nearest-looking bucket. The original label is kept alongside
+  // it (sourceLabel) so an engineer can see exactly what didn't map.
+  return { floorName: "Unclassified / Review Required", sourceLabel: raw, rank: 9000, reviewRequired: true };
 }
+// Thin wrappers kept for the many existing call sites -- floorSortRank/
+// compareFloorLabels now derive from the single normalizeFloorLabel source
+// of truth above instead of their own separate (and, for word-ordinal
+// labels like "Second Floor"/"Third Floor", incomplete) regex logic.
+function floorSortRank(label) { return normalizeFloorLabel(label).rank; }
 function compareFloorLabels(a, b) {
-  const ra = floorSortRank(a), rb = floorSortRank(b);
-  if (ra !== rb) return ra - rb;
-  return String(a).localeCompare(String(b), undefined, { numeric: true });
+  const na = normalizeFloorLabel(a), nb = normalizeFloorLabel(b);
+  if (na.rank !== nb.rank) return na.rank - nb.rank;
+  return String(na.floorName).localeCompare(String(nb.floorName), undefined, { numeric: true });
 }
 
 // The main entry point. Takes raw boq_items rows (already filtered to the
@@ -608,20 +708,30 @@ function consolidateBoqItems(items, drawingsById) {
     // Floor breakdown -- the numbers the UI/Excel must reconcile against.
     // Built ONLY from countable rows so floor totals always sum to
     // totalQuantity exactly (section 14's reconciliation requirement).
+    // Grouped by CANONICAL floor identity (normalizeFloorLabel), not the raw
+    // text, so e.g. "2nd Floor" and "Second Floor" from two different
+    // drawings correctly merge into one SF bucket instead of showing as two
+    // separate, un-combined floor rows -- the mandatory floor-normalization
+    // requirement (2026-08-10). Every distinct raw label that fed a bucket
+    // is kept as source_floor_labels for traceability, per the same spec.
     const floorMap = new Map();
     countableRows.forEach(r => {
-      const label = r.floor_label || "Unassigned";
-      floorMap.set(label, (floorMap.get(label) || 0) + Number(r.quantity || 0));
+      const norm = normalizeFloorLabel(r.floor_label || "Unassigned");
+      if (!floorMap.has(norm.floorName)) floorMap.set(norm.floorName, { quantity: 0, sourceLabels: new Set(), reviewRequired: norm.reviewRequired });
+      const entry = floorMap.get(norm.floorName);
+      entry.quantity += Number(r.quantity || 0);
+      if (norm.sourceLabel) entry.sourceLabels.add(norm.sourceLabel);
     });
     const floorBreakdown = [...floorMap.entries()]
-      .map(([floor_label, quantity]) => ({ floor_label, quantity }))
+      .map(([floor_label, v]) => ({ floor_label, quantity: v.quantity, source_floor_labels: [...v.sourceLabels], reviewRequired: v.reviewRequired }))
       .sort((a, b) => compareFloorLabels(a.floor_label, b.floor_label));
 
-    // Zone breakdown, nested under floor where both are present.
+    // Zone breakdown, nested under (canonical) floor where both are present.
     const zoneMap = new Map();
     countableRows.forEach(r => {
+      const floorName = normalizeFloorLabel(r.floor_label || "Unassigned").floorName;
       if (!r.zone) return;
-      const zKey = `${r.floor_label || "Unassigned"}::${r.zone}`;
+      const zKey = `${floorName}::${r.zone}`;
       zoneMap.set(zKey, (zoneMap.get(zKey) || 0) + Number(r.quantity || 0));
     });
     const zoneBreakdown = [...zoneMap.entries()].map(([k, quantity]) => {
@@ -635,7 +745,8 @@ function consolidateBoqItems(items, drawingsById) {
     const roomMap = new Map();
     countableRows.forEach(r => {
       if (!r.room) return;
-      const rKey = `${r.floor_label || "Unassigned"}::${r.room}`;
+      const floorName = normalizeFloorLabel(r.floor_label || "Unassigned").floorName;
+      const rKey = `${floorName}::${r.room}`;
       roomMap.set(rKey, (roomMap.get(rKey) || 0) + Number(r.quantity || 0));
     });
     const roomBreakdown = [...roomMap.entries()].map(([k, quantity]) => {
@@ -657,7 +768,8 @@ function consolidateBoqItems(items, drawingsById) {
     const areaMap = new Map();
     countableRows.forEach(r => {
       if (!r.area_label) return;
-      const aKey = `${r.floor_label || "Unassigned"}::${r.area_label}`;
+      const floorName = normalizeFloorLabel(r.floor_label || "Unassigned").floorName;
+      const aKey = `${floorName}::${r.area_label}`;
       areaMap.set(aKey, (areaMap.get(aKey) || 0) + Number(r.quantity || 0));
     });
     const areaBreakdown = [...areaMap.entries()].map(([k, quantity]) => {
@@ -669,12 +781,16 @@ function consolidateBoqItems(items, drawingsById) {
     // each explicitly tagged with its classification and whether it counted
     // toward the total. This is the "Quantity Basis" traceability data --
     // an engineer can see a schedule/key-plan row was found and considered,
-    // just not double-added.
+    // just not double-added. `floor_label` stays the RAW per-row drawing
+    // text (never overwritten -- this is the traceability copy); a new
+    // `normalizedFloorName` carries the canonical identity alongside it so
+    // any future floor-scoped filter/sort on evidence rows uses the same
+    // canonical hierarchy as everywhere else, without losing the original.
     const evidence = rows.map(r => ({
       id: r.id, drawing_id: r.drawing_id,
       drawing_name: r.drawing_id ? (drawingsById[r.drawing_id]?.file_name || "Unknown drawing") : "AI System Design (no drawing)",
       page: r.coordinates?.page || null,
-      floor_label: r.floor_label, zone: r.zone, room: r.room,
+      floor_label: r.floor_label, normalizedFloorName: normalizeFloorLabel(r.floor_label).floorName, zone: r.zone, room: r.room,
       quantity: r.quantity, confidence_score: r.confidence_score,
       location: r.location, source: r.source, review_status: r.review_status,
       quantitySourceType: r.quantity_source_type || "physical_count",
@@ -4190,7 +4306,11 @@ function BoqTab({ project }) {
     const rows = focusedKey ? bucketRows.filter(r => r.key === focusedKey) : bucketRows;
     const focusedRow = focusedKey ? bucketRows.find(r => r.key === focusedKey) : null;
     const hasZones = rows.some(r => r.zoneBreakdown.length > 0);
-    const allFloors = [...new Set(rows.flatMap(r => r.floorBreakdown.map(fb => fb.floor_label)))];
+    // Sorted via compareFloorLabels -- the raw Set union above preserves only
+    // first-occurrence order across rows, which is NOT the canonical floor
+    // sequence (this was a real ordering bug: floors could render in
+    // whatever order items happened to be encountered, not BF->GF->...->RF).
+    const allFloors = [...new Set(rows.flatMap(r => r.floorBreakdown.map(fb => fb.floor_label)))].sort(compareFloorLabels);
     const allEvidence = rows.flatMap(r => r.evidence.map(ev => ({ ...ev, itemDescription: r.description, unit: r.unit })))
       .sort((a,b) => (b.confidence_score||0) - (a.confidence_score||0));
     const [showAllEvidence, setShowAllEvidence] = useState(false);
@@ -4231,15 +4351,29 @@ function BoqTab({ project }) {
                         </tr>
                       </thead>
                       <tbody className="divide-y">
-                        {allFloors.map(floor => (
-                          <tr key={floor}>
-                            <td className="px-3 py-1.5">{floor}</td>
-                            {rows.map(r => {
-                              const fb = r.floorBreakdown.find(f => f.floor_label === floor);
-                              return <td key={r.key} className="px-3 py-1.5 text-right">{fb ? fb.quantity : "—"}</td>;
-                            })}
-                          </tr>
-                        ))}
+                        {allFloors.map(floor => {
+                          // Surface the review-required flag / original source
+                          // label(s) as a tooltip on the canonical floor name --
+                          // normalization never hides an unmapped label, it just
+                          // sorts it into its own reviewable bucket (see
+                          // normalizeFloorLabel above).
+                          const sample = rows.map(r => r.floorBreakdown.find(f => f.floor_label === floor)).find(Boolean);
+                          const srcLabels = sample?.source_floor_labels || [];
+                          const isReview = !!sample?.reviewRequired;
+                          const title = srcLabels.length ? `Source label(s): ${srcLabels.join(", ")}` : undefined;
+                          return (
+                            <tr key={floor}>
+                              <td className="px-3 py-1.5" title={title}>
+                                {floor}
+                                {isReview && <span className="ml-1 text-amber-600" title="Could not be confidently mapped to the standard floor hierarchy -- shown under its original label, not guessed">⚠</span>}
+                              </td>
+                              {rows.map(r => {
+                                const fb = r.floorBreakdown.find(f => f.floor_label === floor);
+                                return <td key={r.key} className="px-3 py-1.5 text-right">{fb ? fb.quantity : "—"}</td>;
+                              })}
+                            </tr>
+                          );
+                        })}
                         <tr className="font-semibold bg-slate-50">
                           <td className="px-3 py-1.5">Total</td>
                           {rows.map(r => <td key={r.key} className="px-3 py-1.5 text-right">{r.totalQuantity}</td>)}
@@ -5323,11 +5457,17 @@ function ExportTab({ project }) {
         }),
       ], "System BOQ");
 
-      // 4. Floor Breakdown -- flattened, must sum back to Consolidated BOQ's Total Quantity per item.
+      // 4. Floor Breakdown -- flattened, must sum back to Consolidated BOQ's
+      // Total Quantity per item. "Floor" is the normalized canonical name
+      // (BF-1/GF/MF/FF/SF/TF/4F.../RF/PH, per the mandatory floor-
+      // normalization spec); "Source Label(s)" preserves every distinct raw
+      // drawing label that was merged into that canonical floor, so nothing
+      // is lost even though rows for e.g. "2nd Floor" and "Second Floor" on
+      // different drawings now correctly combine into one SF row here.
       addSheet([
         ...trialRow, [disclaimer], [],
-        ["Item Code","Item Name","Floor","Quantity","Unit"],
-        ...consolidated.flatMap(r => r.floorBreakdown.map(fb => [r.itemCode, r.description, fb.floor_label, fb.quantity, r.unit])),
+        ["Item Code","Item Name","Floor","Source Label(s)","Quantity","Unit"],
+        ...consolidated.flatMap(r => r.floorBreakdown.map(fb => [r.itemCode, r.description, fb.floor_label, (fb.source_floor_labels||[]).join(", "), fb.quantity, r.unit])),
       ], "Floor Breakdown");
 
       // 5. Zone Breakdown
@@ -5365,10 +5505,14 @@ function ExportTab({ project }) {
       // 10. Drawing Evidence -- every source detection, individually traceable,
       // now including the quantity-source classification and whether it
       // actually counted toward the total (section 15's "Quantity Basis").
+      // "Floor (raw)" keeps the original per-drawing text unchanged;
+      // "Floor (normalized)" adds the canonical identity alongside it so
+      // this sheet stays consistent with every other floor-ordered surface
+      // without discarding the original drawing label.
       addSheet([
         ...trialRow, [disclaimer], [],
-        ["Item Code","Item Name","Drawing","Page","Floor","Zone","Quantity","Source Type","Counted Toward Total?","Confidence %","Location","Basis Notes"],
-        ...consolidated.flatMap(r => r.evidence.map(ev => [r.itemCode, r.description, ev.drawing_name, ev.page||"", ev.floor_label||"", ev.zone||"", ev.quantity, ev.quantitySourceLabel, ev.countedTowardTotal?"Yes":"No", ev.confidence_score??"", ev.location||"", ev.quantityBasisNotes||""])),
+        ["Item Code","Item Name","Drawing","Page","Floor (raw)","Floor (normalized)","Zone","Quantity","Source Type","Counted Toward Total?","Confidence %","Location","Basis Notes"],
+        ...consolidated.flatMap(r => r.evidence.map(ev => [r.itemCode, r.description, ev.drawing_name, ev.page||"", ev.floor_label||"", ev.normalizedFloorName||"", ev.zone||"", ev.quantity, ev.quantitySourceLabel, ev.countedTowardTotal?"Yes":"No", ev.confidence_score??"", ev.location||"", ev.quantityBasisNotes||""])),
       ], "Drawing Evidence");
 
       // 11. Revision History -- from analysis_runs directly (not consolidated -- this IS the audit trail of every revision, including superseded ones).
