@@ -55,6 +55,21 @@ window.__LIBS_READY__ = (async function () {
   // way the others above do; PDF export button just checks jsPDF itself is
   // present before offering to run.
   window.__PDF_LIBS_OK__ = !!(okJsPdf && okJsPdfAutotable);
+  // pdf.js -- renders an uploaded PDF drawing's first page to a canvas so
+  // the markup viewer can plot overlay markers on it, the same way it
+  // already does for image uploads. Also a nice-to-have, not core --
+  // MarkupViewerModal falls back to its existing "no page render" banner
+  // if this fails to load, exactly like the __PDF_LIBS_OK__ pattern above.
+  var okPdfJs = await __loadLib([
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"
+  ], function () { return typeof window.pdfjsLib !== "undefined"; });
+  if (okPdfJs) {
+    try {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    } catch (e) { okPdfJs = false; }
+  }
+  window.__PDFJS_OK__ = !!okPdfJs;
   return okReact && okReactDom && okBabel && okSupabase && okXlsx;
 })();
 </script>
@@ -508,6 +523,33 @@ const GROUP_BY_LABELS = {
 };
 function GROUP_BY_LABEL(g) { return GROUP_BY_LABELS[g] || "BOQ"; }
 
+// Canonical vertical floor ordering (Basement -> Ground -> 1st -> 2nd -> ...
+// -> Roof), since floor_label is free text from AI extraction ("B1", "GF",
+// "Ground Floor", "1st Floor", "Level 3", "Roof", "RF", etc.) and a plain
+// alphabetic/numeric sort mixes basements/roof in with the numbered floors
+// in whatever order the labels happen to compare as strings. Deeper
+// basements sort before shallower ones (B2 before B1); anything
+// unrecognized sorts after all recognized floors but before Roof, rather
+// than silently before everything else, so an odd label doesn't jump the
+// whole list.
+function floorSortRank(label) {
+  const s = String(label || "").trim();
+  if (!s || s.toLowerCase() === "unassigned") return 8000;
+  if (/\broof\b|\bterrace\b|\bpenthouse\b|^rf$/i.test(s)) return 100000;
+  let m = s.match(/\bB\s*-?\s*(\d+)\b/i) || s.match(/basement\s*-?\s*(\d+)?/i);
+  if (m) return -1000 - (m[1] ? parseInt(m[1], 10) : 0);
+  if (/\bground\b|^gf$|^gnd$/i.test(s)) return 0;
+  if (/\bmezzanine\b|^mz$/i.test(s)) return 0.5;
+  m = s.match(/\bF\s*-?\s*(\d+)\b/i) || s.match(/\blevel\s*-?\s*(\d+)\b/i) || s.match(/^(\d+)(st|nd|rd|th)?\s*floor\b/i) || s.match(/^(\d+)(st|nd|rd|th)?$/i);
+  if (m) return parseInt(m[1], 10);
+  return 9000; // unrecognized -- after every real floor, before Roof
+}
+function compareFloorLabels(a, b) {
+  const ra = floorSortRank(a), rb = floorSortRank(b);
+  if (ra !== rb) return ra - rb;
+  return String(a).localeCompare(String(b), undefined, { numeric: true });
+}
+
 // The main entry point. Takes raw boq_items rows (already filtered to the
 // latest revision + duplicate-drawing exclusion applied by the caller) plus
 // a drawings lookup map (id -> {file_name, floor_label}) for evidence
@@ -573,7 +615,7 @@ function consolidateBoqItems(items, drawingsById) {
     });
     const floorBreakdown = [...floorMap.entries()]
       .map(([floor_label, quantity]) => ({ floor_label, quantity }))
-      .sort((a, b) => a.floor_label.localeCompare(b.floor_label, undefined, { numeric: true }));
+      .sort((a, b) => compareFloorLabels(a.floor_label, b.floor_label));
 
     // Zone breakdown, nested under floor where both are present.
     const zoneMap = new Map();
@@ -585,7 +627,7 @@ function consolidateBoqItems(items, drawingsById) {
     const zoneBreakdown = [...zoneMap.entries()].map(([k, quantity]) => {
       const [floor_label, zone] = k.split("::");
       return { floor_label, zone, quantity };
-    });
+    }).sort((a, b) => compareFloorLabels(a.floor_label, b.floor_label) || a.zone.localeCompare(b.zone, undefined, { numeric: true }));
 
     // Room breakdown -- only meaningful for room-scoped item types (per-room
     // equipment counts), so callers should skip rendering this when every
@@ -599,7 +641,7 @@ function consolidateBoqItems(items, drawingsById) {
     const roomBreakdown = [...roomMap.entries()].map(([k, quantity]) => {
       const [floor_label, room] = k.split("::");
       return { floor_label, room, quantity };
-    });
+    }).sort((a, b) => compareFloorLabels(a.floor_label, b.floor_label) || a.room.localeCompare(b.room, undefined, { numeric: true }));
 
     // Building breakdown (multi-building/villa/tower projects only -- the
     // AI omits "building" entirely for single-building projects, so most
@@ -621,7 +663,7 @@ function consolidateBoqItems(items, drawingsById) {
     const areaBreakdown = [...areaMap.entries()].map(([k, quantity]) => {
       const [floor_label, area_label] = k.split("::");
       return { floor_label, area_label, quantity };
-    });
+    }).sort((a, b) => compareFloorLabels(a.floor_label, b.floor_label) || a.area_label.localeCompare(b.area_label, undefined, { numeric: true }));
 
     // Drawing evidence -- EVERY source row, including reference-only ones,
     // each explicitly tagged with its classification and whether it counted
@@ -713,6 +755,20 @@ function consolidateBoqItems(items, drawingsById) {
 // rows for display. This is what makes "Group By Floor" still show
 // consolidated per-floor quantities (via floorBreakdown) rather than
 // re-fragmenting already-merged items.
+// Reorders a bucketed object's keys into canonical floor order -- keys are
+// either a bare floor_label ("floor" grouping) or "floor_label / X" ("zone"/
+// "room"/"area" groupings), so the floor portion (before " / ") is always
+// what determines vertical order; anything after that is a plain
+// alphanumeric tiebreaker within the same floor.
+function sortBucketKeysByFloor(g) {
+  const sorted = {};
+  Object.keys(g).sort((a, b) => {
+    const r = compareFloorLabels(a.split(" / ")[0], b.split(" / ")[0]);
+    return r !== 0 ? r : a.localeCompare(b, undefined, { numeric: true });
+  }).forEach(k => { sorted[k] = g[k]; });
+  return sorted;
+}
+
 function bucketConsolidated(consolidated, groupBy) {
   if (groupBy === "project") return { "Project BOQ": consolidated };
   if (groupBy === "system") {
@@ -739,7 +795,7 @@ function bucketConsolidated(consolidated, groupBy) {
         g[fb.floor_label] = g[fb.floor_label] || []; g[fb.floor_label].push({ ...row, totalQuantity: fb.quantity, quantityIsTbd: row.quantityIsTbd });
       });
     });
-    return g;
+    return sortBucketKeysByFloor(g);
   }
   if (groupBy === "zone") {
     const g = {};
@@ -749,7 +805,7 @@ function bucketConsolidated(consolidated, groupBy) {
         g[k] = g[k] || []; g[k].push({ ...row, totalQuantity: zb.quantity, quantityIsTbd: row.quantityIsTbd });
       });
     });
-    return g;
+    return sortBucketKeysByFloor(g);
   }
   if (groupBy === "room") {
     const g = {};
@@ -759,7 +815,7 @@ function bucketConsolidated(consolidated, groupBy) {
         g[k] = g[k] || []; g[k].push({ ...row, totalQuantity: rb.quantity, quantityIsTbd: row.quantityIsTbd });
       });
     });
-    return g;
+    return sortBucketKeysByFloor(g);
   }
   if (groupBy === "building") {
     const g = {};
@@ -778,7 +834,7 @@ function bucketConsolidated(consolidated, groupBy) {
         g[k] = g[k] || []; g[k].push({ ...row, totalQuantity: ab.quantity, quantityIsTbd: row.quantityIsTbd });
       });
     });
-    return g;
+    return sortBucketKeysByFloor(g);
   }
   if (groupBy === "drawing") {
     const g = {};
@@ -830,9 +886,78 @@ function isDiscreteUnitForSimpleBoq(unit) {
 // simplified column for this one view, per explicit user choice.
 function simpleBoqStatusFor(row) {
   const statuses = row.optimizationStatuses || [];
-  if (statuses.includes("engineered")) return "Engineered";
+  // `optimizationStatuses` only ever gets populated by the Master BOQ
+  // Engine's ai-engine prompt (added 2026-08-09) -- any project analyzed
+  // before that change has `optimization_status = NULL` on every row, so
+  // this signal alone silently fails to recognize real engineered/derived
+  // items on existing data (the "Takeoff still shows Designed" bug). Fall
+  // back to `row.sources` (`source: "engineering_rule"`), which has existed
+  // since the very first version of the deterministic accessory-derivation
+  // engine and is populated on every historical row regardless of when it
+  // was extracted -- a reliable signal independent of the newer field.
+  if (statuses.includes("engineered") || (row.sources || []).includes("engineering_rule")) return "Engineered";
   if (statuses.includes("calculated")) return "Calculated";
+  // Same backward-compatibility fallback for Calculated: `design_system`
+  // rows (no source drawing) have always defaulted their evidence's
+  // quantity_source_type to "calculated_quantity", independent of the newer
+  // optimization_status field.
+  if ((row.evidence || []).some(e => e.quantitySourceType === "calculated_quantity")) return "Calculated";
   return "Confirmed";
+}
+// --------------------------------------------------------------------------
+// Simple BOQ item ordering (2026-08-10): per the user's explicit request,
+// items within a system are NOT sorted alphabetically -- alphabetical order
+// put "12U Network Cabinet" ahead of "Bullet Camera" purely because "1" <
+// "B", which reads backwards to a real QS/estimator ("BOQ should start
+// from very important items, not from the racks"). Instead this ranks each
+// row into a tier and sorts by tier first, alphabetically within a tier:
+// 0 = primary field devices (camera, detector, sensor, reader, beacon...);
+// 1 = recording/control hubs (NVR/DVR/VMS, server, controller, gateway...);
+// 2 = other active equipment (network switches, UPS, pumps, motors...);
+// 3 = passive infrastructure (cable, conduit, tray, rack, cabinet, patch
+//     panel...); 4 = unrecognized/unclassified; 5 = administrative/lump-sum
+// lines (system-wide testing, commissioning, design/configuration -- these
+// are always LS/lot-unit line items, never a real counted quantity, so they
+// read last as a summary rather than interrupting the equipment list).
+// A small, auditable keyword list -- same design philosophy as
+// BOQ_SYNONYMS/BOQ_STOPWORDS/PASSIVE_KEYWORDS/ACTIVE_KEYWORDS above, not a
+// per-system_category hardcoded table, since "field device -> hub -> other
+// active -> passive -> admin" is a generic structure across every
+// discipline (ELV, Electrical, HVAC, Plumbing, Fire).
+const SIMPLE_BOQ_LUMPSUM_UNITS = new Set(["ls", "lot", "lump sum", "lumpsum", "sum", "job"]);
+const SIMPLE_BOQ_PRIMARY_KEYWORDS = [
+  "camera", "detector", "sensor", "reader", "sounder", "call point", "beacon",
+  "access point", "luminaire", "light fixture", "led fitting", "lamp", "fixture",
+  "antenna", "speaker", "microphone", "strobe", "keypad",
+];
+const SIMPLE_BOQ_HUB_KEYWORDS = [
+  "nvr", "dvr", "recorder", "vms", "video management", "server", "workstation",
+  "controller", "gateway", "panel", "module", "hub",
+];
+function simpleBoqImportanceRank(row) {
+  const unit = String(row.unit || "").trim().toLowerCase().replace(/\.+$/, "");
+  if (SIMPLE_BOQ_LUMPSUM_UNITS.has(unit)) return 5; // admin/lump-sum -- always last
+  const text = `${row.description || ""} ${row.technical_specification || ""}`.toLowerCase();
+  // Earliest-keyword-wins: real BOQ descriptions almost always lead with the
+  // actual product name ("PoE Network Switch for CCTV Cameras...", "Bullet
+  // Camera - Recognition view..."), so whichever tier's keyword appears
+  // FIRST in the text decides the item's category -- this avoids a switch
+  // description that happens to mention "camera" or "cabinet" later in the
+  // text being misfiled as a camera or a passive enclosure.
+  const tiers = [
+    [0, SIMPLE_BOQ_PRIMARY_KEYWORDS],
+    [1, SIMPLE_BOQ_HUB_KEYWORDS],
+    [2, ACTIVE_KEYWORDS],
+    [3, PASSIVE_KEYWORDS],
+  ];
+  let bestTier = 4, bestIndex = Infinity; // 4 = unclassified, sorts after every recognized tier
+  tiers.forEach(([tier, keywords]) => {
+    keywords.forEach(k => {
+      const idx = text.indexOf(k);
+      if (idx !== -1 && idx < bestIndex) { bestIndex = idx; bestTier = tier; }
+    });
+  });
+  return bestTier;
 }
 function simpleBoqRemarksFor(row) {
   if (row.discrepancy) return `Discrepancy flagged: physical ${row.discrepancy.physicalTotal} vs schedule ${row.discrepancy.scheduleTotal}`;
@@ -862,45 +987,83 @@ function simpleBoqLocationAggregate(row) {
 }
 function simpleBoqSumQty(arr) { return arr.reduce((s, e) => s + Number(e.quantity || 0), 0); }
 
-function buildSimpleBoqLines(consolidatedAll) {
+// opts.excludeEngineered: Takeoff BOQ mode -- keep ONLY rows whose status
+// collapses to "Confirmed" (a real, physically-counted symbol/item taken
+// directly from the drawing), dropping both "Engineered" (an accessory the
+// engineering-rules engine derived, e.g. patch cords/licenses -- never
+// itself drawn) AND "Calculated" (an AI-computed estimate -- e.g. cable
+// length scaled from a run, a switch/patch-panel count derived from camera
+// count, a lump-sum testing/commissioning allowance -- explicitly NOT a
+// direct count of a visible symbol, per the AI's own quantity_source_type
+// classification). Originally this only excluded "Engineered", which left
+// every "Calculated" row (network switches, patch panels, cable/conduit
+// runs, UPS-per-cabinet, NVR licenses, testing lump sums -- all tagged
+// quantity_source_type: "calculated_quantity" by the AI itself) showing
+// in Takeoff, which is exactly the bug the user reported ("rack, network
+// switch, patch cord... still shows in takeoff... should only show items
+// taken from the drawing"). Confirmed against the real project's live data
+// via direct SQL: every one of those example items is genuinely tagged
+// calculated_quantity, not physical_count, so this is a correct behavior
+// change, not a guess. So Takeoff BOQ really is "only what's on the
+// drawing," per the user's explicit instruction.
+// opts.floorFilter: when this is being called per-floor-bucket (Group By
+// Floor), the caller has already given us a row whose totalQuantity is
+// correctly scoped to just this floor (via bucketConsolidated's override) --
+// the line for that bucket shows that floor's own total, not the row's
+// full project-wide total.
+//
+// One line per item, always (2026-08-10): earlier versions unrolled a
+// discrete-unit item (cameras, cabinets...) into one line PER physical
+// location whenever room/floor breakdown data existed, even when the view
+// wasn't grouped by floor at all -- so a camera installed on 6 floors at
+// 10/floor showed as 6 separate 10-unit lines instead of one 60-unit line.
+// The user explicitly asked for the opposite: "if each floor has ten
+// cameras for six floors, it should show me sixty cameras in one line."
+// Every item now renders as exactly ONE line: the row's real total quantity
+// (or, inside a Group By Floor bucket, that bucket's own floor-scoped
+// total via floorFilter) with a real, non-fabricated location summary via
+// simpleBoqLocationAggregate() -- never split into per-room/per-floor rows
+// outside of an actual Group By Floor bucket. `isDiscreteUnitForSimpleBoq`/
+// `simpleBoqSumQty`/`simpleBoqLocationForEntry` are left defined-but-
+// unreferenced (dead code, matching this project's established low-risk
+// precedent) rather than deleted, since they backed the now-removed
+// per-location unrolling.
+function buildSimpleBoqLines(consolidatedAll, opts) {
+  opts = opts || {};
+  const excludeEngineered = !!opts.excludeEngineered;
+  const floorFilter = opts.floorFilter || null;
   const bySystem = {};
   consolidatedAll.forEach(row => {
     if (row.quantityIsTbd || row.totalQuantity == null) return; // TBD rows have no reliable qty to place on any line
+    if (excludeEngineered && simpleBoqStatusFor(row) !== "Confirmed") return;
     (bySystem[row.systemCategory] = bySystem[row.systemCategory] || []).push(row);
   });
   const systemOrder = Object.keys(bySystem).sort((a, b) => SYSTEM_LABEL(a).localeCompare(SYSTEM_LABEL(b)));
   const lines = [];
   systemOrder.forEach(sysCat => {
-    const sysRows = [...bySystem[sysCat]].sort((a, b) => a.description.localeCompare(b.description));
+    const sysRows = [...bySystem[sysCat]].sort((a, b) => {
+      const rankDiff = simpleBoqImportanceRank(a) - simpleBoqImportanceRank(b);
+      return rankDiff !== 0 ? rankDiff : a.description.localeCompare(b.description);
+    });
     sysRows.forEach(row => {
-      const discrete = isDiscreteUnitForSimpleBoq(row.unit);
-      let breakdown = null;
-      // Only unroll into per-location lines when the breakdown's own sum
-      // exactly reconciles to the row's real total -- if room/floor data is
-      // only partial, fall back to one aggregate line rather than silently
-      // dropping quantity that has nowhere to go in a partial breakdown.
-      if (discrete) {
-        if (row.roomBreakdown.length && Math.abs(simpleBoqSumQty(row.roomBreakdown) - row.totalQuantity) < 0.001) breakdown = row.roomBreakdown;
-        else if (row.floorBreakdown.length > 1 && Math.abs(simpleBoqSumQty(row.floorBreakdown) - row.totalQuantity) < 0.001) breakdown = row.floorBreakdown;
-      }
-      if (breakdown) {
-        breakdown.forEach(entry => {
-          if (!entry.quantity) return;
-          lines.push({
-            key: `${row.key}::${entry.floor_label}::${entry.room || ""}`,
-            system: SYSTEM_LABEL(sysCat), description: row.description, location: simpleBoqLocationForEntry(entry),
-            qty: entry.quantity, unit: row.unit, status: simpleBoqStatusFor(row), remarks: simpleBoqRemarksFor(row),
-          });
-        });
-      } else {
-        lines.push({
-          key: row.key, system: SYSTEM_LABEL(sysCat), description: row.description, location: simpleBoqLocationAggregate(row),
-          qty: row.totalQuantity, unit: row.unit, status: simpleBoqStatusFor(row), remarks: simpleBoqRemarksFor(row),
-        });
-      }
+      lines.push({
+        key: floorFilter ? `${row.key}::${floorFilter}` : row.key, rowKey: row.key,
+        system: SYSTEM_LABEL(sysCat), description: row.description, location: floorFilter || simpleBoqLocationAggregate(row),
+        qty: row.totalQuantity, unit: row.unit, status: simpleBoqStatusFor(row), remarks: simpleBoqRemarksFor(row),
+      });
     });
   });
   return lines.map((l, i) => ({ ...l, line: i + 1 }));
+}
+
+// Sums a set of simple-BOQ lines per unit (mixed units can't be added
+// together meaningfully -- e.g. "45 Nos + 1200 m" stays two numbers, never
+// silently summed into one, matching this project's "math must reconcile,
+// never fabricate" discipline).
+function simpleBoqSubtotalsByUnit(lines) {
+  const byUnit = {};
+  lines.forEach(l => { byUnit[l.unit] = (byUnit[l.unit] || 0) + Number(l.qty || 0); });
+  return Object.entries(byUnit).map(([unit, qty]) => `${qty} ${unit}`).join(", ");
 }
 
 async function callEngine(action, payload) {
@@ -2801,18 +2964,16 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
         {err && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{err}</div>}
         <div className="grid md:grid-cols-2 gap-4">
           <Field label="Project Name" required value={form.project_name} onChange={v=>setForm({...form, project_name:v})} />
-          <Field label="Client" value={form.client_name} onChange={v=>setForm({...form, client_name:v})} />
-          <Field label="Consultant" value={form.consultant_name} onChange={v=>setForm({...form, consultant_name:v})} />
           <Field label="Contractor" value={form.contractor_name} onChange={v=>setForm({...form, contractor_name:v})} />
           <Field label="Country" required value={form.country} onChange={v=>setForm({...form, country:v})} />
           <Field label="City" required value={form.city} onChange={v=>setForm({...form, city:v})} />
-          <Field label="Area Size" type="number" value={form.area_size} onChange={v=>setForm({...form, area_size:v})} />
         </div>
         {/* Building Type, Number of Floors, Project Scope, and Required Systems were removed from this
             form per a direct request to keep project setup minimal -- compliance only needs city/country.
-            The underlying columns/defaults still exist and are still used elsewhere (dashboard cards, AI
-            prompts), they're just no longer collected up front; existing projects keep whatever values
-            they already have. */}
+            Client, Consultant, and Area Size were also removed per a follow-up request ("not required").
+            The underlying columns/defaults still exist and are still used elsewhere (exports, dashboard
+            cards) for any project that already has them from before this change -- they're just no
+            longer collected up front for new/edited projects. */}
         <div className="flex gap-3 pt-2">
           <button disabled={busy} className="bg-slate-900 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">{busy ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save Changes" : "Create Project")}</button>
           <button type="button" onClick={onCancel} className="px-5 py-2.5 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-100">Cancel</button>
@@ -2848,7 +3009,7 @@ function ProjectWorkspace({ project, onBack, onEdit }) {
   // change low-risk -- they can be fully removed in a later cleanup pass.
   const tabs = [
     ["overview","Overview"], ["drawings","Drawings & AI Analysis"], ["design","System Design (No Drawings)"],
-    ["boq","BOQ"],
+    ["boq","BOQ"], ["specification","Specification"],
     ["compliance","Compliance"], ["products","Product Recommendations"],
     ["export","Export"], ["chat","AI Assistant"],
   ];
@@ -2871,6 +3032,7 @@ function ProjectWorkspace({ project, onBack, onEdit }) {
       {tab === "drawings" && <DrawingsTab project={project} />}
       {tab === "design" && <DesignTab project={project} />}
       {tab === "boq" && <BoqTab project={project} />}
+      {tab === "specification" && <SpecificationTab project={project} />}
       {tab === "compliance" && <ComplianceTab project={project} />}
       {tab === "products" && <ProductsTab project={project} />}
       {tab === "export" && <ExportTab project={project} />}
@@ -3275,14 +3437,17 @@ function DrawingsTab({ project }) {
 function MarkupViewerModal({ drawing, onClose }) {
   const [items, setItems] = useState([]);
   const [imgUrl, setImgUrl] = useState(null);
+  const [pageRenderFailed, setPageRenderFailed] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeItem, setActiveItem] = useState(null);
   const isImage = drawing.file_type === "image" || drawing.file_type === "scan";
+  const isPdf = drawing.file_type === "pdf";
 
   useEffect(() => { load(); }, [drawing.id]);
   async function load() {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setPageRenderFailed(false);
     try {
       const { data, error: qErr } = await sb.from("boq_items").select("*").eq("drawing_id", drawing.id).order("revision_number", { ascending: false });
       if (qErr) throw qErr;
@@ -3292,11 +3457,74 @@ function MarkupViewerModal({ drawing, onClose }) {
         const { data: signed, error: sErr } = await sb.storage.from("drawings").createSignedUrl(drawing.storage_path, 300);
         if (sErr) throw sErr;
         setImgUrl(signed.signedUrl);
+      } else if (isPdf) {
+        // Renders the PDF's first page to a canvas via pdf.js, then reuses
+        // that as a data-URL "image" -- every marker-overlay/download code
+        // path below already works off imgUrl regardless of where it came
+        // from, so no separate rendering path is needed for PDFs. Falls
+        // back to the existing "no page render" banner (pageRenderFailed)
+        // rather than breaking the modal if pdf.js isn't available or the
+        // render throws -- the item list below still works either way.
+        try {
+          if (!window.__PDFJS_OK__ || !window.pdfjsLib) throw new Error("pdf.js not available");
+          const { data: signed, error: sErr } = await sb.storage.from("drawings").createSignedUrl(drawing.storage_path, 300);
+          if (sErr) throw sErr;
+          const pdf = await window.pdfjsLib.getDocument(signed.signedUrl).promise;
+          const page = await pdf.getPage(1);
+          const viewport = page.getViewport({ scale: 1.5 });
+          const canvas = document.createElement("canvas");
+          canvas.width = viewport.width; canvas.height = viewport.height;
+          await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+          setImgUrl(canvas.toDataURL("image/png"));
+        } catch (pdfErr) {
+          console.error("PDF page render failed:", pdfErr);
+          setPageRenderFailed(true);
+        }
       }
     } catch (e) {
       console.error("MarkupViewerModal load failed:", e);
       setError(e.message || "Could not load markup data for this drawing.");
     } finally { setLoading(false); }
+  }
+
+  // Composites the currently-shown base image/rendered page plus every
+  // marker overlay onto an offscreen canvas at the image's real resolution,
+  // then triggers a PNG download -- so the "view" and "download" the user
+  // sees are always the exact same markup, never two different renderers
+  // drifting apart. Wrapped defensively: if the image host doesn't return
+  // CORS headers permitting canvas export, this fails gracefully with a
+  // clear message instead of a silent broken download.
+  async function downloadMarkup() {
+    if (!imgUrl) return;
+    setDownloading(true);
+    try {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(new Error("Could not load the drawing image for export.")); img.src = imgUrl; });
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      located.forEach(it => {
+        const color = systemColor(it.system_category);
+        const drawMarker = (x, y) => {
+          const w = Math.max(it.coordinates.width || 0, 0.01) * canvas.width;
+          const h = Math.max(it.coordinates.height || 0, 0.01) * canvas.height;
+          const px = x * canvas.width, py = y * canvas.height;
+          ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.strokeRect(px, py, w, h);
+          ctx.fillStyle = color + "33"; ctx.fillRect(px, py, w, h);
+        };
+        drawMarker(it.coordinates.x || 0, it.coordinates.y || 0);
+        (Array.isArray(it.coordinates.instances) ? it.coordinates.instances : []).forEach(inst => drawMarker(inst.x || 0, inst.y || 0));
+      });
+      const url = canvas.toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = url; a.download = `${drawing.file_name || "drawing"}-markup.png`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    } catch (e) {
+      console.error("downloadMarkup failed:", e);
+      alert("Could not export the markup image: " + e.message + ". You can still use your browser's screenshot tool on the view above.");
+    } finally { setDownloading(false); }
   }
 
   const located = items.filter(i => i.coordinates && i.coordinates.x != null && i.coordinates.y != null);
@@ -3311,7 +3539,10 @@ function MarkupViewerModal({ drawing, onClose }) {
       <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Drawing Markup — {drawing.file_name}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          <div className="flex items-center gap-3">
+            {imgUrl && <button onClick={downloadMarkup} disabled={downloading} className="text-xs font-semibold bg-slate-900 text-white px-3 py-1.5 rounded-lg hover:bg-slate-800 disabled:opacity-50">{downloading ? "Preparing…" : "Download Markup (PNG)"}</button>}
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          </div>
         </div>
         {loading ? <div className="text-slate-400 text-sm py-8 text-center">Loading…</div> : error ? (
           <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center justify-between">
@@ -3320,7 +3551,7 @@ function MarkupViewerModal({ drawing, onClose }) {
           </div>
         ) : (
           <React.Fragment>
-            {!isImage && (
+            {!imgUrl && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 mb-4">
                 {drawing.file_type === "dxf" ? (
                   "This DXF was analyzed by the AI reading the actual CAD exchange-format text (real entity/layer/block data, not a visual estimate), but there's no rendered drawing image to place markers on, so on-drawing positions aren't shown for DXF items — the item list below is still the AI's real read of your file's data."
@@ -3332,8 +3563,10 @@ function MarkupViewerModal({ drawing, onClose }) {
                   ) : (
                     "This file type needs a PDF or image export attached before AI analysis (and markup) can run — use \"Attach Export for AI\" on the Drawings tab."
                   )
+                ) : isPdf ? (
+                  "Couldn't render this PDF's first page for the markup overlay (the page-render library may not have loaded, or this PDF uses an unsupported feature) — the item list below still shows every extracted item and its page/coordinates."
                 ) : (
-                  "Inline page rendering with overlay markers is only available for image (PNG/JPG) uploads in this release — PDF page-image rendering is on the roadmap. Item locations below are still shown as page numbers and coordinates where the AI captured them."
+                  "Inline page rendering with overlay markers is only available for image (PNG/JPG) uploads in this release. Item locations below are still shown as page numbers and coordinates where the AI captured them."
                 )}
               </div>
             )}
@@ -3347,7 +3580,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                 ))}
               </div>
             )}
-            {isImage && imgUrl && (
+            {imgUrl && (
               <div className="qtr-markup-wrap relative border rounded-lg overflow-hidden bg-slate-100 mb-4">
                 <img src={imgUrl} className="w-full block" alt={drawing.file_name} />
                 {located.map(it => {
@@ -3386,6 +3619,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                 })}
               </div>
             )}
+            {imgUrl && isPdf && <div className="text-[10px] text-slate-400 mb-4 -mt-3">Showing page 1 of this PDF. Marker positions for items reported on other pages are still listed below but not plotted on this page image.</div>}
             {located.length === 0 && unlocated.length === 0 && (
               <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">No BOQ items recorded for this drawing yet.</div>
             )}
@@ -3594,21 +3828,18 @@ function BoqTab({ project }) {
   const [rules, setRules] = useState([]);
   const [groupBy, setGroupBy] = useState("system");
   const [filterSystem, setFilterSystem] = useState("all");
-  // The left-hand bucket list (systems/floors/etc., per groupBy) selects
-  // which bucket's items show in the right-hand detail panel -- this is the
-  // two-panel "BOQ – Group by System" layout from the reference screenshot,
-  // replacing the old single long stacked-table layout.
-  const [selectedBucket, setSelectedBucket] = useState(null);
-  // 2026-08-09 redesign, second pass: the Breakdown/Drawing Evidence/Zones/
-  // Notes panel is now a persistent system-wide panel below the item table
-  // (matching the reference screenshot exactly -- a Floor x Item matrix
-  // aggregated across every item in the bucket), not a per-row expand.
-  // `focusedItemKey` narrows that panel to one item when its eye icon is
-  // clicked; `activeSystemTab` is which of the 4 tabs is showing.
+  // BOQ Type (2026-08-10): "designed" = complete system solution (every
+  // required item, including engineered/derived accessories) vs "takeoff" =
+  // only what was physically taken off the drawings. Drives
+  // buildSimpleBoqLines' opts.excludeEngineered.
+  const [boqListType, setBoqListType] = useState("designed");
+  // `focusedItemKey` opens the persistent Breakdown/Evidence/Notes drill-down
+  // panel below the Simple List table, scoped to one item via its "View"
+  // action -- this replaces the former two-panel dashboard's per-bucket
+  // panel now that the Dashboard View toggle has been removed per explicit
+  // user request ("remove the option dashboard view no required").
   const [focusedItemKey, setFocusedItemKey] = useState(null);
   const [activeSystemTab, setActiveSystemTab] = useState("breakdown");
-  const [itemPage, setItemPage] = useState(0);
-  const ITEMS_PER_PAGE = 25;
   const [openComments, setOpenComments] = useState(null);
   const [comments, setComments] = useState({});
   const [commentText, setCommentText] = useState("");
@@ -3623,9 +3854,8 @@ function BoqTab({ project }) {
   const [assumptions, setAssumptions] = useState([]);
   const [reviewItems, setReviewItems] = useState([]);
   const [showOptimizationPanel, setShowOptimizationPanel] = useState(false);
-  // Simple flat BOQ list (alternative to the two-panel Group-By dashboard,
-  // toggled by the user, not a replacement -- see buildSimpleBoqLines()).
-  const [boqViewMode, setBoqViewMode] = useState("grouped");
+  // Simple List View pagination -- only used for the flat/"project" grouping
+  // (see groupedSimpleBoq below); grouped modes render each group in full.
   const [simpleBoqPage, setSimpleBoqPage] = useState(0);
   const SIMPLE_BOQ_PAGE_SIZE = 50;
 
@@ -3732,31 +3962,49 @@ function BoqTab({ project }) {
 
   const consolidatedAll = useMemo(() => consolidateBoqItems(eligibleItems, drawingsById), [eligibleItems, drawingsById]);
   const consolidated = useMemo(() => filterSystem === "all" ? consolidatedAll : consolidatedAll.filter(r => r.systemCategory === filterSystem), [consolidatedAll, filterSystem]);
-  const buckets = useMemo(() => bucketConsolidated(consolidated, groupBy), [consolidated, groupBy]);
-  // Ordered list of [bucketName, bucketRows] pairs backing the left-hand
-  // panel of the merged "BOQ - Group by <groupBy>" layout (2026-08-09).
-  const bucketEntries = useMemo(() => Object.entries(buckets), [buckets]);
-  // Simple flat list -- built from `consolidated` (so the System Filter
-  // dropdown still applies), independent of groupBy/selectedBucket, since
-  // this view is one continuous table across every system, not a bucket.
-  const simpleBoqLines = useMemo(() => buildSimpleBoqLines(consolidated), [consolidated]);
-  useEffect(() => { setSimpleBoqPage(0); }, [consolidated, boqViewMode]);
-  // Keep selectedBucket valid whenever groupBy/filterSystem/data changes --
-  // default to the first bucket so the right-hand panel is never empty when
-  // buckets exist, and clear it when there are none.
-  useEffect(() => {
-    if (bucketEntries.length === 0) { setSelectedBucket(null); return; }
-    if (!bucketEntries.some(([name]) => name === selectedBucket)) setSelectedBucket(bucketEntries[0][0]);
-  }, [bucketEntries]);
-
-  // Reset the item-focus/tab/pagination state whenever the selected bucket
-  // changes, so switching systems doesn't leave a stale item focused or a
-  // stale page number showing.
+  // Lookup map backing the Simple List View's per-line "View" action -- a
+  // line only carries rowKey, this resolves it back to the full consolidated
+  // row (with its evidence/breakdown) for SystemDetailPanel.
+  const rowsByKey = useMemo(() => { const m = {}; consolidated.forEach(r => { m[r.key] = r; }); return m; }, [consolidated]);
+  // Simple List View grouping (2026-08-10 redesign): the former two-panel
+  // dashboard's Group By dropdown and "System BOQ" bucketing now live here
+  // instead, per explicit user request ("shift it to simple list view").
+  // Deliberately scoped to System/Category/Floor/Building/Flat(Project) --
+  // Zone/Room/Drawing/Area are NOT offered here, unlike the old dashboard's
+  // dropdown: those dimensions can fragment a row's breakdown in ways that
+  // don't reconcile cleanly with buildSimpleBoqLines' per-location unrolling
+  // (a correctness risk, not a missing feature -- those groupings are still
+  // fully available in the drill-down panel below and the Master BOQ
+  // export). Falls back to "system" if groupBy is currently set to one of
+  // the dropped values (e.g. from a stale default).
+  const SIMPLE_BOQ_GROUP_BY_OPTIONS = ["system", "category", "floor", "building", "project"];
+  const effectiveGroupBy = SIMPLE_BOQ_GROUP_BY_OPTIONS.includes(groupBy) ? groupBy : "system";
+  const groupedSimpleBoq = useMemo(() => {
+    const opts = { excludeEngineered: boqListType === "takeoff" };
+    if (effectiveGroupBy === "project") {
+      return [{ groupName: null, lines: buildSimpleBoqLines(consolidated, opts) }];
+    }
+    const buckets = bucketConsolidated(consolidated, effectiveGroupBy);
+    let counter = 0;
+    return Object.entries(buckets).map(([bucketName, bucketRows]) => {
+      // bucketConsolidated's "floor" grouping keys are the bare floor label
+      // itself (see sortBucketKeysByFloor), so it's passed straight through
+      // as floorFilter to correctly scope each bucket row's breakdown/
+      // location to just this floor (see buildSimpleBoqLines' opts doc).
+      const lines = buildSimpleBoqLines(bucketRows, { ...opts, floorFilter: effectiveGroupBy === "floor" ? bucketName : null })
+        .map(l => ({ ...l, line: ++counter }));
+      return { groupName: bucketName, lines };
+    });
+  }, [consolidated, effectiveGroupBy, boqListType]);
+  const simpleBoqLines = useMemo(() => groupedSimpleBoq.flatMap(g => g.lines), [groupedSimpleBoq]);
+  useEffect(() => { setSimpleBoqPage(0); }, [consolidated, effectiveGroupBy, boqListType]);
+  // Reset the item-focus/tab state whenever the grouping/type/filter
+  // changes, so switching Group By or BOQ Type doesn't leave a stale item
+  // focused in the drill-down panel below.
   useEffect(() => {
     setFocusedItemKey(null);
     setActiveSystemTab("breakdown");
-    setItemPage(0);
-  }, [selectedBucket]);
+  }, [effectiveGroupBy, boqListType, filterSystem]);
 
   // Former ProcurementBoqTab logic, merged in (2026-08-09) -- required
   // accessories derived from engineering_rules, no separate AI call or tab.
@@ -4326,33 +4574,31 @@ function BoqTab({ project }) {
         </div>
       )}
 
-      {/* View toggle: the two-panel Group-By dashboard vs. a simple, flat,
-          continuously-numbered BOQ table (Line/System/Item/Location/Qty/
-          Unit/Status/Remarks) matching a classic QS/estimator takeoff --
-          added alongside the dashboard by explicit user choice, not a
-          replacement for it. */}
-      <div className="flex items-center gap-2 mb-3">
-        <button onClick={()=>setBoqViewMode("grouped")} className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${boqViewMode==="grouped" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}>Dashboard View</button>
-        <button onClick={()=>setBoqViewMode("simple")} className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${boqViewMode==="simple" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}>Simple List View</button>
-      </div>
-
+      {/* Simple List View (2026-08-10 redesign): the former two-panel
+          Group-By dashboard was removed per explicit user request ("remove
+          the option dashboard view no required") -- this flat/grouped
+          Line/System/Item/Location/Qty/Unit/Status/Remarks table, matching
+          a classic QS/estimator takeoff, is now the only BOQ view. Its own
+          BOQ Type and Group By controls (below) replace what the dashboard
+          used to offer, per "shift it to simple list view". */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        {boqViewMode === "grouped" && (
-          <div>
-            <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">Group By</label>
-            <select className="border rounded-lg px-3 py-1.5 text-sm" value={groupBy} onChange={e=>setGroupBy(e.target.value)}>
-              <option value="system">System BOQ</option>
-              <option value="floor">Floor BOQ</option>
-              <option value="project">Item BOQ (single flat list)</option>
-              <option value="category">Category (ELV / Electrical / HVAC / etc.)</option>
-              <option value="zone">Zone</option>
-              <option value="room">Room</option>
-              <option value="drawing">Drawing</option>
-              <option value="building">Building / Villa / Tower</option>
-              <option value="area">Area</option>
-            </select>
-          </div>
-        )}
+        <div>
+          <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">BOQ Type</label>
+          <select className="border rounded-lg px-3 py-1.5 text-sm" value={boqListType} onChange={e=>setBoqListType(e.target.value)}>
+            <option value="designed">Designed Engineering BOQ (complete system)</option>
+            <option value="takeoff">Takeoff BOQ (drawing quantities only)</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">Group By</label>
+          <select className="border rounded-lg px-3 py-1.5 text-sm" value={effectiveGroupBy} onChange={e=>setGroupBy(e.target.value)}>
+            <option value="system">System BOQ</option>
+            <option value="category">Category (ELV / Electrical / HVAC / etc.)</option>
+            <option value="floor">Floor BOQ</option>
+            <option value="building">Building / Villa / Tower</option>
+            <option value="project">Flat List (single continuous BOQ)</option>
+          </select>
+        </div>
         <div>
           <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">System Filter</label>
           <select className="border rounded-lg px-3 py-1.5 text-sm" value={filterSystem} onChange={e=>setFilterSystem(e.target.value)}>
@@ -4377,199 +4623,95 @@ function BoqTab({ project }) {
         </div>
       )}
 
-      {boqViewMode === "grouped" && bucketEntries.length === 0 && <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet. Analyze a drawing or design a system to generate one.</div>}
-
-      {boqViewMode === "grouped" && bucketEntries.length > 0 && (
-        // Two-panel "BOQ - Group by <groupBy>" layout (2026-08-09 redesign,
-        // matched against the reference dashboard): left is a real data
-        // table of the current buckets (not just a button list) plus a
-        // "BOQ Summary by System" donut chart; right is the selected
-        // bucket's "System Overview" card + stat tiles + a single item
-        // table with items sorted active-first (via classifyComponentType),
-        // instead of 3 separately-labeled Active/Passive/Other tables.
-        <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-4">
-          <div className="space-y-4 self-start">
-            <div className="bg-white border rounded-xl overflow-hidden">
-              <div className="px-3 py-2 bg-slate-50 border-b text-xs font-semibold text-slate-500 uppercase">
-                {GROUP_BY_LABEL(groupBy)} ({bucketEntries.length})
-              </div>
-              <div className="overflow-x-auto max-h-[50vh] overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0">
+      {simpleBoqLines.length === 0 ? (
+        <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet. Analyze a drawing or design a system to generate one.</div>
+      ) : (
+        <React.Fragment>
+          {groupedSimpleBoq.map((group) => {
+            // Flat mode ("project"): the one group's lines get real
+            // pagination (SIMPLE_BOQ_PAGE_SIZE/page). Grouped modes render
+            // each group's full line set under its own subheader instead --
+            // groups are bounded by system/floor/building, not the whole
+            // project, so pagination isn't needed there.
+            const isFlat = group.groupName === null;
+            const pageLines = isFlat ? group.lines.slice(simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE, simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE + SIMPLE_BOQ_PAGE_SIZE) : group.lines;
+            return (
+              <div key={group.groupName ?? "flat"} className="qtr-boq-table bg-white border rounded-xl overflow-x-auto mb-4">
+                {!isFlat && (
+                  <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-700">{group.groupName}</span>
+                    <span className="text-[11px] text-slate-500">{group.lines.length} line{group.lines.length===1?"":"s"} · Total: {simpleBoqSubtotalsByUnit(group.lines) || "—"}</span>
+                  </div>
+                )}
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                     <tr>
-                      <th className="text-left px-3 py-2">{GROUP_BY_LABEL(groupBy)}</th>
-                      <th className="text-right px-3 py-2">Items</th>
+                      <th className="text-right px-3 py-2">Line</th>
+                      <th className="text-left px-3 py-2">System</th>
+                      <th className="text-left px-3 py-2">Item Description</th>
+                      <th className="text-left px-3 py-2">Location</th>
                       <th className="text-right px-3 py-2">Qty</th>
-                      <th className="text-left px-3 py-2">Conf.</th>
-                      <th className="text-center px-3 py-2">Review</th>
-                      <th className="text-center px-3 py-2"></th>
+                      <th className="text-left px-3 py-2">Unit</th>
+                      <th className="text-left px-3 py-2">Status</th>
+                      <th className="text-left px-3 py-2">Remarks</th>
+                      <th className="text-center px-3 py-2">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {bucketEntries.map(([bucketName, bucketRows]) => {
-                      const conf = bucketRows.filter(r=>r.avgConfidence!=null);
-                      const avgConf = conf.length ? Math.round(conf.reduce((s,r)=>s+r.avgConfidence,0)/conf.length) : null;
-                      const needsReview = bucketRows.filter(r=>r.reviewBucket==="review_required"||r.reviewBucket==="engineer_review").length;
-                      const totalQty = bucketRows.reduce((s,r)=> s + (r.quantityIsTbd || r.totalQuantity==null ? 0 : r.totalQuantity), 0);
-                      const isSel = selectedBucket === bucketName;
-                      return (
-                        <tr key={bucketName} onClick={()=>setSelectedBucket(bucketName)}
-                          className={`cursor-pointer hover:bg-slate-50 ${isSel ? "bg-blue-50" : ""}`}>
-                          <td className={`px-3 py-2 font-semibold ${isSel ? "text-blue-700" : "text-slate-700"}`}>{bucketName}</td>
-                          <td className="px-3 py-2 text-right">{bucketRows.length}</td>
-                          <td className="px-3 py-2 text-right">{totalQty}</td>
-                          <td className="px-3 py-2">
-                            {avgConf != null ? (
-                              <div className="flex items-center gap-1.5">
-                                <div className="w-10 h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:`${avgConf}%`}}></div></div>
-                                <span className="text-slate-500">{avgConf}%</span>
-                              </div>
-                            ) : "—"}
-                          </td>
-                          <td className="px-3 py-2 text-center">{needsReview > 0 ? <span className="text-amber-600 font-semibold">{needsReview}</span> : "—"}</td>
-                          <td className="px-3 py-2 text-center">
-                            <button onClick={(e)=>{e.stopPropagation();setSelectedBucket(bucketName);}} className="text-blue-600 text-[11px] font-semibold hover:underline">View →</button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {pageLines.map(l => (
+                      <tr key={l.key} className={focusedItemKey === l.rowKey ? "bg-blue-50" : ""}>
+                        <td className="px-3 py-2 text-right text-slate-400">{l.line}</td>
+                        <td className="px-3 py-2 font-medium">{l.system}</td>
+                        <td className="px-3 py-2">{l.description}</td>
+                        <td className="px-3 py-2 text-slate-600">{l.location}</td>
+                        <td className="px-3 py-2 text-right font-semibold">{l.qty}</td>
+                        <td className="px-3 py-2 text-slate-500">{l.unit}</td>
+                        <td className="px-3 py-2">
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${l.status === "Confirmed" ? "bg-emerald-100 text-emerald-700" : l.status === "Engineered" ? "bg-blue-100 text-blue-700" : "bg-violet-100 text-violet-700"}`}>{l.status}</span>
+                        </td>
+                        <td className="px-3 py-2 text-slate-500 text-xs">{l.remarks}</td>
+                        <td className="px-3 py-2 text-center">
+                          <button onClick={()=>{ const next = focusedItemKey === l.rowKey ? null : l.rowKey; setFocusedItemKey(next); setActiveSystemTab("breakdown"); }} className={`text-xs hover:underline ${focusedItemKey === l.rowKey ? "text-blue-700 font-semibold" : "text-blue-600"}`} title="View this item's breakdown/evidence/notes below">
+                            👁 {focusedItemKey === l.rowKey ? "Focused" : "View"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                   <tfoot>
                     <tr className="font-semibold bg-slate-50 border-t">
-                      <td className="px-3 py-2">Total</td>
-                      <td className="px-3 py-2 text-right">{consolidated.length}</td>
-                      <td className="px-3 py-2 text-right">{bucketEntries.reduce((s,[,rows])=>s+rows.reduce((s2,r)=>s2+(r.quantityIsTbd||r.totalQuantity==null?0:r.totalQuantity),0),0)}</td>
-                      <td colSpan={3}></td>
+                      <td className="px-3 py-2" colSpan={4}>Total ({group.lines.length} line{group.lines.length===1?"":"s"})</td>
+                      <td className="px-3 py-2 text-right">{simpleBoqSubtotalsByUnit(group.lines) || "—"}</td>
+                      <td colSpan={4}></td>
                     </tr>
                   </tfoot>
                 </table>
+                {isFlat && group.lines.length > SIMPLE_BOQ_PAGE_SIZE && (
+                  <div className="flex items-center justify-between px-3 py-2 border-t text-xs text-slate-500">
+                    <span>Showing {simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE + 1} to {Math.min(simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE + SIMPLE_BOQ_PAGE_SIZE, group.lines.length)} of {group.lines.length} line{group.lines.length===1?"":"s"}</span>
+                    <div className="flex items-center gap-2">
+                      <button onClick={()=>setSimpleBoqPage(p=>Math.max(0,p-1))} disabled={simpleBoqPage===0} className="px-2 py-1 border rounded disabled:opacity-30">‹</button>
+                      <span className="font-semibold text-slate-700">{simpleBoqPage+1}</span>
+                      <button onClick={()=>setSimpleBoqPage(p=>Math.min(Math.ceil(group.lines.length / SIMPLE_BOQ_PAGE_SIZE)-1,p+1))} disabled={simpleBoqPage>=Math.ceil(group.lines.length / SIMPLE_BOQ_PAGE_SIZE)-1} className="px-2 py-1 border rounded disabled:opacity-30">›</button>
+                    </div>
+                  </div>
+                )}
               </div>
+            );
+          })}
+          {/* Grand total across every group -- only shown when actually
+              grouped (the flat/project view's single table footer above is
+              already the grand total). */}
+          {groupedSimpleBoq.length > 1 && (
+            <div className="bg-slate-900 text-white rounded-xl px-4 py-2.5 mb-4 flex items-center justify-between text-sm">
+              <span className="font-semibold">Project Total</span>
+              <span>{simpleBoqLines.length} line{simpleBoqLines.length===1?"":"s"} · {simpleBoqSubtotalsByUnit(simpleBoqLines) || "—"}</span>
             </div>
-
-            {/* "BOQ Summary by System" donut chart removed per explicit user
-                request (2026-08-09, later still) -- systemDonut itself is
-                kept (its .total still feeds the "Total Quantity" summary
-                card above), only this visual block was deleted. */}
-          </div>
-
-          <div>
-            {bucketEntries.filter(([name]) => name === selectedBucket).map(([bucketName, bucketRows]) => {
-              const sorted = [...bucketRows].sort((a,b) => {
-                const order = { active: 0, passive: 1, other: 2 };
-                return order[classifyComponentType(a)] - order[classifyComponentType(b)];
-              });
-              const conf = bucketRows.filter(r=>r.avgConfidence!=null);
-              const avgConf = conf.length ? Math.round(conf.reduce((s,r)=>s+r.avgConfidence,0)/conf.length) : null;
-              const totalQty = bucketRows.reduce((s,r)=> s + (r.quantityIsTbd || r.totalQuantity==null ? 0 : r.totalQuantity), 0);
-              const needsReview = bucketRows.filter(r=>r.reviewBucket==="review_required"||r.reviewBucket==="engineer_review").length;
-              const unitList = [...new Set(bucketRows.map(r=>r.unit).filter(Boolean))];
-              const pageCount = Math.max(1, Math.ceil(sorted.length / ITEMS_PER_PAGE));
-              const clampedPage = Math.min(itemPage, pageCount - 1);
-              const pageStart = clampedPage * ITEMS_PER_PAGE;
-              const pageRows = sorted.slice(pageStart, pageStart + ITEMS_PER_PAGE);
-              return (
-                <div key={bucketName}>
-                  <div className="bg-white border rounded-xl p-4 mb-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-semibold text-slate-800 text-lg">{bucketName} System Overview</h3>
-                      <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">{bucketRows.length} items</span>
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
-                      {[
-                        ["Total Quantity", totalQty],
-                        ["Units", unitList.join(" / ") || "—"],
-                        ["Avg. Confidence", avgConf != null ? `${avgConf}%` : "—"],
-                        ["Review Required", needsReview],
-                      ].map(([label, val]) => (
-                        <div key={label} className="bg-slate-50 rounded-lg py-2">
-                          <div className={`text-base font-bold ${label==="Review Required" && needsReview>0 ? "text-amber-600" : "text-slate-800"}`}>{val}</div>
-                          <div className="text-[10px] text-slate-500 uppercase">{label}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="qtr-boq-table bg-white border rounded-xl overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
-                        <tr>
-                          <th className="text-left px-3 py-2">Item</th>
-                          <th className="text-left px-3 py-2">Specification</th>
-                          <th className="text-left px-3 py-2">Unit</th>
-                          <th className="text-right px-3 py-2">Total Qty</th>
-                          <th className="text-center px-3 py-2">Status</th>
-                          <th className="text-center px-3 py-2">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {pageRows.map((row) => <ConsolidatedRow key={row.key + bucketName} row={row} isFocused={focusedItemKey === row.key} onFocus={setFocusedItemKey} />)}
-                      </tbody>
-                    </table>
-                    <div className="flex items-center justify-between px-3 py-2 border-t text-xs text-slate-500">
-                      <span>Showing {sorted.length === 0 ? 0 : pageStart + 1} to {Math.min(pageStart + ITEMS_PER_PAGE, sorted.length)} of {sorted.length} item{sorted.length===1?"":"s"}</span>
-                      {pageCount > 1 && (
-                        <div className="flex items-center gap-2">
-                          <button onClick={()=>setItemPage(p=>Math.max(0,p-1))} disabled={clampedPage===0} className="px-2 py-1 border rounded disabled:opacity-30">‹</button>
-                          <span className="font-semibold text-slate-700">{clampedPage+1}</span>
-                          <button onClick={()=>setItemPage(p=>Math.min(pageCount-1,p+1))} disabled={clampedPage>=pageCount-1} className="px-2 py-1 border rounded disabled:opacity-30">›</button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <SystemDetailPanel bucketName={bucketName} bucketRows={sorted} focusedKey={focusedItemKey} setFocusedKey={setFocusedItemKey} activeTab={activeSystemTab} setActiveTab={setActiveSystemTab} />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {boqViewMode === "simple" && (
-        simpleBoqLines.length === 0 ? (
-          <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet. Analyze a drawing or design a system to generate one.</div>
-        ) : (
-          <div className="qtr-boq-table bg-white border rounded-xl overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
-                <tr>
-                  <th className="text-right px-3 py-2">Line</th>
-                  <th className="text-left px-3 py-2">System</th>
-                  <th className="text-left px-3 py-2">Item Description</th>
-                  <th className="text-left px-3 py-2">Location</th>
-                  <th className="text-right px-3 py-2">Qty</th>
-                  <th className="text-left px-3 py-2">Unit</th>
-                  <th className="text-left px-3 py-2">Status</th>
-                  <th className="text-left px-3 py-2">Remarks</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {simpleBoqLines.slice(simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE, simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE + SIMPLE_BOQ_PAGE_SIZE).map(l => (
-                  <tr key={l.key}>
-                    <td className="px-3 py-2 text-right text-slate-400">{l.line}</td>
-                    <td className="px-3 py-2 font-medium">{l.system}</td>
-                    <td className="px-3 py-2">{l.description}</td>
-                    <td className="px-3 py-2 text-slate-600">{l.location}</td>
-                    <td className="px-3 py-2 text-right font-semibold">{l.qty}</td>
-                    <td className="px-3 py-2 text-slate-500">{l.unit}</td>
-                    <td className="px-3 py-2">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${l.status === "Confirmed" ? "bg-emerald-100 text-emerald-700" : l.status === "Engineered" ? "bg-blue-100 text-blue-700" : "bg-violet-100 text-violet-700"}`}>{l.status}</span>
-                    </td>
-                    <td className="px-3 py-2 text-slate-500 text-xs">{l.remarks}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="flex items-center justify-between px-3 py-2 border-t text-xs text-slate-500">
-              <span>Showing {simpleBoqLines.length === 0 ? 0 : simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE + 1} to {Math.min(simpleBoqPage * SIMPLE_BOQ_PAGE_SIZE + SIMPLE_BOQ_PAGE_SIZE, simpleBoqLines.length)} of {simpleBoqLines.length} line{simpleBoqLines.length===1?"":"s"}</span>
-              {Math.ceil(simpleBoqLines.length / SIMPLE_BOQ_PAGE_SIZE) > 1 && (
-                <div className="flex items-center gap-2">
-                  <button onClick={()=>setSimpleBoqPage(p=>Math.max(0,p-1))} disabled={simpleBoqPage===0} className="px-2 py-1 border rounded disabled:opacity-30">‹</button>
-                  <span className="font-semibold text-slate-700">{simpleBoqPage+1}</span>
-                  <button onClick={()=>setSimpleBoqPage(p=>Math.min(Math.ceil(simpleBoqLines.length / SIMPLE_BOQ_PAGE_SIZE)-1,p+1))} disabled={simpleBoqPage>=Math.ceil(simpleBoqLines.length / SIMPLE_BOQ_PAGE_SIZE)-1} className="px-2 py-1 border rounded disabled:opacity-30">›</button>
-                </div>
-              )}
-            </div>
-          </div>
-        )
+          )}
+          {focusedItemKey && rowsByKey[focusedItemKey] && (
+            <SystemDetailPanel bucketName={null} bucketRows={[rowsByKey[focusedItemKey]]} focusedKey={focusedItemKey} setFocusedKey={setFocusedItemKey} activeTab={activeSystemTab} setActiveTab={setActiveSystemTab} />
+          )}
+        </React.Fragment>
       )}
       </React.Fragment>
       )}
@@ -4769,6 +4911,157 @@ function EngineeringBoqTab({ project }) {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Specification tab (2026-08-10): "a specification page next to boq which
+// gives all the items and complete BOQ project specification as per the
+// rule and regulation based on the selected location." Combines the same
+// consolidated BOQ engine used by BoqTab with the same location-matched
+// compliance_rules ComplianceTab already queries -- no new AI call, no new
+// schema; this is a presentation layer joining two data sources that both
+// already exist, grouped by system so each system's items sit directly
+// under the regulations that apply to it.
+// ---------------------------------------------------------------------------
+function SpecificationTab({ project }) {
+  const [rawItems, setRawItems] = useState([]);
+  const [drawingRows, setDrawingRows] = useState([]);
+  const [rules, setRules] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { load(); }, [project.id]);
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const [{ data: items, error: iErr }, { data: dr, error: dErr }, { data: cr, error: cErr }] = await Promise.all([
+        sb.from("boq_items").select("*").eq("project_id", project.id),
+        sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
+        sb.from("compliance_rules").select("*").eq("country", project.country).ilike("city", project.city),
+      ]);
+      if (iErr) throw iErr; if (dErr) throw dErr; if (cErr) throw cErr;
+      setRawItems(items || []); setDrawingRows(dr || []); setRules(cr || []);
+    } catch (e) {
+      console.error("SpecificationTab.load failed:", e);
+      setError(e.message || "Could not load the project specification.");
+    } finally { setLoading(false); }
+  }
+
+  const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
+  const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
+  const consolidated = useMemo(() => {
+    const latest = filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+    return consolidateBoqItems(latest, drawingsById);
+  }, [rawItems, excludeDrawingIds, drawingsById]);
+
+  // Group the consolidated BOQ by system, in the same canonical label order
+  // used everywhere else (SYSTEM_LABEL), and pair each group with whichever
+  // seeded compliance rules apply to that same system_category.
+  const bySystem = useMemo(() => {
+    const g = {};
+    consolidated.forEach(row => { (g[row.systemCategory] = g[row.systemCategory] || []).push(row); });
+    return Object.entries(g)
+      .map(([cat, rows]) => ({
+        cat, label: SYSTEM_LABEL(cat),
+        rows: [...rows].sort((a,b)=>a.description.localeCompare(b.description)),
+        rules: rules.filter(r => r.system_category === cat),
+      }))
+      .sort((a,b) => a.label.localeCompare(b.label));
+  }, [consolidated, rules]);
+
+  // Rules whose system_category has no matching BOQ item group yet (e.g. a
+  // seeded regulation for a system this project hasn't taken off/designed
+  // yet) -- shown separately rather than silently dropped.
+  const generalRules = useMemo(() => rules.filter(r => !bySystem.some(g => g.cat === r.system_category)), [rules, bySystem]);
+
+  return (
+    <div>
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 mb-4 text-xs text-amber-800">
+        <strong>Project Specification — AI-generated, for informational and preliminary planning purposes only.</strong> Combines this project's BOQ items with the applicable authority requirements seeded for <strong>{project.city}, {project.country}</strong>. It is not a substitute for an independent code-compliance review by a licensed engineer, and the regulation library below is a reference starting set, not an exhaustive legal document.
+      </div>
+      {error ? (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-4 flex items-center justify-between">
+          <div className="text-sm text-rose-700">{error}</div>
+          <button onClick={load} className="text-xs font-semibold bg-rose-600 text-white px-3 py-1.5 rounded-lg hover:bg-rose-700">Retry</button>
+        </div>
+      ) : loading ? <div className="text-slate-400 text-sm py-8 text-center">Loading…</div> : consolidated.length === 0 ? (
+        <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">No BOQ items yet. Analyze a drawing or design a system to generate one.</div>
+      ) : (
+        <div className="space-y-5">
+          {rules.length === 0 && (
+            <div className="text-xs text-slate-400 italic">No seeded compliance rules for this location yet — items are still listed below without a matched regulation. This reference set currently covers Dubai, Abu Dhabi (UAE) and Riyadh (KSA) as a starting library, extendable to any jurisdiction.</div>
+          )}
+          {bySystem.map(group => (
+            <div key={group.cat} className="bg-white border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-50 border-b flex items-center justify-between">
+                <h3 className="font-semibold text-slate-800">{group.label}</h3>
+                <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">{group.rows.length} item{group.rows.length===1?"":"s"}</span>
+              </div>
+              {group.rules.length > 0 && (
+                <div className="px-4 pt-3 space-y-2">
+                  {group.rules.map(r => (
+                    <div key={r.id} className="bg-slate-50 border rounded-lg p-3 text-xs">
+                      <div className="font-semibold text-slate-700">{r.authority}</div>
+                      <div className="text-slate-600 mt-0.5">{r.requirement}</div>
+                      <div className="text-slate-500 mt-1.5 space-y-0.5">
+                        {r.required_approval && <div><strong>Approval:</strong> {r.required_approval}</div>}
+                        {r.required_certificate && <div><strong>Certificate:</strong> {r.required_certificate}</div>}
+                        {r.testing_requirement && <div><strong>Testing:</strong> {r.testing_requirement}</div>}
+                        {r.required_documents && <div><strong>Documents required:</strong> {r.required_documents}</div>}
+                        {r.approval_process && <div><strong>Approval process:</strong> {r.approval_process}</div>}
+                        {r.reference_code && <div className="text-slate-400"><strong>Reference:</strong> {r.reference_code}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Item specifications -- deliberately NOT a BOQ-style Qty/Unit
+                  table (per explicit user request: "not required the qty to
+                  show make properly as a item specifications"). Quantities
+                  already live in the BOQ tab; this page reads as a written
+                  technical specification per item -- description, spec
+                  text, manufacturer/model, testing & commissioning -- the
+                  same fields an engineer would expect in a spec document. */}
+              <div className="divide-y">
+                {group.rows.map(row => {
+                  const anyRow = row.rawItems[0];
+                  const testingNote = [anyRow?.testing_requirements, anyRow?.commissioning_requirements].filter(Boolean).join(" · ");
+                  return (
+                    <div key={row.key} className="px-4 py-3">
+                      <div className="font-semibold text-slate-800 text-sm">{row.description}</div>
+                      {(row.manufacturer || row.model_number) && (
+                        <div className="text-xs text-slate-500 mt-0.5">{[row.manufacturer, row.model_number].filter(Boolean).join(" — ")}</div>
+                      )}
+                      <div className="text-sm text-slate-600 mt-1.5">
+                        {row.technical_specification || <span className="text-slate-400 italic">No detailed specification recorded for this item yet.</span>}
+                      </div>
+                      {testingNote && (
+                        <div className="text-xs text-slate-500 mt-1.5"><span className="font-semibold text-slate-600">Testing &amp; Commissioning: </span>{testingNote}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {generalRules.length > 0 && (
+            <div className="bg-white border rounded-xl p-4">
+              <h3 className="font-semibold text-slate-800 mb-2">Other applicable regulations (no matching BOQ system yet)</h3>
+              <div className="grid md:grid-cols-2 gap-3">
+                {generalRules.map(r => (
+                  <div key={r.id} className="bg-slate-50 border rounded-lg p-3 text-xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wide bg-slate-900 text-white px-2 py-0.5 rounded-full">{SYSTEM_LABEL(r.system_category)}</span>
+                    <div className="font-semibold text-slate-700 mt-1.5">{r.authority}</div>
+                    <div className="text-slate-600 mt-0.5">{r.requirement}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
