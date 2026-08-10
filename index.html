@@ -3338,6 +3338,20 @@ function DrawingsTab({ project }) {
   const [selectedForCombine, setSelectedForCombine] = useState({});
   const [combining, setCombining] = useState(false);
   const fileRef = useRef();
+  // 2026-08-10: a real customer hit repeated "Failed to fetch"/timeout
+  // errors traced (via direct SQL against analysis_runs) to a burst of
+  // near-simultaneous AI calls -- e.g. clicking "Re-analyze" on several
+  // different drawings in a row, since each drawing's own analyzing[d.id]
+  // flag only ever gated THAT drawing's button, not the others. All AI
+  // actions share one Anthropic API key platform-wide, so concurrent calls
+  // compete for the same capacity and are more likely to time out together.
+  // The backend now has its own hard concurrency gate (ai-engine,
+  // checkConcurrencyGate) as the real fix, but disabling the OTHER
+  // buttons here too gives instant feedback instead of a delayed rejection,
+  // and stops the pile-up from being created client-side in the first
+  // place. Also applies to combining/reworking, which share the same
+  // AI capacity.
+  const anyAiCallInFlight = combining || Object.values(analyzing).some(Boolean);
 
   function toggleCombineSelect(drawingId) {
     setSelectedForCombine(s => ({ ...s, [drawingId]: !s[drawingId] }));
@@ -3563,11 +3577,11 @@ function DrawingsTab({ project }) {
         )}
         <div className="text-xs text-slate-400">You can select multiple files at once — e.g. every floor plan for one discipline, or a full drawing set. Upload specification/requirement PDFs under "Specification / Requirement Document" so they're kept alongside the drawings for this project. Accepted: PDF, PNG/JPG (scanned or photographed drawings), DWG, DXF, Revit (.rvt), IFC. AI analysis runs directly on PDF, image, <strong>DXF</strong>, and <strong>IFC</strong> files — for DXF and IFC, the AI reads the actual underlying CAD/BIM exchange-format data (entities, layers, blocks for DXF; building elements for IFC), not a rendered picture, so it works from your real design data rather than a visual guess. It's still an AI-based read of that data (not a hard deterministic parser), and on-drawing markup positions aren't available for DXF/IFC since there's no page image to place a marker on — markup is only shown for PDF/image-based analyses. DWG and Revit (.rvt) itself are closed, proprietary formats with no free/reliable parser — they upload and store now, and you can unlock AI analysis for them by attaching a PDF or image export of the same drawing (one click "Export"/"Print to PDF" in any CAD/BIM tool, or export to IFC instead if your tool supports it) using the "Attach export" control shown next to each one below.</div>
         <div className="mt-3">
-          <button onClick={analyzeAllPending} className="text-xs bg-slate-900 text-white px-3 py-2 rounded-lg font-semibold hover:bg-slate-800">Analyze All Un-analyzed Drawings</button>
-          <span className="text-xs text-slate-400 ml-2">Runs AI analysis on every uploaded drawing that hasn't been analyzed yet, so a full drawing set produces one complete project BOQ without clicking "Analyze" on each file individually. Each drawing is still its own independent AI call.</span>
+          <button onClick={analyzeAllPending} disabled={anyAiCallInFlight} className="text-xs bg-slate-900 text-white px-3 py-2 rounded-lg font-semibold hover:bg-slate-800 disabled:opacity-50">Analyze All Un-analyzed Drawings</button>
+          <span className="text-xs text-slate-400 ml-2">Runs AI analysis on every uploaded drawing that hasn't been analyzed yet, one at a time, so a full drawing set produces one complete project BOQ without clicking "Analyze" on each file individually.</span>
         </div>
         <div className="mt-2">
-          <button onClick={analyzeCombined} disabled={combining} className="text-xs bg-white text-slate-900 border border-slate-300 px-3 py-2 rounded-lg font-semibold hover:bg-slate-50 disabled:opacity-50">
+          <button onClick={analyzeCombined} disabled={anyAiCallInFlight} className="text-xs bg-white text-slate-900 border border-slate-300 px-3 py-2 rounded-lg font-semibold hover:bg-slate-50 disabled:opacity-50">
             {combining ? "Analyzing combined set…" : `Combine & Analyze Selected (${Object.values(selectedForCombine).filter(Boolean).length})`}
           </button>
           <span className="text-xs text-slate-400 ml-2">Check 2+ drawings below, then run this to send them to the AI together in ONE call — the AI deduplicates items that appear on more than one of them (e.g. the same camera on both an architectural plan and an ELV layout), instead of counting it twice.</span>
@@ -3613,7 +3627,7 @@ function DrawingsTab({ project }) {
                         Classify & Select Pages
                       </button>
                     )}
-                    <button onClick={()=>analyze(d.id)} disabled={analyzing[d.id]} className="bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
+                    <button onClick={()=>analyze(d.id)} disabled={anyAiCallInFlight} title={anyAiCallInFlight && !analyzing[d.id] ? "Another AI analysis is already running -- please wait for it to finish first" : undefined} className="bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
                       {analyzing[d.id] ? "Analyzing with AI…" : (runs[d.id] ? "Re-analyze" : "Analyze with AI")}
                     </button>
                   </>
@@ -4096,6 +4110,15 @@ function BoqTab({ project }) {
   const [comments, setComments] = useState({});
   const [commentText, setCommentText] = useState("");
   const [reworking, setReworking] = useState({});
+  // 2026-08-10: same fix as DrawingsTab's anyAiCallInFlight -- reworking[id]
+  // only ever gated ONE drawing's own button, so a user could click "AI
+  // Rework" on several flagged drawings in a row and pile up concurrent AI
+  // calls that compete for the same shared Anthropic API key and are more
+  // likely to time out together. The backend concurrency gate
+  // (ai-engine's checkConcurrencyGate) is the real, authoritative fix;
+  // this just gives instant UI feedback and stops the pile-up from being
+  // created client-side in the first place.
+  const anyReworkInFlight = Object.values(reworking).some(Boolean);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   // Master BOQ Engine supporting data (2026-08-09): AI-proposed cost
@@ -4885,7 +4908,7 @@ function BoqTab({ project }) {
           {drawingIdsWithFlags.map(id => (
             <div key={id} className="flex items-center justify-between py-1">
               <span className="text-sm text-amber-800">{drawingsById[id]?.file_name || id}</span>
-              <button onClick={()=>requestRework(id)} disabled={reworking[id]} className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50">
+              <button onClick={()=>requestRework(id)} disabled={anyReworkInFlight} title={anyReworkInFlight && !reworking[id] ? "Another AI rework is already running -- please wait for it to finish first" : undefined} className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50">
                 {reworking[id] ? "AI reworking…" : "AI Rework (apply corrections)"}
               </button>
             </div>
