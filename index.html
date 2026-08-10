@@ -1247,6 +1247,33 @@ async function callEngine(action, payload) {
 // original response, so every caller that used to do
 // `const result = await callEngine(...)` and immediately read
 // result.item_count/notes now needs to poll for completion instead. Both
+// pollDelay (2026-08-10, scale hardening): a backgrounded tab used to keep
+// polling every 3-4s exactly as fast as a focused one. With ~100 concurrent
+// users that is a large amount of database traffic nobody is looking at.
+// When the tab is hidden we back off to 15s, which cuts idle-tab polling load
+// by ~4x while still finishing the run promptly once the user returns (the
+// work itself always continues server-side regardless -- polling only decides
+// how quickly the UI notices).
+// BOQ_FETCH_LIMIT (2026-08-10, scale hardening): a hard ceiling on how many
+// BOQ rows any single query can pull back. Previously NO query in the app used
+// .limit() or .range() at all, so every BOQ/Procurement/Engineering/Export tab
+// open fetched a project's entire item history -- all revisions included --
+// over the wire, per user, per tab switch. Set deliberately far above any
+// realistic single project (largest today is ~113 rows) so it never truncates
+// real data, while bounding the worst case if a project ever grows large. If a
+// genuine project ever approaches this, the correct fix is server-side
+// pagination plus filtering to the latest revision, not raising this number.
+const BOQ_FETCH_LIMIT = 10000;
+
+function pollDelay(activeMs) {
+  try {
+    if (typeof document !== "undefined" && document.hidden) {
+      return Math.max(activeMs, 15000);
+    }
+  } catch (e) { /* non-browser context: fall through to the normal interval */ }
+  return activeMs;
+}
+
 // analysis_runs and drawings are already directly readable via the
 // Supabase client for the project's owner (RLS: runs_via_project /
 // drawings via the same project-ownership chain), so this polls the
@@ -1263,7 +1290,7 @@ async function pollAnalysisRun(runId, { intervalMs = 4000, maxWaitMs = 7 * 60 * 
       err.stillProcessing = true;
       throw err;
     }
-    await new Promise(r => setTimeout(r, intervalMs));
+    await new Promise(r => setTimeout(r, pollDelay(intervalMs)));
   }
 }
 
@@ -1280,7 +1307,7 @@ async function pollClassification(drawingId, { intervalMs = 3000, maxWaitMs = 5 
     if (Date.now() - startedAt > maxWaitMs) {
       throw new Error(`Classification is taking longer than ${Math.round(maxWaitMs / 1000 / 60)} minutes. It may still finish in the background -- try reopening this dialog in a minute.`);
     }
-    await new Promise(r => setTimeout(r, intervalMs));
+    await new Promise(r => setTimeout(r, pollDelay(intervalMs)));
   }
 }
 
@@ -3801,7 +3828,7 @@ function MarkupViewerModal({ drawing, onClose }) {
   async function load() {
     setLoading(true); setError(null); setPageRenderFailed(false);
     try {
-      const { data, error: qErr } = await sb.from("boq_items").select("*").eq("drawing_id", drawing.id).order("revision_number", { ascending: false });
+      const { data, error: qErr } = await sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("drawing_id", drawing.id).order("revision_number", { ascending: false });
       if (qErr) throw qErr;
       const latestRev = data && data.length ? Math.max(...data.map(i=>i.revision_number)) : 0;
       setItems((data||[]).filter(i => i.revision_number === latestRev));
@@ -4301,7 +4328,7 @@ function BoqTab({ project }) {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: qErr } = await sb.from("boq_items").select("*").eq("project_id", project.id).order("system_category").order("floor_label");
+      const { data, error: qErr } = await sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id).order("system_category").order("floor_label");
       if (qErr) throw qErr;
       setRawItems(data || []);
       const { data: dr, error: drErr } = await sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id);
@@ -5219,7 +5246,7 @@ function ProcurementBoqTab({ project }) {
     setLoading(true); setError(null);
     try {
       const [{ data: items, error: iErr }, { data: dr, error: dErr }, { data: er, error: eErr }] = await Promise.all([
-        sb.from("boq_items").select("*").eq("project_id", project.id),
+        sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id),
         sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
         sb.from("engineering_rules").select("*"),
       ]);
@@ -5324,7 +5351,7 @@ function EngineeringBoqTab({ project }) {
     setLoading(true); setError(null);
     try {
       const [{ data: items, error: iErr }, { data: dr, error: dErr }] = await Promise.all([
-        sb.from("boq_items").select("*").eq("project_id", project.id),
+        sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id),
         sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
       ]);
       if (iErr) throw iErr; if (dErr) throw dErr;
@@ -5413,7 +5440,7 @@ function SpecificationTab({ project }) {
     setLoading(true); setError(null);
     try {
       const [{ data: items, error: iErr }, { data: dr, error: dErr }, { data: cr, error: cErr }] = await Promise.all([
-        sb.from("boq_items").select("*").eq("project_id", project.id),
+        sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id),
         sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
         sb.from("compliance_rules").select("*").eq("country", project.country).ilike("city", project.city),
       ]);
@@ -5701,7 +5728,7 @@ function ExportTab({ project }) {
     setBusy(true);
     try {
       const [{ data: items }, { data: dr }, { data: rules }, { data: runs }, { data: costOpts }, { data: assumps }, { data: reviewRows }] = await Promise.all([
-        sb.from("boq_items").select("*").eq("project_id", project.id),
+        sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id),
         sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
         sb.from("engineering_rules").select("*"),
         sb.from("analysis_runs").select("*").eq("project_id", project.id).order("created_at"),
@@ -5904,7 +5931,7 @@ function ExportTab({ project }) {
     }
     setBusy(true);
     try {
-      const { data: items } = await sb.from("boq_items").select("*").eq("project_id", project.id).order("system_category").order("floor_label");
+      const { data: items } = await sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id).order("system_category").order("floor_label");
       const latestRevByDrawing = {};
       (items||[]).forEach(it => { if (it.drawing_id) latestRevByDrawing[it.drawing_id] = Math.max(latestRevByDrawing[it.drawing_id]||0, it.revision_number); });
       const filtered = (items||[]).filter(it => !it.drawing_id || it.revision_number === latestRevByDrawing[it.drawing_id])
@@ -7598,6 +7625,85 @@ function App() {
     </div>
   );
 }
+
+
+// ---------------------------------------------------------------------------
+// AUTO-UPDATE CHECK (2026-08-10)
+// Problem this solves: this app is one static index.html served from GitHub
+// Pages. Browsers cache it, so after a new build is pushed a user could keep
+// running the OLD code indefinitely with no indication -- the only remedy was
+// telling them to hard-refresh by hand. That is exactly the "why do I always
+// have to update manually" problem.
+//
+// How it works, and why this shape: rather than baking a version constant into
+// the bundle (which would then have to be bumped by hand on every deploy --
+// simply moving the manual step somewhere else), this asks the SERVER what it
+// is currently serving. A cheap HEAD request against our own URL returns an
+// ETag / Last-Modified that GitHub Pages changes automatically whenever the
+// file changes. Compare it to whatever was current when this tab loaded; if it
+// moved, a new build exists. Zero maintenance, nothing to remember on deploy.
+//
+// Deliberately NON-destructive: it never force-reloads. A silent auto-reload
+// could discard a half-filled project form or interrupt a running analysis.
+// It shows a dismissible bar and lets the user choose when.
+(function setupAutoUpdateCheck() {
+  var CHECK_INTERVAL_MS = 3 * 60 * 1000;
+  var baseline = null;
+  var notified = false;
+
+  function currentStamp(res) {
+    return res.headers.get("etag") || res.headers.get("last-modified") || null;
+  }
+
+  function probe() {
+    return fetch(window.location.pathname + "?_uc=" + Date.now(), {
+      method: "HEAD",
+      cache: "no-store",
+    }).then(currentStamp).catch(function () { return null; });
+  }
+
+  function showUpdateBar() {
+    if (notified || document.getElementById("qtr-update-bar")) return;
+    notified = true;
+    var bar = document.createElement("div");
+    bar.id = "qtr-update-bar";
+    bar.setAttribute("role", "status");
+    bar.style.cssText =
+      "position:fixed;left:0;right:0;bottom:0;z-index:99999;display:flex;" +
+      "align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;" +
+      "padding:12px 16px;background:#0f766e;color:#fff;font-size:14px;" +
+      "font-family:inherit;box-shadow:0 -2px 12px rgba(0,0,0,0.3)";
+    var msg = document.createElement("span");
+    msg.textContent = "A new version of Quantora is available.";
+    var reload = document.createElement("button");
+    reload.textContent = "Reload now";
+    reload.style.cssText =
+      "background:#fff;color:#0f766e;border:0;border-radius:6px;padding:6px 14px;" +
+      "font-weight:600;cursor:pointer";
+    reload.onclick = function () { window.location.reload(); };
+    var later = document.createElement("button");
+    later.textContent = "Later";
+    later.style.cssText =
+      "background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.6);" +
+      "border-radius:6px;padding:6px 14px;cursor:pointer";
+    later.onclick = function () { bar.remove(); };
+    bar.appendChild(msg); bar.appendChild(reload); bar.appendChild(later);
+    document.body.appendChild(bar);
+  }
+
+  probe().then(function (stamp) {
+    baseline = stamp;
+    // If the host exposes neither header there is nothing reliable to compare,
+    // so stay silent rather than nagging on every check.
+    if (!baseline) return;
+    setInterval(function () {
+      if (notified || document.hidden) return;
+      probe().then(function (latest) {
+        if (latest && latest !== baseline) showUpdateBar();
+      });
+    }, CHECK_INTERVAL_MS);
+  });
+})();
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
