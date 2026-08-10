@@ -1218,7 +1218,15 @@ async function callEngine(action, payload) {
       // (alerts, etc.) keeps working unchanged.
       window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message: json.error } }));
     }
-    throw new Error(json.error || "AI engine request failed");
+    const err = new Error(json.error || "AI engine request failed");
+    // requires_confirmation (2026-08-10, later still): checkRecentFailureHistory's
+    // cost-protection gate on the backend returns this instead of a plain error
+    // when a drawing has already timed out repeatedly -- attached onto the thrown
+    // Error (not just the message string) so analyze()/rework() below can offer a
+    // real "retry anyway" confirmation instead of just showing a dead-end alert.
+    // Existing callers that only read ex.message are completely unaffected.
+    if (json.requires_confirmation) { err.requiresConfirmation = true; err.recentFailures = json.recent_failures; }
+    throw err;
   }
   return json;
 }
@@ -3504,10 +3512,33 @@ function DrawingsTab({ project }) {
   async function analyze(drawingId) {
     setAnalyzing(a => ({...a, [drawingId]: true})); setErr("");
     try {
-      const result = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawingId });
-      await load();
-      alert(`AI analysis complete: ${result.item_count} BOQ items generated (revision ${result.revision_number}).\n\n${result.notes}`);
-    } catch (ex) { setErr(ex.message); } finally { setAnalyzing(a => ({...a, [drawingId]: false})); }
+      // Loop instead of recursing into a fresh analyze() call on a confirmed
+      // retry -- recursing here would let a wrapping finally{} from the FIRST
+      // call flip the loading flag back off while the confirmed retry is still
+      // in flight, since the recursive call's own promise isn't awaited before
+      // the outer finally runs. A plain loop keeps everything in one call frame.
+      let confirmRetryAfterFailures = false;
+      for (;;) {
+        try {
+          const result = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawingId, confirm_retry_after_failures: confirmRetryAfterFailures });
+          await load();
+          alert(`AI analysis complete: ${result.item_count} BOQ items generated (revision ${result.revision_number}).\n\n${result.notes}`);
+          return;
+        } catch (ex) {
+          // See callEngine's requires_confirmation handling above -- this
+          // drawing has already timed out repeatedly and likely spent real AI
+          // cost each time with nothing to show for it. Give the user a real
+          // choice instead of silently repeating that cost on every click of
+          // "Analyze"/"Re-analyze".
+          if (ex.requiresConfirmation && window.confirm(`${ex.message}\n\nClick OK to retry anyway, or Cancel to stop here.`)) {
+            confirmRetryAfterFailures = true;
+            continue;
+          }
+          setErr(ex.message);
+          return;
+        }
+      }
+    } finally { setAnalyzing(a => ({...a, [drawingId]: false})); }
   }
 
   // DWG/Revit are closed, proprietary formats with no free/reliable parser --
@@ -4283,10 +4314,28 @@ function BoqTab({ project }) {
         (cs||[]).forEach(c => allComments.push(`[${it.description}] ${c.comment}`));
       }
       if (allComments.length === 0) { alert("No open correction comments for this drawing yet. Add a comment on an item first."); return; }
-      const result = await callEngine("rework", { project_id: project.id, drawing_id: drawingId, comments: allComments });
-      alert(`Revision ${result.revision_number} generated: ${result.item_count} items.\n${result.notes}`);
-      await load();
-    } catch (ex) { alert("Rework failed: " + ex.message); } finally { setReworking(r => ({...r, [drawingId]: false})); }
+      // Same loop-based confirm-and-retry pattern as analyze() above, and for the
+      // same reason: checkRecentFailureHistory on the backend can return a 429
+      // requiring explicit confirmation when this drawing has already timed out
+      // repeatedly, and recursing into a fresh async call from inside this
+      // try/catch would race with the outer finally{} that flips the spinner off.
+      let confirmRetryAfterFailures = false;
+      for (;;) {
+        try {
+          const result = await callEngine("rework", { project_id: project.id, drawing_id: drawingId, comments: allComments, confirm_retry_after_failures: confirmRetryAfterFailures });
+          alert(`Revision ${result.revision_number} generated: ${result.item_count} items.\n${result.notes}`);
+          await load();
+          return;
+        } catch (ex) {
+          if (ex.requiresConfirmation && window.confirm(`${ex.message}\n\nClick OK to retry anyway, or Cancel to stop here.`)) {
+            confirmRetryAfterFailures = true;
+            continue;
+          }
+          alert("Rework failed: " + ex.message);
+          return;
+        }
+      }
+    } finally { setReworking(r => ({...r, [drawingId]: false})); }
   }
 
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
