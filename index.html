@@ -6380,6 +6380,11 @@ const QADMIN_CSS = `
 .qadmin .btn{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:9px;font-weight:600;font-size:13px;border:1px solid var(--border);cursor:pointer;background:rgba(255,255,255,0.02);color:var(--text);}
 .qadmin .btn:disabled{opacity:0.5;cursor:not-allowed;}
 .qadmin .btn-primary{background:var(--grad);color:#04101f;border:none;}
+.qadmin .btn-sm{padding:7px 13px;font-size:12px;border-radius:8px;}
+.qadmin input[type=number],.qadmin input[type=text]{background:rgba(255,255,255,0.02);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 11px;font-size:12.5px;font-family:inherit;outline:none;}
+.qadmin input[type=number]{width:100px;}
+.qadmin input[type=number]:focus,.qadmin input[type=text]:focus{border-color:var(--primary);}
+.qadmin input[type=number]::placeholder,.qadmin input[type=text]::placeholder{color:var(--text-dimmer);}
 .qadmin .status-strip{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:22px;}
 .qadmin .status-chip{flex:1;min-width:140px;background:rgba(255,255,255,0.02);border:1px solid var(--border-soft);border-radius:10px;padding:12px 14px;text-align:center;}
 .qadmin .status-chip .n{font-size:19px;font-weight:800;}
@@ -6653,7 +6658,13 @@ function AdminPortal({ onBack }) {
             {activeView === "customers" && (
               <QCustomersView companies={companies} perCompanyById={perCompanyById} trialByCompanyId={trialByCompanyId}
                 selectedId={selectedCompanyId} onSelect={setSelectedCompanyId}
-                payments={reportsData?.payments || []} />
+                payments={reportsData?.payments || []}
+                onQuotaChanged={async () => {
+                  try {
+                    const res = await callAdminAnalytics("list_companies", {});
+                    setCompanies(res.companies || []);
+                  } catch (e) { /* non-fatal -- the success/error message already shown by AdminQuotaControls covers this */ }
+                }} />
             )}
             {activeView === "projects" && (
               <QProjectsView perProject={overview?.per_project || []} companyNameById={companyNameById} />
@@ -6852,7 +6863,116 @@ function QExecView({ overview, trial, systemStatus, reportsData, companies, perC
   );
 }
 
-function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedId, onSelect, payments }) {
+// Platform-admin-only testing/support tool (2026-08-10): lets an admin grant
+// one specific company extra AI-processed pages on top of their plan's
+// normal max_drawing_pages, or push out that company's trial end date --
+// WITHOUT touching plans.max_drawing_pages/trial_duration_days, so every
+// other customer keeps getting exactly the standard rule (e.g. the 30-page
+// trial default). Every change is backed by admin-analytics' grant_bonus_pages
+// / extend_trial actions (each writes an admin_quota_adjustments audit row)
+// and the company object here (from list_companies) already carries
+// bonus_drawing_pages + plan_max_drawing_pages, so no extra fetch is needed
+// just to show "plan default + bonus = effective limit".
+function AdminQuotaControls({ company, onChanged }) {
+  const [bonusInput, setBonusInput] = useState("20");
+  const [trialDaysInput, setTrialDaysInput] = useState("7");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
+  useEffect(() => {
+    setMsg(null);
+    setHistory([]);
+    setHistoryLoaded(false);
+    if (company?.id) loadHistory(company.id);
+  }, [company?.id]);
+
+  async function loadHistory(companyId) {
+    try {
+      const res = await callAdminAnalytics("list_quota_adjustments", { company_id: companyId });
+      setHistory(res.adjustments || []);
+    } catch (e) { /* non-fatal -- history is supplementary, not required for the grant/extend actions to work */ }
+    finally { setHistoryLoaded(true); }
+  }
+
+  async function grantPages() {
+    const n = Number(bonusInput);
+    if (!Number.isFinite(n) || n === 0) { setMsg({ type: "err", text: "Enter a non-zero page count (e.g. 20, or -10 to reduce a previous grant)." }); return; }
+    setBusy("pages"); setMsg(null);
+    try {
+      const res = await callAdminAnalytics("grant_bonus_pages", { company_id: company.id, additional_pages: n, note: note || undefined });
+      setMsg({ type: "ok", text: `Done — ${company.name} now has ${res.bonus_drawing_pages} bonus page(s).` });
+      await loadHistory(company.id);
+      if (onChanged) await onChanged();
+    } catch (e) {
+      setMsg({ type: "err", text: e.message || "Failed to grant bonus pages." });
+    } finally { setBusy(""); }
+  }
+
+  async function extendTrial() {
+    const n = Number(trialDaysInput);
+    if (!Number.isFinite(n) || n <= 0) { setMsg({ type: "err", text: "Enter a positive number of days." }); return; }
+    setBusy("trial"); setMsg(null);
+    try {
+      const res = await callAdminAnalytics("extend_trial", { company_id: company.id, additional_days: n, note: note || undefined });
+      setMsg({ type: "ok", text: `Done — trial now ends ${new Date(res.trial_end_date).toLocaleString()}.` });
+      await loadHistory(company.id);
+      if (onChanged) await onChanged();
+    } catch (e) {
+      setMsg({ type: "err", text: e.message || "Failed to extend trial." });
+    } finally { setBusy(""); }
+  }
+
+  const planMax = company.plan_max_drawing_pages;
+  const bonus = company.bonus_drawing_pages || 0;
+  const effective = planMax == null ? "Unlimited" : (planMax + bonus);
+
+  return (
+    <div>
+      <div className="section-label" style={{ marginTop: 0 }}>Admin Quota Override (Testing/Support Only)</div>
+      <div className="detail-list" style={{ marginBottom: 14 }}>
+        <div className="detail-item"><span>Standard plan page limit</span><b>{planMax == null ? "Unlimited" : planMax}</b></div>
+        <div className="detail-item"><span>Admin bonus pages (this company only)</span><b>{bonus}</b></div>
+        <div className="detail-item"><span>Effective page limit</span><b>{effective}</b></div>
+        {company.plan === "trial" && (
+          <div className="detail-item"><span>Trial ends</span><b>{company.trial_end_date ? new Date(company.trial_end_date).toLocaleString() : "—"}</b></div>
+        )}
+      </div>
+
+      {msg && <div style={{ fontSize: 12, marginBottom: 10, color: msg.type === "ok" ? "#86efac" : "#fca5a5" }}>{msg.text}</div>}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+        <input type="number" value={bonusInput} onChange={e => setBonusInput(e.target.value)} placeholder="e.g. 20" />
+        <button className="btn btn-sm" disabled={busy === "pages"} onClick={grantPages}>{busy === "pages" ? "Granting…" : "Grant Bonus Pages"}</button>
+      </div>
+
+      {company.plan === "trial" && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <input type="number" value={trialDaysInput} onChange={e => setTrialDaysInput(e.target.value)} placeholder="days" />
+          <button className="btn btn-sm" disabled={busy === "trial"} onClick={extendTrial}>{busy === "trial" ? "Extending…" : "Extend Trial"}</button>
+        </div>
+      )}
+
+      <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note (e.g. reason for override)" style={{ width: "100%", marginBottom: 12 }} />
+
+      <div className="section-label" style={{ marginTop: 4, marginBottom: 8, fontSize: 10.5 }}>Adjustment History</div>
+      <div className="detail-list">
+        {!historyLoaded ? <div className="detail-item"><span>Loading…</span><b>—</b></div> :
+          history.length === 0 ? <div className="detail-item"><span>No admin quota adjustments yet.</span><b>—</b></div> :
+          history.map(h => (
+            <div className="detail-item" key={h.id}>
+              <span>{(h.created_at || "").replace("T", " ").slice(0, 16)} · {h.adjustment_type === "bonus_pages_granted" ? "Bonus pages" : "Trial extended"}{h.note ? ` — ${h.note}` : ""}</span>
+              <b>{h.adjustment_type === "bonus_pages_granted" ? (h.amount > 0 ? `+${h.amount}` : h.amount) : `+${h.amount}d`}</b>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedId, onSelect, payments, onQuotaChanged }) {
   const selected = companies.find(c => c.id === selectedId);
   const selectedFin = selected ? perCompanyById[selected.id] : null;
   const selectedTrial = selected ? trialByCompanyId[selected.id] : null;
@@ -6916,6 +7036,9 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
                   ))}
               </div>
             </div>
+          </div>
+          <div className="detail" style={{ marginTop: 8 }}>
+            <AdminQuotaControls company={selected} onChanged={onQuotaChanged} />
           </div>
         </div>
       )}
