@@ -1231,6 +1231,59 @@ async function callEngine(action, payload) {
   return json;
 }
 
+// pollAnalysisRun / pollClassification (2026-08-10, later still): ai-engine's
+// analyze_drawing/rework/design_system/analyze_drawings_combined/classify_pages
+// actions now do their real work (the Claude call) in the BACKGROUND on the
+// server (see runInBackground in ai-engine.ts) and return almost instantly
+// with just { run_id, status: "processing" } -- this was the fix for
+// "Failed to fetch" on dense drawings: Supabase's Edge Function platform
+// enforces a flat 150-second timeout on how long it will hold a client
+// connection open waiting for a response, on every plan tier, and no amount
+// of raising our own server-side timeout could get past that. Returning
+// immediately means there's no held-open connection left for that timeout
+// to kill.
+//
+// The tradeoff: the frontend no longer gets the finished result in the
+// original response, so every caller that used to do
+// `const result = await callEngine(...)` and immediately read
+// result.item_count/notes now needs to poll for completion instead. Both
+// analysis_runs and drawings are already directly readable via the
+// Supabase client for the project's owner (RLS: runs_via_project /
+// drawings via the same project-ownership chain), so this polls the
+// table directly rather than adding a new ai-engine round trip per check.
+async function pollAnalysisRun(runId, { intervalMs = 4000, maxWaitMs = 7 * 60 * 1000 } = {}) {
+  const startedAt = Date.now();
+  for (;;) {
+    const { data: row, error } = await sb.from("analysis_runs").select("status, summary, error_message").eq("id", runId).single();
+    if (error) throw new Error("Could not check analysis status: " + error.message);
+    if (row.status === "completed") return row.summary || {};
+    if (row.status === "failed") throw new Error(row.error_message || "AI analysis failed.");
+    if (Date.now() - startedAt > maxWaitMs) {
+      const err = new Error(`This is taking longer than ${Math.round(maxWaitMs / 1000 / 60)} minutes -- it may still be processing in the background. Check back in a few minutes, or refresh the page to see if it finished.`);
+      err.stillProcessing = true;
+      throw err;
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+}
+
+async function pollClassification(drawingId, { intervalMs = 3000, maxWaitMs = 5 * 60 * 1000 } = {}) {
+  const startedAt = Date.now();
+  for (;;) {
+    const { data: row, error } = await sb.from("drawings").select("classification_status, total_pages_detected").eq("id", drawingId).single();
+    if (error) throw new Error("Could not check classification status: " + error.message);
+    if (row.classification_status === "classified") {
+      const { data: pages } = await sb.from("drawing_pages").select("*").eq("drawing_id", drawingId).order("page_number");
+      return { total_pages: row.total_pages_detected || 0, pages: pages || [] };
+    }
+    if (row.classification_status === "failed") throw new Error("Page classification failed -- please try again.");
+    if (Date.now() - startedAt > maxWaitMs) {
+      throw new Error(`Classification is taking longer than ${Math.round(maxWaitMs / 1000 / 60)} minutes. It may still finish in the background -- try reopening this dialog in a minute.`);
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+}
+
 const BILLING_FN_URL = `${SUPABASE_URL}/functions/v1/billing`;
 async function callBilling(action, payload) {
   const { data: { session } } = await sb.auth.getSession();
@@ -3376,12 +3429,13 @@ function DrawingsTab({ project }) {
     if (ids.length < 2) { alert("Select at least 2 drawings (checkboxes below) to run a combined analysis."); return; }
     setCombining(true); setErr("");
     try {
-      const result = await callEngine("analyze_drawings_combined", { project_id: project.id, drawing_ids: ids });
+      const started = await callEngine("analyze_drawings_combined", { project_id: project.id, drawing_ids: ids });
+      const summary = await pollAnalysisRun(started.run_id);
       await load();
       setSelectedForCombine({});
-      let msg = `Combined analysis complete: ${result.item_count} BOQ items generated from ${result.drawings_included} of ${ids.length} selected drawings (deduplicated across drawings).\n\n${result.notes}`;
-      if (result.skipped && result.skipped.length) {
-        msg += `\n\nSkipped:\n${result.skipped.map(s => `- ${s.file_name}: ${s.reason}`).join("\n")}`;
+      let msg = `Combined analysis complete: ${summary.item_count} BOQ items generated from ${started.drawings_included} of ${ids.length} selected drawings (deduplicated across drawings).\n\n${summary.notes}`;
+      if (started.skipped && started.skipped.length) {
+        msg += `\n\nSkipped:\n${started.skipped.map(s => `- ${s.file_name}: ${s.reason}`).join("\n")}`;
       }
       alert(msg);
     } catch (ex) { setErr(ex.message); } finally { setCombining(false); }
@@ -3520,9 +3574,10 @@ function DrawingsTab({ project }) {
       let confirmRetryAfterFailures = false;
       for (;;) {
         try {
-          const result = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawingId, confirm_retry_after_failures: confirmRetryAfterFailures });
+          const started = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawingId, confirm_retry_after_failures: confirmRetryAfterFailures });
+          const summary = await pollAnalysisRun(started.run_id);
           await load();
-          alert(`AI analysis complete: ${result.item_count} BOQ items generated (revision ${result.revision_number}).\n\n${result.notes}`);
+          alert(`AI analysis complete: ${summary.item_count} BOQ items generated (revision ${started.revision_number}).\n\n${summary.notes}`);
           return;
         } catch (ex) {
           // See callEngine's requires_confirmation handling above -- this
@@ -3973,13 +4028,22 @@ function ClassifyAndSelectModal({ project, drawing, onClose, onAnalyzed }) {
   async function load() {
     setLoading(true); setError("");
     try {
-      const [classifyResult, usageSummary] = await Promise.all([
+      const [started, usageSummary] = await Promise.all([
         callEngine("classify_pages", { project_id: project.id, drawing_id: drawing.id }),
         callBilling("usage_summary", {}).catch(() => null),
       ]);
-      setTotalPages(classifyResult.total_pages || 0);
-      setPages(classifyResult.pages || []);
       setUsage(usageSummary);
+      if (started.cached) {
+        // Already classified previously (classification_status was
+        // "classified" and force wasn't passed) -- ai-engine returned the
+        // full result synchronously in this case, nothing to poll.
+        setTotalPages(started.total_pages || 0);
+        setPages(started.pages || []);
+      } else {
+        const classifyResult = await pollClassification(drawing.id);
+        setTotalPages(classifyResult.total_pages || 0);
+        setPages(classifyResult.pages || []);
+      }
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   }
 
@@ -4027,10 +4091,11 @@ function ClassifyAndSelectModal({ project, drawing, onClose, onAnalyzed }) {
     if (selectedCount === 0) { setError("Select at least one page to analyze."); return; }
     setSubmitting(true); setError("");
     try {
-      const result = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawing.id, page_selection: selectedPageNumbers });
-      await onAnalyzed(result);
+      const started = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawing.id, page_selection: selectedPageNumbers });
+      const summary = await pollAnalysisRun(started.run_id);
+      await onAnalyzed(started);
       onClose();
-      alert(`AI analysis complete: ${result.item_count} BOQ items generated from ${result.pages_processed} selected pages (revision ${result.revision_number}).\n\n${result.notes}`);
+      alert(`AI analysis complete: ${summary.item_count} BOQ items generated from ${started.pages_processed} selected pages (revision ${started.revision_number}).\n\n${summary.notes}`);
     } catch (e) { setError(e.message); } finally { setSubmitting(false); }
   }
 
@@ -4139,8 +4204,9 @@ function DesignTab({ project }) {
     e.preventDefault();
     setBusy(true); setErr(""); setResult(null);
     try {
-      const r = await callEngine("design_system", { project_id: project.id, system_category: system, requirements_text: reqText });
-      setResult(r);
+      const started = await callEngine("design_system", { project_id: project.id, system_category: system, requirements_text: reqText });
+      const summary = await pollAnalysisRun(started.run_id);
+      setResult(summary);
     } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
   }
 
@@ -4322,8 +4388,9 @@ function BoqTab({ project }) {
       let confirmRetryAfterFailures = false;
       for (;;) {
         try {
-          const result = await callEngine("rework", { project_id: project.id, drawing_id: drawingId, comments: allComments, confirm_retry_after_failures: confirmRetryAfterFailures });
-          alert(`Revision ${result.revision_number} generated: ${result.item_count} items.\n${result.notes}`);
+          const started = await callEngine("rework", { project_id: project.id, drawing_id: drawingId, comments: allComments, confirm_retry_after_failures: confirmRetryAfterFailures });
+          const summary = await pollAnalysisRun(started.run_id);
+          alert(`Revision ${started.revision_number} generated: ${summary.item_count} items.\n${summary.notes}`);
           await load();
           return;
         } catch (ex) {
@@ -6053,14 +6120,27 @@ function AdminAssistPanel() {
     try {
       const payload = { admin_override: true, target_project_id: projectId };
       let out;
+      // analyze_drawing/rework/design_system/classify_pages now all run
+      // their AI work in the background on the server (see pollAnalysisRun/
+      // pollClassification above) -- admin_override calls go through the
+      // exact same background+poll path as regular customer calls, they're
+      // just exempt from the cost-protection retry-confirmation gate, not
+      // from the timeout fix itself. Only "chat" is still a direct
+      // synchronous round trip.
       if (actionType === "analyze_drawing") {
-        out = await callEngine("analyze_drawing", { ...payload, drawing_id: drawingId });
+        const started = await callEngine("analyze_drawing", { ...payload, drawing_id: drawingId });
+        const summary = await pollAnalysisRun(started.run_id);
+        out = { ...summary, pages_processed: started.pages_processed };
       } else if (actionType === "classify_pages") {
-        out = await callEngine("classify_pages", { ...payload, drawing_id: drawingId });
+        const started = await callEngine("classify_pages", { ...payload, drawing_id: drawingId });
+        out = started.cached ? started : await pollClassification(drawingId);
       } else if (actionType === "rework") {
-        out = await callEngine("rework", { ...payload, drawing_id: drawingId, comments: reworkComments.split("\n").map(s => s.trim()).filter(Boolean) });
+        const started = await callEngine("rework", { ...payload, drawing_id: drawingId, comments: reworkComments.split("\n").map(s => s.trim()).filter(Boolean) });
+        const summary = await pollAnalysisRun(started.run_id);
+        out = { ...summary, pages_processed: started.pages_processed };
       } else if (actionType === "design_system") {
-        out = await callEngine("design_system", { ...payload, system_category: designSystemCategory, requirements_text: designRequirements });
+        const started = await callEngine("design_system", { ...payload, system_category: designSystemCategory, requirements_text: designRequirements });
+        out = await pollAnalysisRun(started.run_id);
       } else if (actionType === "chat") {
         out = await callEngine("chat", { ...payload, message: chatMessage });
       }
