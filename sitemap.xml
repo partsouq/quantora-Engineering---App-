@@ -2,11 +2,11 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://quantoraengineering.com/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
   <url><loc>https://quantoraengineering.com/guides.html</loc><changefreq>monthly</changefreq><priority>0.9</priority></url>
-  <url><loc>https://quantoraengineering.com/cctv-boq.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://quantoraengineering.com/fire-alarm-boq.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://quantoraengineering.com/mep-takeoff.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://quantoraengineering.com/structured-cabling-boq.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://quantoraengineering.com/uae-compliance.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://quantoraengineering.com/cctvboq.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://quantoraengineering.com/firealarmboq.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://quantoraengineering.com/meptakeoff.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://quantoraengineering.com/structuredcablingboq.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://quantoraengineering.com/uaecompliance.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
   <url><loc>https://quantoraengineering.com/terms.html</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
   <url><loc>https://quantoraengineering.com/privacy.html</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
   <url><loc>https://quantoraengineering.com/refund.html</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
