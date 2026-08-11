@@ -2921,7 +2921,10 @@ function UpgradePlanModal({ open, onClose, reason }) {
           <div className="grid md:grid-cols-3 gap-4 mt-2">
             {plans.map(plan => {
               const isCurrent = plan.id === currentPlanId;
-              const selfServe = !!plan.stripe_price_id;
+              // Paddle is the live provider; the Stripe check is kept as a fallback so
+              // that switching back later (once a UAE freelance permit exists) needs no
+              // frontend change.
+              const selfServe = !!(plan.paddle_price_id || plan.stripe_price_id);
               return (
                 <div key={plan.id} className={`rounded-xl border p-4 flex flex-col ${isCurrent ? "border-slate-900 ring-1 ring-slate-900" : "border-slate-200"}`}>
                   <div className="font-bold">{plan.name}</div>
@@ -2942,14 +2945,14 @@ function UpgradePlanModal({ open, onClose, reason }) {
                       {busyPlanId === plan.id ? "Redirecting…" : `Subscribe to ${plan.name}`}
                     </button>
                   ) : (
-                    <a href="mailto:sales@example.com?subject=Enterprise%20plan" className="mt-4 text-center text-sm font-semibold border rounded-lg py-2 hover:bg-slate-50">Contact sales</a>
+                    <a href="mailto:support@quantoraengineering.com?subject=Enterprise%20plan%20enquiry" className="mt-4 text-center text-sm font-semibold border rounded-lg py-2 hover:bg-slate-50">Contact sales</a>
                   )}
                 </div>
               );
             })}
           </div>
         )}
-        {company?.stripe_customer_id && (
+        {(company?.paddle_customer_id || company?.stripe_customer_id) && (
           <div className="mt-5 text-center">
             <button onClick={manageBilling} disabled={portalBusy} className="text-sm text-slate-500 underline hover:text-slate-900 disabled:opacity-50">
               {portalBusy ? "Opening billing portal…" : "Manage billing / payment method / cancel subscription"}
