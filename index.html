@@ -2221,75 +2221,71 @@ const QUANTORA_LANDING_HTML = `
   <div class="wrap">
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Real Output</div>
     <h2 class="sectitle">See a Sample BOQ</h2>
-    <p class="secsub">Every line item is color-coded by confidence and source, so you can cross-check the AI's takeoff at a glance.</p>
+    <p class="secsub">Exactly what you see in the platform: every line carries its system, location, quantity and status &mdash; so you can trace each figure back to the drawing before it reaches a tender.</p>
     <div class="panel" style="overflow-x:auto;padding:0;">
       <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
         <thead>
           <tr style="background:rgba(255,255,255,0.03);color:var(--text-dimmer);font-size:11px;text-transform:uppercase;letter-spacing:0.05em;">
-            <th style="text-align:left;padding:12px 16px;">Item</th>
-            <th style="text-align:left;padding:12px 16px;">Discipline</th>
+            <th style="text-align:right;padding:12px 16px;">Line</th>
+            <th style="text-align:left;padding:12px 16px;">System</th>
+            <th style="text-align:left;padding:12px 16px;">Item Description</th>
+            <th style="text-align:left;padding:12px 16px;">Location</th>
             <th style="text-align:right;padding:12px 16px;">Qty</th>
             <th style="text-align:left;padding:12px 16px;">Unit</th>
-            <th style="text-align:center;padding:12px 16px;">Confidence</th>
-            <th style="text-align:center;padding:12px 16px;">Status</th>
+            <th style="text-align:left;padding:12px 16px;">Status</th>
+            <th style="text-align:left;padding:12px 16px;">Remarks</th>
           </tr>
         </thead>
         <tbody>
-          <tr style="border-top:1px solid var(--border-soft);">
-            <td style="padding:12px 16px;font-weight:600;">Dome IP Camera, 5MP, IR</td>
-            <td style="padding:12px 16px;color:var(--text-dim);">ELV — CCTV</td>
-            <td style="padding:12px 16px;text-align:right;">24</td>
-            <td style="padding:12px 16px;">nos</td>
-            <td style="padding:12px 16px;text-align:center;">96%</td>
-            <td style="padding:12px 16px;text-align:center;"><span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:9999px;background:rgba(34,197,94,0.15);color:#86efac;">Confirmed</span></td>
+          <tr>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:var(--text-dimmer);">1</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);white-space:nowrap;">CCTV</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:#fff;">2MP IP Dome Camera — Indoor Corridor/Common Area</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);white-space:nowrap;">Ground Floor</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:#fff;font-weight:600;">14</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);">No</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);"><span style="font-size:11px;font-weight:600;color:#34d399;border:1px solid #34d39955;border-radius:9999px;padding:2px 9px;white-space:nowrap;">Confirmed</span></td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:230px;">Counted from CCTV-GF-L01 layout; matches schedule</td>
           </tr>
-          <tr style="border-top:1px solid var(--border-soft);">
-            <td style="padding:12px 16px;font-weight:600;">Access Control Card Reader</td>
-            <td style="padding:12px 16px;color:var(--text-dim);">ELV — Access Control</td>
-            <td style="padding:12px 16px;text-align:right;">12</td>
-            <td style="padding:12px 16px;">nos</td>
-            <td style="padding:12px 16px;text-align:center;">91%</td>
-            <td style="padding:12px 16px;text-align:center;"><span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:9999px;background:rgba(34,197,94,0.15);color:#86efac;">Confirmed</span></td>
+          <tr>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:var(--text-dimmer);">2</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);white-space:nowrap;">CCTV</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:#fff;">2MP IP Bullet Camera — Outdoor Perimeter</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);white-space:nowrap;">Ground Floor</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:#fff;font-weight:600;">8</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);">No</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);"><span style="font-size:11px;font-weight:600;color:#34d399;border:1px solid #34d39955;border-radius:9999px;padding:2px 9px;white-space:nowrap;">Confirmed</span></td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:230px;">Counted from layout; IP66 housing per spec note</td>
           </tr>
-          <tr style="border-top:1px solid var(--border-soft);">
-            <td style="padding:12px 16px;font-weight:600;">Network Point + Patch Cord</td>
-            <td style="padding:12px 16px;color:var(--text-dim);">Engineering Rule</td>
-            <td style="padding:12px 16px;text-align:right;">24</td>
-            <td style="padding:12px 16px;">nos</td>
-            <td style="padding:12px 16px;text-align:center;">100%</td>
-            <td style="padding:12px 16px;text-align:center;"><span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:9999px;background:rgba(20,184,166,0.15);color:#5eead4;">Engineering Rule</span></td>
+          <tr>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:var(--text-dimmer);">3</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);white-space:nowrap;">CCTV</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:#fff;">24-Port PoE+ Network Switch, Gigabit</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);white-space:nowrap;">GF Server Room</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:#fff;font-weight:600;">2</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);">No</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);"><span style="font-size:11px;font-weight:600;color:#60a5fa;border:1px solid #60a5fa55;border-radius:9999px;padding:2px 9px;white-space:nowrap;">Engineered</span></td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:230px;">One switch per floor riser; PoE budget 370W</td>
           </tr>
-          <tr style="border-top:1px solid var(--border-soft);">
-            <td style="padding:12px 16px;font-weight:600;">Addressable Smoke Detector</td>
-            <td style="padding:12px 16px;color:var(--text-dim);">Fire Protection</td>
-            <td style="padding:12px 16px;text-align:right;">48</td>
-            <td style="padding:12px 16px;">nos</td>
-            <td style="padding:12px 16px;text-align:center;">84%</td>
-            <td style="padding:12px 16px;text-align:center;"><span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:9999px;background:rgba(245,158,11,0.15);color:#fcd34d;">Review Required</span></td>
+          <tr>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:var(--text-dimmer);">4</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);white-space:nowrap;">CCTV</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:#fff;">VMS Camera License</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);white-space:nowrap;">Ground Floor</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:#fff;font-weight:600;">38</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);">nos</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);"><span style="font-size:11px;font-weight:600;color:#60a5fa;border:1px solid #60a5fa55;border-radius:9999px;padding:2px 9px;white-space:nowrap;">Engineered</span></td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:230px;">Derived: 1 licence per camera (38 cameras)</td>
           </tr>
-          <tr style="border-top:1px solid var(--border-soft);">
-            <td style="padding:12px 16px;font-weight:600;">DB Panel, TPN, 12-way</td>
-            <td style="padding:12px 16px;color:var(--text-dim);">Electrical</td>
-            <td style="padding:12px 16px;text-align:right;">3</td>
-            <td style="padding:12px 16px;">nos</td>
-            <td style="padding:12px 16px;text-align:center;">100%</td>
-            <td style="padding:12px 16px;text-align:center;"><span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:9999px;background:rgba(20,184,166,0.15);color:#5eead4;">Engineering Rule</span></td>
-          </tr>
-          <tr style="border-top:1px solid var(--border-soft);">
-            <td style="padding:12px 16px;font-weight:600;">Ducted FCU, 2 Ton</td>
-            <td style="padding:12px 16px;color:var(--text-dim);">Mechanical (HVAC)</td>
-            <td style="padding:12px 16px;text-align:right;">18</td>
-            <td style="padding:12px 16px;">nos</td>
-            <td style="padding:12px 16px;text-align:center;">76%</td>
-            <td style="padding:12px 16px;text-align:center;"><span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:9999px;background:rgba(239,68,68,0.15);color:#f87171;">Engineer Review</span></td>
-          </tr>
-          <tr style="border-top:1px solid var(--border-soft);">
-            <td style="padding:12px 16px;font-weight:600;">PVC Drainage Pipe, 110mm</td>
-            <td style="padding:12px 16px;color:var(--text-dim);">Plumbing</td>
-            <td style="padding:12px 16px;text-align:right;">240</td>
-            <td style="padding:12px 16px;">lm</td>
-            <td style="padding:12px 16px;text-align:center;">88%</td>
-            <td style="padding:12px 16px;text-align:center;"><span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:9999px;background:rgba(245,158,11,0.15);color:#fcd34d;">Review Required</span></td>
+          <tr>
+            <td style="padding:12px 16px;text-align:right;color:var(--text-dimmer);">5</td>
+            <td style="padding:12px 16px;color:var(--text-dim,#9aa3ba);white-space:nowrap;">Fire Alarm</td>
+            <td style="padding:12px 16px;color:#fff;">Addressable Smoke Detector</td>
+            <td style="padding:12px 16px;color:var(--text-dim,#9aa3ba);white-space:nowrap;">Ground Floor</td>
+            <td style="padding:12px 16px;text-align:right;color:#fff;font-weight:600;">48</td>
+            <td style="padding:12px 16px;color:var(--text-dim,#9aa3ba);">No</td>
+            <td style="padding:12px 16px;"><span style="font-size:11px;font-weight:600;color:#fbbf24;border:1px solid #fbbf2455;border-radius:9999px;padding:2px 9px;white-space:nowrap;">Review Required</span></td>
+            <td style="padding:12px 16px;color:var(--text-dimmer);font-size:12px;max-width:230px;">Spacing not dimensioned &mdash; engineer to confirm</td>
           </tr>
         </tbody>
       </table>
