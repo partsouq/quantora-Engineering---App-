@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Quantora Engineering — AI Construction Intelligence Platform</title>
+<title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
 <link rel="icon" href="/favicon.ico" sizes="any" />
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="/icon180.png" />
 <link rel="manifest" href="/manifest.json" />
 <meta name="theme-color" content="#01081b" />
-<meta name="description" content="Quantora Engineering reads your construction drawings and produces a complete bill of quantities in minutes — every item counted, located and justified. 33 MEP and low-current systems, with local compliance for 20 countries across the Gulf, South and South East Asia. 14-day free trial." />
+<meta name="description" content="Upload a drawing or describe the project and get a complete bill of quantities in minutes — every item counted, specified and checked against local codes." />
 <meta name="robots" content="index, follow" />
 <link rel="canonical" href="https://quantoraengineering.com/" />
 <meta name="author" content="Quantora Engineering" />
@@ -21,15 +21,15 @@
 <!-- Open Graph / social sharing preview -->
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Quantora Engineering" />
-<meta property="og:title" content="Quantora Engineering — AI Construction Intelligence Platform" />
-<meta property="og:description" content="Upload your drawings and get a complete, procurement-ready bill of quantities in minutes — every item counted, located and justified, against your own country's codes and authorities." />
+<meta property="og:title" content="AI BOQ &amp; Take-Off from Drawings | Quantora Engineering" />
+<meta property="og:description" content="Upload a drawing or describe the project and get a complete bill of quantities in minutes — every item counted, specified and checked against your local codes. 33 systems, 20 countries." />
 <meta property="og:url" content="https://quantoraengineering.com/" />
 <meta property="og:image" content="https://quantoraengineering.com/poster.jpg" />
 <meta property="og:image:width" content="1280" />
 <meta property="og:image:height" content="720" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Quantora Engineering — AI Construction Intelligence Platform" />
-<meta name="twitter:description" content="Upload your drawings and get a complete, procurement-ready bill of quantities in minutes — checked against your country's codes." />
+<meta name="twitter:title" content="AI BOQ &amp; Take-Off from Drawings | Quantora Engineering" />
+<meta name="twitter:description" content="Upload a drawing or describe the project and get a complete bill of quantities in minutes — every item counted, specified and checked against your local codes. 33 systems, 20 countries." />
 <meta name="twitter:image" content="https://quantoraengineering.com/poster.jpg" />
 
 <!-- Structured data: helps search engines understand what this is -->
@@ -1711,7 +1711,8 @@ const QUANTORA_LANDING_CSS = `
   /* SECTIONS */
   section{padding:70px 0;}
   .kicker{color:#a5b4fc;font-size:12.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;text-align:center;margin-bottom:10px;}
-  h2.sectitle{font-size:clamp(24px,3vw,33px);font-weight:800;text-align:center;margin:0 0 14px;letter-spacing:-0.01em;}
+  .hero-poweredby{font-size:17px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;color:#8fa6c8;margin:-4px 0 16px;}
+  .sectitle{font-size:clamp(24px,3vw,33px);font-weight:800;text-align:center;margin:0 0 14px;letter-spacing:-0.01em;}
   p.secsub{color:var(--text-dim);text-align:center;max-width:620px;margin:0 auto 46px;font-size:15.5px;}
 
   .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;position:relative;}
@@ -1965,7 +1966,8 @@ const QUANTORA_LANDING_HTML = `
   <div class="wrap hero-grid">
     <div>
       <span class="pill"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg> AI CONSTRUCTION INTELLIGENCE PLATFORM</span>
-      <h1>The World's First <span class="grad-text">AI Construction Intelligence Platform</span></h1>
+      <h1>Transform Construction Drawings into <span class="grad-text">Engineering Intelligence and Complete BOQs</span></h1>
+      <div class="hero-poweredby">Powered by Quantora AI</div>
       <p class="sub">Upload your project drawings and let Quantora Engineering automatically analyze, design, estimate, validate, and generate complete BOQs with engineering intelligence.</p>
       <div class="hero-ctas">
         <a class="btn btn-lg btn-grad" href="?auth=signup">Start Free Trial →</a>
@@ -2915,6 +2917,15 @@ function UpgradePlanModal({ open, onClose, reason }) {
   const [busyPlanId, setBusyPlanId] = useState(null);
   const [portalBusy, setPortalBusy] = useState(false);
   const [err, setErr] = useState("");
+  // Wallet top-ups (2026-08-12). The pricing page promises pay-as-you-go
+  // credit for usage beyond a plan's monthly pages, so the purchase path has
+  // to exist. Packs come from the credit_packs table rather than a hardcoded
+  // list, so prices can change without a redeploy; a pack with no Paddle price
+  // id yet comes back available:false and renders disabled instead of failing
+  // at checkout.
+  const [packs, setPacks] = useState([]);
+  const [balanceCents, setBalanceCents] = useState(0);
+  const [busyPackId, setBusyPackId] = useState(null);
 
   useEffect(() => { if (open) load(); }, [open]);
   async function load() {
@@ -2929,7 +2940,26 @@ function UpgradePlanModal({ open, onClose, reason }) {
         co = data;
       }
       setPlans(plansData || []); setCompany(co);
+      setBalanceCents(co?.credit_balance_cents ?? 0);
+      // Non-fatal: the plan grid is the primary purpose of this modal, so a
+      // failure to list top-up packs must not blank the whole thing.
+      try {
+        const res = await callPaddleBilling("list_credit_packs", {});
+        setPacks(res?.packs ?? []);
+        if (typeof res?.balance_cents === "number") setBalanceCents(res.balance_cents);
+      } catch (packErr) {
+        console.error("list_credit_packs failed:", packErr);
+        setPacks([]);
+      }
     } finally { setLoading(false); }
+  }
+
+  async function buyCredits(packId) {
+    setBusyPackId(packId); setErr("");
+    try {
+      const { url } = await callPaddleBilling("create_topup_checkout", { pack_id: packId });
+      window.location.href = url;
+    } catch (ex) { setErr(ex.message); setBusyPackId(null); }
   }
 
   async function subscribe(planId) {
@@ -3000,6 +3030,47 @@ function UpgradePlanModal({ open, onClose, reason }) {
             })}
           </div>
         )}
+        {!loading && packs.length > 0 && (
+          <div className="mt-6 border-t pt-5">
+            <div className="flex items-baseline justify-between mb-1">
+              <h3 className="font-bold text-sm">Pay-as-you-go credit</h3>
+              <div className="text-xs text-slate-500">
+                Balance <span className="font-semibold text-slate-900">${(balanceCents / 100).toFixed(2)}</span>
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 mb-3">
+              Covers usage beyond your plan's monthly pages, so you're never blocked mid-project. Credit never expires.
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {packs.map(pack => (
+                <button
+                  key={pack.id}
+                  onClick={() => buyCredits(pack.id)}
+                  disabled={!pack.available || busyPackId === pack.id}
+                  title={pack.available ? "" : "Not available for purchase yet — contact support."}
+                  className="rounded-xl border border-slate-200 p-3 text-left hover:border-slate-900 disabled:opacity-40 disabled:hover:border-slate-200 disabled:cursor-not-allowed"
+                >
+                  <div className="text-lg font-bold">${pack.price_usd}</div>
+                  <div className="text-xs text-slate-500">
+                    ${(pack.credit_cents / 100).toFixed(2)} credit
+                    {pack.credit_cents > pack.price_usd * 100 && (
+                      <span className="text-emerald-600 font-semibold"> +{Math.round((pack.credit_cents / (pack.price_usd * 100) - 1) * 100)}%</span>
+                    )}
+                  </div>
+                  <div className="text-xs font-semibold mt-2 text-slate-700">
+                    {busyPackId === pack.id ? "Redirecting…" : pack.available ? "Buy" : "Unavailable"}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {packs.every(p => !p.available) && (
+              <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-3">
+                Credit top-ups aren't switched on yet. Email support@quantoraengineering.com and we'll add credit to your account manually.
+              </div>
+            )}
+          </div>
+        )}
+
         {(company?.paddle_customer_id || company?.stripe_customer_id) && (
           <div className="mt-5 text-center">
             <button onClick={manageBilling} disabled={portalBusy} className="text-sm text-slate-500 underline hover:text-slate-900 disabled:opacity-50">
