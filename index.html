@@ -4,6 +4,14 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Quantora Engineering — AI Construction Intelligence Platform</title>
+
+<!-- Site icon (favicon) — what Google shows next to the search result -->
+<link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="icon" type="image/png" sizes="96x96" href="/favicon.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="/icon192.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/icon180.png" />
+<link rel="manifest" href="/manifest.json" />
+<meta name="theme-color" content="#01081b" />
 <meta name="description" content="Quantora Engineering reads your construction drawings and produces a complete bill of quantities in minutes — every item counted, located and justified. Built for MEP and low-current systems. 14-day free trial." />
 <meta name="robots" content="index, follow" />
 <link rel="canonical" href="https://quantoraengineering.com/" />
@@ -39,6 +47,17 @@
     { "@type": "Offer", "name": "Professional", "price": "99", "priceCurrency": "USD" },
     { "@type": "Offer", "name": "Team", "price": "199", "priceCurrency": "USD" }
   ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "Quantora Engineering",
+  "url": "https://quantoraengineering.com/",
+  "logo": "https://quantoraengineering.com/icon512.png",
+  "email": "support@quantoraengineering.com",
+  "description": "AI Construction Intelligence Platform for automated take-off, bill of quantities, specifications and compliance checking."
 }
 </script>
 <script>
@@ -3391,7 +3410,7 @@ function ProjectWorkspace({ project, onBack, onEdit }) {
     ["overview","Overview"], ["drawings","Drawings & AI Analysis"], ["design","System Design (No Drawings)"],
     ["boq","BOQ"], ["specification","Specification"],
     ["compliance","Compliance"], ["products","Product Recommendations"],
-    ["export","Export"], ["chat","AI Assistant"],
+    ["export","Export"], ["chat","Estima AI"],
   ];
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -6139,7 +6158,7 @@ function ExportTab({ project }) {
 // AI Assistant chat tab
 // ---------------------------------------------------------------------------
 function ChatTab({ project }) {
-  const [messages, setMessages] = useState([{ role: "assistant", text: `Hi, I'm your AI Construction Assistant for ${project.project_name}. Ask me about quantities, specifications, compliance, or cost optimization for this project.` }]);
+  const [messages, setMessages] = useState([{ role: "assistant", text: `Hi, I'm Estima, your AI Assistant for ${project.project_name}. Ask me about quantities, specifications, compliance, or cost optimization for this project.` }]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const endRef = useRef();
