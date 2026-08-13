@@ -1390,6 +1390,12 @@ async function callBilling(action, payload) {
 // does. The older Stripe-backed `billing` actions are left in place untouched
 // so switching back later is a configuration change, not a rewrite.
 const PADDLE_FN_URL = `${SUPABASE_URL}/functions/v1/paddle-billing`;
+// Every plan limit is NOT NULL in the database now, so a null reaching here is a
+// data fault, not an "unlimited" plan. Show an em dash and let it be noticed.
+function fmtLimit(n) {
+  return n == null ? "—" : Number(n).toLocaleString();
+}
+
 async function callPaddleBilling(action, payload) {
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(PADDLE_FN_URL, {
@@ -1413,6 +1419,25 @@ async function callAdminPlan(action, payload) {
   });
   const json = await res.json();
   if (!res.ok) throw new Error(json.error || "Admin plan request failed");
+  return json;
+}
+
+const ADMIN_DISCOUNTS_FN_URL = `${SUPABASE_URL}/functions/v1/admin-discounts`;
+async function callAdminDiscounts(action, payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(ADMIN_DISCOUNTS_FN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action, ...(payload || {}) }),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    const err = new Error(json.error || "Discount request failed");
+    // The server asks for a confirmation rather than refusing outright when a
+    // discount is unbounded; carry that through so the form can offer the tick.
+    err.needsConfirmation = json.needs_confirmation || null;
+    throw err;
+  }
   return json;
 }
 
@@ -2523,15 +2548,16 @@ const QUANTORA_LANDING_HTML = `
   <div class="wrap">
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>Pricing</div>
     <h2 class="sectitle">Simple, Usage-Based Pricing</h2>
-    <p class="secsub">Start with a free trial, then pick the plan that fits your workload. Reach your monthly page allowance? Pay-as-you-go credits keep you going — you're never blocked mid-project.</p>
+    <p class="secsub">Start with a free trial, then pick the plan that fits your workload. Every allowance below is a real published number, with no open-ended promises. Reach your monthly pages? Pay-as-you-go credits keep you going, up to the monthly ceiling shown on your plan.</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px;margin-top:24px;">
       <div class="panel" style="padding:22px;display:flex;flex-direction:column;">
         <div style="font-weight:700;font-size:15px;color:#fff;">Individual</div>
         <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$19</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div>30 AI-processed pages/month</div>
-          <div>Unlimited projects</div>
-          <div>Pay-as-you-go credits for overage</div>
+          <div>5 projects &middot; 1 user</div>
+          <div>200 AI chat messages &middot; 10 reworks per project</div>
+          <div>Pay-as-you-go credits up to $100/month</div>
         </div>
         <a class="btn btn-outline-lg" href="?auth=signup" style="margin-top:16px;text-align:center;">Start Free Trial</a>
       </div>
@@ -2541,8 +2567,9 @@ const QUANTORA_LANDING_HTML = `
         <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$99</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div>200 AI-processed pages/month</div>
-          <div>Unlimited projects &amp; rework</div>
-          <div>Pay-as-you-go credits for overage</div>
+          <div>25 projects &middot; 5 users</div>
+          <div>1,000 AI chat messages &middot; 20 reworks per project</div>
+          <div>Pay-as-you-go credits up to $500/month</div>
         </div>
         <a class="btn btn-grad" href="?auth=signup" style="margin-top:16px;text-align:center;">Start Free Trial</a>
       </div>
@@ -2551,8 +2578,9 @@ const QUANTORA_LANDING_HTML = `
         <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$199</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div>500 AI-processed pages/month</div>
-          <div>Priority processing</div>
-          <div>Pay-as-you-go credits for overage</div>
+          <div>100 projects &middot; 15 users</div>
+          <div>3,000 AI chat messages &middot; 30 reworks per project</div>
+          <div>Pay-as-you-go credits up to $1,500/month</div>
         </div>
         <a class="btn btn-outline-lg" href="?auth=signup" style="margin-top:16px;text-align:center;">Start Free Trial</a>
       </div>
@@ -3014,8 +3042,17 @@ function UpgradePlanModal({ open, onClose, reason }) {
                     {plan.price_usd != null && Number(plan.price_usd) > 0 && <span className="text-xs font-normal text-slate-400">/mo</span>}
                   </div>
                   <div className="text-xs text-slate-500 mt-2 space-y-1 flex-1">
-                    <div>{plan.max_drawing_pages ?? "Unlimited"} AI-processed drawing pages/month included</div>
-                    {plan.max_drawing_pages != null && <div className="text-slate-400">Pay-as-you-go credits cover any usage beyond that — never blocked mid-project.</div>}
+                    {/* Every limit column is NOT NULL at the database level, so there is
+                        no "unlimited" case left to fall back to. A missing number here
+                        would mean a genuine data problem, and an em dash is the honest
+                        way to show that rather than inventing a reassuring word. */}
+                    <div>{fmtLimit(plan.max_drawing_pages)} AI-processed drawing pages/month</div>
+                    <div>{fmtLimit(plan.max_projects)} projects &middot; {fmtLimit(plan.max_users)} user{plan.max_users === 1 ? "" : "s"}</div>
+                    <div>{fmtLimit(plan.max_chat_requests)} AI chat messages/month</div>
+                    <div>{fmtLimit(plan.max_rework_per_project)} reworks per project</div>
+                    {plan.max_overage_cents > 0
+                      ? <div className="text-slate-400">Pay-as-you-go credits beyond that, up to ${(plan.max_overage_cents / 100).toLocaleString()}/month.</div>
+                      : <div className="text-slate-400">No pay-as-you-go on this plan.</div>}
                     {plan.is_trial && <div>{plan.trial_duration_days ?? 2}-day trial window</div>}
                   </div>
                   {isCurrent ? (
@@ -3357,11 +3394,11 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
           </div>
           <div>
             <div className="text-xs font-semibold text-slate-500 uppercase">Drawing Analyses / Designs / Reworks this month</div>
-            <div className="text-sm">{usage.analysesUsed} {usage.plan?.monthly_drawing_analyses != null ? `/ ${usage.plan.monthly_drawing_analyses}` : "(unlimited)"}</div>
+            <div className="text-sm">{usage.analysesUsed} / {fmtLimit(usage.plan?.monthly_drawing_analyses)}</div>
           </div>
           <div>
             <div className="text-xs font-semibold text-slate-500 uppercase">Total AI Requests this month</div>
-            <div className="text-sm">{usage.requestsUsed} {usage.plan?.monthly_ai_requests != null ? `/ ${usage.plan.monthly_ai_requests}` : "(unlimited)"}</div>
+            <div className="text-sm">{usage.requestsUsed} / {fmtLimit(usage.plan?.monthly_ai_requests)}</div>
           </div>
           <button onClick={onOpenBilling} className="ml-auto bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800">
             Manage plan
@@ -9272,6 +9309,31 @@ const QADMIN_CSS = `
 .qadmin input[type=number]:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft);}
 .qadmin input[type=number]::placeholder{color:var(--text-dimmer);}
 
+/* The customer app sets input/select/textarea to white with !important, for a
+   light theme. The admin portal is dark, so it has to say so just as loudly.
+   Checkboxes and radios are left alone -- they are drawn by the browser and
+   look correct already once given an accent colour. */
+.qadmin input:not([type=checkbox]):not([type=radio]),
+.qadmin select,
+.qadmin textarea{
+  background-color:rgba(255,255,255,0.05)!important;
+  color:var(--text)!important;
+  -webkit-text-fill-color:var(--text)!important;
+  border:1px solid var(--border);border-radius:9px;padding:8px 11px;
+  font-size:12.5px;font-family:inherit;
+}
+.qadmin input::placeholder,.qadmin textarea::placeholder{
+  color:var(--text-dimmer)!important;-webkit-text-fill-color:var(--text-dimmer)!important;opacity:1;
+}
+/* A native dropdown list is painted by the OS, not the page, so the options
+   need their own colours or they render dark-on-dark. */
+.qadmin select option{background-color:#101728;color:#e6ebf5;}
+.qadmin input[type=checkbox],.qadmin input[type=radio]{accent-color:var(--primary);width:14px;height:14px;}
+.qadmin input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:0.55;cursor:pointer;}
+.qadmin input:focus,.qadmin select:focus,.qadmin textarea:focus{
+  outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft);
+}
+
 .qadmin .sidebar-scrim{display:none;}
 @media (max-width:960px){
   .qadmin .sidebar{position:fixed;left:0;top:0;z-index:40;transform:translateX(-100%);transition:transform .2s;}
@@ -9296,6 +9358,7 @@ const QICONS = {
   pipeline: <QIcon paths={<><path d="M3 20h18"/><path d="M6 20V9M11 20V4M16 20v-7M21 20v-3"/></>} />,
   ai: <QIcon paths={<><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></>} />,
   revenue: <QIcon paths={<><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5a2.5 2.5 0 012.5-1.5c1.5 0 2.5.8 2.5 2s-1 1.7-2.5 2-2.5.8-2.5 2 1 2 2.5 2a2.5 2.5 0 002.5-1.5"/></>} />,
+  discounts: <QIcon paths={<><path d="M9 15l6-6"/><circle cx="9.5" cy="9.5" r="1.6"/><circle cx="14.5" cy="14.5" r="1.6"/><path d="M4 8.5V5a1 1 0 011-1h3.5L20 15.5 15.5 20 4 8.5z"/></>} />,
   health: <QIcon paths={<path d="M3 12h4l2-7 4 14 2-7h6"/>} />,
   reports: <QIcon paths={<><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></>} />,
 };
@@ -9308,10 +9371,24 @@ const QADMIN_NAV = [
   { group: "Work", key: "pipeline", label: "Estimating & Procurement", sub: "Bid pipeline, budgets, enquiries and approvals" },
   { group: "Business", key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
   { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
+  { group: "Business", key: "discounts", label: "Discounts", sub: "Coupon codes, negotiated prices, and who has what" },
   { group: "Business", key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
   { group: "Platform", key: "health", label: "System Health", sub: "Live status of core platform services" },
   { group: "Platform", key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
 ];
+
+// One place to name an audit row, so a new adjustment type cannot silently
+// inherit the label of an unrelated one.
+const QADJ_LABEL = {
+  bonus_pages_granted: "Bonus pages",
+  plan_changed: "Plan changed",
+  trial_extended: "Trial extended",
+  discount_created: "Discount created",
+  discount_archived: "Discount archived",
+  discount_restored: "Discount reactivated",
+  discount_assigned: "Discount given",
+  discount_removed: "Discount removed",
+};
 
 function qMoney(cents) { return `$${((cents || 0) / 100).toFixed(2)}`; }
 function qPct(n) { return n == null ? "—" : `${n.toFixed(1)}%`; }
@@ -9583,6 +9660,9 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "myprojects" && (
               <QMyProjectsView onOpen={p => setOpenProject(p)} />
+            )}
+            {activeView === "discounts" && (
+              <QDiscountsView />
             )}
             {activeView === "ai" && (
               <QAiUsageView overview={overview} aiCostDaily={reportsData?.ai_cost_daily || []} />
@@ -9873,13 +9953,16 @@ function AdminQuotaControls({ company, onChanged }) {
 
   const planMax = company.plan_max_drawing_pages;
   const bonus = company.bonus_drawing_pages || 0;
-  const effective = planMax == null ? "Unlimited" : (planMax + bonus);
+  const effective = planMax == null ? "not set" : (planMax + bonus);
 
   return (
     <div>
       <div className="section-label" style={{ marginTop: 0 }}>Admin Quota Override (Testing/Support Only)</div>
       <div className="detail-list" style={{ marginBottom: 14 }}>
-        <div className="detail-item"><span>Standard plan page limit</span><b>{planMax == null ? "Unlimited" : planMax}</b></div>
+        <div className="detail-item"><span>Standard plan page limit</span>
+          <b style={planMax == null ? { color: "#fca5a5" } : undefined}>
+            {planMax == null ? "not set — this plan row is missing a limit" : planMax}
+          </b></div>
         <div className="detail-item"><span>Admin bonus pages (this company only)</span><b>{bonus}</b></div>
         <div className="detail-item"><span>Effective page limit</span><b>{effective}</b></div>
         {company.plan === "trial" && (
@@ -9937,8 +10020,13 @@ function AdminQuotaControls({ company, onChanged }) {
           history.length === 0 ? <div className="detail-item"><span>No admin quota adjustments yet.</span><b>—</b></div> :
           history.map(h => (
             <div className="detail-item" key={h.id}>
-              <span>{(h.created_at || "").replace("T", " ").slice(0, 16)} · {h.adjustment_type === "bonus_pages_granted" ? "Bonus pages" : h.adjustment_type === "plan_changed" ? "Plan changed" : "Trial extended"}{h.note ? ` — ${h.note}` : ""}</span>
-              <b>{h.adjustment_type === "bonus_pages_granted" ? (h.amount > 0 ? `+${h.amount}` : h.amount) : h.adjustment_type === "plan_changed" ? `${h.previous_value} → ${h.new_value}` : `+${h.amount}d`}</b>
+              <span>{(h.created_at || "").replace("T", " ").slice(0, 16)} · {QADJ_LABEL[h.adjustment_type] || h.adjustment_type}{h.note ? ` — ${h.note}` : ""}</span>
+              <b>{h.adjustment_type === "bonus_pages_granted" ? (h.amount > 0 ? `+${h.amount}` : h.amount)
+                 : h.adjustment_type === "plan_changed" ? `${h.previous_value} → ${h.new_value}`
+                 : h.adjustment_type === "discount_assigned" ? "applied"
+                 : h.adjustment_type === "discount_removed" ? "removed"
+                 : h.adjustment_type === "trial_extended" ? `+${h.amount}d`
+                 : "—"}</b>
             </div>
           ))}
       </div>
@@ -9964,7 +10052,11 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
               const daysLeft = c.plan === "trial" ? qDaysLeft(c.trial_end_date) : null;
               const paidStatus = c.subscription_status ?? fin?.subscription_status;
               const isPaidActive = paidStatus === "active" || paidStatus === "trialing" || paidStatus === "manual";
-              const statusLabel = c.plan === "trial" ? (daysLeft != null && daysLeft <= 0 ? "Trial · Expired" : `Trial · ${daysLeft}d left`) : (paidStatus === "manual" ? "Active · manual" : isPaidActive ? "Active" : "Inactive");
+              const statusLabel = c.plan === "trial"
+                ? (daysLeft == null ? "Trial · no end date"
+                   : daysLeft <= 0 ? "Trial · Expired"
+                   : `Trial · ${daysLeft}d left`)
+                : (paidStatus === "manual" ? "Active · manual" : isPaidActive ? "Active" : "Inactive");
               const statusClass = c.plan === "trial" ? (daysLeft != null && daysLeft <= 0 ? "pill st-churned" : "pill st-trial") : (isPaidActive ? "pill st-active" : "pill st-churned");
               return (
                 <tr key={c.id} onClick={() => onSelect(selectedId === c.id ? null : c.id)}>
@@ -10288,6 +10380,456 @@ function QMyProjectsView({ onOpen }) {
         Only your own projects appear; other customers' project data is not readable from this browser,
         which is why Project Monitoring reports on their activity rather than opening their files.
       </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// QDiscountsView (2026-08-13).
+//
+// Paddle holds every discount; this reads and writes them through the
+// admin-discounts edge function. Redemption counts come from Paddle, never
+// from a local tally -- a code can be used on a checkout this system never saw.
+// ---------------------------------------------------------------------------
+
+// Paddle's published pricing for a merchant-of-record transaction. Approximate
+// on purpose, and labelled as such on screen: the exact figure varies by
+// payment method and country, and a number that pretends to be exact is worse
+// than one that admits it is a guide.
+const PADDLE_FEE_PCT = 5;
+const PADDLE_FEE_FIXED_USD = 0.5;
+
+function qDiscountedPrice(listUsd, d) {
+  if (!Number.isFinite(listUsd)) return null;
+  if (!d) return listUsd;
+  if (d.type === "percentage") return Math.max(0, listUsd * (1 - Number(d.amount) / 100));
+  return Math.max(0, listUsd - Number(d.amount) / 100);
+}
+function qNetAfterPaddle(paidUsd) {
+  if (!Number.isFinite(paidUsd) || paidUsd <= 0) return 0;
+  return paidUsd - (paidUsd * PADDLE_FEE_PCT / 100) - PADDLE_FEE_FIXED_USD;
+}
+function qUsd(n) { return n == null || !Number.isFinite(n) ? "—" : `$${n.toFixed(2)}`; }
+
+function QDiscountsView() {
+  const [data, setData] = useState(null);
+  const [companies, setCompanies] = useState([]);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [assignFor, setAssignFor] = useState(null);   // discount being given out
+  const [assignCompany, setAssignCompany] = useState("");
+  const [assignNote, setAssignNote] = useState("");
+
+  const [form, setForm] = useState({
+    kind: "coupon",           // coupon = customer types a code; private = we attach it
+    type: "percentage",
+    amount: "20",
+    description: "",
+    code: "",
+    recur: false,
+    intervals: "3",
+    usageLimit: "50",
+    expiresAt: "",
+    restrictTo: "",           // "" = everything
+    confirmForever: false,
+    confirmUnlimited: false,
+  });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  useEffect(() => { load(); }, []);
+  async function load() {
+    setErr("");
+    try {
+      const [d, c] = await Promise.all([
+        callAdminDiscounts("list", {}),
+        callAdminDiscounts("companies", {}).catch(() => ({ companies: [] })),
+      ]);
+      setData(d);
+      setCompanies(c.companies || []);
+    } catch (e) {
+      console.error("QDiscountsView.load failed:", e);
+      setErr(e.message || "Could not load discounts.");
+      setData({ discounts: [], assignments: [], prices: [] });
+    }
+  }
+
+  const discounts = data?.discounts || [];
+  const assignments = data?.assignments || [];
+  const prices = data?.prices || [];
+  const active = discounts.filter(d => d.status === "active");
+  const redemptions = discounts.reduce((n, d) => n + (d.times_used || 0), 0);
+
+  // What the discount being typed would actually leave behind, on whichever
+  // price it is restricted to -- or on the cheapest plan, which is where a
+  // percentage discount does the most damage.
+  const previewPrice = (() => {
+    if (form.restrictTo) return prices.find(p => p.paddle_price_id === form.restrictTo) || null;
+    return prices.filter(p => p.kind === "plan").sort((a, b) => a.price_usd - b.price_usd)[0] || null;
+  })();
+  const previewDiscount = form.type === "percentage"
+    ? { type: "percentage", amount: Number(form.amount) }
+    : { type: "flat", amount: Math.round(Number(form.amount) * 100) };
+  const previewPaid = previewPrice ? qDiscountedPrice(previewPrice.price_usd, previewDiscount) : null;
+  const previewNet = previewPaid == null ? null : qNetAfterPaddle(previewPaid);
+
+  async function create() {
+    setBusy("create"); setMsg(null);
+    try {
+      const payload = {
+        type: form.type === "percentage" ? "percentage" : "flat",
+        description: form.description.trim(),
+        enable_code: form.kind === "coupon",
+        code: form.code.trim().toUpperCase(),
+        recur: !!form.recur,
+        maximum_recurring_intervals: form.recur && form.intervals !== "" ? Number(form.intervals) : null,
+        usage_limit: form.usageLimit !== "" ? Number(form.usageLimit) : null,
+        expires_at: form.expiresAt ? new Date(form.expiresAt + "T23:59:59").toISOString() : null,
+        restrict_to: form.restrictTo ? [form.restrictTo] : [],
+        confirm_forever: !!form.confirmForever,
+        confirm_unlimited: !!form.confirmUnlimited,
+      };
+      if (form.type === "percentage") payload.amount = Number(form.amount);
+      else payload.amount_cents = Math.round(Number(form.amount) * 100);
+
+      const res = await callAdminDiscounts("create", payload);
+      setMsg({ type: "ok", text: `Created “${res.discount.description}”${res.discount.code ? ` — code ${res.discount.code}` : " — no code; give it to a named account below"}.` });
+      setShowForm(false);
+      setForm(f => ({ ...f, description: "", code: "", confirmForever: false, confirmUnlimited: false }));
+      await load();
+    } catch (e) {
+      setMsg({ type: "err", text: e.message, needs: e.needsConfirmation });
+    } finally { setBusy(""); }
+  }
+
+  async function archive(d, restore) {
+    const what = restore ? "Reactivate" : "Archive";
+    if (!window.confirm(
+      `${what} “${d.description}”?\n\n` +
+      (restore
+        ? "It becomes usable again immediately."
+        : "No new customer will be able to use it. Anyone already subscribed at this discounted price keeps it — Paddle does not take an agreed price away from an existing customer, and neither should we.")
+    )) return;
+    setBusy(d.id); setMsg(null);
+    try {
+      await callAdminDiscounts("archive", { discount_id: d.id, restore: !!restore });
+      setMsg({ type: "ok", text: `“${d.description}” ${restore ? "reactivated" : "archived"}.` });
+      await load();
+    } catch (e) {
+      setMsg({ type: "err", text: e.message });
+    } finally { setBusy(""); }
+  }
+
+  async function assign() {
+    if (!assignCompany) { setMsg({ type: "err", text: "Choose a customer first." }); return; }
+    setBusy("assign"); setMsg(null);
+    try {
+      const res = await callAdminDiscounts("assign_to_company", {
+        discount_id: assignFor.id, company_id: assignCompany, note: assignNote || undefined,
+      });
+      setMsg({ type: "ok", text: `${res.company_name} will now be charged the discounted price at their next checkout.` });
+      setAssignFor(null); setAssignCompany(""); setAssignNote("");
+      await load();
+    } catch (e) {
+      setMsg({ type: "err", text: e.message });
+    } finally { setBusy(""); }
+  }
+
+  async function unassign(a) {
+    if (!window.confirm(
+      `Remove the discount from ${a.company_name}?\n\n` +
+      "Their next checkout will be at full price. An existing subscription already on the discounted price is not changed by this — that has to be done in the Paddle dashboard."
+    )) return;
+    setBusy(a.id); setMsg(null);
+    try {
+      const res = await callAdminDiscounts("unassign", { company_id: a.company_id });
+      setMsg({ type: "ok", text: res.warning || "Removed." });
+      await load();
+    } catch (e) {
+      setMsg({ type: "err", text: e.message });
+    } finally { setBusy(""); }
+  }
+
+  function amountLabel(d) {
+    return d.type === "percentage" ? `${Number(d.amount)}% off` : `${qUsd(Number(d.amount) / 100)} off`;
+  }
+  function appliesLabel(d) {
+    if (!d.restrict_to || !d.restrict_to.length) return "Everything";
+    const names = d.restrict_to.map(id => (prices.find(p => p.paddle_price_id === id) || {}).name).filter(Boolean);
+    return names.length ? names.join(", ") : `${d.restrict_to.length} item(s)`;
+  }
+  function lifetimeLabel(d) {
+    if (!d.recur) return "First payment only";
+    if (d.maximum_recurring_intervals) return `First ${d.maximum_recurring_intervals} payments`;
+    return "Every payment, forever";
+  }
+
+  return (
+    <div>
+      <div className="kpi-row">
+        <div className="card kpi"><div className="kpi-icon blue">{QICONS.discounts}</div>
+          <div><div className="lbl">Active discounts</div><div className="v">{active.length}</div></div></div>
+        <div className="card kpi"><div className="kpi-icon blue">{QICONS.customers}</div>
+          <div><div className="lbl">Customers on a deal</div><div className="v">{assignments.length}</div></div></div>
+        <div className="card kpi"><div className="kpi-icon blue">{QICONS.revenue}</div>
+          <div><div className="lbl">Times redeemed</div><div className="v">{redemptions}</div></div></div>
+        <div className="card kpi"><div className="kpi-icon blue">{QICONS.exec}</div>
+          <div><div className="lbl">Public codes live</div><div className="v">{active.filter(d => d.enabled_for_checkout).length}</div></div></div>
+      </div>
+
+      {err && <div className="card panel" style={{ padding: "14px 18px", color: "#fca5a5", fontSize: 13 }}>{err}</div>}
+      {msg && (
+        <div className="card panel" style={{ padding: "12px 18px", marginBottom: 14, fontSize: 12.5, lineHeight: 1.6,
+                                             color: msg.type === "ok" ? "#86efac" : "#fca5a5" }}>
+          {msg.text}
+        </div>
+      )}
+
+      <div className="card panel">
+        <div className="panel-head">
+          <h3>Discounts</h3>
+          <button className="btn btn-primary btn-sm" onClick={() => { setShowForm(v => !v); setMsg(null); }}>
+            {showForm ? "Close" : "New discount"}
+          </button>
+        </div>
+
+        {showForm && (
+          <div style={{ padding: "16px 18px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="section-label" style={{ marginTop: 0 }}>Who is this for?</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+              {[["coupon", "Anyone with the code", "A public code customers type at checkout. Use for campaigns."],
+                ["private", "One named customer", "No code at all. You give it to a specific company below, and it is applied automatically. Nothing they can forward on."]].map(([k, label, help]) => (
+                <div key={k} onClick={() => set("kind", k)}
+                  style={{ flex: "1 1 260px", cursor: "pointer", padding: "11px 13px", borderRadius: 10,
+                           border: `1px solid ${form.kind === k ? "rgba(91,140,255,0.7)" : "rgba(255,255,255,0.1)"}`,
+                           background: form.kind === k ? "rgba(91,140,255,0.10)" : "transparent" }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{label}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 3, lineHeight: 1.5 }}>{help}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
+              <div>
+                <div className="section-label" style={{ marginTop: 0 }}>Amount</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <select value={form.type} onChange={e => set("type", e.target.value)} style={{ minWidth: 120 }}>
+                    <option value="percentage">Percentage</option>
+                    <option value="flat">Fixed amount</option>
+                  </select>
+                  <input type="number" value={form.amount} onChange={e => set("amount", e.target.value)}
+                    style={{ width: 90 }} placeholder={form.type === "percentage" ? "20" : "5.00"} />
+                  <span style={{ alignSelf: "center", fontSize: 12, color: "var(--text-dimmer)" }}>
+                    {form.type === "percentage" ? "%" : "USD"}
+                  </span>
+                </div>
+              </div>
+              <div style={{ flex: "1 1 240px" }}>
+                <div className="section-label" style={{ marginTop: 0 }}>Applies to</div>
+                <select value={form.restrictTo} onChange={e => set("restrictTo", e.target.value)} style={{ width: "100%" }}>
+                  <option value="">Everything we sell</option>
+                  {prices.map(p => (
+                    <option key={p.paddle_price_id} value={p.paddle_price_id}>
+                      {p.name} — ${p.price_usd}{p.kind === "plan" ? "/mo" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="section-label" style={{ marginTop: 0 }}>What to call it</div>
+            <input type="text" value={form.description} onChange={e => set("description", e.target.value)}
+              placeholder="e.g. Launch offer — 20% off the first 3 months" style={{ width: "100%", marginBottom: 12 }} />
+
+            {form.kind === "coupon" && (
+              <>
+                <div className="section-label" style={{ marginTop: 0 }}>Code the customer types</div>
+                <input type="text" value={form.code} onChange={e => set("code", e.target.value.toUpperCase())}
+                  placeholder="LAUNCH20" style={{ width: 240, marginBottom: 12 }} />
+              </>
+            )}
+
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
+              <div>
+                <div className="section-label" style={{ marginTop: 0 }}>How long it lasts</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+                    <input type="checkbox" checked={form.recur} onChange={e => set("recur", e.target.checked)} />
+                    Repeats on renewals
+                  </label>
+                  {form.recur && (
+                    <>
+                      <input type="number" value={form.intervals} onChange={e => set("intervals", e.target.value)}
+                        style={{ width: 80 }} placeholder="3" />
+                      <span style={{ fontSize: 12, color: "var(--text-dimmer)" }}>months</span>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="section-label" style={{ marginTop: 0 }}>Max redemptions</div>
+                <input type="number" value={form.usageLimit} onChange={e => set("usageLimit", e.target.value)}
+                  style={{ width: 110 }} placeholder="50" />
+              </div>
+              <div>
+                <div className="section-label" style={{ marginTop: 0 }}>Expires</div>
+                <input type="date" value={form.expiresAt} onChange={e => set("expiresAt", e.target.value)} style={{ width: 170 }} />
+              </div>
+            </div>
+
+            {/* What is actually left after the discount and Paddle's cut. */}
+            {previewPrice && (
+              <div className="detail-list" style={{ marginBottom: 12 }}>
+                <div className="detail-item"><span>{previewPrice.name} list price</span><b>{qUsd(previewPrice.price_usd)}</b></div>
+                <div className="detail-item"><span>Customer pays</span><b>{qUsd(previewPaid)}</b></div>
+                <div className="detail-item">
+                  <span>You keep, after Paddle's ~{PADDLE_FEE_PCT}% + ${PADDLE_FEE_FIXED_USD.toFixed(2)}</span>
+                  <b style={{ color: previewNet <= 0 ? "#fca5a5" : previewNet < 5 ? "#fcd34d" : undefined }}>{qUsd(previewNet)}</b>
+                </div>
+                {previewNet <= 0 && (
+                  <div className="detail-item"><span style={{ color: "#fca5a5" }}>
+                    This discount costs you money before a single drawing is processed.
+                  </span><b>—</b></div>
+                )}
+                {previewNet > 0 && previewNet < 5 && (
+                  <div className="detail-item"><span style={{ color: "#fcd34d" }}>
+                    Under $5 left to cover the AI processing this plan allows. Check it against the AI Usage page.
+                  </span><b>—</b></div>
+                )}
+              </div>
+            )}
+
+            {msg?.needs === "forever" && (
+              <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", marginBottom: 10, color: "#fcd34d" }}>
+                <input type="checkbox" checked={form.confirmForever} onChange={e => set("confirmForever", e.target.checked)} />
+                Yes — this price cut should apply to every renewal, with no end.
+              </label>
+            )}
+            {msg?.needs === "unlimited" && (
+              <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", marginBottom: 10, color: "#fcd34d" }}>
+                <input type="checkbox" checked={form.confirmUnlimited} onChange={e => set("confirmUnlimited", e.target.checked)} />
+                Yes — this code may be redeemed an unlimited number of times.
+              </label>
+            )}
+
+            <button className="btn btn-primary" disabled={busy === "create"} onClick={create}>
+              {busy === "create" ? "Creating…" : "Create in Paddle"}
+            </button>
+            <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 10, lineHeight: 1.55 }}>
+              The discount is created in Paddle, which is the merchant of record — that is what makes the customer's
+              invoice and VAT match the price you agreed. It cannot be created here alone.
+            </div>
+          </div>
+        )}
+
+        <div className="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Discount</th><th>Amount</th><th>Applies to</th><th>Lasts</th>
+              <th className="num">Used</th><th>Expires</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody>
+              {data === null ? (
+                <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>Loading…</td></tr>
+              ) : discounts.length === 0 ? (
+                <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>
+                  No discounts yet. “New discount” creates one in Paddle.
+                </td></tr>
+              ) : discounts.map(d => (
+                <tr key={d.id}>
+                  <td className="name">
+                    {d.description}
+                    <div style={{ marginTop: 4 }}>
+                      {d.code
+                        ? <span className="pill st-trial" style={{ letterSpacing: "0.04em" }}>{d.code}</span>
+                        : <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-dimmer)" }}>
+                            no code — assigned to named accounts
+                          </span>}
+                    </div>
+                  </td>
+                  <td>{amountLabel(d)}</td>
+                  <td>{appliesLabel(d)}</td>
+                  <td>{lifetimeLabel(d)}</td>
+                  <td className="num">{d.times_used}{d.usage_limit ? ` / ${d.usage_limit}` : ""}</td>
+                  <td>{d.expires_at ? new Date(d.expires_at).toLocaleDateString() : "—"}</td>
+                  <td><span className={`pill ${d.status === "active" ? "st-active" : "st-churned"}`}>{d.status}</span></td>
+                  <td className="num" style={{ whiteSpace: "nowrap" }}>
+                    {d.status === "active" && !d.enabled_for_checkout && (
+                      <button className="btn btn-sm" style={{ marginRight: 6 }}
+                        title="Give this discount to a named customer"
+                        onClick={() => { setAssignFor(d); setAssignCompany(""); setAssignNote(""); setMsg(null); }}>
+                        Assign
+                      </button>
+                    )}
+                    <button className="btn btn-sm" disabled={busy === d.id} onClick={() => archive(d, d.status !== "active")}>
+                      {busy === d.id ? "…" : d.status === "active" ? "Archive" : "Restore"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {assignFor && (
+          <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="section-label" style={{ marginTop: 0 }}>Give “{assignFor.description}” to a customer</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+              <select value={assignCompany} onChange={e => setAssignCompany(e.target.value)} style={{ minWidth: 240 }}>
+                <option value="">Choose a customer…</option>
+                {companies.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} — {c.plan || "free"}</option>
+                ))}
+              </select>
+              <button className="btn btn-primary btn-sm" disabled={busy === "assign"} onClick={assign}>
+                {busy === "assign" ? "Applying…" : "Apply to this customer"}
+              </button>
+              <button className="btn btn-sm" onClick={() => setAssignFor(null)}>Cancel</button>
+            </div>
+            <input type="text" value={assignNote} onChange={e => setAssignNote(e.target.value)}
+              placeholder="Why (e.g. agreed on the call with their commercial manager, 12 Aug)" style={{ width: "100%" }} />
+            <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 8, lineHeight: 1.55 }}>
+              Applies from their next checkout. A customer can hold only one discount at a time.
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="card panel" style={{ marginTop: 16 }}>
+        <div className="panel-head">
+          <h3>Customers on a negotiated price</h3>
+          <span className="tag">{assignments.length}</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Customer</th><th>Discount</th><th>Why</th><th>Since</th><th></th></tr></thead>
+            <tbody>
+              {assignments.length === 0 ? (
+                <tr><td colSpan="5" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>
+                  Nobody is on a negotiated price. Create a discount with no code, then use “Give to customer”.
+                </td></tr>
+              ) : assignments.map(a => (
+                <tr key={a.id}>
+                  <td className="name">{a.company_name}</td>
+                  <td>{a.description || "—"}</td>
+                  <td style={{ color: "var(--text-dimmer)" }}>{a.note || "—"}</td>
+                  <td>{a.created_at ? new Date(a.created_at).toLocaleDateString() : "—"}</td>
+                  <td className="num">
+                    <button className="btn btn-sm" disabled={busy === a.id} onClick={() => unassign(a)}>
+                      {busy === a.id ? "…" : "Remove"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ padding: "12px 18px 16px", color: "var(--text-dimmer)", fontSize: 12, lineHeight: 1.6 }}>
+          Free pages and wallet credit are not discounts and are not managed here — those cost AI processing rather
+          than revenue, and live under Customers so the two never get added together in a report.
+        </p>
+      </div>
     </div>
   );
 }
