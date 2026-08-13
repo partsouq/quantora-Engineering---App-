@@ -6501,17 +6501,26 @@ function MarkupViewerModal({ drawing, onClose }) {
       canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(img, 0, 0);
+      // Same numbers as the screen, so the downloaded markup and the view can
+      // never disagree about which camera is number 7.
+      const badge = Math.max(11, Math.round(canvas.width / 110));
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
       onPage.forEach(it => {
         const color = systemColor(it.system_category);
-        const drawMarker = (x, y) => {
-          const w = Math.max(it.coordinates.width || 0, 0.01) * canvas.width;
-          const h = Math.max(it.coordinates.height || 0, 0.01) * canvas.height;
-          const px = x * canvas.width, py = y * canvas.height;
+        const w = boxW(it) * canvas.width;
+        const h = boxH(it) * canvas.height;
+        positionsOf(it).forEach((pos, idx) => {
+          const px = (pos.x || 0) * canvas.width, py = (pos.y || 0) * canvas.height;
           ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.strokeRect(px, py, w, h);
           ctx.fillStyle = color + "33"; ctx.fillRect(px, py, w, h);
-        };
-        drawMarker(it.coordinates.x || 0, it.coordinates.y || 0);
-        (Array.isArray(it.coordinates.instances) ? it.coordinates.instances : []).forEach(inst => drawMarker(inst.x || 0, inst.y || 0));
+          const label = String(idx + 1);
+          ctx.font = `bold ${badge}px Arial, sans-serif`;
+          const tw = ctx.measureText(label).width;
+          const bw = Math.max(badge * 1.5, tw + badge * 0.7), bh = badge * 1.45;
+          const bx = px - 1, by = Math.max(0, py - bh - 1);
+          ctx.fillStyle = color; ctx.fillRect(bx, by, bw, bh);
+          ctx.fillStyle = "#ffffff"; ctx.fillText(label, bx + bw / 2, by + bh / 2 + 0.5);
+        });
       });
       const url = canvas.toDataURL("image/png");
       const a = document.createElement("a");
@@ -6538,6 +6547,17 @@ function MarkupViewerModal({ drawing, onClose }) {
     return acc;
   }, {});
   const unlocated = items.filter(i => !(i.coordinates && i.coordinates.x != null && i.coordinates.y != null));
+  // Every position of one BOQ line, in order, so each can be numbered 1..N.
+  // The first is whatever is in x/y; the rest come from instances[].
+  const positionsOf = it => [
+    { x: it.coordinates.x || 0, y: it.coordinates.y || 0 },
+    ...(Array.isArray(it.coordinates.instances) ? it.coordinates.instances : []),
+  ];
+  // A device box comes back at 1-3% of the page. That is the right size for a
+  // highlight but leaves nowhere to hang a number, so enforce a floor.
+  const MIN_MARKER = 0.012;
+  const boxW = it => Math.max(it.coordinates.width || 0, MIN_MARKER);
+  const boxH = it => Math.max(it.coordinates.height || 0, MIN_MARKER);
   // Distinct systems actually present among located items, for a compact legend
   // (not all 34 possible categories -- just the ones on this drawing).
   const presentSystems = Array.from(new Set(located.map(i => i.system_category).filter(Boolean))).sort();
@@ -6594,33 +6614,30 @@ function MarkupViewerModal({ drawing, onClose }) {
                 <img src={imgUrl} className="w-full block" alt={drawing.file_name} />
                 {onPage.map(it => {
                   const color = systemColor(it.system_category);
-                  const extraInstances = Array.isArray(it.coordinates.instances) ? it.coordinates.instances : [];
+                  const w = boxW(it), h = boxH(it);
+                  const isActive = activeItem === it.id;
                   return (
                     <React.Fragment key={it.id}>
-                      <div
-                        onClick={()=>setActiveItem(activeItem===it.id?null:it.id)}
-                        title={it.description}
-                        className="qtr-marker absolute"
-                        style={{
-                          left: `${(it.coordinates.x||0)*100}%`, top: `${(it.coordinates.y||0)*100}%`,
-                          width: `${Math.max(it.coordinates.width||0,0.01)*100}%`, height: `${Math.max(it.coordinates.height||0,0.01)*100}%`,
-                          borderColor: color, boxShadow: `0 0 0 1px ${color}`, background: `${color}33`,
-                        }}>
-                        {activeItem===it.id && (
-                          <div className="qtr-marker-tooltip bg-slate-900 text-white text-[10px] rounded px-2 py-1 whitespace-nowrap">
-                            {it.description} — Qty {it.quantity} {it.unit}
-                          </div>
-                        )}
-                      </div>
-                      {extraInstances.map((inst, idx) => (
-                        <div key={`${it.id}-inst-${idx}`}
-                          title={it.description}
+                      {positionsOf(it).map((pos, idx) => (
+                        <div key={`${it.id}-${idx}`}
+                          onClick={()=>setActiveItem(isActive?null:it.id)}
+                          title={`${it.description} — ${idx+1} of ${it.quantity} ${it.unit || ""}`}
                           className="qtr-marker absolute"
                           style={{
-                            left: `${(inst.x||0)*100}%`, top: `${(inst.y||0)*100}%`,
-                            width: `${Math.max(it.coordinates.width||0,0.01)*100}%`, height: `${Math.max(it.coordinates.height||0,0.01)*100}%`,
-                            borderColor: color, boxShadow: `0 0 0 1px ${color}`, background: `${color}33`,
+                            left: `${(pos.x||0)*100}%`, top: `${(pos.y||0)*100}%`,
+                            width: `${w*100}%`, height: `${h*100}%`,
+                            borderColor: color,
+                            boxShadow: isActive ? `0 0 0 2px ${color}` : `0 0 0 1px ${color}`,
+                            background: `${color}${isActive ? "55" : "33"}`,
                           }}>
+                          {/* The number sits just outside the top-left corner so it
+                              never covers the symbol being pointed at. */}
+                          <span className="qtr-marker-no" style={{ background: color }}>{idx + 1}</span>
+                          {isActive && idx === 0 && (
+                            <div className="qtr-marker-tooltip bg-slate-900 text-white text-[10px] rounded px-2 py-1 whitespace-nowrap">
+                              {it.description} — {positionsOf(it).length} of {it.quantity} {it.unit} marked
+                            </div>
+                          )}
                         </div>
                       ))}
                     </React.Fragment>
@@ -6666,7 +6683,12 @@ function MarkupViewerModal({ drawing, onClose }) {
                 <div className="grid md:grid-cols-2 gap-2">
                   {located.map(it => {
                     const color = systemColor(it.system_category);
-                    const instCount = Array.isArray(it.coordinates.instances) ? it.coordinates.instances.length + 1 : null;
+                    const marked = positionsOf(it).length;
+                    const qty = Number(it.quantity);
+                    // Only meaningful for countable items -- 34 m of cable tray is
+                    // one route, not 34 markers, so it is never "short".
+                    const countable = Number.isFinite(qty) && qty > 0 && /^(no|nos|nr|pcs|each|ea)\.?$/i.test(String(it.unit || "").trim());
+                    const short = countable && marked < qty;
                     return (
                       <div key={it.id}
                         onClick={()=>{
@@ -6679,7 +6701,14 @@ function MarkupViewerModal({ drawing, onClose }) {
                         className={`text-xs border rounded-lg px-3 py-2 cursor-pointer ${activeItem===it.id?"qtr-item-active bg-rose-50":itemPage(it)===pageNum||!isPdf?"bg-white":"bg-slate-50 opacity-70"}`}
                         style={{ borderLeft: `4px solid ${color}` }}>
                         <div className="font-medium">{it.description}</div>
-                        <div className="text-slate-500">Page {it.coordinates.page||1} · Qty {it.quantity} {it.unit}{instCount ? ` · ${instCount} positions plotted` : ""}</div>
+                        <div className="text-slate-500">
+                          Page {it.coordinates.page||1} · Qty {it.quantity} {it.unit}
+                          {countable
+                            ? <span style={{ color: short ? "#b45309" : undefined, fontWeight: short ? 600 : undefined }}>
+                                {" · "}{marked} of {qty} marked{short ? " — the rest were not found on the drawing" : ""}
+                              </span>
+                            : ` · ${marked} position${marked === 1 ? "" : "s"} marked`}
+                        </div>
                       </div>
                     );
                   })}
@@ -11390,6 +11419,13 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .qtr-marker{border:2px solid #f43f5e;background:rgba(244,63,94,0.1);cursor:pointer}
 .qtr-marker:hover{background:rgba(244,63,94,0.25)}
 .qtr-marker-tooltip{position:absolute;bottom:-4px;left:0;transform:translateY(100%);z-index:10;box-shadow:0 4px 10px rgba(0,0,0,0.25)}
+/* Numbered badge on every marker. Sits above the box's top-left corner so the
+   symbol underneath stays visible; pointer-events off so it never swallows a
+   click meant for the marker. */
+.qtr-marker-no{position:absolute;left:-1px;top:0;transform:translateY(-100%);
+  font-size:9px;line-height:1;font-weight:800;color:#fff;padding:2px 3px;border-radius:3px;
+  min-width:12px;text-align:center;pointer-events:none;white-space:nowrap;
+  text-shadow:0 1px 1px rgba(0,0,0,0.35)}
 .qtr-item-active{border-color:#fb7185!important}
 </style>
 <style id="quantora-estimation-ui">
