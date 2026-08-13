@@ -2237,11 +2237,14 @@ const QUANTORA_LANDING_HTML = `
     <div style="max-width:1000px;margin:0 auto 54px;">
       <div style="position:relative;border-radius:16px;overflow:hidden;border:1px solid rgba(148,163,184,0.18);box-shadow:0 24px 70px rgba(0,0,0,0.55);background:#070b14;">
         <video autoplay muted loop playsinline preload="metadata" poster="poster.jpg" style="display:block;width:100%;height:auto;">
-          <source src="walkthrough.webm" type="video/webm" />
+          <!-- Single H.264 source (2026-08-13). The previous WebM source was removed
+               rather than re-encoded: every current browser plays H.264, and keeping a
+               second source meant a stale WebM would silently be served in Chrome and
+               Firefox whenever the two files fell out of step. -->
           <source src="walkthrough.mp4" type="video/mp4" />
         </video>
       </div>
-      <p style="text-align:center;font-size:13px;color:var(--text-dimmer);margin-top:14px;">Project setup to procurement-ready BOQ, in 30 seconds · no sound</p>
+      <p style="text-align:center;font-size:13px;color:var(--text-dimmer);margin-top:14px;">Quantora Mall — Phase 1 · tender, take-off, estimate, enquiry, comparison and approval · 1 min 19 s · no sound</p>
     </div>
 
     <div class="steps">
