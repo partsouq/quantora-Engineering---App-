@@ -6404,10 +6404,41 @@ function MarkupViewerModal({ drawing, onClose }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeItem, setActiveItem] = useState(null);
+  const [pageNum, setPageNum] = useState(1);
+  const [pageCount, setPageCount] = useState(1);
+  const [rendering, setRendering] = useState(false);
+  // The parsed PDF is kept for the life of the modal so paging does not
+  // re-download it -- and so a page render never depends on a signed URL that
+  // may since have expired.
+  const pdfRef = useRef(null);
   const isImage = drawing.file_type === "image" || drawing.file_type === "scan";
   const isPdf = drawing.file_type === "pdf";
 
   useEffect(() => { load(); }, [drawing.id]);
+
+  // Renders one page of the already-parsed PDF to a data URL. Every overlay,
+  // legend and export path downstream works off imgUrl, so nothing else needs
+  // to know which page it is looking at.
+  async function renderPage(n) {
+    const pdf = pdfRef.current;
+    if (!pdf) return;
+    setRendering(true);
+    try {
+      const page = await pdf.getPage(n);
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+      setImgUrl(canvas.toDataURL("image/png"));
+      setPageNum(n);
+    } catch (e) {
+      console.error("renderPage failed:", e);
+      setPageRenderFailed(true);
+    } finally {
+      setRendering(false);
+    }
+  }
+
   async function load() {
     setLoading(true); setError(null); setPageRenderFailed(false);
     try {
@@ -6431,13 +6462,16 @@ function MarkupViewerModal({ drawing, onClose }) {
           if (!window.__PDFJS_OK__ || !window.pdfjsLib) throw new Error("pdf.js not available");
           const { data: signed, error: sErr } = await sb.storage.from("drawings").createSignedUrl(drawing.storage_path, 300);
           if (sErr) throw sErr;
-          const pdf = await window.pdfjsLib.getDocument(signed.signedUrl).promise;
-          const page = await pdf.getPage(1);
-          const viewport = page.getViewport({ scale: 1.5 });
-          const canvas = document.createElement("canvas");
-          canvas.width = viewport.width; canvas.height = viewport.height;
-          await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-          setImgUrl(canvas.toDataURL("image/png"));
+          // Read the whole file once rather than letting pdf.js range-request
+          // pages as they are needed: the signed URL lasts 300s, and someone
+          // reviewing a 40-page package will still be paging long after that.
+          const res = await fetch(signed.signedUrl);
+          if (!res.ok) throw new Error("Could not download the drawing file.");
+          const buf = await res.arrayBuffer();
+          const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+          pdfRef.current = pdf;
+          setPageCount(pdf.numPages || 1);
+          await renderPage(1);
         } catch (pdfErr) {
           console.error("PDF page render failed:", pdfErr);
           setPageRenderFailed(true);
@@ -6467,7 +6501,7 @@ function MarkupViewerModal({ drawing, onClose }) {
       canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(img, 0, 0);
-      located.forEach(it => {
+      onPage.forEach(it => {
         const color = systemColor(it.system_category);
         const drawMarker = (x, y) => {
           const w = Math.max(it.coordinates.width || 0, 0.01) * canvas.width;
@@ -6481,7 +6515,7 @@ function MarkupViewerModal({ drawing, onClose }) {
       });
       const url = canvas.toDataURL("image/png");
       const a = document.createElement("a");
-      a.href = url; a.download = `${drawing.file_name || "drawing"}-markup.png`;
+      a.href = url; a.download = `${drawing.file_name || "drawing"}${pageCount > 1 ? `-p${pageNum}` : ""}-markup.png`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
     } catch (e) {
       console.error("downloadMarkup failed:", e);
@@ -6490,6 +6524,19 @@ function MarkupViewerModal({ drawing, onClose }) {
   }
 
   const located = items.filter(i => i.coordinates && i.coordinates.x != null && i.coordinates.y != null);
+  // Coordinates are page-relative, so a marker may only be drawn on the page it
+  // was found on. Without this filter an item from page 7 lands at the same
+  // fraction of page 1 -- a confident marker pointing at the wrong drawing.
+  const itemPage = it => Number(it.coordinates?.page) || 1;
+  const onPage = located.filter(it => itemPage(it) === pageNum);
+  // Which pages actually carry markers, so a 40-page package does not have to
+  // be paged through blind.
+  const pagesWithMarkers = Array.from(new Set(located.map(itemPage))).sort((a, b) => a - b);
+  const markerCountByPage = located.reduce((acc, it) => {
+    const p = itemPage(it);
+    acc[p] = (acc[p] || 0) + 1 + (Array.isArray(it.coordinates.instances) ? it.coordinates.instances.length : 0);
+    return acc;
+  }, {});
   const unlocated = items.filter(i => !(i.coordinates && i.coordinates.x != null && i.coordinates.y != null));
   // Distinct systems actually present among located items, for a compact legend
   // (not all 34 possible categories -- just the ones on this drawing).
@@ -6545,7 +6592,7 @@ function MarkupViewerModal({ drawing, onClose }) {
             {imgUrl && (
               <div className="qtr-markup-wrap relative border rounded-lg overflow-hidden bg-slate-100 mb-4">
                 <img src={imgUrl} className="w-full block" alt={drawing.file_name} />
-                {located.map(it => {
+                {onPage.map(it => {
                   const color = systemColor(it.system_category);
                   const extraInstances = Array.isArray(it.coordinates.instances) ? it.coordinates.instances : [];
                   return (
@@ -6581,21 +6628,56 @@ function MarkupViewerModal({ drawing, onClose }) {
                 })}
               </div>
             )}
-            {imgUrl && isPdf && <div className="text-[10px] text-slate-400 mb-4 -mt-3">Showing page 1 of this PDF. Marker positions for items reported on other pages are still listed below but not plotted on this page image.</div>}
+            {imgUrl && isPdf && pageCount > 1 && (
+              <div className="flex items-center gap-2 flex-wrap mb-4 -mt-2">
+                <button onClick={()=>renderPage(Math.max(1, pageNum-1))} disabled={pageNum<=1||rendering}
+                  className="text-xs font-semibold border px-2.5 py-1.5 rounded-lg hover:bg-slate-50 disabled:opacity-40">&larr; Prev</button>
+                <span className="text-xs text-slate-500">Page {pageNum} of {pageCount}</span>
+                <button onClick={()=>renderPage(Math.min(pageCount, pageNum+1))} disabled={pageNum>=pageCount||rendering}
+                  className="text-xs font-semibold border px-2.5 py-1.5 rounded-lg hover:bg-slate-50 disabled:opacity-40">Next &rarr;</button>
+                {rendering && <span className="text-xs text-slate-400">Rendering…</span>}
+                {pagesWithMarkers.length > 0 && (
+                  <div className="flex items-center gap-1 flex-wrap ml-2">
+                    <span className="text-[11px] text-slate-400">Pages with markup:</span>
+                    {pagesWithMarkers.map(p => (
+                      <button key={p} onClick={()=>renderPage(p)}
+                        title={`${markerCountByPage[p]} marker${markerCountByPage[p]===1?"":"s"}`}
+                        className={`text-[11px] font-semibold px-2 py-0.5 rounded ${p===pageNum?"bg-slate-900 text-white":"bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {imgUrl && isPdf && pageCount > 1 && onPage.length === 0 && (
+              <div className="text-[11px] text-slate-400 mb-4 -mt-2">
+                No items were located on this page. Use the page numbers above to jump to a page that has markup.
+              </div>
+            )}
             {located.length === 0 && unlocated.length === 0 && (
               <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">No BOQ items recorded for this drawing yet.</div>
             )}
             {located.length > 0 && (
               <div className="mb-4">
                 <div className="text-xs font-semibold text-slate-500 uppercase mb-2">
-                  Located items ({located.length}){hasCadInstances ? " — instance count shown where CAD data captured multiple exact positions" : ""}
+                  Located items ({located.length}){pageCount > 1 ? ` — ${onPage.length} on page ${pageNum}` : ""}{hasCadInstances ? " — instance count shown where CAD data captured multiple exact positions" : ""}
                 </div>
                 <div className="grid md:grid-cols-2 gap-2">
                   {located.map(it => {
                     const color = systemColor(it.system_category);
                     const instCount = Array.isArray(it.coordinates.instances) ? it.coordinates.instances.length + 1 : null;
                     return (
-                      <div key={it.id} onClick={()=>setActiveItem(activeItem===it.id?null:it.id)} className={`text-xs border rounded-lg px-3 py-2 cursor-pointer ${activeItem===it.id?"qtr-item-active bg-rose-50":"bg-white"}`} style={{ borderLeft: `4px solid ${color}` }}>
+                      <div key={it.id}
+                        onClick={()=>{
+                          // Selecting an item that lives on another page takes you
+                          // there, rather than highlighting something off-screen.
+                          const p = itemPage(it);
+                          if (isPdf && p !== pageNum && p <= pageCount) renderPage(p);
+                          setActiveItem(activeItem===it.id?null:it.id);
+                        }}
+                        className={`text-xs border rounded-lg px-3 py-2 cursor-pointer ${activeItem===it.id?"qtr-item-active bg-rose-50":itemPage(it)===pageNum||!isPdf?"bg-white":"bg-slate-50 opacity-70"}`}
+                        style={{ borderLeft: `4px solid ${color}` }}>
                         <div className="font-medium">{it.description}</div>
                         <div className="text-slate-500">Page {it.coordinates.page||1} · Qty {it.quantity} {it.unit}{instCount ? ` · ${instCount} positions plotted` : ""}</div>
                       </div>
@@ -11371,7 +11453,15 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .hover\:text-rose-600:hover{color:#e11d48}
 @media (min-width:640px){.sm\:px-6{padding-left:1.5rem;padding-right:1.5rem}}
 @media (min-width:1024px){.lg\:block{display:block}.lg\:hidden{display:none}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.lg\:grid-cols-\[260px_1fr\]{grid-template-columns:260px minmax(0,1fr)}}
-.bg-gradient-to-r{background-image:linear-gradient(to right,var(--tw-gradient-stops))}.qtr-cell{background-color:#fff!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;border-color:#c8d2e4}.qtr-cell-off{background-color:#e6eaf3!important;color:#96a0b5!important;-webkit-text-fill-color:#96a0b5!important;border-color:#d5dbe8;opacity:.6}.bg-blue-600{background-color:#2563eb}.bg-amber-500{background-color:#f59e0b}.bg-slate-400{background-color:#94a3b8}.bg-emerald-500{background-color:#10b981}.bg-rose-500{background-color:#f43f5e}.border-blue-600{border-color:#2563eb}.line-through{text-decoration-line:line-through}.hover\:bg-rose-50:hover{background-color:rgba(244,63,94,.10)}.items-baseline{align-items:baseline}.ml-1\.5{margin-left:.375rem}.mt-1\.5{margin-top:.375rem}.text-\[11px\]{font-size:11px;line-height:1.45}.w-48{width:12rem}.bg-black\/50{background-color:rgba(0,0,0,.5)}.border-rose-300{border-color:#fda4af}.max-w-lg{max-width:32rem}.z-50{z-index:50}@media (min-width:768px){.md\:grid-cols-5{grid-template-columns:repeat(5,minmax(0,1fr))}}.w-20{width:5rem}
+.bg-gradient-to-r{background-image:linear-gradient(to right,var(--tw-gradient-stops))}.qtr-cell{background-color:#fff!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;border-color:#c8d2e4}
+/* Missing from the static Tailwind build (see note above): these four are used
+   by the drawing-markup viewer and were silently doing nothing. */
+.gap-x-4{column-gap:1rem}
+.gap-y-1{row-gap:0.25rem}
+.opacity-70{opacity:0.7}
+.opacity-40{opacity:0.4}
+.disabled\:opacity-40:disabled{opacity:0.4}
+.-mt-2{margin-top:-0.5rem}.qtr-cell-off{background-color:#e6eaf3!important;color:#96a0b5!important;-webkit-text-fill-color:#96a0b5!important;border-color:#d5dbe8;opacity:.6}.bg-blue-600{background-color:#2563eb}.bg-amber-500{background-color:#f59e0b}.bg-slate-400{background-color:#94a3b8}.bg-emerald-500{background-color:#10b981}.bg-rose-500{background-color:#f43f5e}.border-blue-600{border-color:#2563eb}.line-through{text-decoration-line:line-through}.hover\:bg-rose-50:hover{background-color:rgba(244,63,94,.10)}.items-baseline{align-items:baseline}.ml-1\.5{margin-left:.375rem}.mt-1\.5{margin-top:.375rem}.text-\[11px\]{font-size:11px;line-height:1.45}.w-48{width:12rem}.bg-black\/50{background-color:rgba(0,0,0,.5)}.border-rose-300{border-color:#fda4af}.max-w-lg{max-width:32rem}.z-50{z-index:50}@media (min-width:768px){.md\:grid-cols-5{grid-template-columns:repeat(5,minmax(0,1fr))}}.w-20{width:5rem}
 </style>
 </body>
 </html>
