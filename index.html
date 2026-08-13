@@ -3181,13 +3181,50 @@ function TeamPanel() {
 function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
   const [projects, setProjects] = useState([]);
   const [stats, setStats] = useState({ projects: 0, boq: 0, drawings: 0, revisions: 0 });
+  // Total of every project's selling price, computed the same way the
+  // Estimation page computes one project's: material (BOQ rates, or the
+  // per-system override) + installation + staff, plus that project's margin.
+  // Null until it has been worked out, so it is never shown as a false zero.
+  const [pipeline, setPipeline] = useState(null);
   const [usage, setUsage] = useState(null);
   const [usageError, setUsageError] = useState(null);
   const [trialUsage, setTrialUsage] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
-  useEffect(() => { load(); loadUsage(); loadTrialUsage(); }, []);
+  useEffect(() => { load(); loadUsage(); loadTrialUsage(); loadPipeline(); }, []);
+  async function loadPipeline() {
+    try {
+      const [{ data: est }, { data: lab }, { data: stf }, { data: items }] = await Promise.all([
+        sb.from("project_estimates").select("project_id, margin_pct"),
+        sb.from("estimate_labour").select("project_id, system_category, method, team_size, days, day_rate_cents, sub_price_cents, material_override_cents"),
+        sb.from("estimate_staff").select("project_id, headcount, months, monthly_cost_cents"),
+        sb.from("boq_items").select("project_id, system_category, quantity, unit_cost_cents"),
+      ]);
+      if (!est || !est.length) { setPipeline(null); return; }
+      const cost = {};
+      const add = (pid, v) => { cost[pid] = (cost[pid] || 0) + v; };
+      const overridden = new Set();
+      (lab || []).forEach(r => {
+        if (r.material_override_cents != null) { overridden.add(r.project_id + "|" + r.system_category); add(r.project_id, Number(r.material_override_cents)); }
+        add(r.project_id, r.method === "sub"
+          ? Number(r.sub_price_cents || 0)
+          : Math.round((Number(r.team_size) || 0) * (Number(r.days) || 0) * Number(r.day_rate_cents || 0)));
+      });
+      (items || []).forEach(it => {
+        if (it.unit_cost_cents == null) return;
+        if (overridden.has(it.project_id + "|" + it.system_category)) return;
+        add(it.project_id, Math.round((Number(it.quantity) || 0) * Number(it.unit_cost_cents)));
+      });
+      (stf || []).forEach(r => add(r.project_id, Math.round((Number(r.headcount) || 0) * (Number(r.months) || 0) * Number(r.monthly_cost_cents || 0))));
+      let total = 0, priced = 0;
+      est.forEach(e => {
+        const c = cost[e.project_id] || 0;
+        if (c > 0) { total += Math.round(c * (1 + (Number(e.margin_pct) || 0) / 100)); priced += 1; }
+      });
+      setPipeline({ total, priced });
+    } catch (e) { console.error("loadPipeline failed:", e); setPipeline(null); }
+  }
   async function loadTrialUsage() {
     try {
       const summary = await callBilling("usage_summary", {});
@@ -3241,8 +3278,8 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Dashboard</h1>
-          <p className="text-slate-500 text-sm">Overview of your construction projects and AI processing activity.</p>
+          <h1 className="text-2xl font-bold">All projects</h1>
+          <p className="text-slate-500 text-sm">Every project you are working on. Open one and the whole workspace switches to it — its documents, drawings, take-off, estimate, suppliers and approvals.</p>
         </div>
         <button onClick={onNewProject} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-800">+ New Project</button>
       </div>
@@ -3254,9 +3291,10 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
         {[
           ["Projects", stats.projects, "bg-blue-50 text-blue-700"],
+          ["Pipeline Value", pipeline ? fmtMoney(pipeline.total) : "\u2014", "bg-teal-50 text-teal-700"],
           ["BOQ Line Items", stats.boq, "bg-emerald-50 text-emerald-700"],
           ["Drawings Uploaded", stats.drawings, "bg-amber-50 text-amber-700"],
           ["AI Analysis Runs", stats.revisions, "bg-violet-50 text-violet-700"],
@@ -3673,48 +3711,2049 @@ const PROJECT_STATUS_STYLE = {
 // ---------------------------------------------------------------------------
 // Project workspace (tabs)
 // ---------------------------------------------------------------------------
-function ProjectWorkspace({ project, onBack, onEdit }) {
-  const [tab, setTab] = useState("overview");
-  // 2026-08-09: Procurement BOQ and Engineering BOQ were merged into the
-  // single "BOQ" tab (now a two-panel takeoff view) per the user's explicit
-  // request -- three separate tabs showing the same underlying consolidated
-  // data with slightly different columns was confusing, and made it hard to
-  // trust which one was "the real" quantity. Procurement info (accessories,
-  // spare %, final order qty) and Engineering info (design basis, testing &
-  // commissioning) now live inside the BOQ tab's per-system Notes sub-tab.
-  // ProcurementBoqTab/EngineeringBoqTab components are left defined below
-  // (dead code, unreferenced) rather than deleted outright, to keep this
-  // change low-risk -- they can be fully removed in a later cleanup pass.
-  const tabs = [
-    ["overview","Overview"], ["drawings","Drawings & AI Analysis"], ["design","System Design (No Drawings)"],
-    ["boq","BOQ"], ["specification","Specification"],
-    ["compliance","Compliance"], ["products","Product Recommendations"],
-    ["export","Export"], ["chat","Estima AI"],
-  ];
+
+// ---------------------------------------------------------------------------
+// Estimation / budget helpers (2026-08-12).
+// Money is stored in the database as integer cents (bigint) so nothing is ever
+// lost to floating point. These convert at the UI boundary only.
+// ---------------------------------------------------------------------------
+const centsToNum = (c) => (c === null || c === undefined) ? 0 : Number(c) / 100;
+const numToCents = (n) => Math.round((Number(n) || 0) * 100);
+function fmtMoney(cents, dp = 0) {
+  const n = centsToNum(cents);
+  return n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
+function fmtMillions(cents) {
+  return (centsToNum(cents) / 1000000).toFixed(2);
+}
+// Parses what a person actually types into a money cell: "1,450", "1 450.50",
+// "AED 1,450/-" all become 145000 cents. Returns null for genuinely empty input
+// so a blank cell stays blank rather than becoming a hard zero.
+function parseMoneyInput(v) {
+  if (v === null || v === undefined) return null;
+  const cleaned = String(v).replace(/[^0-9.\-]/g, "");
+  if (cleaned === "" || cleaned === "-" || cleaned === ".") return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? Math.round(n * 100) : null;
+}
+
+const CURRENCIES = ["AED","SAR","QAR","KWD","BHD","OMR","INR","USD","EUR","GBP"];
+// OverviewTab declares its own fmtDate inside the component, so it is not in
+// scope here -- these pages get their own module-level formatter.
+function fmtDay(iso) {
+  if (!iso) return "\u2014";
+  try { return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); }
+  catch (e) { return String(iso).slice(0, 10); }
+}
+
+// A spreadsheet-style cell. Keeps its own text while focused so typing "1,4"
+// isn't reformatted out from under the cursor, and commits on blur/Enter.
+function NumCell({ value, onCommit, align = "right", width = "w-full", disabled = false, placeholder = "" }) {
+  const alignCls = align === "left" ? "text-left" : "text-right";
+  const [draft, setDraft] = useState(null);
+  const shown = draft !== null ? draft : (value === null || value === undefined || value === "" ? "" : String(value));
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-900 mb-3">&larr; Back to Dashboard</button>
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h1 className="text-2xl font-bold">{project.project_name}</h1>
-          <p className="text-slate-500 text-sm">{project.city}, {project.country} · {BUILDING_TYPES.find(b=>b[0]===project.building_type)?.[1]}</p>
+    <input
+      type="text"
+      inputMode="decimal"
+      disabled={disabled}
+      placeholder={placeholder}
+      className={`${width} border rounded-md px-2 py-1 text-sm ${alignCls} tabular-nums ${disabled ? "qtr-cell-off" : "qtr-cell"}`}
+      value={shown}
+      onChange={e => setDraft(e.target.value)}
+      onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+      onBlur={() => { if (draft !== null) { onCommit(draft); setDraft(null); } }}
+    />
+  );
+}
+
+// The default staff lines a brand-new estimate starts with. The estimator can
+// change every number and add or remove rows -- these are only a starting shape
+// so the page is never an empty grid on first open.
+const DEFAULT_STAFF = [
+  { role_label: "Project manager",           headcount: 1, months: 0, monthly_cost_cents: 0, sort_order: 0 },
+  { role_label: "Engineering / design",      headcount: 1, months: 0, monthly_cost_cents: 0, sort_order: 1 },
+  { role_label: "Site supervisor",           headcount: 1, months: 0, monthly_cost_cents: 0, sort_order: 2 },
+  { role_label: "Transportation & vehicles", headcount: 1, months: 0, monthly_cost_cents: 0, sort_order: 3 },
+];
+
+function StepCard({ n, title, sub, amount, amountLabel, children }) {
+  return (
+    <div className="bg-white border rounded-2xl overflow-hidden">
+      <div className="flex items-center gap-3 px-5 py-3.5 border-b bg-slate-50/70">
+        <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-blue-600 to-violet-600 text-white text-sm font-bold flex items-center justify-center">{n}</div>
+        <div className="flex-1 min-w-0">
+          <div className="font-bold text-sm">{title}</div>
+          <div className="text-xs text-slate-500">{sub}</div>
         </div>
-        <button onClick={onEdit} className="text-sm border px-3 py-2 rounded-lg hover:bg-slate-50 font-medium">Edit Project</button>
+        <div className="text-right shrink-0">
+          <div className="text-lg font-bold tabular-nums">{amount}</div>
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{amountLabel}</div>
+        </div>
       </div>
-      <div className="qtr-tabbar flex gap-1 border-b mb-6 overflow-x-auto">
-        {tabs.map(([k,l]) => (
-          <button key={k} onClick={()=>setTab(k)} className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 ${tab===k ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"}`}>{l}</button>
+      <div className="px-5 py-4">{children}</div>
+    </div>
+  );
+}
+
+function Kpi({ label, value, sub, accent = "blue" }) {
+  const bar = { blue: "bg-blue-600", green: "bg-emerald-600", amber: "bg-amber-500", rose: "bg-rose-600", slate: "bg-slate-400" }[accent] || "bg-blue-600";
+  return (
+    <div className="relative bg-white border rounded-2xl px-4 py-3 overflow-hidden flex-1 min-w-[168px]">
+      <div className={`absolute left-0 top-0 bottom-0 w-[3px] ${bar}`} />
+      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</div>
+      <div className="text-2xl font-bold tracking-tight mt-1 tabular-nums">{value}</div>
+      <div className="text-xs text-slate-500 mt-0.5">{sub}</div>
+    </div>
+  );
+}
+
+function Note({ children, tone = "info" }) {
+  const cls = tone === "warn" ? "bg-amber-50 border-amber-200" : tone === "bad" ? "bg-rose-50 border-rose-200" : "bg-blue-50 border-blue-200";
+  return <div className={`mt-3 border rounded-xl px-4 py-3 text-sm leading-relaxed text-slate-700 ${cls}`}>{children}</div>;
+}
+
+// ---------------------------------------------------------------------------
+// EstimationTab (2026-08-12) -- the five-step build-up.
+//
+// Step 1 material comes from the BOQ wherever a unit rate has been entered
+// (sum of quantity x unit_cost_cents per system). Where no rate exists yet the
+// system still appears, at zero, with its item count and measured quantity, and
+// the estimator can type a package price straight over it -- that override is
+// stored on estimate_labour.material_override_cents and is what wins when set.
+// Nothing is invented: a system with no rates and no override shows zero and
+// says so, rather than guessing a value.
+//
+// Steps 2 and 3 are pure user input, persisted to estimate_labour /
+// estimate_staff. Steps 4 and 5 are derived and stored nowhere except the
+// margin percentage and the client budget on project_estimates.
+// ---------------------------------------------------------------------------
+function EstimationTab({ project }) {
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState(null);
+  const [saving, setSaving]     = useState(false);
+  const [header, setHeader]     = useState({ currency: "AED", margin_pct: 14, client_budget_cents: null, budget_source: "Client stated budget" });
+  const [systems, setSystems]   = useState([]);   // { key, label, items, qty, boqCents }
+  const [labour, setLabour]     = useState({});   // system_category -> row
+  const [staff, setStaff]       = useState([]);
+
+  useEffect(() => { load(); }, [project.id]);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const [{ data: items, error: iErr }, { data: hdr }, { data: lab }, { data: stf }] = await Promise.all([
+        sb.from("boq_items").select("system_category, quantity, unit_cost_cents").eq("project_id", project.id),
+        sb.from("project_estimates").select("*").eq("project_id", project.id).maybeSingle(),
+        sb.from("estimate_labour").select("*").eq("project_id", project.id),
+        sb.from("estimate_staff").select("*").eq("project_id", project.id).order("sort_order"),
+      ]);
+      if (iErr) throw iErr;
+
+      const agg = {};
+      (items || []).forEach(it => {
+        const k = it.system_category || "uncategorised";
+        if (!agg[k]) agg[k] = { key: k, label: SYSTEM_LABEL(k), items: 0, qty: 0, boqCents: 0, rated: 0 };
+        agg[k].items += 1;
+        agg[k].qty   += Number(it.quantity) || 0;
+        if (it.unit_cost_cents !== null && it.unit_cost_cents !== undefined) {
+          agg[k].boqCents += Math.round((Number(it.quantity) || 0) * Number(it.unit_cost_cents));
+          agg[k].rated += 1;
+        }
+      });
+      const sysList = Object.values(agg).sort((a, b) => b.boqCents - a.boqCents || a.label.localeCompare(b.label));
+
+      const labMap = {};
+      (lab || []).forEach(r => { labMap[r.system_category] = r; });
+      sysList.forEach(sy => {
+        if (!labMap[sy.key]) labMap[sy.key] = {
+          project_id: project.id, system_category: sy.key, method: "own",
+          team_size: 0, days: 0, day_rate_cents: 0, sub_price_cents: 0, material_override_cents: null,
+        };
+      });
+
+      setSystems(sysList);
+      setLabour(labMap);
+      setHeader(hdr || { currency: "AED", margin_pct: 14, client_budget_cents: null, budget_source: "Client stated budget" });
+      setStaff((stf && stf.length) ? stf : DEFAULT_STAFF.map(r => ({ ...r, project_id: project.id })));
+    } catch (e) {
+      console.error("EstimationTab.load failed:", e);
+      setError(e.message || "Could not load the estimate.");
+    } finally { setLoading(false); }
+  }
+
+  // ---- persistence -------------------------------------------------------
+  async function saveHeader(patch) {
+    const next = { ...header, ...patch };
+    setHeader(next);
+    setSaving(true);
+    try {
+      const { error: e } = await sb.from("project_estimates").upsert({
+        project_id: project.id,
+        currency: next.currency,
+        margin_pct: next.margin_pct,
+        client_budget_cents: next.client_budget_cents,
+        budget_source: next.budget_source,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "project_id" });
+      if (e) throw e;
+    } catch (e) { console.error("saveHeader failed:", e); setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  async function saveLabour(key, patch) {
+    const row = { ...labour[key], ...patch };
+    setLabour(prev => ({ ...prev, [key]: row }));
+    setSaving(true);
+    try {
+      const { error: e } = await sb.from("estimate_labour").upsert({
+        project_id: project.id, system_category: key,
+        method: row.method, team_size: row.team_size, days: row.days,
+        day_rate_cents: row.day_rate_cents, sub_price_cents: row.sub_price_cents,
+        material_override_cents: row.material_override_cents,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "project_id,system_category" });
+      if (e) throw e;
+    } catch (e) { console.error("saveLabour failed:", e); setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  async function saveStaff(idx, patch) {
+    const next = staff.map((r, i) => i === idx ? { ...r, ...patch } : r);
+    setStaff(next);
+    setSaving(true);
+    try {
+      const row = next[idx];
+      const payload = {
+        project_id: project.id, role_label: row.role_label, headcount: row.headcount,
+        months: row.months, monthly_cost_cents: row.monthly_cost_cents, sort_order: row.sort_order ?? idx,
+        updated_at: new Date().toISOString(),
+      };
+      if (row.id) {
+        const { error: e } = await sb.from("estimate_staff").update(payload).eq("id", row.id);
+        if (e) throw e;
+      } else {
+        const { data, error: e } = await sb.from("estimate_staff").insert(payload).select().single();
+        if (e) throw e;
+        setStaff(cur => cur.map((r, i) => i === idx ? { ...r, id: data.id } : r));
+      }
+    } catch (e) { console.error("saveStaff failed:", e); setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  async function addStaffRow() {
+    setStaff(cur => [...cur, { project_id: project.id, role_label: "New role", headcount: 1, months: 0, monthly_cost_cents: 0, sort_order: cur.length }]);
+  }
+  async function removeStaffRow(idx) {
+    const row = staff[idx];
+    setStaff(cur => cur.filter((_, i) => i !== idx));
+    if (row?.id) { try { await sb.from("estimate_staff").delete().eq("id", row.id); } catch (e) { console.error(e); } }
+  }
+
+  // ---- derived ------------------------------------------------------------
+  const cur = header.currency || "AED";
+  const matOf = (sy) => {
+    const ov = labour[sy.key]?.material_override_cents;
+    return (ov !== null && ov !== undefined) ? Number(ov) : sy.boqCents;
+  };
+  const instOf = (key) => {
+    const r = labour[key]; if (!r) return 0;
+    return r.method === "sub"
+      ? Number(r.sub_price_cents || 0)
+      : Math.round((Number(r.team_size) || 0) * (Number(r.days) || 0) * Number(r.day_rate_cents || 0));
+  };
+  const matTotal   = systems.reduce((a, sy) => a + matOf(sy), 0);
+  const instTotal  = systems.reduce((a, sy) => a + instOf(sy.key), 0);
+  const staffTotal = staff.reduce((a, r) => a + Math.round((Number(r.headcount) || 0) * (Number(r.months) || 0) * Number(r.monthly_cost_cents || 0)), 0);
+  const cost       = matTotal + instTotal + staffTotal;
+  const marginPct  = Number(header.margin_pct) || 0;
+  const marginVal  = Math.round(cost * marginPct / 100);
+  const sell       = cost + marginVal;
+  const onSell     = sell ? marginVal / sell * 100 : 0;
+  const budget     = header.client_budget_cents === null || header.client_budget_cents === undefined ? null : Number(header.client_budget_cents);
+  const room       = budget === null ? null : budget - sell;
+  const budgetMar  = (budget && budget > 0) ? (budget - cost) / budget * 100 : null;
+  const ownMen     = systems.reduce((a, sy) => a + (labour[sy.key]?.method === "own" ? (Number(labour[sy.key].team_size) || 0) : 0), 0);
+  const ratedCount = systems.reduce((a, sy) => a + (sy.rated || 0), 0);
+  const itemCount  = systems.reduce((a, sy) => a + sy.items, 0);
+
+  if (loading) return <div className="text-slate-400 text-sm">Loading the estimate…</div>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500 max-w-3xl leading-relaxed">
+        Five steps, in order. Every white box is a cell you type into and everything below it re-adds itself, the
+        way a spreadsheet does. <b>Step 1 is filled in from Take-off &amp; BOQ</b> — it uses the unit rates already
+        entered there, and you can type a package price over any system when a supplier quotes you one instead.
+      </p>
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center justify-between">
+          <div className="text-sm text-rose-700">{error}</div>
+          <button onClick={load} className="text-xs font-semibold bg-rose-600 text-white px-3 py-1.5 rounded-lg hover:bg-rose-700">Retry</button>
+        </div>
+      )}
+
+      <div className="flex gap-3 flex-wrap">
+        <Kpi label="Cost to us"  value={`${fmtMillions(cost)}M`} sub="material + installation + staff" accent="blue" />
+        <Kpi label="Margin added" value={`${marginPct.toFixed(1)}%`} sub={`${fmtMoney(marginVal)} ${cur}`} accent="amber" />
+        <Kpi label="Selling price" value={`${fmtMillions(sell)}M`} sub={cur} accent="green" />
+        <Kpi
+          label="Against client budget"
+          value={budget === null ? "—" : `${room >= 0 ? "+" : ""}${fmtMoney(room)}`}
+          sub={budget === null ? "no budget entered yet" : (room >= 0 ? "room left before we are over" : "we are over the budget")}
+          accent={budget === null ? "slate" : (room >= 0 ? "green" : "rose")}
+        />
+      </div>
+
+      <div className="flex gap-2 flex-wrap items-end">
+        <div>
+          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Currency</label>
+          <select className="border rounded-lg px-3 py-2 text-sm" value={cur} onChange={e => saveHeader({ currency: e.target.value })}>
+            {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="text-xs text-slate-400 pb-2.5">{saving ? "Saving…" : "All changes saved automatically"}</div>
+      </div>
+
+      {/* ---------------- step 1 ---------------- */}
+      <StepCard n={1} title="Supply of material" amount={fmtMoney(matTotal)} amountLabel="material cost"
+        sub="Carried from Take-off &amp; BOQ — quantity × the unit rate entered there.">
+        {systems.length === 0 ? (
+          <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">
+            There is no BOQ on this project yet. Upload drawings and run the analysis, or design the system from a
+            brief, and every system will appear here ready to price.
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                    <th className="text-left font-bold py-2 pr-3">System</th>
+                    <th className="text-right font-bold py-2 px-3">Items</th>
+                    <th className="text-right font-bold py-2 px-3">Measured qty</th>
+                    <th className="text-right font-bold py-2 px-3">From BOQ rates</th>
+                    <th className="text-right font-bold py-2 px-3">Package price override</th>
+                    <th className="text-right font-bold py-2 pl-3">Supply value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {systems.map(sy => {
+                    const ov = labour[sy.key]?.material_override_cents;
+                    const used = matOf(sy);
+                    return (
+                      <tr key={sy.key} className="border-b last:border-0 hover:bg-slate-50/60">
+                        <td className="py-1.5 pr-3">{sy.label}</td>
+                        <td className="py-1.5 px-3 text-right tabular-nums">{sy.items}</td>
+                        <td className="py-1.5 px-3 text-right tabular-nums text-slate-500">{sy.qty.toLocaleString()}</td>
+                        <td className="py-1.5 px-3 text-right tabular-nums">
+                          {sy.rated ? fmtMoney(sy.boqCents) : <span className="text-slate-400">no rates yet</span>}
+                        </td>
+                        <td className="py-1.5 px-3 text-right">
+                          <NumCell value={ov === null || ov === undefined ? "" : centsToNum(ov)} placeholder="—"
+                            onCommit={v => saveLabour(sy.key, { material_override_cents: parseMoneyInput(v) })} />
+                        </td>
+                        <td className="py-1.5 pl-3 text-right font-semibold tabular-nums">{fmtMoney(used)}</td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="bg-slate-50 font-bold">
+                    <td className="py-2 pr-3">Total material</td>
+                    <td className="py-2 px-3 text-right tabular-nums">{itemCount}</td>
+                    <td colSpan={3}></td>
+                    <td className="py-2 pl-3 text-right tabular-nums">{fmtMoney(matTotal)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <Note>
+              <b>Where these numbers come from.</b> {ratedCount} of {itemCount} BOQ lines have a unit rate entered,
+              so those systems price themselves. For a system with no rates, either enter the rates on
+              Take-off &amp; BOQ or type the supplier's package price in the override column — the override always
+              wins, and clearing it hands the line back to the BOQ.
+            </Note>
+          </>
+        )}
+      </StepCard>
+
+      {/* ---------------- step 2 ---------------- */}
+      <StepCard n={2} title="Installation cost" amount={fmtMoney(instTotal)} amountLabel="installation cost"
+        sub="Two ways to price it. Pick one per system — your own team, or a subcontractor's quoted price.">
+        {systems.length === 0 ? (
+          <div className="text-sm text-slate-400">Nothing to install until there is a BOQ.</div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                    <th className="text-left font-bold py-2 pr-3">System</th>
+                    <th className="text-left font-bold py-2 px-3">Priced as</th>
+                    <th className="text-right font-bold py-2 px-3">Men</th>
+                    <th className="text-right font-bold py-2 px-3">Days</th>
+                    <th className="text-right font-bold py-2 px-3">Cost / man / day</th>
+                    <th className="text-right font-bold py-2 px-3">Subcontractor price</th>
+                    <th className="text-right font-bold py-2 pl-3">Installation cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {systems.map(sy => {
+                    const r = labour[sy.key] || {};
+                    const isSub = r.method === "sub";
+                    return (
+                      <tr key={sy.key} className="border-b last:border-0 hover:bg-slate-50/60">
+                        <td className="py-1.5 pr-3">{sy.label}</td>
+                        <td className="py-1.5 px-3">
+                          <select className="border rounded-md px-2 py-1 text-sm" value={r.method || "own"}
+                            onChange={e => saveLabour(sy.key, { method: e.target.value })}>
+                            <option value="own">Our own team</option>
+                            <option value="sub">Subcontractor</option>
+                          </select>
+                        </td>
+                        <td className="py-1.5 px-3"><NumCell disabled={isSub} value={r.team_size ?? 0} onCommit={v => saveLabour(sy.key, { team_size: Number(String(v).replace(/[^0-9.]/g,"")) || 0 })} /></td>
+                        <td className="py-1.5 px-3"><NumCell disabled={isSub} value={r.days ?? 0} onCommit={v => saveLabour(sy.key, { days: Number(String(v).replace(/[^0-9.]/g,"")) || 0 })} /></td>
+                        <td className="py-1.5 px-3"><NumCell disabled={isSub} value={centsToNum(r.day_rate_cents)} onCommit={v => saveLabour(sy.key, { day_rate_cents: parseMoneyInput(v) || 0 })} /></td>
+                        <td className="py-1.5 px-3"><NumCell disabled={!isSub} value={centsToNum(r.sub_price_cents)} onCommit={v => saveLabour(sy.key, { sub_price_cents: parseMoneyInput(v) || 0 })} /></td>
+                        <td className={`py-1.5 pl-3 text-right font-semibold tabular-nums ${isSub ? "text-violet-700" : ""}`}>{fmtMoney(instOf(sy.key))}</td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="bg-slate-50 font-bold">
+                    <td className="py-2 pr-3">Total installation</td>
+                    <td></td>
+                    <td className="py-2 px-3 text-right tabular-nums">{ownMen}</td>
+                    <td colSpan={3}></td>
+                    <td className="py-2 pl-3 text-right tabular-nums">{fmtMoney(instTotal)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <Note>
+              <b>Which one should I use?</b> Choose <b>our own team</b> when your men will do the work — then men ×
+              days × cost per day is the answer. Choose <b>subcontractor</b> when someone else quoted you a price
+              for that system — then that quoted price is used and the men, days and day-rate are ignored. Switch
+              the dropdown and watch the last column change; that is how you compare doing it yourself against
+              giving it away.
+            </Note>
+          </>
+        )}
+      </StepCard>
+
+      {/* ---------------- step 3 ---------------- */}
+      <StepCard n={3} title="Project staff and running costs" amount={fmtMoney(staffTotal)} amountLabel="staff &amp; running cost"
+        sub="The people and things the whole job needs, not any one system. Headcount × months × monthly cost.">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                <th className="text-left font-bold py-2 pr-3">Role or item</th>
+                <th className="text-right font-bold py-2 px-3">How many</th>
+                <th className="text-right font-bold py-2 px-3">Months on site</th>
+                <th className="text-right font-bold py-2 px-3">Cost each / month</th>
+                <th className="text-right font-bold py-2 px-3">Total</th>
+                <th className="py-2 pl-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {staff.map((r, i) => (
+                <tr key={r.id || i} className="border-b last:border-0 hover:bg-slate-50/60">
+                  <td className="py-1.5 pr-3">
+                    <input className="w-full border rounded-md px-2 py-1 text-sm" value={r.role_label}
+                      onChange={e => setStaff(cur => cur.map((x, j) => j === i ? { ...x, role_label: e.target.value } : x))}
+                      onBlur={e => saveStaff(i, { role_label: e.target.value })} />
+                  </td>
+                  <td className="py-1.5 px-3"><NumCell value={r.headcount ?? 0} onCommit={v => saveStaff(i, { headcount: Number(String(v).replace(/[^0-9.]/g,"")) || 0 })} /></td>
+                  <td className="py-1.5 px-3"><NumCell value={r.months ?? 0} onCommit={v => saveStaff(i, { months: Number(String(v).replace(/[^0-9.]/g,"")) || 0 })} /></td>
+                  <td className="py-1.5 px-3"><NumCell value={centsToNum(r.monthly_cost_cents)} onCommit={v => saveStaff(i, { monthly_cost_cents: parseMoneyInput(v) || 0 })} /></td>
+                  <td className="py-1.5 px-3 text-right font-semibold tabular-nums">
+                    {fmtMoney(Math.round((Number(r.headcount) || 0) * (Number(r.months) || 0) * Number(r.monthly_cost_cents || 0)))}
+                  </td>
+                  <td className="py-1.5 pl-3 text-right">
+                    <button onClick={() => removeStaffRow(i)} className="text-xs text-slate-400 hover:text-rose-600">Remove</button>
+                  </td>
+                </tr>
+              ))}
+              <tr className="bg-slate-50 font-bold">
+                <td className="py-2 pr-3">Total staff &amp; running cost</td>
+                <td colSpan={3}></td>
+                <td className="py-2 px-3 text-right tabular-nums">{fmtMoney(staffTotal)}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <button onClick={addStaffRow} className="mt-3 text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">+ Add a role</button>
+      </StepCard>
+
+      {/* ---------------- step 4 ---------------- */}
+      <StepCard n={4} title="Margin and selling price" amount={fmtMoney(sell)} amountLabel="selling price"
+        sub="Add the three steps above to get what the job costs us, then decide what to sell it for.">
+        <div className="grid lg:grid-cols-2 gap-6">
+          <div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                  <th className="text-left font-bold py-2 pr-3">Line</th>
+                  <th className="text-right font-bold py-2 px-3">Amount</th>
+                  <th className="text-right font-bold py-2 pl-3">% of cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[["Supply of material (step 1)", matTotal], ["Installation (step 2)", instTotal], ["Staff & running cost (step 3)", staffTotal]].map(([l, v]) => (
+                  <tr key={l} className="border-b">
+                    <td className="py-1.5 pr-3">{l}</td>
+                    <td className="py-1.5 px-3 text-right tabular-nums">{fmtMoney(v)}</td>
+                    <td className="py-1.5 pl-3 text-right tabular-nums text-slate-400">{cost ? Math.round(v / cost * 100) : 0}%</td>
+                  </tr>
+                ))}
+                <tr className="bg-slate-50 font-bold border-b">
+                  <td className="py-2 pr-3">What the job costs us</td>
+                  <td className="py-2 px-3 text-right tabular-nums">{fmtMoney(cost)}</td>
+                  <td className="py-2 pl-3 text-right">100%</td>
+                </tr>
+                <tr className="border-b">
+                  <td className="py-1.5 pr-3">Margin we are adding</td>
+                  <td className="py-1.5 px-3 text-right tabular-nums">{fmtMoney(marginVal)}</td>
+                  <td className="py-1.5 pl-3 text-right">
+                    <NumCell width="w-20" value={marginPct} onCommit={v => saveHeader({ margin_pct: Number(String(v).replace(/[^0-9.\-]/g,"")) || 0 })} />
+                  </td>
+                </tr>
+                <tr className="bg-slate-50 font-bold">
+                  <td className="py-2 pr-3">Price we sell at</td>
+                  <td className="py-2 px-3 text-right tabular-nums">{fmtMoney(sell)}</td>
+                  <td className="py-2 pl-3 text-right">{Math.round(100 + marginPct)}%</td>
+                </tr>
+              </tbody>
+            </table>
+            <Note>
+              <b>Nothing here is typed in by hand except the margin.</b> The three cost lines are the totals of
+              steps 1, 2 and 3. Change any cell anywhere above and this table moves the same second.
+            </Note>
+          </div>
+
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Margin, once you take it off the selling price</div>
+            <div className="relative h-7 rounded-lg bg-slate-100 overflow-hidden">
+              <div className="absolute left-0 top-0 bottom-0 rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-400"
+                style={{ width: `${Math.max(0, Math.min(100, onSell))}%` }} />
+              <div className="absolute right-3 top-0 bottom-0 flex items-center text-xs font-bold text-slate-800">
+                {onSell.toFixed(1)}% of the selling price
+              </div>
+            </div>
+            <Note>
+              <b>Two different percentages, and people mix them up.</b> A {marginPct.toFixed(1)}% margin
+              <i> added on top of cost</i> is only {onSell.toFixed(1)}% <i>of the price you sell at</i>. The bar
+              shows the second one, because that is the money actually left in your hand.
+            </Note>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-4 mb-2">If the price moves</div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                  <th className="text-left font-bold py-2 pr-3">Sell at</th>
+                  <th className="text-right font-bold py-2 px-3">Price</th>
+                  <th className="text-right font-bold py-2 pl-3">You keep</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[["Cost only", 0], ["10% margin", 10], [`Current, ${marginPct.toFixed(1)}%`, marginPct], ["20% margin", 20]].map(([l, p], i) => (
+                  <tr key={i} className="border-b last:border-0">
+                    <td className="py-1.5 pr-3">{l}</td>
+                    <td className="py-1.5 px-3 text-right tabular-nums">{fmtMoney(Math.round(cost * (1 + p / 100)))}</td>
+                    <td className="py-1.5 pl-3 text-right tabular-nums">{fmtMoney(Math.round(cost * p / 100))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </StepCard>
+
+      {/* ---------------- step 5 ---------------- */}
+      <StepCard n={5} title="Check it against the client's budget"
+        amount={budget === null ? "—" : `${room >= 0 ? "+" : ""}${fmtMoney(room)}`} amountLabel="room left"
+        sub="Type in what the client has to spend, or what you think the job will go for, and see the margin that leaves you.">
+        <div className="grid lg:grid-cols-[260px_1fr] gap-6">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Client budget, or the price you expect to win at</label>
+            <NumCell value={budget === null ? "" : centsToNum(budget)} placeholder="Enter a budget"
+              onCommit={v => saveHeader({ client_budget_cents: parseMoneyInput(v) })} />
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1 mt-4">Where this number came from</label>
+            <select className="w-full border rounded-lg px-3 py-2 text-sm" value={header.budget_source || "Client stated budget"}
+              onChange={e => saveHeader({ budget_source: e.target.value })}>
+              <option>Client stated budget</option>
+              <option>Consultant's pre-tender estimate</option>
+              <option>What the last similar job went for</option>
+              <option>Our own target price</option>
+            </select>
+          </div>
+          <div>
+            {(() => {
+              const mx = Math.max(cost, sell, budget || 0) || 1;
+              const bars = [
+                ["What the job costs us", cost, "bg-slate-400"],
+                ["Our price", sell, "bg-gradient-to-r from-blue-600 to-violet-600"],
+                ["Client budget", budget || 0, "bg-emerald-600"],
+              ];
+              return bars.map(([l, v, c]) => (
+                <div key={l} className="mb-3">
+                  <div className="flex justify-between text-sm text-slate-500 mb-1">
+                    <span>{l}</span><b className="text-slate-900 tabular-nums">{v ? fmtMoney(v) : "—"}</b>
+                  </div>
+                  <div className="h-4 rounded-lg bg-slate-100 overflow-hidden">
+                    <div className={`h-full rounded-lg ${c}`} style={{ width: `${v / mx * 100}%` }} />
+                  </div>
+                </div>
+              ));
+            })()}
+            {budget === null || budget <= 0 ? (
+              <Note><b>Enter a budget to compare against.</b> Until you do, this step has nothing to check the bid against.</Note>
+            ) : room >= 0 ? (
+              <Note>
+                <b>You are {fmtMoney(room)} {cur} under the budget.</b> If you bid at the client's number instead of
+                yours, the margin would be {budgetMar.toFixed(1)}% of the selling price rather than {onSell.toFixed(1)}%.
+                That is the room you have to absorb a price rise or to sharpen the bid and still win.
+              </Note>
+            ) : (
+              <Note tone="warn">
+                <b>You are {fmtMoney(-room)} {cur} over the budget.</b> To come down to the client's number you would
+                be selling at {budgetMar > 0 ? `${budgetMar.toFixed(1)}% margin` : `a loss of ${fmtMoney(cost - budget)} ${cur}`}.
+                Either take cost out of steps 1 to 3, or accept the lower margin knowingly rather than by accident.
+              </Note>
+            )}
+          </div>
+        </div>
+      </StepCard>
+
+      <p className="text-xs text-slate-400 border-t pt-3 leading-relaxed">
+        Every figure on this page is editable and every total is calculated, not typed. Your inputs are saved to
+        this project as you leave each cell, so the estimate is still here when you come back.
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CostBudgetTab (2026-08-12) -- budget per system, what has actually been
+// committed against it through purchase orders, and what is left. Budgets and
+// POs are real rows (system_budgets / purchase_orders), both RLS-scoped to the
+// project owner. Estimated cost per system is pulled live from the same
+// material + installation figures the Estimation page uses, so the two pages
+// can never disagree.
+// ---------------------------------------------------------------------------
+function CostBudgetTab({ project }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [cur, setCur]         = useState("AED");
+  const [rows, setRows]       = useState([]);   // { key, label, estCents, budgetCents, note }
+  const [pos, setPos]         = useState([]);
+  const [open, setOpen]       = useState(null); // system key drilled into
+  const [draftPo, setDraftPo] = useState(null);
+
+  useEffect(() => { load(); }, [project.id]);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const [{ data: items, error: iErr }, { data: hdr }, { data: lab }, { data: buds }, { data: orders }] = await Promise.all([
+        sb.from("boq_items").select("system_category, quantity, unit_cost_cents").eq("project_id", project.id),
+        sb.from("project_estimates").select("currency").eq("project_id", project.id).maybeSingle(),
+        sb.from("estimate_labour").select("*").eq("project_id", project.id),
+        sb.from("system_budgets").select("*").eq("project_id", project.id),
+        sb.from("purchase_orders").select("*").eq("project_id", project.id).order("issued_on", { ascending: false }),
+      ]);
+      if (iErr) throw iErr;
+
+      const agg = {};
+      (items || []).forEach(it => {
+        const k = it.system_category || "uncategorised";
+        if (!agg[k]) agg[k] = { key: k, label: SYSTEM_LABEL(k), estCents: 0 };
+        if (it.unit_cost_cents != null) agg[k].estCents += Math.round((Number(it.quantity) || 0) * Number(it.unit_cost_cents));
+      });
+      const labMap = {}; (lab || []).forEach(r => { labMap[r.system_category] = r; });
+      Object.keys(labMap).forEach(k => { if (!agg[k]) agg[k] = { key: k, label: SYSTEM_LABEL(k), estCents: 0 }; });
+      Object.values(agg).forEach(a => {
+        const r = labMap[a.key];
+        if (r) {
+          if (r.material_override_cents != null) a.estCents = Number(r.material_override_cents);
+          a.estCents += r.method === "sub"
+            ? Number(r.sub_price_cents || 0)
+            : Math.round((Number(r.team_size) || 0) * (Number(r.days) || 0) * Number(r.day_rate_cents || 0));
+        }
+      });
+      const budMap = {}; (buds || []).forEach(b => { budMap[b.system_category] = b; });
+      const list = Object.values(agg).map(a => ({
+        ...a,
+        budgetCents: budMap[a.key]?.budget_cents ?? null,
+        note: budMap[a.key]?.note || "",
+      })).sort((x, y) => y.estCents - x.estCents || x.label.localeCompare(y.label));
+
+      setRows(list);
+      setPos(orders || []);
+      setCur(hdr?.currency || "AED");
+    } catch (e) {
+      console.error("CostBudgetTab.load failed:", e);
+      setError(e.message || "Could not load cost and budget.");
+    } finally { setLoading(false); }
+  }
+
+  async function saveBudget(key, patch) {
+    setRows(cur2 => cur2.map(r => r.key === key ? { ...r, ...patch } : r));
+    const row = { ...rows.find(r => r.key === key), ...patch };
+    try {
+      const { error: e } = await sb.from("system_budgets").upsert({
+        project_id: project.id, system_category: key,
+        budget_cents: row.budgetCents ?? 0, note: row.note || null,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "project_id,system_category" });
+      if (e) throw e;
+    } catch (e) { console.error("saveBudget failed:", e); setError(e.message); }
+  }
+
+  async function addPo() {
+    if (!draftPo || !draftPo.po_ref) return;
+    try {
+      const { data, error: e } = await sb.from("purchase_orders").insert({
+        project_id: project.id, system_category: draftPo.system_category,
+        po_ref: draftPo.po_ref, vendor_name: draftPo.vendor_name || null,
+        amount_cents: parseMoneyInput(draftPo.amount) || 0,
+        issued_on: draftPo.issued_on || null, status: draftPo.status || "issued",
+      }).select().single();
+      if (e) throw e;
+      setPos(cur2 => [data, ...cur2]);
+      setDraftPo(null);
+    } catch (e) { console.error("addPo failed:", e); setError(e.message); }
+  }
+  async function removePo(id) {
+    setPos(cur2 => cur2.filter(p => p.id !== id));
+    try { await sb.from("purchase_orders").delete().eq("id", id); } catch (e) { console.error(e); }
+  }
+
+  const committedOf = (key) => pos.filter(p => p.system_category === key && p.status !== "cancelled")
+                                  .reduce((a, p) => a + Number(p.amount_cents || 0), 0);
+  const totalEst    = rows.reduce((a, r) => a + r.estCents, 0);
+  const totalBudget = rows.reduce((a, r) => a + (r.budgetCents || 0), 0);
+  const totalComm   = rows.reduce((a, r) => a + committedOf(r.key), 0);
+  const totalLeft   = totalBudget - totalComm;
+
+  if (loading) return <div className="text-slate-400 text-sm">Loading cost and budget…</div>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500 max-w-3xl leading-relaxed">
+        Set a budget against each system, then watch what is actually committed to vendors eat into it. Committed
+        means a purchase order has been issued — not what you hoped to spend, what you are now contractually on
+        the hook for. Click any system to see the orders behind its number.
+      </p>
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center justify-between">
+          <div className="text-sm text-rose-700">{error}</div>
+          <button onClick={load} className="text-xs font-semibold bg-rose-600 text-white px-3 py-1.5 rounded-lg hover:bg-rose-700">Retry</button>
+        </div>
+      )}
+
+      <div className="flex gap-3 flex-wrap">
+        <Kpi label="Budget set"      value={fmtMoney(totalBudget)} sub={`${rows.filter(r => r.budgetCents).length} of ${rows.length} systems`} accent="blue" />
+        <Kpi label="Committed"       value={fmtMoney(totalComm)}   sub={`${pos.filter(p => p.status !== "cancelled").length} purchase orders`} accent="amber" />
+        <Kpi label="Remaining"       value={fmtMoney(totalLeft)}   sub={totalLeft >= 0 ? "still available" : "over budget"} accent={totalLeft >= 0 ? "green" : "rose"} />
+        <Kpi label="Estimated cost"  value={fmtMoney(totalEst)}    sub="from the estimate, for comparison" accent="slate" />
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">
+          There are no systems on this project yet. Generate a BOQ and each system will appear here to be budgeted.
+        </div>
+      ) : (
+        <div className="bg-white border rounded-2xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b bg-slate-50">
+                  <th className="text-left font-bold py-2.5 px-4">System / package</th>
+                  <th className="text-right font-bold py-2.5 px-3">Estimated cost</th>
+                  <th className="text-right font-bold py-2.5 px-3">Budget</th>
+                  <th className="text-right font-bold py-2.5 px-3">Committed</th>
+                  <th className="text-right font-bold py-2.5 px-3">Remaining</th>
+                  <th className="text-left font-bold py-2.5 px-3 w-40">Used</th>
+                  <th className="py-2.5 px-4"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => {
+                  const comm = committedOf(r.key);
+                  const left = (r.budgetCents || 0) - comm;
+                  const pct  = r.budgetCents ? Math.min(100, comm / r.budgetCents * 100) : 0;
+                  const over = r.budgetCents ? comm > r.budgetCents : false;
+                  const isOpen = open === r.key;
+                  const mine = pos.filter(p => p.system_category === r.key);
+                  return (
+                    <React.Fragment key={r.key}>
+                      <tr className="border-b hover:bg-slate-50/60">
+                        <td className="py-2 px-4 font-medium">{r.label}</td>
+                        <td className="py-2 px-3 text-right tabular-nums text-slate-500">{r.estCents ? fmtMoney(r.estCents) : "—"}</td>
+                        <td className="py-2 px-3 text-right">
+                          <NumCell value={r.budgetCents == null ? "" : centsToNum(r.budgetCents)} placeholder="set a budget"
+                            onCommit={v => saveBudget(r.key, { budgetCents: parseMoneyInput(v) })} />
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums">{comm ? fmtMoney(comm) : "—"}</td>
+                        <td className={`py-2 px-3 text-right tabular-nums font-semibold ${over ? "text-rose-600" : "text-slate-900"}`}>
+                          {r.budgetCents ? fmtMoney(left) : "—"}
+                        </td>
+                        <td className="py-2 px-3">
+                          <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                            <div className={`h-full rounded-full ${over ? "bg-rose-500" : "bg-emerald-500"}`} style={{ width: `${pct}%` }} />
+                          </div>
+                        </td>
+                        <td className="py-2 px-4 text-right">
+                          <button onClick={() => setOpen(isOpen ? null : r.key)} className="text-xs font-semibold text-blue-700 hover:underline">
+                            {isOpen ? "Hide orders" : `${mine.length} order${mine.length === 1 ? "" : "s"}`}
+                          </button>
+                        </td>
+                      </tr>
+                      {isOpen && (
+                        <tr className="bg-slate-50/70 border-b">
+                          <td colSpan={7} className="px-4 py-3">
+                            {mine.length === 0 ? (
+                              <div className="text-sm text-slate-400 mb-3">No purchase order has been raised against {r.label} yet.</div>
+                            ) : (
+                              <table className="w-full text-sm mb-3">
+                                <thead>
+                                  <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                                    <th className="text-left font-bold py-1.5 pr-3">LPO / PO ref</th>
+                                    <th className="text-left font-bold py-1.5 px-3">Vendor</th>
+                                    <th className="text-left font-bold py-1.5 px-3">Issued</th>
+                                    <th className="text-left font-bold py-1.5 px-3">Status</th>
+                                    <th className="text-right font-bold py-1.5 px-3">Amount</th>
+                                    <th className="py-1.5 pl-3"></th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {mine.map(p => (
+                                    <tr key={p.id} className="border-b last:border-0">
+                                      <td className="py-1.5 pr-3 font-medium">{p.po_ref}</td>
+                                      <td className="py-1.5 px-3">{p.vendor_name || "—"}</td>
+                                      <td className="py-1.5 px-3">{p.issued_on || "—"}</td>
+                                      <td className="py-1.5 px-3">
+                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${p.status === "cancelled" ? "bg-slate-100 text-slate-500" : p.status === "delivered" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"}`}>
+                                          {SYSTEM_LABEL(p.status)}
+                                        </span>
+                                      </td>
+                                      <td className={`py-1.5 px-3 text-right tabular-nums ${p.status === "cancelled" ? "line-through text-slate-400" : ""}`}>{fmtMoney(p.amount_cents)}</td>
+                                      <td className="py-1.5 pl-3 text-right"><button onClick={() => removePo(p.id)} className="text-xs text-slate-400 hover:text-rose-600">Remove</button></td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                            {draftPo && draftPo.system_category === r.key ? (
+                              <div className="flex gap-2 flex-wrap items-end bg-white border rounded-xl p-3">
+                                <div><label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">PO ref</label>
+                                  <input className="border rounded-md px-2 py-1 text-sm w-32" value={draftPo.po_ref || ""} onChange={e => setDraftPo({ ...draftPo, po_ref: e.target.value })} /></div>
+                                <div><label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Vendor</label>
+                                  <input className="border rounded-md px-2 py-1 text-sm w-40" value={draftPo.vendor_name || ""} onChange={e => setDraftPo({ ...draftPo, vendor_name: e.target.value })} /></div>
+                                <div><label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Issued</label>
+                                  <input type="date" className="border rounded-md px-2 py-1 text-sm" value={draftPo.issued_on || ""} onChange={e => setDraftPo({ ...draftPo, issued_on: e.target.value })} /></div>
+                                <div><label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Status</label>
+                                  <select className="border rounded-md px-2 py-1 text-sm" value={draftPo.status || "issued"} onChange={e => setDraftPo({ ...draftPo, status: e.target.value })}>
+                                    <option value="draft">Draft</option><option value="issued">Issued</option>
+                                    <option value="part_delivered">Part delivered</option><option value="delivered">Delivered</option>
+                                    <option value="cancelled">Cancelled</option>
+                                  </select></div>
+                                <div><label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Amount</label>
+                                  <input className="border rounded-md px-2 py-1 text-sm w-28 text-right" value={draftPo.amount || ""} onChange={e => setDraftPo({ ...draftPo, amount: e.target.value })} /></div>
+                                <button onClick={addPo} className="text-xs font-semibold bg-slate-900 text-white px-3 py-1.5 rounded-lg">Save order</button>
+                                <button onClick={() => setDraftPo(null)} className="text-xs font-semibold border px-3 py-1.5 rounded-lg">Cancel</button>
+                              </div>
+                            ) : (
+                              <button onClick={() => setDraftPo({ system_category: r.key, status: "issued" })} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-white">+ Record a purchase order</button>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+                <tr className="bg-slate-50 font-bold">
+                  <td className="py-2.5 px-4">All systems</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{fmtMoney(totalEst)}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{fmtMoney(totalBudget)}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{fmtMoney(totalComm)}</td>
+                  <td className={`py-2.5 px-3 text-right tabular-nums ${totalLeft < 0 ? "text-rose-600" : ""}`}>{fmtMoney(totalLeft)}</td>
+                  <td colSpan={2}></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <Note>
+        <b>Budget, estimate and committed are three different numbers.</b> The <b>estimate</b> is what you told the
+        client the work would cost. The <b>budget</b> is what you have allowed yourself to spend buying it in. The
+        <b> committed</b> figure is what you have already ordered. The gap between the first two is your margin;
+        the gap between the last two is what you have left to spend. All amounts are in {cur}.
+      </Note>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Procurement / tender helpers (2026-08-12)
+// ---------------------------------------------------------------------------
+const PROC_FN_URL = `${SUPABASE_URL}/functions/v1/procurement-engine`;
+const TENDER_FN_URL = `${SUPABASE_URL}/functions/v1/tender-engine`;
+async function callEdge(url, action, payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error("Your session has expired — please sign in again.");
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Request failed");
+  return json;
+}
+const callProcurement = (action, payload) => callEdge(PROC_FN_URL, action, payload);
+const callTender = (action, payload) => callEdge(TENDER_FN_URL, action, payload);
+
+// Finds the tender row that belongs to a project, creating it on first open.
+// This is a plain insert -- no AI, no cost -- so opening the page is free.
+async function ensureTender(project) {
+  const { data: found, error: findErr } = await sb.from("tenders").select("*").eq("project_id", project.id).maybeSingle();
+  if (findErr) throw findErr;
+  if (found) return found;
+  const { data: { user } } = await sb.auth.getUser();
+  const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+  const { data: created, error: insErr } = await sb.from("tenders").insert({
+    company_id: prof?.company_id || null,
+    project_id: project.id,
+    tender_name: project.project_name,
+    client_name: project.client_name || null,
+    consultant_name: project.consultant_name || null,
+    main_contractor: project.contractor_name || null,
+    country: project.country || null,
+    city: project.city || null,
+    building_type: project.building_type || null,
+    status: "draft",
+  }).select().single();
+  if (insErr) throw insErr;
+  return created;
+}
+
+function Empty({ children }) {
+  return <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm leading-relaxed">{children}</div>;
+}
+function ErrBar({ error, onRetry }) {
+  if (!error) return null;
+  return (
+    <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center justify-between gap-3">
+      <div className="text-sm text-rose-700">{error}</div>
+      {onRetry && <button onClick={onRetry} className="text-xs font-semibold bg-rose-600 text-white px-3 py-1.5 rounded-lg hover:bg-rose-700 shrink-0">Retry</button>}
+    </div>
+  );
+}
+function SubTabs({ tabs, value, onChange }) {
+  return (
+    <div className="flex gap-1 border-b mb-4 overflow-x-auto">
+      {tabs.map(([k, l, n]) => (
+        <button key={k} onClick={() => onChange(k)}
+          className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 ${value === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}>
+          {l}{n !== undefined && <span className="ml-1.5 text-xs bg-slate-100 text-slate-500 rounded-full px-2 py-0.5 font-bold">{n}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+const SEV_STYLE = {
+  critical: "bg-rose-100 text-rose-700", high: "bg-amber-100 text-amber-700",
+  normal: "bg-blue-100 text-blue-700", info: "bg-slate-100 text-slate-500",
+};
+
+// ---------------------------------------------------------------------------
+// TenderIntelligenceTab -- what the tender documents actually say.
+// Requirements are split into sub-pages the way an estimator reads them
+// (technical / regulatory / commercial / risk) rather than one undifferentiated
+// list, because those four go to different people.
+// ---------------------------------------------------------------------------
+const REQ_GROUPS = [
+  ["technical",  "Specifications", ["technical", "testing_commissioning", "submittal"]],
+  ["regulatory", "Regulatory",     ["regulatory", "prequalification"]],
+  ["commercial", "Commercial",     ["commercial", "contractual", "warranty", "programme"]],
+  ["risk",       "Risk",           ["risk", "exclusion"]],
+];
+
+function TenderIntelligenceTab({ project }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [busy, setBusy]       = useState(null);
+  const [tender, setTender]   = useState(null);
+  const [docs, setDocs]       = useState([]);
+  const [reqs, setReqs]       = useState([]);
+  const [specs, setSpecs]     = useState([]);
+  const [sub, setSub]         = useState("technical");
+
+  useEffect(() => { load(); }, [project.id]);
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const t = await ensureTender(project);
+      setTender(t);
+      const [{ data: d }, { data: r }, { data: sp }] = await Promise.all([
+        sb.from("tender_documents").select("*").eq("tender_id", t.id).order("uploaded_at", { ascending: false }),
+        sb.from("tender_requirements").select("*").eq("tender_id", t.id).order("page_number"),
+        sb.from("spec_items").select("*").eq("tender_id", t.id).order("system_category"),
+      ]);
+      setDocs(d || []); setReqs(r || []); setSpecs(sp || []);
+    } catch (e) {
+      console.error("TenderIntelligenceTab.load failed:", e);
+      setError(e.message || "Could not load tender intelligence.");
+    } finally { setLoading(false); }
+  }
+
+  async function saveTender(patch) {
+    setTender(t => ({ ...t, ...patch }));
+    try {
+      const { error: e } = await sb.from("tenders").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", tender.id);
+      if (e) throw e;
+    } catch (e) { setError(e.message); }
+  }
+
+  async function uploadDocs(files) {
+    if (!files || !files.length) return;
+    setBusy("upload"); setError(null);
+    try {
+      for (const f of files) {
+        const path = `${project.id}/tender/${Date.now()}-${f.name}`;
+        const { error: upErr } = await sb.storage.from("drawings").upload(path, f, { upsert: false });
+        if (upErr) throw upErr;
+        const { data: { user } } = await sb.auth.getUser();
+        const { data: row, error: insErr } = await sb.from("tender_documents").insert({
+          tender_id: tender.id, file_name: f.name, storage_path: path,
+          mime_type: f.type || null, size_bytes: f.size, doc_type: "unclassified",
+          classification_status: "pending", extraction_status: "pending", uploaded_by: user.id,
+        }).select().single();
+        if (insErr) throw insErr;
+        setDocs(cur => [row, ...cur]);
+      }
+    } catch (e) {
+      console.error("uploadDocs failed:", e);
+      setError(e.message || "Upload failed.");
+    } finally { setBusy(null); }
+  }
+
+  async function runAnalysis(docId) {
+    setBusy(docId); setError(null);
+    try {
+      await callTender("analyze_document", { tender_id: tender.id, document_id: docId });
+      await load();
+    } catch (e) {
+      console.error("analyze_document failed:", e);
+      setError(e.message || "Analysis failed.");
+    } finally { setBusy(null); }
+  }
+
+  const group = REQ_GROUPS.find(g => g[0] === sub);
+  const inGroup = (g) => reqs.filter(r => g[2].includes(r.category));
+  const shown = group ? inGroup(group) : [];
+  const mandatory = reqs.filter(r => r.is_mandatory).length;
+  const critical = reqs.filter(r => r.severity === "critical").length;
+
+  if (loading) return <div className="text-slate-400 text-sm">Loading tender intelligence…</div>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500 max-w-3xl leading-relaxed">
+        What the tender documents actually say, pulled out clause by clause and filed where the person who has to
+        act on it will look. Every requirement keeps the page and clause it came from, so a price can always be
+        traced back to the wording that caused it.
+      </p>
+      <ErrBar error={error} onRetry={load} />
+
+      <div className="flex gap-3 flex-wrap">
+        <Kpi label="Documents"    value={docs.length} sub={`${docs.filter(d => d.extraction_status === "extracted").length} read`} accent="blue" />
+        <Kpi label="Requirements" value={reqs.length} sub={`${mandatory} mandatory`} accent="green" />
+        <Kpi label="Critical"     value={critical} sub="need a decision" accent="rose" />
+        <Kpi label="Specified items" value={specs.length} sub={`${new Set(specs.map(x => x.system_category)).size} systems`} accent="amber" />
+      </div>
+
+      <div className="bg-white border rounded-2xl p-5">
+        <div className="font-bold text-sm mb-3">Tender details</div>
+        <div className="grid md:grid-cols-3 gap-3">
+          <Field label="Tender reference" value={tender?.tender_ref || ""} onChange={v => saveTender({ tender_ref: v })} />
+          <Field label="Client" value={tender?.client_name || ""} onChange={v => saveTender({ client_name: v })} />
+          <Field label="Consultant" value={tender?.consultant_name || ""} onChange={v => saveTender({ consultant_name: v })} />
+          <Field label="Submission deadline" type="datetime-local"
+            value={tender?.submission_deadline ? String(tender.submission_deadline).slice(0, 16) : ""}
+            onChange={v => saveTender({ submission_deadline: v ? new Date(v).toISOString() : null })} />
+          <Field label="Clarification deadline" type="datetime-local"
+            value={tender?.clarification_deadline ? String(tender.clarification_deadline).slice(0, 16) : ""}
+            onChange={v => saveTender({ clarification_deadline: v ? new Date(v).toISOString() : null })} />
+          <Field label="Bid validity (days)" type="number" value={tender?.bid_validity_days || ""} onChange={v => saveTender({ bid_validity_days: Number(v) || null })} />
+        </div>
+      </div>
+
+      <div className="bg-white border rounded-2xl p-5">
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+          <div>
+            <div className="font-bold text-sm">Tender documents</div>
+            <div className="text-xs text-slate-500">Upload the whole issued set. Reading a document with AI uses processing credits, so it only happens when you ask.</div>
+          </div>
+          <label className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer shrink-0">
+            {busy === "upload" ? "Uploading…" : "⇧ Upload documents"}
+            <input type="file" multiple className="hidden" onChange={e => uploadDocs(Array.from(e.target.files || []))} />
+          </label>
+        </div>
+        {docs.length === 0 ? (
+          <div className="mt-3"><Empty>No tender documents yet. Upload the instructions to bidders, the conditions of contract, the specification and any addenda — the software reads them and files what it finds under the four headings below.</Empty></div>
+        ) : (
+          <div className="overflow-x-auto mt-2">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                  <th className="text-left font-bold py-2 pr-3">File</th>
+                  <th className="text-left font-bold py-2 px-3">Type</th>
+                  <th className="text-right font-bold py-2 px-3">Pages</th>
+                  <th className="text-left font-bold py-2 px-3">Read</th>
+                  <th className="py-2 pl-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {docs.map(d => (
+                  <tr key={d.id} className="border-b last:border-0">
+                    <td className="py-2 pr-3">{d.file_name}</td>
+                    <td className="py-2 px-3 text-slate-500">{SYSTEM_LABEL(d.doc_type || "unclassified")}</td>
+                    <td className="py-2 px-3 text-right tabular-nums">{d.page_count || "—"}</td>
+                    <td className="py-2 px-3">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${d.extraction_status === "extracted" ? "bg-emerald-100 text-emerald-700" : d.extraction_status === "failed" ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-500"}`}>
+                        {SYSTEM_LABEL(d.extraction_status || "pending")}
+                      </span>
+                    </td>
+                    <td className="py-2 pl-3 text-right">
+                      <button disabled={busy === d.id} onClick={() => runAnalysis(d.id)}
+                        className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">
+                        {busy === d.id ? "Reading…" : d.extraction_status === "extracted" ? "Read again" : "Read with AI"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white border rounded-2xl p-5">
+        <div className="font-bold text-sm mb-3">What the tender requires</div>
+        <SubTabs tabs={REQ_GROUPS.map(g => [g[0], g[1], inGroup(g).length])} value={sub} onChange={setSub} />
+        {shown.length === 0 ? (
+          <Empty>Nothing filed under {group?.[1]} yet. Read a document above and anything in this category appears here with its clause reference.</Empty>
+        ) : shown.map(r => (
+          <div key={r.id} className={`border rounded-xl p-4 mb-2 ${r.severity === "critical" ? "border-rose-200 bg-rose-50" : "bg-slate-50"}`}>
+            <div className="flex items-center gap-2 flex-wrap mb-1.5">
+              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${SEV_STYLE[r.severity] || SEV_STYLE.info}`}>{r.severity || "info"}</span>
+              {r.is_mandatory && <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-blue-100 text-blue-700">Mandatory</span>}
+              <span className="text-sm font-semibold flex-1 min-w-0">{r.title}</span>
+              {(r.clause_ref || r.page_number) && (
+                <span className="text-[11px] text-slate-500 bg-slate-100 border rounded px-2 py-0.5 shrink-0">
+                  {r.clause_ref ? `cl. ${r.clause_ref}` : ""}{r.clause_ref && r.page_number ? " · " : ""}{r.page_number ? `p.${r.page_number}` : ""}
+                </span>
+              )}
+            </div>
+            <div className="text-sm text-slate-600 leading-relaxed">{r.requirement_text}</div>
+          </div>
         ))}
       </div>
-      {tab === "overview" && <OverviewTab project={project} onViewFloors={() => setTab("boq")} />}
-      {tab === "drawings" && <DrawingsTab project={project} />}
-      {tab === "design" && <DesignTab project={project} />}
-      {tab === "boq" && <BoqTab project={project} />}
-      {tab === "specification" && <SpecificationTab project={project} />}
-      {tab === "compliance" && <ComplianceTab project={project} />}
-      {tab === "products" && <ProductsTab project={project} />}
-      {tab === "export" && <ExportTab project={project} />}
-      {tab === "chat" && <ChatTab project={project} />}
+
+      {specs.length > 0 && (
+        <div className="bg-white border rounded-2xl p-5">
+          <div className="font-bold text-sm mb-1">Specified items</div>
+          <div className="text-xs text-slate-500 mb-2">Every product the specification names, with what it must meet and whether an approved equal is allowed.</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                  <th className="text-left font-bold py-2 pr-3">Item</th>
+                  <th className="text-left font-bold py-2 px-3">System</th>
+                  <th className="text-left font-bold py-2 px-3">Named brands</th>
+                  <th className="text-left font-bold py-2 px-3">Equal allowed</th>
+                  <th className="text-left font-bold py-2 pl-3">Clause</th>
+                </tr>
+              </thead>
+              <tbody>
+                {specs.map(x => (
+                  <tr key={x.id} className="border-b last:border-0">
+                    <td className="py-2 pr-3">{x.item_name}</td>
+                    <td className="py-2 px-3 text-slate-500">{SYSTEM_LABEL(x.system_category || "—")}</td>
+                    <td className="py-2 px-3">{(x.specified_brands || []).join(", ") || "—"}</td>
+                    <td className="py-2 px-3">{x.approved_equal_allowed === null ? "—" : x.approved_equal_allowed ? "Yes" : "No"}</td>
+                    <td className="py-2 pl-3 text-slate-500">{x.clause_ref || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// RfqPackagesTab -- split the BOQ into enquiry packages and choose how each is
+// priced. The supply / installation / both choice is a real column, because it
+// changes the response template and how quotations compare afterwards.
+// ---------------------------------------------------------------------------
+const BASIS_LABEL = {
+  supply_only: "Supply only",
+  installation_only: "Installation only",
+  supply_and_install: "Supply and install",
+};
+function RfqPackagesTab({ project }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [tender, setTender]   = useState(null);
+  const [packs, setPacks]     = useState([]);
+  const [lines, setLines]     = useState({});
+  const [invites, setInvites] = useState({});
+  const [systems, setSystems] = useState([]);
+  const [open, setOpen]       = useState(null);
+  const [draft, setDraft]     = useState(null);
+  const [invDraft, setInvDraft] = useState(null);
+
+  useEffect(() => { load(); }, [project.id]);
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const t = await ensureTender(project);
+      setTender(t);
+      const [{ data: p }, { data: items }] = await Promise.all([
+        sb.from("rfq_packages").select("*").eq("tender_id", t.id).order("created_at", { ascending: false }),
+        sb.from("boq_items").select("system_category").eq("project_id", project.id),
+      ]);
+      setPacks(p || []);
+      setSystems([...new Set((items || []).map(i => i.system_category).filter(Boolean))].sort());
+      if (p && p.length) {
+        const ids = p.map(x => x.id);
+        const [{ data: l }, { data: iv }] = await Promise.all([
+          sb.from("rfq_lines").select("*").in("package_id", ids).order("line_no"),
+          sb.from("rfq_invitations").select("*").in("package_id", ids),
+        ]);
+        const lm = {}, im = {};
+        (l || []).forEach(x => { (lm[x.package_id] = lm[x.package_id] || []).push(x); });
+        (iv || []).forEach(x => { (im[x.package_id] = im[x.package_id] || []).push(x); });
+        setLines(lm); setInvites(im);
+      }
+    } catch (e) {
+      console.error("RfqPackagesTab.load failed:", e);
+      setError(e.message || "Could not load RFQ packages.");
+    } finally { setLoading(false); }
+  }
+
+  async function createPackage() {
+    if (!draft?.package_name) { setError("Give the package a name first."); return; }
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { data, error: e } = await sb.from("rfq_packages").insert({
+        tender_id: tender.id,
+        package_name: draft.package_name,
+        package_ref: draft.package_ref || null,
+        system_categories: draft.system_categories || [],
+        pricing_basis: draft.pricing_basis || "supply_and_install",
+        currency: draft.currency || "AED",
+        scope_note: draft.scope_note || null,
+        response_deadline: draft.response_deadline ? new Date(draft.response_deadline).toISOString() : null,
+        status: "draft",
+        created_by: user.id,
+      }).select().single();
+      if (e) throw e;
+      setPacks(cur => [data, ...cur]);
+      setDraft(null);
+      await addLinesFromBoq(data);
+    } catch (e) { console.error("createPackage failed:", e); setError(e.message); }
+  }
+
+  // Pull the BOQ lines for the package's systems into the enquiry. Plain SQL,
+  // no AI -- the quantities are the ones already measured.
+  async function addLinesFromBoq(pkg) {
+    try {
+      let q = sb.from("boq_items").select("id, system_category, description, technical_specification, quantity, unit, unit_cost_cents").eq("project_id", project.id);
+      if (pkg.system_categories?.length) q = q.in("system_category", pkg.system_categories);
+      const { data: items, error: e } = await q;
+      if (e) throw e;
+      if (!items || !items.length) { setError("There are no BOQ lines for those systems yet."); return; }
+      const rows = items.map((it, i) => ({
+        package_id: pkg.id, boq_item_id: it.id, line_no: i + 1,
+        description: it.description, specification: it.technical_specification || null,
+        quantity: it.quantity, unit: it.unit,
+        our_estimate_cents: it.unit_cost_cents != null ? Math.round(Number(it.quantity || 0) * Number(it.unit_cost_cents)) : null,
+      }));
+      const { data: ins, error: insErr } = await sb.from("rfq_lines").insert(rows).select();
+      if (insErr) throw insErr;
+      setLines(cur => ({ ...cur, [pkg.id]: ins }));
+      const est = rows.reduce((a, r) => a + (r.our_estimate_cents || 0), 0);
+      await sb.from("rfq_packages").update({ our_estimate_cents: est }).eq("id", pkg.id);
+      setPacks(cur => cur.map(p => p.id === pkg.id ? { ...p, our_estimate_cents: est } : p));
+    } catch (e) { console.error("addLinesFromBoq failed:", e); setError(e.message); }
+  }
+
+  async function addInvite(pkgId) {
+    if (!invDraft?.vendor_name) return;
+    try {
+      const { data, error: e } = await sb.from("rfq_invitations").insert({
+        package_id: pkgId, vendor_name: invDraft.vendor_name,
+        vendor_email: invDraft.vendor_email || null, status: "draft",
+      }).select().single();
+      if (e) throw e;
+      setInvites(cur => ({ ...cur, [pkgId]: [...(cur[pkgId] || []), data] }));
+      setInvDraft(null);
+    } catch (e) { setError(e.message); }
+  }
+  async function setInviteStatus(inv, status) {
+    setInvites(cur => ({ ...cur, [inv.package_id]: cur[inv.package_id].map(x => x.id === inv.id ? { ...x, status } : x) }));
+    try {
+      await sb.from("rfq_invitations").update({
+        status, issued_at: status === "issued" ? new Date().toISOString() : inv.issued_at,
+      }).eq("id", inv.id);
+    } catch (e) { setError(e.message); }
+  }
+  async function setPackStatus(pkg, status) {
+    setPacks(cur => cur.map(p => p.id === pkg.id ? { ...p, status } : p));
+    try { await sb.from("rfq_packages").update({ status }).eq("id", pkg.id); } catch (e) { setError(e.message); }
+  }
+
+  if (loading) return <div className="text-slate-400 text-sm">Loading RFQ packages…</div>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500 max-w-3xl leading-relaxed">
+        Split the bill of quantities into enquiry packages and choose how each one is priced — supply only,
+        installation only, or supply and install together. The choice matters: it changes what the supplier is
+        quoting for, and therefore whether two quotations can be compared at all.
+      </p>
+      <ErrBar error={error} onRetry={load} />
+
+      <div className="flex gap-3 flex-wrap">
+        <Kpi label="Packages" value={packs.length} sub={`${packs.filter(p => p.status === "issued").length} issued`} accent="blue" />
+        <Kpi label="Suppliers invited" value={Object.values(invites).flat().length} sub={`${Object.values(invites).flat().filter(i => i.status === "quoted").length} have quoted`} accent="green" />
+        <Kpi label="Lines enquired" value={Object.values(lines).flat().length} sub="from the measured BOQ" accent="amber" />
+        <Kpi label="Our estimate" value={fmtMoney(packs.reduce((a, p) => a + Number(p.our_estimate_cents || 0), 0))} sub="across all packages" accent="slate" />
+      </div>
+
+      {draft ? (
+        <div className="bg-white border rounded-2xl p-5">
+          <div className="font-bold text-sm mb-3">New enquiry package</div>
+          <div className="grid md:grid-cols-3 gap-3">
+            <Field label="Package name" value={draft.package_name || ""} onChange={v => setDraft({ ...draft, package_name: v })} required />
+            <Field label="Reference" value={draft.package_ref || ""} onChange={v => setDraft({ ...draft, package_ref: v })} />
+            <div>
+              <label className="text-xs font-semibold text-slate-600">Priced as</label>
+              <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={draft.pricing_basis || "supply_and_install"}
+                onChange={e => setDraft({ ...draft, pricing_basis: e.target.value })}>
+                <option value="supply_and_install">Supply and install together</option>
+                <option value="supply_only">Supply only</option>
+                <option value="installation_only">Installation only</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-600">Currency</label>
+              <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={draft.currency || "AED"}
+                onChange={e => setDraft({ ...draft, currency: e.target.value })}>
+                {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <Field label="Response deadline" type="datetime-local" value={draft.response_deadline || ""} onChange={v => setDraft({ ...draft, response_deadline: v })} />
+            <Field label="Scope note" value={draft.scope_note || ""} onChange={v => setDraft({ ...draft, scope_note: v })} />
+          </div>
+          <div className="mt-3">
+            <label className="text-xs font-semibold text-slate-600 block mb-1.5">Systems in this package</label>
+            {systems.length === 0 ? (
+              <div className="text-sm text-slate-400">No systems yet — generate a BOQ first.</div>
+            ) : (
+              <div className="flex gap-2 flex-wrap">
+                {systems.map(sy => {
+                  const on = (draft.system_categories || []).includes(sy);
+                  return (
+                    <button key={sy} onClick={() => setDraft({
+                      ...draft,
+                      system_categories: on ? draft.system_categories.filter(x => x !== sy) : [...(draft.system_categories || []), sy],
+                    })} className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${on ? "bg-blue-100 text-blue-700 border-blue-600" : "hover:bg-slate-50"}`}>
+                      {SYSTEM_LABEL(sy)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div className="mt-4 flex gap-2">
+            <button onClick={createPackage} className="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-lg">Create package and pull in the BOQ lines</button>
+            <button onClick={() => setDraft(null)} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setDraft({ pricing_basis: "supply_and_install", currency: "AED", system_categories: [] })}
+          className="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-lg">+ New enquiry package</button>
+      )}
+
+      {packs.length === 0 ? (
+        <Empty>No enquiry packages yet. A package is one enquiry sent to several suppliers — usually one system, or a few that the same trade would install.</Empty>
+      ) : packs.map(p => {
+        const ls = lines[p.id] || [], iv = invites[p.id] || [];
+        const isOpen = open === p.id;
+        return (
+          <div key={p.id} className="bg-white border rounded-2xl overflow-hidden">
+            <div className="px-5 py-4 flex items-center gap-3 flex-wrap">
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-sm">{p.package_name} {p.package_ref && <span className="text-slate-400 font-normal">· {p.package_ref}</span>}</div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  {BASIS_LABEL[p.pricing_basis]} · {(p.system_categories || []).map(SYSTEM_LABEL).join(", ") || "no systems"} ·
+                  {" "}{ls.length} lines · {iv.length} suppliers
+                  {p.response_deadline ? ` · due ${fmtDay(p.response_deadline)}` : ""}
+                </div>
+              </div>
+              <select className="border rounded-lg px-2 py-1.5 text-sm" value={p.status} onChange={e => setPackStatus(p, e.target.value)}>
+                <option value="draft">Draft</option><option value="issued">Issued</option>
+                <option value="closed">Closed</option><option value="awarded">Awarded</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <div className="text-right shrink-0">
+                <div className="text-sm font-bold tabular-nums">{p.our_estimate_cents ? fmtMoney(p.our_estimate_cents) : "—"}</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">our estimate</div>
+              </div>
+              <button onClick={() => setOpen(isOpen ? null : p.id)} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">
+                {isOpen ? "Close" : "Open"}
+              </button>
+            </div>
+
+            {isOpen && (
+              <div className="border-t px-5 py-4">
+                <div className="font-bold text-sm mb-2">Suppliers invited</div>
+                {iv.length === 0 ? <div className="text-sm text-slate-400 mb-3">Nobody invited yet.</div> : (
+                  <table className="w-full text-sm mb-3">
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                        <th className="text-left font-bold py-1.5 pr-3">Supplier</th>
+                        <th className="text-left font-bold py-1.5 px-3">Email</th>
+                        <th className="text-left font-bold py-1.5 px-3">Status</th>
+                        <th className="text-left font-bold py-1.5 pl-3">Issued</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {iv.map(x => (
+                        <tr key={x.id} className="border-b last:border-0">
+                          <td className="py-1.5 pr-3">{x.vendor_name}</td>
+                          <td className="py-1.5 px-3 text-slate-500">{x.vendor_email || "—"}</td>
+                          <td className="py-1.5 px-3">
+                            <select className="border rounded-md px-2 py-1 text-sm" value={x.status} onChange={e => setInviteStatus(x, e.target.value)}>
+                              <option value="draft">Draft</option><option value="issued">Issued</option>
+                              <option value="acknowledged">Acknowledged</option><option value="quoted">Quoted</option>
+                              <option value="declined">Declined</option><option value="no_response">No response</option>
+                              <option value="closed">Closed</option>
+                            </select>
+                          </td>
+                          <td className="py-1.5 pl-3 text-slate-500">{x.issued_at ? fmtDay(x.issued_at) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {invDraft && invDraft.pkg === p.id ? (
+                  <div className="flex gap-2 flex-wrap items-end bg-slate-50 border rounded-xl p-3 mb-3">
+                    <div><label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Supplier</label>
+                      <input className="border rounded-md px-2 py-1 text-sm w-48" value={invDraft.vendor_name || ""} onChange={e => setInvDraft({ ...invDraft, vendor_name: e.target.value })} /></div>
+                    <div><label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Email</label>
+                      <input className="border rounded-md px-2 py-1 text-sm w-56" value={invDraft.vendor_email || ""} onChange={e => setInvDraft({ ...invDraft, vendor_email: e.target.value })} /></div>
+                    <button onClick={() => addInvite(p.id)} className="text-xs font-semibold bg-slate-900 text-white px-3 py-1.5 rounded-lg">Add</button>
+                    <button onClick={() => setInvDraft(null)} className="text-xs font-semibold border px-3 py-1.5 rounded-lg">Cancel</button>
+                  </div>
+                ) : (
+                  <button onClick={() => setInvDraft({ pkg: p.id })} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50 mb-3">+ Invite a supplier</button>
+                )}
+
+                <div className="font-bold text-sm mb-2">Lines in this enquiry</div>
+                {ls.length === 0 ? (
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="text-sm text-slate-400">No lines pulled in yet.</div>
+                    <button onClick={() => addLinesFromBoq(p)} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">Pull lines from the BOQ</button>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                          <th className="text-left font-bold py-1.5 pr-3">#</th>
+                          <th className="text-left font-bold py-1.5 px-3">Description</th>
+                          <th className="text-right font-bold py-1.5 px-3">Qty</th>
+                          <th className="text-left font-bold py-1.5 px-3">Unit</th>
+                          <th className="text-right font-bold py-1.5 pl-3">Our estimate</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ls.map(l => (
+                          <tr key={l.id} className="border-b last:border-0">
+                            <td className="py-1.5 pr-3 text-slate-400">{l.line_no}</td>
+                            <td className="py-1.5 px-3">{l.description}</td>
+                            <td className="py-1.5 px-3 text-right tabular-nums">{Number(l.quantity).toLocaleString()}</td>
+                            <td className="py-1.5 px-3 text-slate-500">{l.unit}</td>
+                            <td className="py-1.5 pl-3 text-right tabular-nums">{l.our_estimate_cents ? fmtMoney(l.our_estimate_cents) : "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ComparisonTab -- ranks bidders two ways, because they answer two different
+// questions: L1/L2/L3 on the package total tells you who to award to, and the
+// lowest unit rate line by line tells you where each bidder is actually cheap.
+// The ranking is computed in the browser from real quotation lines -- no AI --
+// and shows delivery, payment terms, warranty, brand and origin alongside the
+// money, because a cheaper bid on worse terms is not cheaper.
+// ---------------------------------------------------------------------------
+function ComparisonTab({ project }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [tender, setTender]   = useState(null);
+  const [packs, setPacks]     = useState([]);
+  const [pkgId, setPkgId]     = useState("");
+  const [quotes, setQuotes]   = useState([]);
+  const [qlines, setQlines]   = useState([]);
+  const [view, setView]       = useState("total");
+
+  useEffect(() => { load(); }, [project.id]);
+  useEffect(() => { if (pkgId) loadQuotes(pkgId); }, [pkgId]);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const t = await ensureTender(project);
+      setTender(t);
+      const { data: p } = await sb.from("rfq_packages").select("*").eq("tender_id", t.id).order("created_at", { ascending: false });
+      setPacks(p || []);
+      if (p && p.length) setPkgId(p[0].id);
+    } catch (e) {
+      console.error("ComparisonTab.load failed:", e);
+      setError(e.message || "Could not load comparisons.");
+    } finally { setLoading(false); }
+  }
+  async function loadQuotes(id) {
+    setError(null);
+    try {
+      const { data: q } = await sb.from("quotations").select("*").eq("package_id", id).order("uploaded_at");
+      setQuotes(q || []);
+      if (q && q.length) {
+        const { data: l } = await sb.from("quotation_lines").select("*").in("quotation_id", q.map(x => x.id)).order("line_no");
+        setQlines(l || []);
+      } else setQlines([]);
+    } catch (e) { setError(e.message); }
+  }
+
+  const pack = packs.find(p => p.id === pkgId);
+  const cur = pack?.currency || "AED";
+
+  // rank by package total
+  const ranked = [...quotes]
+    .map(q => ({
+      ...q,
+      total: Number(q.quoted_total_cents || qlines.filter(l => l.quotation_id === q.id).reduce((a, l) => a + Number(l.total_cents || 0), 0)),
+      lineCount: qlines.filter(l => l.quotation_id === q.id).length,
+    }))
+    .filter(q => q.total > 0)
+    .sort((a, b) => a.total - b.total)
+    .map((q, i) => ({ ...q, rank: i + 1 }));
+  const lowest = ranked.length ? ranked[0].total : 0;
+
+  // rank per line by unit rate
+  const byDesc = {};
+  qlines.forEach(l => {
+    const key = (l.description || "").trim().toLowerCase();
+    if (!key) return;
+    (byDesc[key] = byDesc[key] || []).push(l);
+  });
+  const perItem = Object.entries(byDesc)
+    .map(([, ls]) => {
+      const sorted = [...ls].filter(l => Number(l.unit_rate_cents) > 0).sort((a, b) => Number(a.unit_rate_cents) - Number(b.unit_rate_cents));
+      if (!sorted.length) return null;
+      return { description: ls[0].description, unit: ls[0].unit, quantity: ls[0].quantity, offers: sorted };
+    })
+    .filter(Boolean);
+
+  const vendorOf = (qid) => quotes.find(q => q.id === qid)?.vendor_name || "—";
+  const RK = ["bg-emerald-100 text-emerald-700", "bg-blue-100 text-blue-700", "bg-amber-100 text-amber-700"];
+  const rkCls = (i) => RK[i] || "bg-slate-100 text-slate-500";
+
+  if (loading) return <div className="text-slate-400 text-sm">Loading comparison…</div>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500 max-w-3xl leading-relaxed">
+        Two rankings, because they answer different questions. <b>By package total</b> tells you who to award to.
+        <b> By unit rate, line by line</b> tells you where each supplier is genuinely cheap — which is how you
+        negotiate, and how you spot a bid that is only low because something is missing from it.
+      </p>
+      <ErrBar error={error} onRetry={load} />
+
+      <div className="flex gap-2 flex-wrap items-end">
+        <div>
+          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Package</label>
+          <select className="border rounded-lg px-3 py-2 text-sm" value={pkgId} onChange={e => setPkgId(e.target.value)}>
+            {packs.length === 0 && <option value="">No packages yet</option>}
+            {packs.map(p => <option key={p.id} value={p.id}>{p.package_name}</option>)}
+          </select>
+        </div>
+        {pack && <div className="text-xs text-slate-500 pb-2.5">{BASIS_LABEL[pack.pricing_basis]} · quoted in {cur}</div>}
+      </div>
+
+      {packs.length === 0 ? (
+        <Empty>There are no enquiry packages yet. Create one on the RFQ Packages page, invite suppliers, and their quotations will be compared here.</Empty>
+      ) : quotes.length === 0 ? (
+        <Empty>No quotation has been received against this package yet. Once a supplier's quotation is uploaded and read, it appears here ranked against the others.</Empty>
+      ) : (
+        <>
+          <div className="flex gap-3 flex-wrap">
+            <Kpi label="Bidders" value={ranked.length} sub={`${quotes.length} quotations received`} accent="blue" />
+            <Kpi label="Lowest total" value={fmtMoney(lowest)} sub={ranked[0]?.vendor_name || "—"} accent="green" />
+            <Kpi label="Spread" value={ranked.length > 1 ? `${(((ranked[ranked.length-1].total - lowest) / lowest) * 100).toFixed(1)}%` : "—"} sub="lowest to highest" accent="amber" />
+            <Kpi label="Our estimate" value={pack?.our_estimate_cents ? fmtMoney(pack.our_estimate_cents) : "—"} sub="for comparison" accent="slate" />
+          </div>
+
+          <SubTabs tabs={[["total", "By package total", ranked.length], ["item", "By unit rate, line by line", perItem.length]]} value={view} onChange={setView} />
+
+          {view === "total" ? (
+            <div className="bg-white border rounded-2xl overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b bg-slate-50">
+                    <th className="text-left font-bold py-2.5 px-4">Rank</th>
+                    <th className="text-left font-bold py-2.5 px-3">Supplier</th>
+                    <th className="text-right font-bold py-2.5 px-3">Quoted total</th>
+                    <th className="text-right font-bold py-2.5 px-3">vs lowest</th>
+                    <th className="text-left font-bold py-2.5 px-3">Delivery</th>
+                    <th className="text-left font-bold py-2.5 px-3">Payment terms</th>
+                    <th className="text-left font-bold py-2.5 px-3">Warranty</th>
+                    <th className="text-left font-bold py-2.5 px-3">Validity</th>
+                    <th className="text-left font-bold py-2.5 px-4">Incoterms</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ranked.map((q, i) => (
+                    <tr key={q.id} className="border-b last:border-0">
+                      <td className="py-2 px-4">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${rkCls(i)}`}>L{q.rank}</span>
+                      </td>
+                      <td className="py-2 px-3 font-medium">{q.vendor_name}</td>
+                      <td className="py-2 px-3 text-right tabular-nums font-semibold">{fmtMoney(q.total)}</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-slate-500">
+                        {i === 0 ? "—" : `+${(((q.total - lowest) / lowest) * 100).toFixed(1)}%`}
+                      </td>
+                      <td className="py-2 px-3">{q.lead_time_days ? `${q.lead_time_days} days` : "—"}</td>
+                      <td className="py-2 px-3">{q.payment_terms || "—"}</td>
+                      <td className="py-2 px-3">{q.warranty_months ? `${q.warranty_months} months` : "—"}</td>
+                      <td className="py-2 px-3">{q.validity_days ? `${q.validity_days} days` : "—"}</td>
+                      <td className="py-2 px-4">{q.incoterms || "—"}{q.freight_included ? " · freight in" : ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : perItem.length === 0 ? (
+            <Empty>The quotations have no priced lines yet, so there is nothing to rank item by item.</Empty>
+          ) : (
+            <div className="space-y-3">
+              {perItem.map((it, idx) => (
+                <div key={idx} className="bg-white border rounded-2xl p-4">
+                  <div className="flex items-baseline gap-3 flex-wrap mb-2">
+                    <div className="font-bold text-sm flex-1 min-w-0">{it.description}</div>
+                    <div className="text-xs text-slate-500">{Number(it.quantity || 0).toLocaleString()} {it.unit}</div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                          <th className="text-left font-bold py-1.5 pr-3">Rank</th>
+                          <th className="text-left font-bold py-1.5 px-3">Supplier</th>
+                          <th className="text-left font-bold py-1.5 px-3">Brand offered</th>
+                          <th className="text-left font-bold py-1.5 px-3">Model</th>
+                          <th className="text-left font-bold py-1.5 px-3">Origin</th>
+                          <th className="text-right font-bold py-1.5 px-3">Unit rate</th>
+                          <th className="text-right font-bold py-1.5 pl-3">Line total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {it.offers.map((o, i) => (
+                          <tr key={o.id} className="border-b last:border-0">
+                            <td className="py-1.5 pr-3"><span className={`text-[10px] font-bold px-2 py-0.5 rounded ${rkCls(i)}`}>L{i + 1}</span></td>
+                            <td className="py-1.5 px-3">{vendorOf(o.quotation_id)}</td>
+                            <td className="py-1.5 px-3">{o.offered_brand || "—"}</td>
+                            <td className="py-1.5 px-3 text-slate-500">{o.offered_model || "—"}</td>
+                            <td className="py-1.5 px-3 text-slate-500">{o.country_of_origin || "—"}</td>
+                            <td className="py-1.5 px-3 text-right tabular-nums font-semibold">{fmtMoney(o.unit_rate_cents, 2)}</td>
+                            <td className="py-1.5 pl-3 text-right tabular-nums">{fmtMoney(o.total_cents)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <Note>
+            <b>The cheapest total and the cheapest line are rarely the same supplier.</b> If one bidder is L1 overall
+            but L3 on half the items, the difference is usually scope they have left out or a brand they have
+            substituted — worth finding before you award, not after.
+          </Note>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ApprovalsTab -- an award goes up a chain of people. The chain is editable,
+// names and emails are typed in by the person raising it, and every step keeps
+// its comment. Roles are used as labels, never a hard-coded person.
+// ---------------------------------------------------------------------------
+const APPROVAL_STATUS_STYLE = {
+  pending: "bg-blue-100 text-blue-700", approved: "bg-emerald-100 text-emerald-700",
+  rejected: "bg-rose-100 text-rose-700", changes_requested: "bg-amber-100 text-amber-700",
+  cancelled: "bg-slate-100 text-slate-500", expired: "bg-slate-100 text-slate-500",
+};
+function ApprovalsTab({ project }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [tender, setTender]   = useState(null);
+  const [rows, setRows]       = useState([]);
+  const [actions, setActions] = useState({});
+  const [draft, setDraft]     = useState(null);
+  const [open, setOpen]       = useState(null);
+  const [comment, setComment] = useState({});
+
+  useEffect(() => { load(); }, [project.id]);
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const t = await ensureTender(project);
+      setTender(t);
+      const { data: ap } = await sb.from("approvals").select("*").eq("tender_id", t.id).order("created_at", { ascending: false });
+      setRows(ap || []);
+      if (ap && ap.length) {
+        const { data: ac } = await sb.from("approval_actions").select("*").in("approval_id", ap.map(a => a.id)).order("step");
+        const m = {}; (ac || []).forEach(x => { (m[x.approval_id] = m[x.approval_id] || []).push(x); });
+        setActions(m);
+      }
+    } catch (e) {
+      console.error("ApprovalsTab.load failed:", e);
+      setError(e.message || "Could not load approvals.");
+    } finally { setLoading(false); }
+  }
+
+  async function createApproval() {
+    if (!draft?.title) { setError("Give the approval a title."); return; }
+    const chain = (draft.chain || []).filter(c => c.name || c.email);
+    if (!chain.length) { setError("Add at least one approver."); return; }
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { data, error: e } = await sb.from("approvals").insert({
+        tender_id: tender.id, title: draft.title,
+        amount_cents: parseMoneyInput(draft.amount) || 0,
+        currency: draft.currency || "AED",
+        status: "pending", current_step: 1,
+        chain: chain.map((c, i) => ({ step: i + 1, role: c.role || "Approver", name: c.name || "", email: c.email || "" })),
+        requested_by: user.id,
+      }).select().single();
+      if (e) throw e;
+      setRows(cur => [data, ...cur]);
+      setDraft(null);
+    } catch (e) { console.error("createApproval failed:", e); setError(e.message); }
+  }
+
+  async function act(ap, step, action) {
+    const c = comment[`${ap.id}:${step.step}`] || "";
+    try {
+      const { data, error: e } = await sb.from("approval_actions").insert({
+        approval_id: ap.id, step: step.step, approver_name: step.name || step.role,
+        approver_email: step.email || null, action, comment: c || null,
+        acted_at: new Date().toISOString(),
+      }).select().single();
+      if (e) throw e;
+      setActions(cur => ({ ...cur, [ap.id]: [...(cur[ap.id] || []), data] }));
+
+      const last = ap.current_step >= (ap.chain || []).length;
+      const patch = action === "approved"
+        ? (last ? { status: "approved", completed_at: new Date().toISOString() } : { current_step: ap.current_step + 1 })
+        : { status: action === "rejected" ? "rejected" : "changes_requested" };
+      await sb.from("approvals").update(patch).eq("id", ap.id);
+      setRows(cur => cur.map(r => r.id === ap.id ? { ...r, ...patch } : r));
+      setComment(cur => ({ ...cur, [`${ap.id}:${step.step}`]: "" }));
+    } catch (e) { console.error("act failed:", e); setError(e.message); }
+  }
+
+  if (loading) return <div className="text-slate-400 text-sm">Loading approvals…</div>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500 max-w-3xl leading-relaxed">
+        An award goes up a chain of people before it is committed. Build the chain yourself — the roles, the names
+        and the email addresses are all yours to set — and every step keeps the comment that came with it, so the
+        reason for a decision survives long after the people have moved on.
+      </p>
+      <ErrBar error={error} onRetry={load} />
+
+      <div className="flex gap-3 flex-wrap">
+        <Kpi label="Awaiting a decision" value={rows.filter(r => r.status === "pending").length} sub="in the chain now" accent="blue" />
+        <Kpi label="Approved" value={rows.filter(r => r.status === "approved").length} sub="fully signed off" accent="green" />
+        <Kpi label="Sent back" value={rows.filter(r => r.status === "changes_requested" || r.status === "rejected").length} sub="need rework" accent="rose" />
+        <Kpi label="Value pending" value={fmtMoney(rows.filter(r => r.status === "pending").reduce((a, r) => a + Number(r.amount_cents || 0), 0))} sub="awaiting approval" accent="amber" />
+      </div>
+
+      {draft ? (
+        <div className="bg-white border rounded-2xl p-5">
+          <div className="font-bold text-sm mb-3">New approval request</div>
+          <div className="grid md:grid-cols-3 gap-3">
+            <Field label="What is being approved" value={draft.title || ""} onChange={v => setDraft({ ...draft, title: v })} required />
+            <Field label="Amount" value={draft.amount || ""} onChange={v => setDraft({ ...draft, amount: v })} />
+            <div>
+              <label className="text-xs font-semibold text-slate-600">Currency</label>
+              <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={draft.currency || "AED"} onChange={e => setDraft({ ...draft, currency: e.target.value })}>
+                {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-4 mb-2">Approval chain</div>
+          <table className="w-full text-sm mb-2">
+            <thead>
+              <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                <th className="text-left font-bold py-1.5 pr-3">Step</th>
+                <th className="text-left font-bold py-1.5 px-3">Role</th>
+                <th className="text-left font-bold py-1.5 px-3">Name</th>
+                <th className="text-left font-bold py-1.5 px-3">Email</th>
+                <th className="py-1.5 pl-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {(draft.chain || []).map((c, i) => (
+                <tr key={i} className="border-b last:border-0">
+                  <td className="py-1.5 pr-3 font-bold">{i + 1}</td>
+                  <td className="py-1.5 px-3"><input className="w-full border rounded-md px-2 py-1 text-sm" value={c.role || ""} placeholder="Estimator"
+                    onChange={e => setDraft({ ...draft, chain: draft.chain.map((x, j) => j === i ? { ...x, role: e.target.value } : x) })} /></td>
+                  <td className="py-1.5 px-3"><input className="w-full border rounded-md px-2 py-1 text-sm" value={c.name || ""}
+                    onChange={e => setDraft({ ...draft, chain: draft.chain.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} /></td>
+                  <td className="py-1.5 px-3"><input className="w-full border rounded-md px-2 py-1 text-sm" value={c.email || ""}
+                    onChange={e => setDraft({ ...draft, chain: draft.chain.map((x, j) => j === i ? { ...x, email: e.target.value } : x) })} /></td>
+                  <td className="py-1.5 pl-3 text-right">
+                    <button onClick={() => setDraft({ ...draft, chain: draft.chain.filter((_, j) => j !== i) })} className="text-xs text-slate-400 hover:text-rose-600">Remove</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={() => setDraft({ ...draft, chain: [...(draft.chain || []), { role: "", name: "", email: "" }] })}
+              className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">+ Add approver</button>
+            <button onClick={createApproval} className="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-lg">Send for approval</button>
+            <button onClick={() => setDraft(null)} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setDraft({ currency: "AED", chain: [
+          { role: "Estimator", name: "", email: "" },
+          { role: "Senior Estimator", name: "", email: "" },
+          { role: "Commercial Manager", name: "", email: "" },
+        ] })} className="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-lg">+ New approval request</button>
+      )}
+
+      {rows.length === 0 ? (
+        <Empty>Nothing has been sent for approval on this project yet.</Empty>
+      ) : rows.map(ap => {
+        const chain = ap.chain || [];
+        const acts = actions[ap.id] || [];
+        const isOpen = open === ap.id;
+        return (
+          <div key={ap.id} className="bg-white border rounded-2xl overflow-hidden">
+            <div className="px-5 py-4 flex items-center gap-3 flex-wrap">
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-sm">{ap.title}</div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Step {Math.min(ap.current_step, chain.length)} of {chain.length} · raised {fmtDay(ap.created_at)}
+                </div>
+              </div>
+              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${APPROVAL_STATUS_STYLE[ap.status] || APPROVAL_STATUS_STYLE.pending}`}>
+                {SYSTEM_LABEL(ap.status)}
+              </span>
+              <div className="text-right shrink-0">
+                <div className="text-sm font-bold tabular-nums">{fmtMoney(ap.amount_cents)}</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{ap.currency}</div>
+              </div>
+              <button onClick={() => setOpen(isOpen ? null : ap.id)} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">
+                {isOpen ? "Close" : "Open"}
+              </button>
+            </div>
+            {isOpen && (
+              <div className="border-t px-5 py-4">
+                {chain.map(st => {
+                  const done = acts.find(a => a.step === st.step);
+                  const isCurrent = ap.status === "pending" && ap.current_step === st.step;
+                  return (
+                    <div key={st.step} className="flex gap-3 py-3 border-b last:border-0">
+                      <div className={`w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${
+                        done ? (done.action === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700")
+                             : isCurrent ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-400"}`}>
+                        {done ? (done.action === "approved" ? "✓" : "✗") : st.step}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold">{st.role}{st.name ? ` — ${st.name}` : ""}</div>
+                        <div className="text-xs text-slate-500">{st.email || "no email set"}</div>
+                        {done ? (
+                          <div className="text-sm text-slate-600 mt-1.5">
+                            <b>{SYSTEM_LABEL(done.action)}</b> {done.acted_at ? `· ${fmtDay(done.acted_at)}` : ""}
+                            {done.comment && <div className="mt-1 bg-slate-50 border rounded-lg px-3 py-2 leading-relaxed">{done.comment}</div>}
+                          </div>
+                        ) : isCurrent ? (
+                          <div className="mt-2">
+                            <textarea rows={3} className="w-full border rounded-lg px-3 py-2 text-sm"
+                              placeholder="Explain the recommendation, note any condition of approval, or record why a cheaper bidder was excluded. This is stored with the approval."
+                              value={comment[`${ap.id}:${st.step}`] || ""}
+                              onChange={e => setComment(cur => ({ ...cur, [`${ap.id}:${st.step}`]: e.target.value }))} />
+                            <div className="flex gap-2 mt-2 flex-wrap">
+                              <button onClick={() => act(ap, st, "approved")} className="text-xs font-semibold bg-slate-900 text-white px-3 py-1.5 rounded-lg">Approve</button>
+                              <button onClick={() => act(ap, st, "changes_requested")} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">Request changes</button>
+                              <button onClick={() => act(ap, st, "rejected")} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-rose-50">Reject</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-slate-400 mt-1">Waiting for the step before this one.</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProjectWorkspace({ project, onBack, onEdit }) {
+  const [tab, setTab] = useState("overview");
+  const [navOpen, setNavOpen] = useState(false);
+  // 2026-08-12: the flat nine-tab bar was replaced with the grouped navigation
+  // the desktop software uses, so the same mental model works in both places:
+  // Home -> Tender -> Estimating -> Procurement -> Analysis -> Output, in the
+  // order the work is actually done. The old tab keys are unchanged so nothing
+  // downstream had to move; only the chrome around them is new.
+  const NAV = [
+    ["Home", [["overview", "Overview"]]],
+    ["Tender", [
+      ["tender", "Tender Intelligence"],
+      ["drawings", "Drawings & AI Analysis"],
+      ["design", "System Design (No Drawings)"],
+      ["specification", "Specification"],
+      ["compliance", "Compliance"],
+    ]],
+    ["Estimating", [
+      ["boq", "Take-off & BOQ"],
+      ["estimation", "Estimation"],
+    ]],
+    ["Procurement", [
+      ["rfq", "RFQ Packages"],
+      ["comparison", "Comparison"],
+      ["approvals", "Approvals"],
+    ]],
+    ["Analysis", [
+      ["cost", "Cost & Budget"],
+      ["products", "Product Recommendations"],
+    ]],
+    ["Output", [
+      ["export", "Export"],
+      ["chat", "Estima AI"],
+    ]],
+  ];
+  const currentLabel = NAV.flatMap(g => g[1]).find(t => t[0] === tab)?.[1] || "Overview";
+
+  const NavList = () => (
+    <nav className="text-sm">
+      {NAV.map(([group, items]) => (
+        <div key={group} className="mb-1">
+          <div className="px-4 pt-4 pb-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">{group}</div>
+          {items.map(([k, l]) => (
+            <button
+              key={k}
+              onClick={() => { setTab(k); setNavOpen(false); }}
+              className={`w-full text-left px-4 py-2 border-l-[3px] transition-colors ${
+                tab === k
+                  ? "bg-blue-50 border-blue-600 text-blue-700 font-semibold"
+                  : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >{l}</button>
+          ))}
+        </div>
+      ))}
+    </nav>
+  );
+
+  return (
+    <div className="max-w-[1500px] mx-auto px-4 sm:px-6 py-6">
+      <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-900 mb-3">&larr; All projects</button>
+      <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold">{project.project_name}</h1>
+          <p className="text-slate-500 text-sm">
+            {project.client_name ? `${project.client_name} · ` : ""}{project.city}, {project.country}
+            {" · "}{BUILDING_TYPES.find(b=>b[0]===project.building_type)?.[1]}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={()=>setNavOpen(o=>!o)} className="lg:hidden text-sm border px-3 py-2 rounded-lg hover:bg-slate-50 font-medium">Sections</button>
+          <button onClick={onEdit} className="text-sm border px-3 py-2 rounded-lg hover:bg-slate-50 font-medium">Edit Project</button>
+        </div>
+      </div>
+
+      <div className="flex gap-6 items-start">
+        <aside className="hidden lg:block w-56 shrink-0 bg-white border rounded-2xl py-2 sticky top-4">
+          <NavList />
+        </aside>
+        {navOpen && (
+          <div className="lg:hidden fixed inset-0 z-40 bg-black/30" onClick={()=>setNavOpen(false)}>
+            <div className="absolute left-0 top-0 bottom-0 w-64 bg-white py-2 overflow-y-auto" onClick={e=>e.stopPropagation()}>
+              <NavList />
+            </div>
+          </div>
+        )}
+
+        <main className="flex-1 min-w-0">
+          <h2 className="text-lg font-bold mb-4 lg:hidden">{currentLabel}</h2>
+          {tab === "overview"      && <OverviewTab project={project} onViewFloors={() => setTab("boq")} />}
+          {tab === "tender"        && <TenderIntelligenceTab project={project} />}
+          {tab === "rfq"           && <RfqPackagesTab project={project} />}
+          {tab === "comparison"    && <ComparisonTab project={project} />}
+          {tab === "approvals"     && <ApprovalsTab project={project} />}
+          {tab === "drawings"      && <DrawingsTab project={project} />}
+          {tab === "design"        && <DesignTab project={project} />}
+          {tab === "boq"           && <BoqTab project={project} />}
+          {tab === "estimation"    && <EstimationTab project={project} />}
+          {tab === "cost"          && <CostBudgetTab project={project} />}
+          {tab === "specification" && <SpecificationTab project={project} />}
+          {tab === "compliance"    && <ComplianceTab project={project} />}
+          {tab === "products"      && <ProductsTab project={project} />}
+          {tab === "export"        && <ExportTab project={project} />}
+          {tab === "chat"          && <ChatTab project={project} />}
+        </main>
+      </div>
     </div>
   );
 }
@@ -7099,6 +9138,7 @@ const QICONS = {
   execdash: <QIcon paths={<><circle cx="4" cy="11" r="2"/><circle cx="12" cy="9" r="2"/><circle cx="20" cy="15" r="2"/><path d="M4 21v-6M4 9V3M12 21v-10M12 7V3M20 21v-4M20 13V3"/></>} />,
   customers: <QIcon paths={<><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.3 3-5.5 6.5-5.5s6.5 2.2 6.5 5.5"/><circle cx="18" cy="8.5" r="2.3"/><path d="M15.8 14.7c2.6.4 4.7 2.4 4.7 5.3"/></>} />,
   projects: <QIcon paths={<path d="M3 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/>} />,
+  pipeline: <QIcon paths={<><path d="M3 20h18"/><path d="M6 20V9M11 20V4M16 20v-7M21 20v-3"/></>} />,
   ai: <QIcon paths={<><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></>} />,
   revenue: <QIcon paths={<><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5a2.5 2.5 0 012.5-1.5c1.5 0 2.5.8 2.5 2s-1 1.7-2.5 2-2.5.8-2.5 2 1 2 2.5 2a2.5 2.5 0 002.5-1.5"/></>} />,
   health: <QIcon paths={<path d="M3 12h4l2-7 4 14 2-7h6"/>} />,
@@ -7110,6 +9150,7 @@ const QADMIN_NAV = [
   { key: "execdash", label: "Project Execution Dashboard", sub: "Cost & revenue analytics, admin assist" },
   { key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
   { key: "projects", label: "Project Monitoring", sub: "Every project across every customer" },
+  { key: "pipeline", label: "Estimating & Procurement", sub: "Bid pipeline, budgets, enquiries and approvals" },
   { key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
   { key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
   { key: "health", label: "System Health", sub: "Live status of core platform services" },
@@ -7119,6 +9160,10 @@ const QADMIN_NAV = [
 function qMoney(cents) { return `$${((cents || 0) / 100).toFixed(2)}`; }
 function qPct(n) { return n == null ? "—" : `${n.toFixed(1)}%`; }
 function qNum(n) { return (n || 0).toLocaleString(); }
+// Money that is NOT US dollars: bids are priced in whatever currency the
+// estimator chose, so this formats the amount and lets the currency be
+// stated separately rather than stamping a "$" on a dirham figure.
+function qAmt(cents) { return Math.round((cents || 0) / 100).toLocaleString(); }
 function qBytes(bytes) {
   const n = Number(bytes || 0);
   if (n < 1024) return `${n} B`;
@@ -7149,6 +9194,7 @@ function AdminPortal({ onBack }) {
   const [companies, setCompanies] = useState([]);
   const [systemStatus, setSystemStatus] = useState(null);
   const [reportsData, setReportsData] = useState(null);
+  const [pipeline, setPipeline] = useState(null);
   const [selectedCompanyId, setSelectedCompanyId] = useState(null);
   const [exportBusy, setExportBusy] = useState("");
 
@@ -7162,13 +9208,19 @@ function AdminPortal({ onBack }) {
       callAdminAnalytics("list_companies", {}),
       callAdminAnalytics("system_status", {}),
       callAdminAnalytics("reports_export", {}),
+      callAdminAnalytics("pipeline_overview", {}),
     ]);
-    const [ov, tr, co, sys, rep] = results;
+    const [ov, tr, co, sys, rep, pipe] = results;
     if (ov.status === "fulfilled") setOverview(ov.value); else setLoadError(ov.reason?.message || "Failed to load admin analytics.");
     if (tr.status === "fulfilled") setTrial(tr.value);
     if (co.status === "fulfilled") setCompanies(co.value.companies || []);
     if (sys.status === "fulfilled") setSystemStatus(sys.value);
     if (rep.status === "fulfilled") setReportsData(rep.value);
+    // Deliberately not folded into loadError: an older admin-analytics
+    // deployment simply does not know this action, and that should degrade to
+    // one unavailable panel rather than blanking the whole portal.
+    if (pipe.status === "fulfilled") setPipeline(pipe.value);
+    else console.warn("pipeline_overview unavailable:", pipe.reason?.message);
     setLoading(false);
   }
 
@@ -7341,7 +9393,10 @@ function AdminPortal({ onBack }) {
                 }} />
             )}
             {activeView === "projects" && (
-              <QProjectsView perProject={overview?.per_project || []} companyNameById={companyNameById} />
+              <QProjectsView perProject={overview?.per_project || []} companyNameById={companyNameById} pipeline={pipeline} />
+            )}
+            {activeView === "pipeline" && (
+              <QPipelineView pipeline={pipeline} />
             )}
             {activeView === "ai" && (
               <QAiUsageView overview={overview} aiCostDaily={reportsData?.ai_cost_daily || []} />
@@ -7781,23 +9836,242 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
   );
 }
 
-function QProjectsView({ perProject, companyNameById }) {
+// ---------------------------------------------------------------------------
+// QPipelineView (2026-08-12) -- what the estimating and procurement pages are
+// actually being used for across the platform, and what that work is worth.
+//
+// Every figure comes from the pipeline_overview action, which builds a
+// project's selling price exactly the way the customer's own Estimation page
+// builds it, so the two can never disagree. A project with no estimate row is
+// excluded rather than counted as zero -- an unpriced project is not a
+// worthless one, and averaging it in as zero would be a lie dressed as data.
+// ---------------------------------------------------------------------------
+function QPipelineView({ pipeline }) {
+  const p = pipeline || {};
+  const projects = p.per_project_pipeline || [];
+  const adoption = p.per_company_adoption || [];
+  const byCur = p.pipeline_by_currency || [];
+
+  if (!pipeline) {
+    return (
+      <div className="card panel">
+        <div className="panel-head"><h3>Estimating &amp; Procurement</h3></div>
+        <p style={{ color: "var(--text-dimmer)", fontSize: "13px", padding: "8px 0" }}>
+          Could not load pipeline data. This view needs the <code>pipeline_overview</code> action on
+          admin-analytics — if the function has not been redeployed since this view was added, that is why.
+        </p>
+      </div>
+    );
+  }
+
+  const statusRow = (obj) => Object.entries(obj || {}).map(([k, v]) => `${SYSTEM_LABEL(k)} ${v}`).join(" · ") || "—";
+
+  return (
+    <>
+      <div className="kpi-row">
+        <div className="card kpi">
+          <div className="lbl">Estimation Adoption</div>
+          <div className="big">{p.projects_with_estimate ?? 0}<span style={{ fontSize: "15px", color: "var(--text-dimmer)" }}> / {p.projects_total ?? 0}</span></div>
+          <div className="delta flat">projects with an estimate started</div>
+        </div>
+        <div className="card kpi">
+          <div className="lbl">Projects Priced</div>
+          <div className="big">{p.projects_priced ?? 0}</div>
+          <div className="delta flat">{p.projects_with_budget ?? 0} also have a budget set</div>
+        </div>
+        <div className="card kpi">
+          <div className="lbl">Quotations Received</div>
+          <div className="big">{qNum(p.quotations_count)}</div>
+          <div className="delta flat">against {qNum(p.rfq_packages_count)} enquiry packages</div>
+        </div>
+        <div className="card kpi">
+          <div className="lbl">Awaiting Approval</div>
+          <div className="big">{qNum(p.approvals_pending_count)}</div>
+          <div className="delta flat">of {qNum(p.approvals_count)} approvals raised</div>
+        </div>
+      </div>
+
+      <div className="card panel">
+        <div className="panel-head"><h3>Bid Pipeline</h3><span className="tag">{byCur.length} currenc{byCur.length === 1 ? "y" : "ies"}</span></div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Currency</th><th className="num">Projects</th><th className="num">Cost</th>
+              <th className="num">Selling Price</th><th className="num">Margin</th>
+              <th className="num">Budget Set</th><th className="num">Committed</th><th className="num">Remaining</th>
+            </tr></thead>
+            <tbody>
+              {byCur.length === 0 ? (
+                <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No project has been priced yet.</td></tr>
+              ) : byCur.map(b => (
+                <tr key={b.currency}>
+                  <td className="name">{b.currency}</td>
+                  <td className="num">{b.projects}</td>
+                  <td className="num">{qAmt(b.cost_cents)}</td>
+                  <td className="num">{qAmt(b.selling_price_cents)}</td>
+                  <td className="num">{b.margin_on_selling_pct == null ? "—" : `${b.margin_on_selling_pct}%`}</td>
+                  <td className="num">{b.budget_set_cents ? qAmt(b.budget_set_cents) : "—"}</td>
+                  <td className="num">{b.committed_cents ? qAmt(b.committed_cents) : "—"}</td>
+                  <td className="num" style={{ color: b.budget_set_cents && b.budget_remaining_cents < 0 ? "#fca5a5" : undefined }}>
+                    {b.budget_set_cents ? qAmt(b.budget_remaining_cents) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ color: "var(--text-dimmer)", fontSize: "12px", marginTop: "10px", lineHeight: 1.6 }}>
+          Split by currency on purpose. Customers price in dirhams, riyals and rials, and adding those into one
+          headline figure would produce a number that looks authoritative and means nothing. Convert at a rate
+          you choose if you need a single portfolio value.
+        </p>
+      </div>
+
+      <div className="card panel">
+        <div className="panel-head"><h3>Feature Funnel</h3><span className="tag">platform-wide</span></div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Stage</th><th className="num">Count</th><th>Detail</th></tr></thead>
+            <tbody>
+              <tr><td className="name">Tenders opened</td><td className="num">{qNum(p.tenders_count)}</td><td>one per project that has used Tender Intelligence</td></tr>
+              <tr><td className="name">Tender documents uploaded</td><td className="num">{qNum(p.tender_documents_count)}</td><td>{qNum(p.tender_documents_read_count)} read by AI</td></tr>
+              <tr><td className="name">Requirements extracted</td><td className="num">{qNum(p.requirements_count)}</td><td>{qNum(p.requirements_critical_count)} flagged critical</td></tr>
+              <tr><td className="name">Specified items found</td><td className="num">{qNum(p.spec_items_count)}</td><td>named products with their clause reference</td></tr>
+              <tr><td className="name">RFQ packages created</td><td className="num">{qNum(p.rfq_packages_count)}</td><td>{statusRow(p.rfq_packages_by_status)}</td></tr>
+              <tr><td className="name">Pricing basis chosen</td><td className="num">—</td><td>{statusRow(p.rfq_packages_by_basis)}</td></tr>
+              <tr><td className="name">Suppliers invited</td><td className="num">{qNum(p.invitations_count)}</td><td>{statusRow(p.invitations_by_status)}</td></tr>
+              <tr><td className="name">Quotations received</td><td className="num">{qNum(p.quotations_count)}</td><td>uploaded against an enquiry package</td></tr>
+              <tr><td className="name">Comparisons built</td><td className="num">{qNum(p.comparisons_count)}</td><td>bidders ranked by total and by unit rate</td></tr>
+              <tr><td className="name">Approvals raised</td><td className="num">{qNum(p.approvals_count)}</td><td>{statusRow(p.approvals_by_status)}</td></tr>
+              <tr><td className="name">Purchase orders recorded</td><td className="num">{qNum(p.purchase_orders_count)}</td><td>what customers have actually committed to vendors</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card panel">
+        <div className="panel-head"><h3>Pipeline By Project</h3><span className="tag">{projects.length} with an estimate</span></div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Project</th><th>Customer</th><th>Cur.</th>
+                <th className="num">Cost</th><th className="num">Selling Price</th><th className="num">Margin</th>
+                <th className="num">Client Budget</th><th className="num">Budget Set</th>
+                <th className="num">Committed</th><th className="num">Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              {projects.length === 0 ? (
+                <tr><td colSpan="10" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>
+                  No customer has started an estimate yet.
+                </td></tr>
+              ) : projects.map(x => (
+                <tr key={x.project_id}>
+                  <td className="name">{x.project_name}</td>
+                  <td>{x.company_name}</td>
+                  <td>{x.currency}</td>
+                  <td className="num">{x.is_priced ? qAmt(x.cost_cents) : "—"}</td>
+                  <td className="num">{x.is_priced ? qAmt(x.selling_price_cents) : "—"}</td>
+                  <td className="num">{x.margin_on_selling_pct == null ? "—" : `${x.margin_on_selling_pct}%`}</td>
+                  <td className="num">{x.client_budget_cents == null ? "—" : qAmt(x.client_budget_cents)}</td>
+                  <td className="num">{x.budget_set_cents ? qAmt(x.budget_set_cents) : "—"}</td>
+                  <td className="num">{x.committed_cents ? qAmt(x.committed_cents) : "—"}</td>
+                  <td className="num" style={{ color: x.budget_set_cents && x.budget_remaining_cents < 0 ? "#fca5a5" : undefined }}>
+                    {x.budget_set_cents ? qAmt(x.budget_remaining_cents) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ color: "var(--text-dimmer)", fontSize: "12px", marginTop: "10px", lineHeight: 1.6 }}>
+          Selling price is built the same way the customer's own Estimation page builds it — material from the
+          BOQ rates or a typed package price, installation from their own team or a subcontractor quote, plus
+          project staff, then their margin. A project whose estimate has been opened but not yet priced shows a
+          dash rather than a zero. Amounts are in each project's own currency.
+        </p>
+      </div>
+
+      <div className="card panel">
+        <div className="panel-head"><h3>Who Is Using What</h3><span className="tag">{adoption.length} customers</span></div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Customer</th><th>Plan</th>
+                <th className="num">Projects</th><th className="num">Estimates</th><th className="num">Budgets</th>
+                <th className="num">POs</th><th className="num">Tenders</th><th className="num">Docs Read</th>
+                <th className="num">RFQs</th><th className="num">Quotes</th><th className="num">Approvals</th>
+                <th>Pipeline Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {adoption.length === 0 ? (
+                <tr><td colSpan="12" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No customers yet.</td></tr>
+              ) : adoption.map(c => {
+                const entries = Object.entries(c.pipeline_by_currency || {});
+                return (
+                  <tr key={c.company_id}>
+                    <td className="name">{c.company_name}</td>
+                    <td>{SYSTEM_LABEL(c.plan || "unknown")}</td>
+                    <td className="num">{c.projects}</td>
+                    <td className="num">{c.estimates}</td>
+                    <td className="num">{c.budgets_set}</td>
+                    <td className="num">{c.purchase_orders}</td>
+                    <td className="num">{c.tenders}</td>
+                    <td className="num">{c.tender_documents_read}</td>
+                    <td className="num">{c.rfq_packages}</td>
+                    <td className="num">{c.quotations}</td>
+                    <td className="num">{c.approvals}</td>
+                    <td>{entries.length === 0 ? "—" : entries.map(([cur, v]) => `${qAmt(v)} ${cur}`).join(" · ")}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ color: "var(--text-dimmer)", fontSize: "12px", marginTop: "10px", lineHeight: 1.6 }}>
+          A zero in a column is a real signal, not missing data — it means that customer has not opened that part
+          of the platform yet. Read across a row to see where someone stopped.
+        </p>
+      </div>
+    </>
+  );
+}
+
+function QProjectsView({ perProject, companyNameById, pipeline }) {
   const list = (perProject || []).slice().sort((a, b) => (b.actual_cost_cents || 0) - (a.actual_cost_cents || 0));
+  // Join in what each project is actually worth. A project that has no
+  // estimate simply shows a dash -- AI cost and bid value are different
+  // questions and one is not a proxy for the other.
+  const byProject = {};
+  ((pipeline && pipeline.per_project_pipeline) || []).forEach(x => { byProject[x.project_id] = x; });
   return (
     <div className="card panel">
       <div className="panel-head"><h3>All Projects</h3><span className="tag">{list.length} projects</span></div>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Project</th><th>Customer</th><th className="num">Pages Processed</th><th className="num">Actual AI Cost</th></tr></thead>
+          <thead><tr>
+            <th>Project</th><th>Customer</th>
+            <th className="num">Pages Processed</th><th className="num">Actual AI Cost</th>
+            <th className="num">Bid Value</th><th className="num">Margin</th><th className="num">Committed</th>
+          </tr></thead>
           <tbody>
-            {list.length === 0 ? <tr><td colSpan="4" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No projects yet.</td></tr> : list.map(p => (
-              <tr key={p.project_id}>
-                <td className="name">{p.project_name}</td>
-                <td>{companyNameById[p.company_id] || "—"}</td>
-                <td className="num">{p.pages_processed}</td>
-                <td className="num">{qMoney(p.actual_cost_cents)}</td>
-              </tr>
-            ))}
+            {list.length === 0 ? <tr><td colSpan="7" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No projects yet.</td></tr> : list.map(p => {
+              const v = byProject[p.project_id];
+              return (
+                <tr key={p.project_id}>
+                  <td className="name">{p.project_name}</td>
+                  <td>{companyNameById[p.company_id] || "—"}</td>
+                  <td className="num">{p.pages_processed}</td>
+                  <td className="num">{qMoney(p.actual_cost_cents)}</td>
+                  <td className="num">{v && v.is_priced ? `${qAmt(v.selling_price_cents)} ${v.currency}` : "—"}</td>
+                  <td className="num">{v && v.margin_on_selling_pct != null ? `${v.margin_on_selling_pct}%` : "—"}</td>
+                  <td className="num">{v && v.committed_cents ? qAmt(v.committed_cents) : "—"}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -8241,6 +10515,69 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .qtr-marker:hover{background:rgba(244,63,94,0.25)}
 .qtr-marker-tooltip{position:absolute;bottom:-4px;left:0;transform:translateY(100%);z-index:10;box-shadow:0 4px 10px rgba(0,0,0,0.25)}
 .qtr-item-active{border-color:#fb7185!important}
+</style>
+<style id="quantora-estimation-ui">
+/* Utilities used by the grouped project navigation, the Estimation page and the
+   Cost & Budget page. The app's Tailwind build is static and pre-purged, so any
+   class not already in it must be hand-written here -- same reason and same
+   technique as the mobile-responsive and markup-viewer blocks above. */
+.absolute{position:absolute}
+.relative{position:relative}
+.fixed{position:fixed}
+.inset-0{top:0;right:0;bottom:0;left:0}
+.left-0{left:0}
+.top-0{top:0}
+.bottom-0{bottom:0}
+.right-3{right:.75rem}
+.top-4{top:1rem}
+.z-40{z-index:40}
+.h-2{height:.5rem}
+.h-4{height:1rem}
+.h-7{height:1.75rem}
+.h-full{height:100%}
+.w-7{width:1.75rem}
+.w-28{width:7rem}
+.w-32{width:8rem}
+.w-40{width:10rem}
+.w-56{width:14rem}
+.w-64{width:16rem}
+.w-\[3px\]{width:3px}
+.min-w-0{min-width:0}
+.min-w-\[168px\]{min-width:168px}
+.max-w-\[1500px\]{max-width:1500px}
+.shrink-0{flex-shrink:0}
+.pl-3{padding-left:.75rem}
+.pr-3{padding-right:.75rem}
+.pt-3{padding-top:.75rem}
+.pt-4{padding-top:1rem}
+.pb-1\.5{padding-bottom:.375rem}
+.pb-2\.5{padding-bottom:.625rem}
+.py-3\.5{padding-top:.875rem;padding-bottom:.875rem}
+.mt-0\.5{margin-top:.125rem}
+.tabular-nums{font-variant-numeric:tabular-nums}
+.tracking-tight{letter-spacing:-.025em}
+.tracking-wider{letter-spacing:.05em}
+.tracking-\[0\.15em\]{letter-spacing:.15em}
+.leading-relaxed{line-height:1.625}
+.transition-colors{transition-property:color,background-color,border-color;transition-duration:.15s}
+.border-l-\[3px\]{border-left-width:3px;border-left-style:solid}
+.text-slate-700{color:#dfe4f0}
+.bg-black\/30{background-color:rgba(0,0,0,.3)}
+.bg-slate-50\/70{background-color:rgba(255,255,255,.035)}
+
+.from-blue-600{--tw-gradient-from:#2563eb var(--tw-gradient-from-position);--tw-gradient-to:rgba(37,99,235,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}
+.from-emerald-600{--tw-gradient-from:#059669 var(--tw-gradient-from-position);--tw-gradient-to:rgba(5,150,105,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}
+.to-violet-600{--tw-gradient-to:#7c3aed var(--tw-gradient-to-position)}
+.to-emerald-400{--tw-gradient-to:#34d399 var(--tw-gradient-to-position)}
+.space-y-4 > * + *{margin-top:1rem}
+.last\:border-0:last-child{border-width:0}
+.hover\:bg-rose-700:hover{background-color:#be123c}
+.hover\:bg-slate-50\/60:hover{background-color:rgba(255,255,255,.045)}
+.hover\:bg-white:hover{background-color:#1b2140}
+.hover\:text-rose-600:hover{color:#e11d48}
+@media (min-width:640px){.sm\:px-6{padding-left:1.5rem;padding-right:1.5rem}}
+@media (min-width:1024px){.lg\:block{display:block}.lg\:hidden{display:none}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.lg\:grid-cols-\[260px_1fr\]{grid-template-columns:260px minmax(0,1fr)}}
+.bg-gradient-to-r{background-image:linear-gradient(to right,var(--tw-gradient-stops))}.qtr-cell{background-color:#fff!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;border-color:#c8d2e4}.qtr-cell-off{background-color:#e6eaf3!important;color:#96a0b5!important;-webkit-text-fill-color:#96a0b5!important;border-color:#d5dbe8;opacity:.6}.bg-blue-600{background-color:#2563eb}.bg-amber-500{background-color:#f59e0b}.bg-slate-400{background-color:#94a3b8}.bg-emerald-500{background-color:#10b981}.bg-rose-500{background-color:#f43f5e}.border-blue-600{border-color:#2563eb}.line-through{text-decoration-line:line-through}.hover\:bg-rose-50:hover{background-color:rgba(244,63,94,.10)}.items-baseline{align-items:baseline}.ml-1\.5{margin-left:.375rem}.mt-1\.5{margin-top:.375rem}.text-\[11px\]{font-size:11px;line-height:1.45}.w-48{width:12rem}@media (min-width:768px){.md\:grid-cols-5{grid-template-columns:repeat(5,minmax(0,1fr))}}.w-20{width:5rem}
 </style>
 </body>
 </html>
