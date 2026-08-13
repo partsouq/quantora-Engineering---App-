@@ -9469,6 +9469,7 @@ const QICONS = {
   pipeline: <QIcon paths={<><path d="M3 20h18"/><path d="M6 20V9M11 20V4M16 20v-7M21 20v-3"/></>} />,
   ai: <QIcon paths={<><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></>} />,
   revenue: <QIcon paths={<><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5a2.5 2.5 0 012.5-1.5c1.5 0 2.5.8 2.5 2s-1 1.7-2.5 2-2.5.8-2.5 2 1 2 2.5 2a2.5 2.5 0 002.5-1.5"/></>} />,
+  payments: <QIcon paths={<><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></>} />,
   discounts: <QIcon paths={<><path d="M9 15l6-6"/><circle cx="9.5" cy="9.5" r="1.6"/><circle cx="14.5" cy="14.5" r="1.6"/><path d="M4 8.5V5a1 1 0 011-1h3.5L20 15.5 15.5 20 4 8.5z"/></>} />,
   health: <QIcon paths={<path d="M3 12h4l2-7 4 14 2-7h6"/>} />,
   reports: <QIcon paths={<><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></>} />,
@@ -9483,6 +9484,7 @@ const QADMIN_NAV = [
   { group: "Business", key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
   { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
   { group: "Business", key: "discounts", label: "Discounts", sub: "Coupon codes, negotiated prices, and who has what" },
+  { group: "Business", key: "payments", label: "Payments", sub: "Whether Paddle will take money yet, and what is missing" },
   { group: "Business", key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
   { group: "Platform", key: "health", label: "System Health", sub: "Live status of core platform services" },
   { group: "Platform", key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
@@ -9774,6 +9776,9 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "discounts" && (
               <QDiscountsView />
+            )}
+            {activeView === "payments" && (
+              <QPaymentsView />
             )}
             {activeView === "ai" && (
               <QAiUsageView overview={overview} aiCostDaily={reportsData?.ai_cost_daily || []} />
@@ -10521,6 +10526,127 @@ function qNetAfterPaddle(paidUsd) {
   return paidUsd - (paidUsd * PADDLE_FEE_PCT / 100) - PADDLE_FEE_FIXED_USD;
 }
 function qUsd(n) { return n == null || !Number.isFinite(n) ? "—" : `$${n.toFixed(2)}`; }
+
+// ---------------------------------------------------------------------------
+// QPaymentsView (2026-08-13). Live readiness check against Paddle.
+//
+// The checkout line is the only one that decides whether money can be taken,
+// and it cannot be answered from our own database -- Paddle has to be asked.
+// The edge function creates a draft transaction to find out and cancels it
+// again straight after; nothing is ever charged.
+// ---------------------------------------------------------------------------
+function QPaymentsView() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [checkedAt, setCheckedAt] = useState(null);
+
+  useEffect(() => { run(); }, []);
+  async function run() {
+    setBusy(true); setErr("");
+    try {
+      const res = await callPaddleBilling("readiness", {});
+      setData(res);
+      setCheckedAt(new Date());
+    } catch (e) {
+      console.error("QPaymentsView.run failed:", e);
+      setErr(e.message || "Could not check the payment configuration.");
+      setData(null);
+    } finally { setBusy(false); }
+  }
+
+  const checks = data?.checks || [];
+  const ready = !!data?.ready;
+
+  return (
+    <div>
+      <div className="card panel" style={{ marginBottom: 16 }}>
+        <div className="panel-head">
+          <h3>Payment readiness</h3>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {checkedAt && <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>
+              checked {checkedAt.toLocaleTimeString()}
+            </span>}
+            <button className="btn btn-sm" disabled={busy} onClick={run}>{busy ? "Checking…" : "Re-check"}</button>
+          </div>
+        </div>
+
+        {err && <p style={{ padding: "14px 18px", color: "#fca5a5", fontSize: 13 }}>{err}</p>}
+
+        {data && (
+          <div style={{ padding: "16px 18px" }}>
+            <div style={{
+              borderRadius: 12, padding: "14px 16px", marginBottom: 16,
+              border: `1px solid ${ready ? "rgba(34,197,94,0.4)" : "rgba(245,158,11,0.4)"}`,
+              background: ready ? "rgba(34,197,94,0.09)" : "rgba(245,158,11,0.09)",
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: ready ? "#86efac" : "#fcd34d" }}>
+                {ready ? "Payments are live" : "Not taking payments yet"}
+              </div>
+              <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 4, lineHeight: 1.6 }}>
+                {data.summary}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-dimmer)", marginTop: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                {data.environment === "sandbox" ? "Paddle sandbox" : "Paddle live account"}
+              </div>
+            </div>
+
+            {checks.map(c => (
+              <div key={c.key} style={{
+                display: "flex", gap: 12, alignItems: "flex-start",
+                padding: "11px 0", borderTop: "1px solid var(--border-soft)",
+              }}>
+                <span style={{
+                  flex: "none", width: 18, height: 18, borderRadius: 999, marginTop: 1,
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 11, fontWeight: 800,
+                  background: c.ok ? "rgba(34,197,94,0.18)" : "rgba(245,158,11,0.18)",
+                  color: c.ok ? "#4ade80" : "#fbbf24",
+                }}>{c.ok ? "✓" : "!"}</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{c.label}</div>
+                  <div style={{ fontSize: 12, color: "var(--text-dimmer)", marginTop: 2, lineHeight: 1.6 }}>{c.detail}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card panel">
+        <div className="panel-head"><h3>What only you can do</h3></div>
+        <div style={{ padding: "16px 18px", fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.75 }}>
+          <p style={{ margin: "0 0 12px" }}>
+            <b style={{ color: "var(--text)" }}>Finish Paddle's verification.</b> Sign in at
+            vendors.paddle.com and complete every outstanding task on the onboarding checklist —
+            business details, payout method and identity documents. Until Paddle marks the account
+            verified it refuses to open any checkout at all, for subscriptions and top-ups alike.
+            Nothing on this side is missing; the checkout line above will turn green on its own
+            once Paddle is done.
+          </p>
+          <p style={{ margin: "0 0 12px" }}>
+            <b style={{ color: "var(--text)" }}>Rotate the API key.</b> The key currently in use was
+            pasted into a chat window and should be treated as compromised. Create a new one in
+            Paddle under Developer tools → Authentication, update
+            <code style={{ padding: "1px 5px", margin: "0 3px", borderRadius: 4, background: "rgba(255,255,255,0.06)" }}>
+              app_secrets.PADDLE_API_KEY
+            </code>
+            from the Supabase SQL editor, then revoke the old one. Do not paste the new key into a
+            chat.
+          </p>
+          <p style={{ margin: 0 }}>
+            <b style={{ color: "var(--text)" }}>Optional rehearsal.</b> Setting
+            <code style={{ padding: "1px 5px", margin: "0 3px", borderRadius: 4, background: "rgba(255,255,255,0.06)" }}>
+              app_secrets.PADDLE_ENV = 'sandbox'
+            </code>
+            with a sandbox key lets you walk the whole flow — checkout, webhook, wallet credit —
+            before the live account is approved. Remember to remove it afterwards.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function QDiscountsView() {
   const [data, setData] = useState(null);
