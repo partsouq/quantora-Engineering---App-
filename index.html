@@ -5651,9 +5651,99 @@ function ApprovalsTab({ project }) {
   );
 }
 
-function ProjectWorkspace({ project, onBack, onEdit }) {
+// ---------------------------------------------------------------------------
+// DeleteProjectModal (2026-08-13). Deleting a project is irreversible and takes
+// a lot with it, so this states exactly what goes and requires the project name
+// to be typed before the button enables. Storage objects are removed first --
+// the database cascade does not reach the drawings bucket, and orphaned files
+// would keep costing storage while being invisible to their owner.
+// ---------------------------------------------------------------------------
+function DeleteProjectModal({ project, onClose, onDeleted }) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [counts, setCounts] = useState(null);
+  const match = typed.trim() === project.project_name.trim();
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [{ count: d }, { count: b }, { count: r }] = await Promise.all([
+          sb.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", project.id),
+          sb.from("boq_items").select("id", { count: "exact", head: true }).eq("project_id", project.id),
+          sb.from("analysis_runs").select("id", { count: "exact", head: true }).eq("project_id", project.id),
+        ]);
+        setCounts({ drawings: d || 0, boq: b || 0, runs: r || 0 });
+      } catch (e) { console.error("delete preflight failed:", e); }
+    })();
+  }, [project.id]);
+
+  async function doDelete() {
+    setBusy(true); setErr("");
+    try {
+      // 1. storage first -- if this fails we stop, rather than deleting the
+      //    rows that tell us which files belonged to this project.
+      const { data: drawings, error: dErr } = await sb.from("drawings")
+        .select("storage_path").eq("project_id", project.id);
+      if (dErr) throw dErr;
+      const paths = (drawings || []).map(d => d.storage_path).filter(Boolean);
+      if (paths.length) {
+        const { error: sErr } = await sb.storage.from("drawings").remove(paths);
+        if (sErr) throw new Error("Could not remove the stored drawing files: " + sErr.message);
+      }
+      // 2. the project row -- everything else cascades in the database.
+      const { error: pErr } = await sb.from("projects").delete().eq("id", project.id);
+      if (pErr) throw pErr;
+      onDeleted();
+    } catch (e) {
+      console.error("deleteProject failed:", e);
+      setErr(e.message || "Could not delete the project.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="bg-white border rounded-2xl max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-bold text-rose-600">Delete this project?</h3>
+        <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+          <b>{project.project_name}</b> and everything filed under it will be removed permanently.
+          This cannot be undone.
+        </p>
+        <div className="bg-slate-50 border rounded-xl p-4 mt-4 text-sm text-slate-600 leading-relaxed">
+          {counts === null ? "Checking what this would remove…" : (
+            <>Deleting takes with it <b>{counts.drawings}</b> uploaded drawing{counts.drawings === 1 ? "" : "s"} and
+            their stored files, <b>{counts.boq}</b> BOQ line{counts.boq === 1 ? "" : "s"}, <b>{counts.runs}</b> AI
+            analysis run{counts.runs === 1 ? "" : "s"}, and the project's estimate, budgets, purchase orders,
+            tender documents, requirements, enquiry packages, quotations and approvals.</>
+          )}
+        </div>
+        <p className="text-xs text-slate-500 mt-3 leading-relaxed">
+          Your AI usage and billing history are kept — those records stay on your account and are simply no
+          longer linked to a project.
+        </p>
+        <label className="text-xs font-semibold text-slate-600 block mt-4 mb-1">
+          Type the project name to confirm
+        </label>
+        <input className="w-full border rounded-lg px-3 py-2 text-sm" value={typed}
+          placeholder={project.project_name} onChange={e => setTyped(e.target.value)} />
+        {err && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-3">{err}</div>}
+        <div className="flex gap-2 mt-5 justify-end">
+          <button onClick={onClose} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Cancel</button>
+          <button onClick={doDelete} disabled={!match || busy}
+            className={`text-sm font-semibold px-4 py-2 rounded-lg text-white ${match && !busy ? "bg-rose-600 hover:bg-rose-700" : "bg-rose-300 cursor-not-allowed"}`}>
+            {busy ? "Deleting…" : "Delete permanently"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectWorkspace({ project, onBack, onEdit, onDeleted }) {
   const [tab, setTab] = useState("overview");
   const [navOpen, setNavOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   // 2026-08-12: the flat nine-tab bar was replaced with the grouped navigation
   // the desktop software uses, so the same mental model works in both places:
   // Home -> Tender -> Estimating -> Procurement -> Analysis -> Output, in the
@@ -5663,12 +5753,15 @@ function ProjectWorkspace({ project, onBack, onEdit }) {
     ["Home", [["overview", "Overview"]]],
     ["Tender", [
       ["tender", "Tender Intelligence"],
-      ["drawings", "Drawings & AI Analysis"],
-      ["design", "System Design (No Drawings)"],
       ["specification", "Specification"],
       ["compliance", "Compliance"],
     ]],
     ["Estimating", [
+      // Drawings sit at the top of Estimating, not under Tender: this is where
+      // someone goes to upload a drawing package, and it has to be the first
+      // thing they see in the section they are already looking at.
+      ["drawings", "Drawings & Upload"],
+      ["design", "System Design (No Drawings)"],
       ["boq", "Take-off & BOQ"],
       ["estimation", "Estimation"],
     ]],
@@ -5723,8 +5816,14 @@ function ProjectWorkspace({ project, onBack, onEdit }) {
         <div className="flex gap-2">
           <button onClick={()=>setNavOpen(o=>!o)} className="lg:hidden text-sm border px-3 py-2 rounded-lg hover:bg-slate-50 font-medium">Sections</button>
           <button onClick={onEdit} className="text-sm border px-3 py-2 rounded-lg hover:bg-slate-50 font-medium">Edit Project</button>
+          <button onClick={()=>setConfirmDelete(true)} className="text-sm border border-rose-300 text-rose-600 px-3 py-2 rounded-lg hover:bg-rose-50 font-medium">Delete</button>
         </div>
       </div>
+
+      {confirmDelete && (
+        <DeleteProjectModal project={project} onClose={()=>setConfirmDelete(false)}
+          onDeleted={()=>{ setConfirmDelete(false); (onDeleted || onBack)(); }} />
+      )}
 
       <div className="flex gap-6 items-start">
         <aside className="hidden lg:block w-56 shrink-0 bg-white border rounded-2xl py-2 sticky top-4">
@@ -5740,7 +5839,24 @@ function ProjectWorkspace({ project, onBack, onEdit }) {
 
         <main className="flex-1 min-w-0">
           <h2 className="text-lg font-bold mb-4 lg:hidden">{currentLabel}</h2>
-          {tab === "overview"      && <OverviewTab project={project} onViewFloors={() => setTab("boq")} />}
+          {tab === "overview" && (
+            <>
+              <div className="bg-white border rounded-2xl p-5 mb-5">
+                <div className="font-bold text-sm">Start here</div>
+                <div className="text-xs text-slate-500 mt-0.5 mb-3">
+                  Upload the drawing package, measure it, then price it — in that order.
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <button onClick={()=>setTab("drawings")} className="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-lg">&#8679; Upload drawings</button>
+                  <button onClick={()=>setTab("tender")} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Upload tender documents</button>
+                  <button onClick={()=>setTab("boq")} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Take-off &amp; BOQ</button>
+                  <button onClick={()=>setTab("estimation")} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Estimation</button>
+                  <button onClick={()=>setTab("export")} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">&#8681; Export</button>
+                </div>
+              </div>
+              <OverviewTab project={project} onViewFloors={() => setTab("boq")} />
+            </>
+          )}
           {tab === "tender"        && <TenderIntelligenceTab project={project} />}
           {tab === "rfq"           && <RfqPackagesTab project={project} />}
           {tab === "comparison"    && <ComparisonTab project={project} />}
@@ -9176,6 +9292,7 @@ const QICONS = {
   execdash: <QIcon paths={<><circle cx="4" cy="11" r="2"/><circle cx="12" cy="9" r="2"/><circle cx="20" cy="15" r="2"/><path d="M4 21v-6M4 9V3M12 21v-10M12 7V3M20 21v-4M20 13V3"/></>} />,
   customers: <QIcon paths={<><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.3 3-5.5 6.5-5.5s6.5 2.2 6.5 5.5"/><circle cx="18" cy="8.5" r="2.3"/><path d="M15.8 14.7c2.6.4 4.7 2.4 4.7 5.3"/></>} />,
   projects: <QIcon paths={<path d="M3 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/>} />,
+  myprojects: <QIcon paths={<><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></>} />,
   pipeline: <QIcon paths={<><path d="M3 20h18"/><path d="M6 20V9M11 20V4M16 20v-7M21 20v-3"/></>} />,
   ai: <QIcon paths={<><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></>} />,
   revenue: <QIcon paths={<><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5a2.5 2.5 0 012.5-1.5c1.5 0 2.5.8 2.5 2s-1 1.7-2.5 2-2.5.8-2.5 2 1 2 2.5 2a2.5 2.5 0 002.5-1.5"/></>} />,
@@ -9184,15 +9301,16 @@ const QICONS = {
 };
 
 const QADMIN_NAV = [
-  { key: "exec", label: "Executive Dashboard", sub: "Platform-wide, real-time overview" },
-  { key: "execdash", label: "Project Execution Dashboard", sub: "Cost & revenue analytics, admin assist" },
-  { key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
-  { key: "projects", label: "Project Monitoring", sub: "Every project across every customer" },
-  { key: "pipeline", label: "Estimating & Procurement", sub: "Bid pipeline, budgets, enquiries and approvals" },
-  { key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
-  { key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
-  { key: "health", label: "System Health", sub: "Live status of core platform services" },
-  { key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
+  { group: "Overview", key: "exec", label: "Executive Dashboard", sub: "Platform-wide, real-time overview" },
+  { group: "Overview", key: "execdash", label: "Project Execution Dashboard", sub: "Cost & revenue analytics, admin assist" },
+  { group: "Work", key: "myprojects", label: "My Projects", sub: "Open your own projects with the full workspace" },
+  { group: "Work", key: "projects", label: "Project Monitoring", sub: "Every project across every customer" },
+  { group: "Work", key: "pipeline", label: "Estimating & Procurement", sub: "Bid pipeline, budgets, enquiries and approvals" },
+  { group: "Business", key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
+  { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
+  { group: "Business", key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
+  { group: "Platform", key: "health", label: "System Health", sub: "Live status of core platform services" },
+  { group: "Platform", key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
 ];
 
 function qMoney(cents) { return `$${((cents || 0) / 100).toFixed(2)}`; }
@@ -9234,6 +9352,7 @@ function AdminPortal({ onBack }) {
   const [reportsData, setReportsData] = useState(null);
   const [pipeline, setPipeline] = useState(null);
   const [selectedCompanyId, setSelectedCompanyId] = useState(null);
+  const [openProject, setOpenProject] = useState(null);
   const [exportBusy, setExportBusy] = useState("");
 
   useEffect(() => { loadAll(); }, []);
@@ -9370,6 +9489,27 @@ function AdminPortal({ onBack }) {
     ], `Quantora_Full_Admin_Report_${new Date().toISOString().slice(0,10)}.xlsx`);
   }
 
+  if (openProject) {
+    return (
+      <div>
+        <div style={{ background: "#0b1120", borderBottom: "1px solid rgba(255,255,255,0.07)", padding: "10px 20px",
+                      display: "flex", alignItems: "center", gap: "12px" }}>
+          <span onClick={() => setOpenProject(null)}
+            style={{ color: "#96a1b8", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+            &larr; Back to admin portal
+          </span>
+          <span style={{ fontSize: "10.5px", fontWeight: 800, letterSpacing: "0.07em", textTransform: "uppercase",
+                         padding: "4px 10px", borderRadius: "99px", background: "rgba(91,140,255,0.13)",
+                         color: "#a8c3ff", border: "1px solid rgba(91,140,255,0.5)" }}>
+            Platform Admin
+          </span>
+        </div>
+        <ProjectWorkspace project={openProject} onBack={() => setOpenProject(null)}
+          onEdit={() => {}} onDeleted={() => setOpenProject(null)} />
+      </div>
+    );
+  }
+
   return (
     <div className="qadmin">
       <style>{QADMIN_CSS}</style>
@@ -9377,11 +9517,16 @@ function AdminPortal({ onBack }) {
         <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
           <div className="brand"><div className="brand-mark">Q</div> Quantora Admin</div>
           <div className="navgroup">
-            {nav.map(n => (
-              <div key={n.key} className={`navitem${activeView === n.key ? " active" : ""}`}
-                onClick={() => { setActiveView(n.key); setSidebarOpen(false); }}>
-                {QICONS[n.key]} {n.label}
-              </div>
+            {nav.map((n, i) => (
+              <React.Fragment key={n.key}>
+                {(i === 0 || nav[i - 1].group !== n.group) && (
+                  <div className="navgroup-label">{n.group}</div>
+                )}
+                <div className={`navitem${activeView === n.key ? " active" : ""}`}
+                  onClick={() => { setActiveView(n.key); setSidebarOpen(false); }}>
+                  {QICONS[n.key]} {n.label}
+                </div>
+              </React.Fragment>
             ))}
           </div>
           <div className="sidebar-foot">
@@ -9435,6 +9580,9 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "pipeline" && (
               <QPipelineView pipeline={pipeline} />
+            )}
+            {activeView === "myprojects" && (
+              <QMyProjectsView onOpen={p => setOpenProject(p)} />
             )}
             {activeView === "ai" && (
               <QAiUsageView overview={overview} aiCostDaily={reportsData?.ai_cost_daily || []} />
@@ -10078,6 +10226,72 @@ function QPipelineView({ pipeline }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// QMyProjectsView (2026-08-13). Lists the signed-in admin's own projects and
+// hands one to the real ProjectWorkspace, so the platform owner works in
+// exactly the same screens a customer does rather than a stripped-down copy.
+// Row-level security already limits this query to projects the caller owns --
+// there is no cross-customer read here, deliberately.
+// ---------------------------------------------------------------------------
+function QMyProjectsView({ onOpen }) {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => { load(); }, []);
+  async function load() {
+    setError("");
+    try {
+      const { data, error: e } = await sb.from("projects").select("*").order("updated_at", { ascending: false });
+      if (e) throw e;
+      setRows(data || []);
+    } catch (e) {
+      console.error("QMyProjectsView.load failed:", e);
+      setError(e.message || "Could not load your projects.");
+      setRows([]);
+    }
+  }
+  return (
+    <div className="card panel">
+      <div className="panel-head">
+        <h3>My Projects</h3>
+        <span className="tag">{rows === null ? "loading" : `${rows.length} project${rows.length === 1 ? "" : "s"}`}</span>
+      </div>
+      {error && <p style={{ padding: "14px 18px", color: "#fca5a5", fontSize: "13px" }}>{error}</p>}
+      <div className="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Project</th><th>Client</th><th>Location</th><th>Type</th><th>Status</th><th className="num">Updated</th><th></th>
+          </tr></thead>
+          <tbody>
+            {rows === null ? (
+              <tr><td colSpan="7" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>Loading…</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan="7" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>
+                You have no projects of your own yet. Create one from the main app and it appears here.
+              </td></tr>
+            ) : rows.map(p => (
+              <tr key={p.id} onClick={() => onOpen(p)}>
+                <td className="name">{p.project_name}</td>
+                <td>{p.client_name || "—"}</td>
+                <td>{[p.city, p.country].filter(Boolean).join(", ") || "—"}</td>
+                <td>{(BUILDING_TYPES.find(b => b[0] === p.building_type) || [])[1] || p.building_type || "—"}</td>
+                <td><span className={`pill st-${p.status === "active" ? "active" : "trial"}`}>{SYSTEM_LABEL(p.status || "active")}</span></td>
+                <td className="num">{p.updated_at ? new Date(p.updated_at).toLocaleDateString() : "—"}</td>
+                <td className="num"><button className="btn btn-sm">Open workspace</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p style={{ padding: "12px 18px 16px", color: "var(--text-dimmer)", fontSize: "12px", lineHeight: 1.6 }}>
+        Opening a project here gives you the full workspace — tender intelligence, drawings, take-off,
+        estimation, enquiries, comparison, approvals, cost and budget, exports — not a read-only view.
+        Only your own projects appear; other customers' project data is not readable from this browser,
+        which is why Project Monitoring reports on their activity rather than opening their files.
+      </p>
+    </div>
+  );
+}
+
 function QProjectsView({ perProject, companyNameById, pipeline }) {
   const list = (perProject || []).slice().sort((a, b) => (b.actual_cost_cents || 0) - (a.actual_cost_cents || 0));
   // Join in what each project is actually worth. A project that has no
@@ -10400,7 +10614,7 @@ function App() {
       )}
       {view.name === "dashboard" && <Dashboard onOpenProject={(p)=>setView({name:"project", project:p})} onNewProject={()=>setView({name:"new"})} onOpenBilling={()=>setBillingModal({ open: true, reason: "" })} />}
       {view.name === "new" && <NewProjectForm onCreated={(p)=>setView({name:"project", project:p})} onCancel={()=>setView({name:"dashboard"})} />}
-      {view.name === "project" && <ProjectWorkspace project={view.project} onBack={()=>setView({name:"dashboard"})} onEdit={()=>setView({name:"edit", project:view.project})} />}
+      {view.name === "project" && <ProjectWorkspace project={view.project} onBack={()=>setView({name:"dashboard"})} onEdit={()=>setView({name:"edit", project:view.project})} onDeleted={()=>setView({name:"dashboard"})} />}
       {view.name === "edit" && <NewProjectForm existingProject={view.project} onCreated={(p)=>setView({name:"project", project:p})} onCancel={()=>setView({name:"project", project:view.project})} />}
       {view.name === "admin" && isPlatformAdmin && <AdminPortal onBack={()=>setView({name:"dashboard"})} />}
       <UpgradePlanModal open={billingModal.open} reason={billingModal.reason} onClose={()=>setBillingModal({ open: false, reason: "" })} />
@@ -10615,7 +10829,7 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .hover\:text-rose-600:hover{color:#e11d48}
 @media (min-width:640px){.sm\:px-6{padding-left:1.5rem;padding-right:1.5rem}}
 @media (min-width:1024px){.lg\:block{display:block}.lg\:hidden{display:none}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.lg\:grid-cols-\[260px_1fr\]{grid-template-columns:260px minmax(0,1fr)}}
-.bg-gradient-to-r{background-image:linear-gradient(to right,var(--tw-gradient-stops))}.qtr-cell{background-color:#fff!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;border-color:#c8d2e4}.qtr-cell-off{background-color:#e6eaf3!important;color:#96a0b5!important;-webkit-text-fill-color:#96a0b5!important;border-color:#d5dbe8;opacity:.6}.bg-blue-600{background-color:#2563eb}.bg-amber-500{background-color:#f59e0b}.bg-slate-400{background-color:#94a3b8}.bg-emerald-500{background-color:#10b981}.bg-rose-500{background-color:#f43f5e}.border-blue-600{border-color:#2563eb}.line-through{text-decoration-line:line-through}.hover\:bg-rose-50:hover{background-color:rgba(244,63,94,.10)}.items-baseline{align-items:baseline}.ml-1\.5{margin-left:.375rem}.mt-1\.5{margin-top:.375rem}.text-\[11px\]{font-size:11px;line-height:1.45}.w-48{width:12rem}@media (min-width:768px){.md\:grid-cols-5{grid-template-columns:repeat(5,minmax(0,1fr))}}.w-20{width:5rem}
+.bg-gradient-to-r{background-image:linear-gradient(to right,var(--tw-gradient-stops))}.qtr-cell{background-color:#fff!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;border-color:#c8d2e4}.qtr-cell-off{background-color:#e6eaf3!important;color:#96a0b5!important;-webkit-text-fill-color:#96a0b5!important;border-color:#d5dbe8;opacity:.6}.bg-blue-600{background-color:#2563eb}.bg-amber-500{background-color:#f59e0b}.bg-slate-400{background-color:#94a3b8}.bg-emerald-500{background-color:#10b981}.bg-rose-500{background-color:#f43f5e}.border-blue-600{border-color:#2563eb}.line-through{text-decoration-line:line-through}.hover\:bg-rose-50:hover{background-color:rgba(244,63,94,.10)}.items-baseline{align-items:baseline}.ml-1\.5{margin-left:.375rem}.mt-1\.5{margin-top:.375rem}.text-\[11px\]{font-size:11px;line-height:1.45}.w-48{width:12rem}.bg-black\/50{background-color:rgba(0,0,0,.5)}.border-rose-300{border-color:#fda4af}.max-w-lg{max-width:32rem}.z-50{z-index:50}@media (min-width:768px){.md\:grid-cols-5{grid-template-columns:repeat(5,minmax(0,1fr))}}.w-20{width:5rem}
 </style>
 </body>
 </html>
