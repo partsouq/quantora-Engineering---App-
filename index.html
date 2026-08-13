@@ -9501,6 +9501,7 @@ const QADJ_LABEL = {
   discount_restored: "Discount reactivated",
   discount_assigned: "Discount given",
   discount_removed: "Discount removed",
+  grant_expired: "Granted access expired",
 };
 
 function qMoney(cents) { return `$${((cents || 0) / 100).toFixed(2)}`; }
@@ -9997,6 +9998,11 @@ function AdminQuotaControls({ company, onChanged }) {
   // webhook, a bank transfer, or a sandbox test that needs undoing.
   const [allPlans, setAllPlans] = useState([]);
   const [planChoice, setPlanChoice] = useState("");
+  // Why a plan is being granted by hand. The list comes from admin-plan so the
+  // portal and the server cannot disagree about what is allowed.
+  const [reasons, setReasons] = useState([]);
+  const [reasonCode, setReasonCode] = useState("");
+  const [grantDays, setGrantDays] = useState("30");
 
   useEffect(() => {
     setMsg(null);
@@ -10011,6 +10017,9 @@ function AdminQuotaControls({ company, onChanged }) {
     callAdminPlan("list_plans", {})
       .then(res => { if (!cancelled) setAllPlans(res.plans || []); })
       .catch(() => { /* non-fatal -- the rest of the panel still works */ });
+    callAdminPlan("list_reasons", {})
+      .then(res => { if (!cancelled) setReasons(res.reasons || []); })
+      .catch(() => { /* the server validates anyway; the list is a convenience */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -10052,20 +10061,43 @@ function AdminQuotaControls({ company, onChanged }) {
 
   async function changePlan() {
     if (!planChoice) { setMsg({ type: "err", text: "Choose a plan first." }); return; }
+    if (needsReason && !reasonCode) { setMsg({ type: "err", text: "Choose why this plan is being granted by hand." }); return; }
+    if (needsReason) {
+      const d = Number(grantDays);
+      if (!Number.isFinite(d) || d < 1 || d > 365) { setMsg({ type: "err", text: "Enter how many days this access should last (1 to 365)." }); return; }
+    }
     const target = allPlans.find(p => p.id === planChoice);
     const label = target ? target.name : planChoice;
-    if (!window.confirm(`Move "${company.name}" from ${company.plan || "free"} to ${label}?\n\nThis changes what the customer can use immediately. Only do this once you have confirmed their payment.`)) return;
+    const until = needsReason
+      ? new Date(Date.now() + Number(grantDays) * 86400000).toLocaleDateString()
+      : null;
+    if (!window.confirm(
+      `Move "${company.name}" from ${company.plan || "free"} to ${label}?` +
+      (until
+        ? `\n\nAccess runs for ${grantDays} day(s), until ${until}, then reverts to ${company.plan || "free"} automatically.` +
+          `\n\nNo payment is taken — this is a grant, not a sale.`
+        : "\n\nThis changes what the customer can use immediately.")
+    )) return;
     setBusy("plan"); setMsg(null);
     try {
-      const res = await callAdminPlan("set_company_plan", { company_id: company.id, plan_id: planChoice, note: note || undefined });
+      const res = await callAdminPlan("set_company_plan", {
+        company_id: company.id, plan_id: planChoice, note: note || undefined,
+        reason_code: reasonCode || undefined,
+        ...(needsReason ? { grant_days: Number(grantDays) } : {}),
+      });
       setMsg({ type: "ok", text: `Done — ${res.company_name} moved from ${res.previous_plan} to ${res.plan_name}.${res.audit_recorded ? "" : " (Warning: the audit row could not be written.)"}` });
-      setPlanChoice("");
+      setPlanChoice(""); setReasonCode(""); setGrantDays("30");
+      if (res.paddle_noted) setMsg(m => ({ ...m, text: m.text + " The reason was also recorded on the Paddle customer." }));
       await loadHistory(company.id);
       if (onChanged) await onChanged();
     } catch (e) {
       setMsg({ type: "err", text: e.message || "Failed to change the plan." });
     } finally { setBusy(""); }
   }
+
+  const chosenPlan = allPlans.find(p => p.id === planChoice);
+  const needsReason = !!chosenPlan && !chosenPlan.is_trial && chosenPlan.id !== "free";
+  const selectedReason = reasons.find(r => r.code === reasonCode);
 
   const planMax = company.plan_max_drawing_pages;
   const bonus = company.bonus_drawing_pages || 0;
@@ -10085,6 +10117,15 @@ function AdminQuotaControls({ company, onChanged }) {
           <div className="detail-item"><span>Trial ends</span><b>{company.trial_end_date ? new Date(company.trial_end_date).toLocaleString() : "—"}</b></div>
         )}
         <div className="detail-item"><span>Current plan</span><b>{company.plan || "free"}</b></div>
+        {company.manual_grant_expires_at && (
+          <div className="detail-item">
+            <span>Granted access ends</span>
+            <b style={{ color: "#fcd34d" }}>
+              {new Date(company.manual_grant_expires_at).toLocaleDateString()}
+              {company.manual_grant_previous_plan ? ` — reverts to ${company.manual_grant_previous_plan}` : ""}
+            </b>
+          </div>
+        )}
         {company.billing_provider && (
           <div className="detail-item">
             <span>Activated by</span>
@@ -10110,8 +10151,34 @@ function AdminQuotaControls({ company, onChanged }) {
         </div>
       )}
 
+      {needsReason && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <select value={reasonCode} onChange={e => setReasonCode(e.target.value)} style={{ minWidth: 240 }}>
+            <option value="">Why is this being granted by hand?</option>
+            {reasons.map(r => <option key={r.code} value={r.code}>{r.label}</option>)}
+          </select>
+          {selectedReason && (
+            <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>{selectedReason.help}</span>
+          )}
+        </div>
+      )}
+
+      {needsReason && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <span style={{ fontSize: 12, color: "var(--text-dim)" }}>Access for</span>
+          <input type="number" value={grantDays} onChange={e => setGrantDays(e.target.value)}
+            style={{ width: 90 }} placeholder="30" />
+          <span style={{ fontSize: 12, color: "var(--text-dim)" }}>days, then back to <b>{company.plan || "free"}</b></span>
+          {Number(grantDays) > 0 && Number(grantDays) <= 365 && (
+            <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>
+              (until {new Date(Date.now() + Number(grantDays) * 86400000).toLocaleDateString()})
+            </span>
+          )}
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
-        <select value={planChoice} onChange={e => setPlanChoice(e.target.value)} style={{ minWidth: 190 }}>
+        <select value={planChoice} onChange={e => { setPlanChoice(e.target.value); setReasonCode(""); }} style={{ minWidth: 190 }}>
           <option value="">Change plan to…</option>
           {allPlans.filter(p => p.id !== company.plan).map(p => (
             <option key={p.id} value={p.id}>
@@ -10123,12 +10190,20 @@ function AdminQuotaControls({ company, onChanged }) {
           {busy === "plan" ? "Applying…" : "Apply Plan"}
         </button>
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginBottom: 10, lineHeight: 1.5 }}>
-        Use this only after confirming payment. Paddle normally sets the plan automatically when a
-        subscription starts; this is the manual override for failed webhooks, bank transfers and testing.
+      <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginBottom: 10, lineHeight: 1.55 }}>
+        Paddle sets the plan automatically when a customer subscribes. This is the route for granting
+        access without a payment — promotions, pilots, gift cards, beta testers, goodwill. Every reason
+        here is a giveaway, so nothing lands in MRR. Payment is only ever taken through Paddle, which is
+        the merchant of record. Access ends on its own at the date shown and the account drops back to
+        whatever it was on before — usually an expired trial, which leaves them blocked until they
+        subscribe. The plan's page and chat limits apply throughout, and for a grant they are a single
+        allowance covering the whole period rather than resetting each month — grant Individual for 30
+        days and that is 30 pages in total, not 30 a month.
+        The reason is written to the audit log and, where a Paddle customer exists, onto their Paddle
+        record as a note.
       </div>
 
-      <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note (e.g. reason for override, or the payment reference)" style={{ width: "100%", marginBottom: 12 }} />
+      <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note (e.g. the campaign, the gift code, or who agreed it)" style={{ width: "100%", marginBottom: 12 }} />
 
       <div className="section-label" style={{ marginTop: 4, marginBottom: 8, fontSize: 10.5 }}>Adjustment History</div>
       <div className="detail-list">
@@ -10136,7 +10211,11 @@ function AdminQuotaControls({ company, onChanged }) {
           history.length === 0 ? <div className="detail-item"><span>No admin quota adjustments yet.</span><b>—</b></div> :
           history.map(h => (
             <div className="detail-item" key={h.id}>
-              <span>{(h.created_at || "").replace("T", " ").slice(0, 16)} · {QADJ_LABEL[h.adjustment_type] || h.adjustment_type}{h.note ? ` — ${h.note}` : ""}</span>
+              <span>
+                {(h.created_at || "").replace("T", " ").slice(0, 16)} · {QADJ_LABEL[h.adjustment_type] || h.adjustment_type}
+                {h.reason_code ? ` · ${(reasons.find(r => r.code === h.reason_code) || {}).label || h.reason_code}` : ""}
+                {h.note ? ` — ${h.note}` : ""}
+              </span>
               <b>{h.adjustment_type === "bonus_pages_granted" ? (h.amount > 0 ? `+${h.amount}` : h.amount)
                  : h.adjustment_type === "plan_changed" ? `${h.previous_value} → ${h.new_value}`
                  : h.adjustment_type === "discount_assigned" ? "applied"
