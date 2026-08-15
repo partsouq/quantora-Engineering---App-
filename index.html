@@ -4916,6 +4916,9 @@ function TenderIntelligenceTab({ project }) {
   const [docs, setDocs]       = useState([]);
   const [reqs, setReqs]       = useState([]);
   const [specs, setSpecs]     = useState([]);
+  const [dates, setDates]     = useState([]);
+  const [refdocs, setRefdocs] = useState([]);
+  const [rfis, setRfis]       = useState([]);
   const [sub, setSub]         = useState("technical");
 
   useEffect(() => { load(); }, [project.id]);
@@ -4924,12 +4927,16 @@ function TenderIntelligenceTab({ project }) {
     try {
       const t = await ensureTender(project);
       setTender(t);
-      const [{ data: d }, { data: r }, { data: sp }] = await Promise.all([
+      const [{ data: d }, { data: r }, { data: sp }, { data: kd }, { data: rd }, { data: cl }] = await Promise.all([
         sb.from("tender_documents").select("*").eq("tender_id", t.id).order("uploaded_at", { ascending: false }),
         sb.from("tender_requirements").select("*").eq("tender_id", t.id).order("page_number"),
         sb.from("spec_items").select("*").eq("tender_id", t.id).order("system_category"),
+        sb.from("tender_key_dates").select("*").eq("tender_id", t.id).order("due_at", { nullsFirst: false }),
+        sb.from("tender_referenced_documents").select("*").eq("tender_id", t.id).order("created_at"),
+        sb.from("tender_clarifications").select("*").eq("tender_id", t.id).order("ref"),
       ]);
       setDocs(d || []); setReqs(r || []); setSpecs(sp || []);
+      setDates(kd || []); setRefdocs(rd || []); setRfis(cl || []);
     } catch (e) {
       console.error("TenderIntelligenceTab.load failed:", e);
       setError(e.message || "Could not load tender intelligence.");
@@ -4978,6 +4985,55 @@ function TenderIntelligenceTab({ project }) {
     } finally { setBusy(null); }
   }
 
+  // Both of these read only what has already been extracted -- no document is
+  // sent to the model a second time -- so they cost a fraction of an analysis.
+  async function writeSummary() {
+    setBusy("summary"); setError(null);
+    try {
+      const res = await callTender("executive_summary", { tender_id: tender.id });
+      setTender(t => ({ ...t, executive_summary: res.summary, summary_generated_at: new Date().toISOString() }));
+      setSub("summary");
+    } catch (e) { setError(e.message || "Could not write the summary."); }
+    finally { setBusy(null); }
+  }
+
+  async function draftRfis() {
+    setBusy("rfi"); setError(null);
+    try {
+      const res = await callTender("draft_clarifications", { tender_id: tender.id });
+      await load();
+      setSub("clarifications");
+      if (!res.drafted) setError(res.message || "Nothing to draft.");
+    } catch (e) { setError(e.message || "Could not draft clarifications."); }
+    finally { setBusy(null); }
+  }
+
+  async function saveRfi(id, patch) {
+    setRfis(cur => cur.map(r => (r.id === id ? { ...r, ...patch } : r)));
+    const { error: e } = await sb.from("tender_clarifications")
+      .update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
+    if (e) setError(e.message);
+  }
+
+  async function saveRefdoc(id, patch) {
+    setRefdocs(cur => cur.map(r => (r.id === id ? { ...r, ...patch } : r)));
+    const { error: e } = await sb.from("tender_referenced_documents").update(patch).eq("id", id);
+    if (e) setError(e.message);
+  }
+
+  const risks = reqs.filter(r => r.risk_type);
+  const missingRefs = refdocs.filter(r => r.status === "unresolved");
+  const openRfis = rfis.filter(r => r.status === "draft" || r.status === "issued");
+  const docById = Object.fromEntries(docs.map(d => [d.id, d]));
+  const reqById = Object.fromEntries(reqs.map(r => [r.id, r]));
+  const fmtWhen = v => { try { return v ? new Date(v).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : ""; } catch (e) { return String(v || ""); } };
+  const Src = ({ page, clause }) => (
+    <span className="text-[10px] text-slate-400">
+      {clause ? `clause ${clause}` : ""}{clause && page ? " · " : ""}{page ? `p${page}` : ""}
+      {!clause && !page ? "no source given" : ""}
+    </span>
+  );
+
   const group = REQ_GROUPS.find(g => g[0] === sub);
   const inGroup = (g) => reqs.filter(r => g[2].includes(r.category));
   const shown = group ? inGroup(group) : [];
@@ -4998,9 +5054,37 @@ function TenderIntelligenceTab({ project }) {
       <div className="flex gap-3 flex-wrap">
         <Kpi label="Documents"    value={docs.length} sub={`${docs.filter(d => d.extraction_status === "extracted").length} read`} accent="blue" />
         <Kpi label="Requirements" value={reqs.length} sub={`${mandatory} mandatory`} accent="green" />
-        <Kpi label="Critical"     value={critical} sub="need a decision" accent="rose" />
+        <Kpi label="Risks"        value={risks.length} sub={`${critical} critical`} accent="rose" />
+        <Kpi label="Clarifications" value={rfis.length} sub={`${openRfis.length} still open`} accent="slate" />
         <Kpi label="Specified items" value={specs.length} sub={`${new Set(specs.map(x => x.system_category)).size} systems`} accent="amber" />
       </div>
+
+      {reqs.length > 0 && (
+        <div className="bg-white border rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-xs text-slate-500 max-w-xl leading-relaxed">
+            Both of these read only what has already been pulled out of the documents — nothing is sent to the AI a
+            second time, so they cost a fraction of reading a document.
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <button onClick={writeSummary} disabled={!!busy}
+              className="text-xs font-semibold bg-slate-900 text-white px-3 py-1.5 rounded-lg hover:bg-slate-800 disabled:opacity-50">
+              {busy === "summary" ? "Writing…" : tender?.executive_summary ? "Rewrite summary" : "Write executive summary"}
+            </button>
+            <button onClick={draftRfis} disabled={!!busy || risks.length === 0}
+              title={risks.length === 0 ? "No risks have been flagged yet" : ""}
+              className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50 disabled:opacity-40">
+              {busy === "rfi" ? "Drafting…" : "Draft clarifications"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {missingRefs.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-800">
+          <b>{missingRefs.length} document{missingRefs.length === 1 ? " is" : "s are"} referred to in the tender but not in the package.</b>{" "}
+          Priced as an assumption is how that becomes a loss. See <b>Missing documents</b> below.
+        </div>
+      )}
 
       <div className="bg-white border rounded-2xl p-5">
         <div className="font-bold text-sm mb-3">Tender details</div>
@@ -5070,8 +5154,156 @@ function TenderIntelligenceTab({ project }) {
 
       <div className="bg-white border rounded-2xl p-5">
         <div className="font-bold text-sm mb-3">What the tender requires</div>
-        <SubTabs tabs={REQ_GROUPS.map(g => [g[0], g[1], inGroup(g).length])} value={sub} onChange={setSub} />
-        {shown.length === 0 ? (
+        <SubTabs
+          tabs={REQ_GROUPS.map(g => [g[0], g[1], inGroup(g).length])
+            .concat([
+              ["risks", "Risk register", risks.length],
+              ["clarifications", "Clarifications", rfis.length],
+              ["dates", "Key dates", dates.length],
+              ["missing", "Missing documents", missingRefs.length],
+              ["summary", "Summary", tender?.executive_summary ? 1 : 0],
+            ])}
+          value={sub} onChange={setSub} />
+
+        {sub === "risks" && (
+          risks.length === 0 ? (
+            <Empty>No risks flagged yet. When a document is read, anything materially onerous against normal practice — uncapped damages, unlimited liability, pay-when-paid, an unusual bond duration — is filed here with the reason and a draft question.</Empty>
+          ) : risks.map(r => (
+            <div key={r.id} className="border rounded-xl p-4 mb-2 border-rose-200 bg-rose-50">
+              <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${SEV_STYLE[r.severity] || SEV_STYLE.info}`}>{r.severity || "info"}</span>
+                <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-white border text-slate-600">{SYSTEM_LABEL(r.risk_type)}</span>
+                <span className="text-sm font-semibold flex-1 min-w-0">{r.title}</span>
+                <span className="shrink-0"><Src page={r.page_number} clause={r.clause_ref} /></span>
+              </div>
+              {r.risk_explanation && (
+                <div className="text-sm text-rose-700 leading-relaxed mb-2">{r.risk_explanation}</div>
+              )}
+              <div className="text-xs text-slate-600 leading-relaxed bg-white border rounded-lg px-3 py-2">
+                <span className="font-semibold text-slate-500">What the tender says: </span>{r.requirement_text}
+              </div>
+              {r.suggested_clarification && (
+                <div className="text-xs text-slate-700 leading-relaxed bg-white border rounded-lg px-3 py-2 mt-2">
+                  <span className="font-semibold text-slate-500">Suggested question: </span>{r.suggested_clarification}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+
+        {sub === "clarifications" && (
+          rfis.length === 0 ? (
+            <Empty>No clarifications yet. Press “Draft clarifications” above and every flagged risk becomes a numbered question you can edit before sending. Nothing is emailed by the software.</Empty>
+          ) : rfis.map(c => {
+            const src = c.requirement_id ? reqById[c.requirement_id] : null;
+            return (
+              <div key={c.id} className="border rounded-xl p-4 mb-2 bg-white">
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  <span className="text-[11px] font-bold text-slate-900 bg-slate-100 border rounded px-2 py-0.5">{c.ref || "RFI"}</span>
+                  {src && <span className="text-[11px] text-slate-500">against {src.title}</span>}
+                  {src && <span><Src page={src.page_number} clause={src.clause_ref} /></span>}
+                  <select value={c.status} onChange={e => saveRfi(c.id, { status: e.target.value })}
+                    className="ml-auto text-[11px] font-semibold border rounded-lg px-2 py-1 bg-white">
+                    <option value="draft">Draft</option>
+                    <option value="issued">Issued</option>
+                    <option value="answered">Answered</option>
+                    <option value="closed">Closed</option>
+                    <option value="withdrawn">Withdrawn</option>
+                  </select>
+                </div>
+                <textarea defaultValue={c.question} rows={2}
+                  onBlur={e => e.target.value !== c.question && saveRfi(c.id, { question: e.target.value })}
+                  className="w-full text-sm border rounded-lg px-3 py-2 leading-relaxed" placeholder="Question to the client" />
+                <div className="grid md:grid-cols-2 gap-2 mt-2">
+                  <textarea defaultValue={c.our_position || ""} rows={2}
+                    onBlur={e => e.target.value !== (c.our_position || "") && saveRfi(c.id, { our_position: e.target.value || null })}
+                    className="w-full text-xs border rounded-lg px-3 py-2" placeholder="What we have assumed while waiting" />
+                  <textarea defaultValue={c.response || ""} rows={2}
+                    onBlur={e => e.target.value !== (c.response || "") && saveRfi(c.id, { response: e.target.value || null, responded_on: e.target.value ? new Date().toISOString().slice(0,10) : null })}
+                    className="w-full text-xs border rounded-lg px-3 py-2" placeholder="The client's answer" />
+                </div>
+                {c.response && (
+                  <input defaultValue={c.price_impact || ""}
+                    onBlur={e => e.target.value !== (c.price_impact || "") && saveRfi(c.id, { price_impact: e.target.value || null })}
+                    className="w-full text-xs border rounded-lg px-3 py-2 mt-2" placeholder="Effect on the price, if any" />
+                )}
+              </div>
+            );
+          })
+        )}
+
+        {sub === "dates" && (
+          dates.length === 0 ? (
+            <Empty>No dates extracted yet. Every deadline the documents state is collected here with the page it came from — submission, clarification cut-off, site visit, bid and bond validity.</Empty>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+                    <th className="text-left font-bold py-2 pr-3">What</th>
+                    <th className="text-left font-bold py-2 px-3">Type</th>
+                    <th className="text-left font-bold py-2 px-3">When</th>
+                    <th className="text-left font-bold py-2 px-3">Source</th>
+                    <th className="text-left font-bold py-2 pl-3">Document</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dates.map(d => (
+                    <tr key={d.id} className="border-b last:border-0">
+                      <td className="py-2 pr-3">{d.label}</td>
+                      <td className="py-2 px-3 text-slate-500">{SYSTEM_LABEL(d.kind)}</td>
+                      <td className="py-2 px-3 font-medium">{d.due_at ? fmtWhen(d.due_at) : (d.due_note || "—")}</td>
+                      <td className="py-2 px-3"><Src page={d.page_number} clause={d.clause_ref} /></td>
+                      <td className="py-2 pl-3 text-slate-500">{docById[d.document_id]?.file_name || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        )}
+
+        {sub === "missing" && (
+          refdocs.length === 0 ? (
+            <Empty>Nothing recorded yet. When a document is read, anything it refers to by name — an appendix, a schedule, a drawing — is listed here and matched against what you uploaded.</Empty>
+          ) : (
+            <div className="space-y-2">
+              {refdocs.map(r => (
+                <div key={r.id} className={`border rounded-xl p-3 flex items-center gap-3 flex-wrap ${r.status === "unresolved" ? "border-amber-200 bg-amber-50" : "bg-white"}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium">{r.referenced_as}</div>
+                    <div className="mt-0.5">
+                      <Src page={r.page_number} clause={r.clause_ref} />
+                      <span className="text-[10px] text-slate-400"> · referred to in {docById[r.referenced_in_document_id]?.file_name || "a tender document"}</span>
+                    </div>
+                  </div>
+                  <select value={r.status} onChange={e => saveRefdoc(r.id, { status: e.target.value })}
+                    className="text-[11px] font-semibold border rounded-lg px-2 py-1 bg-white shrink-0">
+                    <option value="unresolved">Not supplied</option>
+                    <option value="requested">Requested from client</option>
+                    <option value="supplied">Supplied</option>
+                    <option value="not_required">Not required</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+
+        {sub === "summary" && (
+          !tender?.executive_summary ? (
+            <Empty>No summary yet. Press “Write executive summary” above — it reads everything already extracted and writes the one page a commercial manager needs before deciding whether to bid.</Empty>
+          ) : (
+            <div>
+              <div className="text-xs text-slate-400 mb-2">
+                Written {fmtWhen(tender.summary_generated_at)} from {reqs.length} extracted requirements. Rewrite it after reading more documents.
+              </div>
+              <div className="text-sm leading-relaxed whitespace-pre-wrap bg-slate-50 border rounded-xl p-4">{tender.executive_summary}</div>
+            </div>
+          )
+        )}
+
+        {group && (shown.length === 0 ? (
           <Empty>Nothing filed under {group?.[1]} yet. Read a document above and anything in this category appears here with its clause reference.</Empty>
         ) : shown.map(r => (
           <div key={r.id} className={`border rounded-xl p-4 mb-2 ${r.severity === "critical" ? "border-rose-200 bg-rose-50" : "bg-slate-50"}`}>
@@ -5087,7 +5319,7 @@ function TenderIntelligenceTab({ project }) {
             </div>
             <div className="text-sm text-slate-600 leading-relaxed">{r.requirement_text}</div>
           </div>
-        ))}
+        )))}
       </div>
 
       {specs.length > 0 && (
@@ -6035,7 +6267,7 @@ function ProjectWorkspace({ project, onBack, onEdit, onDeleted }) {
           </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={()=>setNavOpen(o=>!o)} className="lg:hidden text-sm border px-3 py-2 rounded-lg hover:bg-slate-50 font-medium">Sections</button>
+          <button onClick={()=>setNavOpen(o=>!o)} className="qws-sections-btn text-sm border px-3 py-2 rounded-lg hover:bg-slate-50 font-medium">Sections</button>
           <button onClick={onEdit} className="text-sm border px-3 py-2 rounded-lg hover:bg-slate-50 font-medium">Edit Project</button>
           <button onClick={()=>setConfirmDelete(true)} className="text-sm border border-rose-300 text-rose-600 px-3 py-2 rounded-lg hover:bg-rose-50 font-medium">Delete</button>
         </div>
@@ -6047,18 +6279,44 @@ function ProjectWorkspace({ project, onBack, onEdit, onDeleted }) {
       )}
 
       <div className="flex gap-6 items-start">
-        <aside className="hidden lg:block w-56 shrink-0 bg-white border rounded-2xl py-2 sticky top-4">
+        {/* Docked from 768px up. Below that the strip above carries the same
+            sections, so navigation is never hidden behind a button. */}
+        <aside className="qws-side w-56 shrink-0 bg-white border rounded-2xl py-2 sticky top-4">
           <NavList />
         </aside>
         {navOpen && (
           <div className="lg:hidden fixed inset-0 z-40 bg-black/30" onClick={()=>setNavOpen(false)}>
             <div className="absolute left-0 top-0 bottom-0 w-64 bg-white py-2 overflow-y-auto" onClick={e=>e.stopPropagation()}>
+              {/* Titled and closable. It used to slide out as an unlabelled dark
+                  panel over the dashboard, which reads as the app having hung
+                  rather than as a menu. */}
+              <div className="flex items-center justify-between px-4 pb-2 border-b">
+                <div className="flex items-center gap-2 font-bold text-sm">
+                  <img src={QUANTORA_LOGO_URI} alt="" style={{ width: 22, height: 22, borderRadius: 5, display: "block" }} />
+                  <span>Sections</span>
+                </div>
+                <button onClick={()=>setNavOpen(false)} aria-label="Close sections"
+                  className="text-slate-400 hover:text-slate-900 text-xl leading-none px-2">&times;</button>
+              </div>
               <NavList />
             </div>
           </div>
         )}
 
         <main className="flex-1 min-w-0">
+          {/* Every section, always on screen, on a narrow display. Grouped by
+              the same headings as the sidebar so the two teach the same map. */}
+          <div className="qws-strip">
+            {NAV.map(([group, items]) => (
+              <React.Fragment key={`strip-${group}`}>
+                <span className="qws-sep">{group}</span>
+                {items.map(([k, l]) => (
+                  <button key={`strip-${k}`} onClick={() => setTab(k)}
+                    className={`qws-chip${tab === k ? " is-on" : ""}`}>{l}</button>
+                ))}
+              </React.Fragment>
+            ))}
+          </div>
           <h2 className="text-lg font-bold mb-4 lg:hidden">{currentLabel}</h2>
           {tab === "overview" && (
             <>
@@ -10652,7 +10910,11 @@ function AdminPortal({ onBack }) {
       <style>{QADMIN_CSS}</style>
       <div className="shell">
         <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
-          <div className="brand"><div className="brand-mark">Q</div> Quantora Admin</div>
+          <div className="brand">
+            <div className="brand-mark" style={{ padding: 0, overflow: "hidden" }}>
+              <img src={QUANTORA_LOGO_URI} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+            </div> Quantora Admin
+          </div>
           <div className="navgroup">
             {nav.map((n, i) => (
               <React.Fragment key={n.key}>
@@ -12417,7 +12679,15 @@ function App() {
   return (
     <div className="min-h-screen">
       <nav className="qtr-topnav bg-white border-b px-6 py-3 flex items-center justify-between sticky top-0 z-10">
-        <div className="font-bold cursor-pointer" onClick={()=>setView({name:"dashboard"})}>🏗️ Quantora <span className="text-blue-700">Engineering</span></div>
+        {/* The real brand mark. This was previously the building-construction
+            emoji -- a base character plus a variation selector -- and where the
+            device font lacks that pair the browser draws a missing-glyph box,
+            which is what a customer on Android was seeing. */}
+        <div className="font-bold cursor-pointer flex items-center gap-2" onClick={()=>setView({name:"dashboard"})}>
+          <img src={QUANTORA_LOGO_URI} alt="" width="26" height="26"
+               style={{ width: 26, height: 26, borderRadius: 6, display: "block" }} />
+          <span>Quantora <span className="text-blue-700">Engineering</span></span>
+        </div>
         <div className="flex items-center gap-4">
           {isPlatformAdmin && (
             <button onClick={()=>setView({name:"admin"})} className="text-xs font-semibold text-violet-700 hover:text-violet-900">Admin</button>
@@ -12665,6 +12935,31 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .opacity-40{opacity:0.4}
 .disabled\:opacity-40:disabled{opacity:0.4}
 .-mt-2{margin-top:-0.5rem}.qtr-cell-off{background-color:#e6eaf3!important;color:#96a0b5!important;-webkit-text-fill-color:#96a0b5!important;border-color:#d5dbe8;opacity:.6}.bg-blue-600{background-color:#2563eb}.bg-amber-500{background-color:#f59e0b}.bg-slate-400{background-color:#94a3b8}.bg-emerald-500{background-color:#10b981}.bg-rose-500{background-color:#f43f5e}.border-blue-600{border-color:#2563eb}.line-through{text-decoration-line:line-through}.hover\:bg-rose-50:hover{background-color:rgba(244,63,94,.10)}.items-baseline{align-items:baseline}.ml-1\.5{margin-left:.375rem}.mt-1\.5{margin-top:.375rem}.text-\[11px\]{font-size:11px;line-height:1.45}.w-48{width:12rem}.bg-black\/50{background-color:rgba(0,0,0,.5)}.border-rose-300{border-color:#fda4af}.max-w-lg{max-width:32rem}.z-50{z-index:50}@media (min-width:768px){.md\:grid-cols-5{grid-template-columns:repeat(5,minmax(0,1fr))}}.w-20{width:5rem}
+
+/* ---------------------------------------------------------------------------
+   Project workspace navigation, always visible (2026-08-15).
+   Tailwind's md: variants are not in this pre-purged build, so these are
+   written by hand. Docked sidebar from 768px; a scrolling strip below that.
+   --------------------------------------------------------------------------- */
+.qws-side{display:none}
+.qws-strip{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;
+  padding:8px 2px 10px;margin-bottom:12px;border-bottom:1px solid var(--q-border,#e2e8f0);
+  scrollbar-width:none}
+.qws-strip::-webkit-scrollbar{display:none}
+.qws-strip .qws-chip{flex:none;white-space:nowrap;font-size:12.5px;font-weight:600;
+  padding:7px 13px;border-radius:999px;border:1px solid var(--q-border,#e2e8f0);
+  background:var(--q-panel,#fff);color:var(--q-text-dim,#64748b);cursor:pointer}
+.qws-strip .qws-chip:hover{background:var(--q-panel-hover,#f8fafc)}
+.qws-strip .qws-chip.is-on{background:#2563eb;border-color:#2563eb;color:#fff}
+.qws-strip .qws-sep{flex:none;align-self:center;font-size:9px;font-weight:800;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--q-text-dimmer,#94a3b8);
+  padding:0 4px}
+.qws-sections-btn{display:inline-block}
+@media (min-width:768px){
+  .qws-side{display:block}
+  .qws-strip{display:none}
+  .qws-sections-btn{display:none}
+}
 </style>
 </body>
 </html>
