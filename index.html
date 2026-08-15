@@ -258,11 +258,13 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const FN_URL = `${SUPABASE_URL}/functions/v1/ai-engine`;
 
 const BUILDING_TYPES = [
-  ["villa","Villa"],["residential_building","Residential Building"],["commercial_building","Commercial Building"],
-  ["hospital","Hospital"],["hotel","Hotel"],["mall","Mall"],["warehouse","Warehouse"],
-  ["industrial_facility","Industrial Facility"],["infrastructure_project","Infrastructure Project"],
-  ["multi_tower_development","Multi-tower Development"],
-];
+  ["villa","Villa"],["residential_building","Residential Building"],["commercial_building","Commercial Building"],["office_building","Office Building"],["hospital","Hospital"],["clinic","Clinic"],["hotel","Hotel"],["resort","Resort"],["mall","Mall"],["retail_outlet","Retail Outlet"],["restaurant","Restaurant"],["school","School"],["university","University"],["stadium","Stadium"],["sports_facility","Sports Facility"],["mosque","Mosque"],["airport","Airport"],["metro_station","Metro Station"],["data_centre","Data Centre"],["warehouse","Warehouse"],["industrial_facility","Industrial Facility"],["labour_accommodation","Labour Accommodation"],["infrastructure_project","Infrastructure Project"],["multi_tower_development","Multi-tower Development"]];
+// A list of building types is never finished. Rather than force a hotel-shaped
+// answer onto a desalination plant, "Something else" lets the type be typed and
+// stores it slugged, so everything downstream that reads building_type -- the
+// product fit, the exports, the dashboard card -- treats it like any other value.
+function slugBuildingType(text){return String(text||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,48);}
+function buildingTypeLabel(v){if(!v)return "\u2014";const hit=BUILDING_TYPES.find(b=>b[0]===v);if(hit)return hit[1];return String(v).split("_").filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(" ");}
 
 const SYSTEM_GROUPS = {
   "ELV": ["cctv","access_control","structured_cabling","wifi","intercom","iptv","public_address","audio_visual","parking_management","anpr","bms","grms"],
@@ -295,6 +297,89 @@ const SYSTEM_COLORS = {
   other: "#6b7280",
 };
 const systemColor = (cat) => SYSTEM_COLORS[cat] || "#6b7280";
+
+// ---------------------------------------------------------------------------
+// A distinct colour per BOQ line, still recognisably its system's colour.
+//
+// Colouring by system alone means every line on a CCTV layout is the same red,
+// which tells an estimator nothing about which box is which camera. Rotating
+// the hue slightly and swinging the lightness keeps the family readable while
+// making each item unmistakable.
+// ---------------------------------------------------------------------------
+function hexToHsl(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+  if (!m) return [0, 0, 50];
+  const n = parseInt(m[1], 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d) {
+    if (mx === r) h = ((g - b) / d) % 6;
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60; if (h < 0) h += 360;
+  }
+  const l = (mx + mn) / 2;
+  const sat = d ? d / (1 - Math.abs(2 * l - 1)) : 0;
+  return [h, sat * 100, l * 100];
+}
+function hslToHex(h, sPct, lPct) {
+  // Wrap the hue first. The x term below reads h directly, so a negative hue --
+  // which any red system produces the moment an offset is subtracted from a
+  // base hue of 0 -- made x negative, and a negative channel formatted as
+  // something like "#ec05-b". A malformed colour is not a wrong shade; the
+  // browser drops the rule and the marker loses its border entirely.
+  h = ((h % 360) + 360) % 360;
+  const sN = Math.max(0, Math.min(100, sPct)) / 100;
+  const lN = Math.max(0, Math.min(100, lPct)) / 100;
+  const c = (1 - Math.abs(2 * lN - 1)) * sN;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = lN - c / 2;
+  let r = 0, g = 0, b = 0;
+  const seg = Math.floor(((h % 360) + 360) % 360 / 60);
+  if (seg === 0) [r, g, b] = [c, x, 0];
+  else if (seg === 1) [r, g, b] = [x, c, 0];
+  else if (seg === 2) [r, g, b] = [0, c, x];
+  else if (seg === 3) [r, g, b] = [0, x, c];
+  else if (seg === 4) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const to = v => Math.round((v + m) * 255).toString(16).padStart(2, "0");
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
+// Offsets per position, as tables rather than a formula, because the values were
+// chosen by looking at the result. Hue stays inside a narrow band so the colour
+// never wanders into a neighbouring system's territory; lightness and saturation
+// do the separating.
+const ITEM_HUE_STEP = [0, 13, -13, 7, -7, 16, -16, 4, -4];
+const ITEM_LIT_STEP = [0, -19, 17, -10, 11, -26, 24, 6, -6];
+const ITEM_SAT_STEP = [0, -6, -24, 10, -14, 4, -32, -18, 12];
+
+// n is the item's position among the items sharing its system on this drawing.
+function itemColour(systemCat, n) {
+  const base = systemColor(systemCat);
+  if (!n) return base;
+  const [h, sat, l] = hexToHsl(base);
+  const i = n % ITEM_HUE_STEP.length;
+  const wrap = Math.floor(n / ITEM_HUE_STEP.length);
+  const hue = h + ITEM_HUE_STEP[i] + wrap * 11;
+  const light = fold(l + ITEM_LIT_STEP[i] + (wrap % 2 ? 13 : -13), 28, 78);
+  const s2 = fold(sat + ITEM_SAT_STEP[i], 38, 96);
+  return hslToHex(hue, s2, light);
+}
+// Reflect rather than clamp. Clamping is what makes two different items come
+// out the same colour: a system whose base lightness is 60 sends both a -19 and
+// a -26 offset to the floor, and the two darkest cameras on the sheet become
+// identical. Bouncing off the limit keeps them apart.
+function fold(v, lo, hi) {
+  const span = hi - lo;
+  if (span <= 0) return lo;
+  let x = v;
+  for (let guard = 0; guard < 8 && (x < lo || x > hi); guard++) {
+    if (x < lo) x = lo + (lo - x);
+    if (x > hi) x = hi - (x - hi);
+  }
+  return Math.max(lo, Math.min(hi, x));
+}
 
 function confidenceColor(score) {
   if (score == null) return "bg-slate-100 text-slate-500";
@@ -3402,8 +3487,47 @@ function TeamPanel() {
   );
 }
 
+// Where a project has actually got to, worked out from its own data rather than
+// stored anywhere. Derived means it cannot drift: a project with drawings and no
+// BOQ rows IS at "drawings uploaded", whatever anyone remembers setting.
+const PROJECT_STAGES = [
+  ["priced",   "Priced",            "#10b981", "rgba(16,185,129,.14)", "rgba(16,185,129,.45)"],
+  ["taken_off","Taken off",         "#3b82f6", "rgba(59,130,246,.14)", "rgba(59,130,246,.45)"],
+  ["drawings", "Drawings uploaded", "#f59e0b", "rgba(245,158,11,.14)", "rgba(245,158,11,.45)"],
+  ["new",      "Not started",       "#94a3b8", "rgba(148,163,184,.14)", "rgba(148,163,184,.4)"],
+];
+function stageOf(m) {
+  if (!m) return "new";
+  if (m.priced) return "priced";
+  if (m.boq > 0) return "taken_off";
+  if (m.drawings > 0) return "drawings";
+  return "new";
+}
+// Approvals, in one word. "None" is a fact, not a failure -- most projects have
+// nothing to approve until a comparison has been run.
+function approvalWord(a) {
+  if (!a || !a.total) return "None";
+  if (a.pending) return `${a.pending} open`;
+  if (a.rejected) return "Rejected";
+  return "Approved";
+}
+function approvalTone(a) {
+  if (!a || !a.total) return "var(--q-text-dimmer,#94a3b8)";
+  if (a.pending) return "#f59e0b";
+  if (a.rejected) return "#f43f5e";
+  return "#10b981";
+}
+
+function StagePill({ stage }) {
+  const [, label, colour, bg, bd] = PROJECT_STAGES.find(x => x[0] === stage) || PROJECT_STAGES[3];
+  return <span className="qpill" style={{ color: colour, background: bg, borderColor: bd }}>{label}</span>;
+}
+
 function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
   const [projects, setProjects] = useState([]);
+  const [metrics, setMetrics] = useState({});
+  const [query, setQuery] = useState("");
+  const [drawings, setDrawings] = useState([]);
   const [stats, setStats] = useState({ projects: 0, boq: 0, drawings: 0, revisions: 0 });
   // Total of every project's selling price, computed the same way the
   // Estimation page computes one project's: material (BOQ rates, or the
@@ -3466,6 +3590,54 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
       const { count: runCount } = await sb.from("analysis_runs").select("id", { count: "exact", head: true });
       setProjects(proj || []);
       setStats({ projects: proj?.length || 0, boq: boqCount || 0, drawings: drawCount || 0, revisions: runCount || 0 });
+
+      // Per-project figures. Three id-only reads, counted in the browser --
+      // cheaper than a round trip per project, and every row is already inside
+      // the same RLS scope this page reads anyway. Non-fatal on purpose: the
+      // page is useful without them, so a failure here must not blank it.
+      try {
+        const [{ data: dRows }, { data: bRows }, { data: eRows }, { data: rRows }, { data: tRows }, { data: aRows }] = await Promise.all([
+          sb.from("drawings").select("id, file_name, project_id"),
+          sb.from("boq_items").select("project_id"),
+          sb.from("project_estimates").select("project_id"),
+          sb.from("analysis_runs").select("project_id, created_at").order("created_at", { ascending: false }).limit(500),
+          // Approvals hang off tenders, not projects, so the route to a project
+          // is approvals -> tender_id -> tenders.project_id.
+          sb.from("tenders").select("id, project_id"),
+          sb.from("approvals").select("tender_id, status"),
+        ]);
+        setDrawings(dRows || []);
+        const projectOfTender = Object.fromEntries((tRows || []).map(t => [t.id, t.project_id]));
+        const appBy = {};
+        for (const a of aRows || []) {
+          const pid = projectOfTender[a.tender_id];
+          if (!pid) continue;
+          appBy[pid] = appBy[pid] || { pending: 0, approved: 0, rejected: 0, total: 0 };
+          appBy[pid].total++;
+          if (a.status === "approved") appBy[pid].approved++;
+          else if (a.status === "rejected" || a.status === "changes_requested") appBy[pid].rejected++;
+          else appBy[pid].pending++;
+        }
+        const tally = rows => (rows || []).reduce((a, r) => (r.project_id ? (a[r.project_id] = (a[r.project_id] || 0) + 1, a) : a), {});
+        void appBy;
+        const dBy = tally(dRows), bBy = tally(bRows);
+        const priced = new Set((eRows || []).map(r => r.project_id).filter(Boolean));
+        const lastRun = {};
+        for (const r of rRows || []) if (r.project_id && !lastRun[r.project_id]) lastRun[r.project_id] = r.created_at;
+        const out = {};
+        for (const p of proj || []) {
+          out[p.id] = {
+            drawings: dBy[p.id] || 0,
+            boq: bBy[p.id] || 0,
+            priced: priced.has(p.id),
+            lastRun: lastRun[p.id] || null,
+            approvals: appBy[p.id] || null,
+          };
+        }
+        setMetrics(out);
+      } catch (mErr) {
+        console.error("Per-project metrics failed:", mErr);
+      }
     } catch (e) {
       console.error("Dashboard load failed:", e);
       setLoadError(e.message || "Could not load your dashboard. Please try again.");
@@ -3498,14 +3670,40 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
     }
   }
 
+  // Name, city and country, so "dubai" and "tower" both find something. The
+  // stage counts above deliberately stay on the whole portfolio -- filtering
+  // them would make the summary quietly disagree with itself.
+  const q = query.trim().toLowerCase();
+  const shownProjects = !q ? projects : projects.filter(p =>
+    [p.project_name, p.city, p.country].filter(Boolean).join(" ").toLowerCase().includes(q));
+
+  // Estimators search for the sheet they were just working on far more often
+  // than for the project name, so drawings are searchable too. Capped, because
+  // a two-letter query on a large account would otherwise return everything.
+  const projectById = Object.fromEntries(projects.map(p => [p.id, p]));
+  const matchedDrawings = !q ? [] : drawings
+    .filter(d => String(d.file_name || "").toLowerCase().includes(q))
+    .slice(0, 24);
+
+  const SearchBox = ({ placeholder }) => (
+    <div className="qsearch">
+      <span className="ic">&#9906;</span>
+      <input value={query} onChange={e => setQuery(e.target.value)} placeholder={placeholder} />
+      {query && <button className="clr" onClick={() => setQuery("")} aria-label="Clear search">&times;</button>}
+    </div>
+  );
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">All projects</h1>
           <p className="text-slate-500 text-sm">Every project you are working on. Open one and the whole workspace switches to it — its documents, drawings, take-off, estimate, suppliers and approvals.</p>
         </div>
-        <button onClick={onNewProject} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-800">+ New Project</button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <SearchBox placeholder="Search projects…" />
+          <button onClick={onNewProject} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-800 shrink-0 whitespace-nowrap">+ New Project</button>
+        </div>
       </div>
 
       {loadError && (
@@ -3515,23 +3713,67 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+      <div className="qapp">
+      <nav className="qapp-nav bg-white border rounded-2xl py-2">
+        <div className="qapp-brand">
+          <img src={QUANTORA_LOGO_URI} alt="" />
+          <span>Quantora <i>Engineering</i></span>
+        </div>
+        <div className="grp">Workspace</div>
+        <button className="on">All projects</button>
+        <button onClick={onOpenBilling}>Plan &amp; billing</button>
+        {shownProjects.length > 0 && <div className="grp">Your projects</div>}
+        {shownProjects.slice(0, 12).map(p => (
+          <button key={`nav-${p.id}`} className="proj" onClick={() => onOpenProject(p)} title={p.project_name}>
+            {p.project_name}
+          </button>
+        ))}
+        {shownProjects.length > 12 && <div className="grp" style={{ paddingTop: 6 }}>+{shownProjects.length - 12} more below</div>}
+      </nav>
+
+      <div>
+      <div className="qdash-kpis">
         {[
-          ["Projects", stats.projects, "bg-blue-50 text-blue-700"],
-          ["Pipeline Value", pipeline ? fmtMoney(pipeline.total) : "\u2014", "bg-teal-50 text-teal-700"],
-          ["BOQ Line Items", stats.boq, "bg-emerald-50 text-emerald-700"],
-          ["Drawings Uploaded", stats.drawings, "bg-amber-50 text-amber-700"],
-          ["AI Analysis Runs", stats.revisions, "bg-violet-50 text-violet-700"],
-        ].map(([label, val, cls]) => (
-          <div key={label} className={`rounded-xl p-4 ${cls}`}>
-            <div className="text-2xl font-bold">{val}</div>
-            <div className="text-xs font-medium mt-1">{label}</div>
+          ["Projects", stats.projects, "#3b82f6"],
+          ["Pipeline Value", pipeline ? fmtMoney(pipeline.total) : "\u2014", "#14b8a6"],
+          ["BOQ Line Items", stats.boq, "#10b981"],
+          ["Drawings Uploaded", stats.drawings, "#f59e0b"],
+          ["AI Analysis Runs", stats.revisions, "#8b5cf6"],
+        ].map(([label, val, colour]) => (
+          <div key={label} className="qdash-kpi">
+            <i style={{ background: colour }} />
+            <b style={{ color: colour }}>{val}</b>
+            <span>{label}</span>
           </div>
         ))}
       </div>
 
+      {projects.length > 0 && (
+        <div className="qstage">
+          {PROJECT_STAGES.map(([key, label, colour]) => {
+            const n = projects.filter(p => stageOf(metrics[p.id]) === key).length;
+            const help = {
+              priced: "estimate started",
+              taken_off: "BOQ produced, not priced",
+              drawings: "uploaded, not measured",
+              new: "nothing uploaded yet",
+            }[key];
+            return (
+              <div key={key} className="st">
+                <b style={{ color: n ? colour : "var(--q-text-dimmer,#94a3b8)" }}>{n}</b>
+                <span>{label}</span>
+                <em>{help}</em>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="qdash-grid">
+      <div className="qdash-rail">
+
       {trialUsage && (
-        <div className={`border rounded-xl p-4 mb-6 ${trialUsage.trial_expired ? "bg-rose-50 border-rose-200" : "bg-violet-50 border-violet-200"}`}>
+        <div className={`border rounded-xl p-4 ${trialUsage.trial_expired ? "bg-rose-50 border-rose-200" : "bg-violet-50 border-violet-200"}`}>
           <div className="flex items-center justify-between mb-3">
             <div className="font-semibold text-sm text-slate-900">Quantora Trial Usage</div>
             {trialUsage.trial_expired ? (
@@ -3571,47 +3813,118 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
       )}
 
       {usage && (
-        <div className="bg-white border rounded-xl p-4 mb-8 flex flex-wrap items-center gap-6">
-          <div>
-            <div className="text-xs font-semibold text-slate-500 uppercase">Plan</div>
-            <div className="text-sm font-bold capitalize">{usage.plan?.name || "Free"}</div>
+        <div className="qdash-card">
+          <h4>Your plan</h4>
+          <div className="flex items-baseline justify-between mb-3">
+            <div className="text-lg font-bold capitalize">{usage.plan?.name || "Free"}</div>
+            <button onClick={onOpenBilling} className="text-xs font-semibold border px-2.5 py-1 rounded-lg hover:bg-slate-50">Manage</button>
           </div>
-          <div>
-            <div className="text-xs font-semibold text-slate-500 uppercase">Drawing Analyses / Designs / Reworks this month</div>
-            <div className="text-sm">{usage.analysesUsed} / {fmtLimit(usage.plan?.monthly_drawing_analyses)}</div>
-          </div>
-          <div>
-            <div className="text-xs font-semibold text-slate-500 uppercase">Total AI Requests this month</div>
-            <div className="text-sm">{usage.requestsUsed} / {fmtLimit(usage.plan?.monthly_ai_requests)}</div>
-          </div>
-          <button onClick={onOpenBilling} className="ml-auto bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800">
-            Manage plan
-          </button>
+          {/* A bar answers "am I close to the limit" without arithmetic. The two
+              raw numbers stay beside it for anyone who wants the exact figure. */}
+          <Meter label="Analyses, designs &amp; reworks" used={usage.analysesUsed} limit={usage.plan?.monthly_drawing_analyses} />
+          <Meter label="All AI requests" used={usage.requestsUsed} limit={usage.plan?.monthly_ai_requests} />
+          <div className="text-[11px] text-slate-400 -mt-1">This calendar month.</div>
         </div>
       )}
 
       <TeamPanel />
 
-      <h2 className="text-lg font-semibold mb-3">Your Projects</h2>
+      </div>{/* /rail */}
+
+      <div className="qdash-main">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+        <h2 className="text-lg font-semibold">
+          Your projects
+          {q && <span className="text-sm font-normal text-slate-400"> — {shownProjects.length} of {projects.length}</span>}
+        </h2>
+        <SearchBox placeholder="Search name, city, country…" />
+      </div>
       {loading ? <div className="text-slate-400 text-sm">Loading…</div> :
         projects.length === 0 ? (
           <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400">
             No projects yet. Click "New Project" to create your first one.
           </div>
+        ) : shownProjects.length === 0 ? (
+          <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400">
+            {matchedDrawings.length > 0
+              ? `No project name matches “${query}” — but ${matchedDrawings.length} drawing${matchedDrawings.length > 1 ? "s below do" : " below does"}.`
+              : `Nothing matches “${query}”.`}{" "}
+            <button onClick={() => setQuery("")} className="underline font-semibold">Clear the search</button>
+          </div>
         ) : (
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projects.map(p => (
-            <div key={p.id} onClick={() => onOpenProject(p)} className="cursor-pointer bg-white rounded-xl border p-5 hover:shadow-md transition-shadow">
-              <div className="flex items-start justify-between">
-                <div className="font-semibold text-slate-900">{p.project_name}</div>
-                <span className="text-[10px] uppercase font-bold tracking-wide bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{p.status}</span>
+        <div className="qdash-projs">
+          {shownProjects.map(p => (
+            <div key={p.id} onClick={() => onOpenProject(p)} className="qdash-proj">
+              <div className="flex items-start justify-between gap-3">
+                <div className="pn">{p.project_name}</div>
+                <StagePill stage={stageOf(metrics[p.id])} />
               </div>
-              <div className="text-sm text-slate-500 mt-1">{p.city}, {p.country}</div>
-              <div className="text-xs text-slate-400 mt-2">{BUILDING_TYPES.find(b=>b[0]===p.building_type)?.[1] || p.building_type} · {p.number_of_floors ?? "-"} floors · {p.area_size ?? "-"} {p.area_unit}</div>
+              <div className="pl">{p.city}, {p.country} · {buildingTypeLabel(p.building_type)}
+                {p.number_of_floors ? ` · ${p.number_of_floors} floors` : ""}
+                {p.area_size ? ` · ${p.area_size} ${p.area_unit}` : ""}</div>
+              <div className="qproj-stats">
+                <div><b>{metrics[p.id]?.drawings ?? "—"}</b>drawings</div>
+                <div><b>{metrics[p.id]?.boq ?? "—"}</b>BOQ lines</div>
+                <div><b>{metrics[p.id]?.priced ? "Yes" : "No"}</b>priced</div>
+                <div>
+                  <b style={{ color: approvalTone(metrics[p.id]?.approvals) }}>{approvalWord(metrics[p.id]?.approvals)}</b>
+                  approvals
+                </div>
+              </div>
+              <div className="pm">
+                <span>{metrics[p.id]?.lastRun
+                  ? `Last analysed ${new Date(metrics[p.id].lastRun).toLocaleDateString(undefined,{day:"2-digit",month:"short"})}`
+                  : "Never analysed"}</span>
+                <span className="go">Open &rarr;</span>
+              </div>
             </div>
           ))}
         </div>
       )}
+      {q && matchedDrawings.length > 0 && (
+        <div className="mt-6">
+          <h3 className="text-sm font-bold mb-2">
+            Drawings matching “{query}” <span className="font-normal text-slate-400">({matchedDrawings.length})</span>
+          </h3>
+          <div className="qdash-projs">
+            {matchedDrawings.map(d => {
+              const proj = projectById[d.project_id];
+              return (
+                <div key={d.id} className="qdash-proj" onClick={() => proj && onOpenProject(proj)}>
+                  <div className="pn" style={{ fontSize: 14 }}>{d.file_name}</div>
+                  <div className="pl">{proj ? proj.project_name : "Project not available"}</div>
+                  <div className="pm">
+                    <span>{proj ? `${proj.city}, ${proj.country}` : ""}</span>
+                    <span className="go">Open project &rarr;</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {q && matchedDrawings.length === 0 && shownProjects.length > 0 && (
+        <div className="mt-4 text-xs text-slate-400">No drawings match “{query}”.</div>
+      )}
+
+      </div>{/* /main */}
+      </div>{/* /grid */}
+      </div>{/* /content column */}
+      </div>{/* /qapp */}
+    </div>
+  );
+}
+
+// A usage bar. Amber past three quarters, rose past nine tenths -- the point
+// where someone needs to act rather than just be informed.
+function Meter({ label, used, limit }) {
+  const has = limit != null && Number(limit) > 0;
+  const pct = has ? Math.min(100, Math.round((Number(used) / Number(limit)) * 100)) : 0;
+  const tone = !has ? "" : pct >= 90 ? " over" : pct >= 75 ? " warn" : "";
+  return (
+    <div className="qdash-meter">
+      <div className="ml"><span>{label}</span><b>{used}{has ? ` / ${limit}` : ""}</b></div>
+      <div className={`qdash-bar${tone}`}><i style={{ width: has ? `${pct}%` : "0%" }} /></div>
     </div>
   );
 }
@@ -3788,6 +4101,14 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // An existing project may hold a type that predates the list -- including one
+  // typed in here earlier -- so the form opens in free-text mode for it rather
+  // than silently snapping it back to a residential building.
+  const initialType = isEdit ? (existingProject.building_type || "") : "residential_building";
+  const [typeOther, setTypeOther] = useState(!!initialType && !BUILDING_TYPES.some(b => b[0] === initialType));
+  const [typeText, setTypeText] = useState(
+    BUILDING_TYPES.some(b => b[0] === initialType) ? "" : buildingTypeLabel(initialType)
+  );
 
   function toggleSystem(sys) {
     setForm(f => ({ ...f, required_systems: f.required_systems.includes(sys) ? f.required_systems.filter(s=>s!==sys) : [...f.required_systems, sys] }));
@@ -3843,12 +4164,43 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
             onChange={({ country, city }) => setForm(f => ({ ...f, country, city }))}
           />
         </div>
-        {/* Building Type, Number of Floors, Project Scope, and Required Systems were removed from this
-            form per a direct request to keep project setup minimal -- compliance only needs city/country.
-            Client, Consultant, and Area Size were also removed per a follow-up request ("not required").
-            The underlying columns/defaults still exist and are still used elsewhere (exports, dashboard
-            cards) for any project that already has them from before this change -- they're just no
-            longer collected up front for new/edited projects. */}
+        {/* Project type was removed from this form on 15 Aug to keep setup minimal, and
+            restored on Irfan's request the same day with a wider list and a free-text
+            escape. Number of Floors, Project Scope, Required Systems, Client, Consultant
+            and Area Size remain off the form; those columns still exist and are still
+            read by exports and dashboard cards for projects created before the change. */}
+        <div>
+          <label className="text-xs font-semibold text-slate-600">Type of Project</label>
+          {typeOther ? (
+            <div className="flex gap-2 mt-1">
+              <input
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                placeholder="e.g. Desalination plant"
+                value={typeText}
+                onChange={e => { setTypeText(e.target.value); setForm(f => ({ ...f, building_type: slugBuildingType(e.target.value) })); }}
+              />
+              <button type="button" className="text-xs font-semibold border px-3 rounded-lg hover:bg-slate-50 whitespace-nowrap"
+                onClick={() => { setTypeOther(false); setForm(f => ({ ...f, building_type: "residential_building" })); }}>
+                Pick from list
+              </button>
+            </div>
+          ) : (
+            <select
+              className="w-full border rounded-lg px-3 py-2 text-sm mt-1 bg-white"
+              value={form.building_type}
+              onChange={e => {
+                if (e.target.value === "__other__") { setTypeOther(true); setTypeText(""); setForm(f => ({ ...f, building_type: "" })); }
+                else setForm(f => ({ ...f, building_type: e.target.value }));
+              }}
+            >
+              {BUILDING_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              <option value="__other__">Something else — type it…</option>
+            </select>
+          )}
+          <p className="text-[11px] text-slate-400 mt-1">
+            The type steers which systems the AI expects to find and which products it recommends. Location still decides the authority rules.
+          </p>
+        </div>
         <div className="flex gap-3 pt-2">
           <button disabled={busy} className="bg-slate-900 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">{busy ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save Changes" : "Create Project")}</button>
           <button type="button" onClick={onCancel} className="px-5 py-2.5 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-100">Cancel</button>
@@ -6193,7 +6545,7 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
   );
 }
 
-function ProjectWorkspace({ project, onBack, onEdit, onDeleted }) {
+function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
   const [tab, setTab] = useState("overview");
   const [navOpen, setNavOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -6257,13 +6609,16 @@ function ProjectWorkspace({ project, onBack, onEdit, onDeleted }) {
 
   return (
     <div className="max-w-[1500px] mx-auto px-4 sm:px-6 py-6">
-      <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-900 mb-3">&larr; All projects</button>
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        {onHome && <button onClick={onHome} className="text-sm text-slate-500 hover:text-slate-900">&larr; Home</button>}
+        <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-900">All projects</button>
+      </div>
       <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">{project.project_name}</h1>
           <p className="text-slate-500 text-sm">
             {project.client_name ? `${project.client_name} · ` : ""}{project.city}, {project.country}
-            {" · "}{BUILDING_TYPES.find(b=>b[0]===project.building_type)?.[1]}
+            {" · "}{buildingTypeLabel(project.building_type)}
           </p>
         </div>
         <div className="flex gap-2">
@@ -6396,7 +6751,7 @@ function OverviewTab({ project, onViewFloors }) {
         <div className="text-sm font-semibold mb-3">Project Information</div>
         <InfoCardGrid>
           <InfoCard icon="location" tone="blue" label="Project Location" value={`${project.city || "—"}, ${project.country || "—"}`} />
-          <InfoCard icon="building" tone="violet" label="Building Type" value={BUILDING_TYPES.find(b => b[0] === project.building_type)?.[1] || project.building_type || "—"} />
+          <InfoCard icon="building" tone="violet" label="Building Type" value={buildingTypeLabel(project.building_type)} />
           <InfoCard icon="layers" tone="emerald" label="Floors" value={project.number_of_floors != null ? `${project.number_of_floors} Floors` : "—"}
             action={onViewFloors && <button onClick={onViewFloors} className="text-[11px] font-semibold text-blue-700 hover:underline shrink-0">View Floors →</button>} />
           <InfoCard icon="target" tone="amber" label="Project Scope" value={project.project_scope || "—"} />
@@ -7407,7 +7762,7 @@ function MarkupViewerModal({ drawing, onClose }) {
       const symbolExport = symbolItems.flatMap(({ item: it, group }) => {
         const bw = Math.max(group.w * 1.6, 0.011), bh = Math.max(group.h * 1.6, 0.011);
         return group.instances.map((pos, idx) => ({
-          color: systemColor(it.system_category),
+          color: colourOf(it),
           label: String(idx + 1),
           positions: [{ x: pos.x - bw / 2, y: pos.y - bh / 2 }],
           w: bw * canvas.width, h: bh * canvas.height,
@@ -7434,7 +7789,7 @@ function MarkupViewerModal({ drawing, onClose }) {
             w: boxWOf(t) * canvas.width, h: boxHOf(t) * canvas.height,
           }))
         : onPage.map(it => ({
-            color: systemColor(it.system_category),
+            color: colourOf(it),
             label: null,
             positions: positionsOf(it),
             w: boxW(it) * canvas.width, h: boxH(it) * canvas.height,
@@ -7481,6 +7836,11 @@ function MarkupViewerModal({ drawing, onClose }) {
     return acc;
   }, {});
   const unlocated = items.filter(i => !(i.coordinates && i.coordinates.x != null && i.coordinates.y != null));
+  // "Unlocated" means the AI gave no coordinate. It does not mean the customer
+  // cannot see where the item is: a line matched to a symbol on this sheet is
+  // numbered on the drawing, and calling it unlocated in the heading directly
+  // above those numbers is how you teach someone to distrust the marks.
+  const unlocatedMarked = unlocated.filter(i => symbolMap[i.id]);
   // Every position of one BOQ line, in order, so each can be numbered 1..N.
   // The first is whatever is in x/y; the rest come from instances[].
   const positionsOf = it => [
@@ -7490,6 +7850,20 @@ function MarkupViewerModal({ drawing, onClose }) {
   // A device box comes back at 1-3% of the page. That is the right size for a
   // highlight but leaves nowhere to hang a number, so enforce a floor.
   const MIN_MARKER = 0.012;
+
+  // One colour per BOQ line, fixed for the life of this modal so the drawing,
+  // the legend and the downloaded PNG can never disagree about which box is
+  // which item.
+  const itemColours = useMemo(() => {
+    const seen = {}, map = {};
+    for (const it of items) {
+      const k = it.system_category || "other";
+      map[it.id] = itemColour(k, seen[k] || 0);
+      seen[k] = (seen[k] || 0) + 1;
+    }
+    return map;
+  }, [items]);
+  const colourOf = it => itemColours[it.id] || systemColor(it.system_category);
 
   // Only countable lines can be marked as symbols. 34 m of cable tray is one
   // route, not 34 devices, and offering to "mark" it would teach the wrong idea
@@ -7655,7 +8029,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                 }) : undefined}>
                 <img src={imgUrl} className="w-full block" alt={drawing.file_name} />
                 {symbolItems.map(({ item: it, group, source }) => {
-                  const color = systemColor(it.system_category);
+                  const color = colourOf(it);
                   const isActive = activeItem === it.id;
                   const bw = Math.max(group.w * 1.6, 0.011);
                   const bh = Math.max(group.h * 1.6, 0.011);
@@ -7701,7 +8075,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                   );
                 })}
                 {!useSymbols && !useTags && onPage.map(it => {
-                  const color = systemColor(it.system_category);
+                  const color = colourOf(it);
                   const w = boxW(it), h = boxH(it);
                   const isActive = activeItem === it.id;
                   return (
@@ -7833,7 +8207,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                 </div>
                 <div className="grid md:grid-cols-2 gap-2">
                   {located.map(it => {
-                    const color = systemColor(it.system_category);
+                    const color = colourOf(it);
                     const marked = positionsOf(it).length;
                     const qty = Number(it.quantity);
                     // Only meaningful for countable items -- 34 m of cable tray is
@@ -7883,10 +8257,16 @@ function MarkupViewerModal({ drawing, onClose }) {
             {unlocated.length > 0 && (
               <div>
                 <div className="text-xs font-semibold text-slate-500 uppercase mb-2">
-                  {useTags ? `Not tagged on this page (${unlocated.length})` : `No location captured (${unlocated.length})`}
+                  {unlocatedMarked.length === unlocated.length
+                    ? `Marked from this drawing's symbols (${unlocated.length})`
+                    : unlocatedMarked.length > 0
+                      ? `${unlocatedMarked.length} of ${unlocated.length} marked from this drawing's symbols`
+                      : useTags ? `Not tagged on this page (${unlocated.length})` : `No location captured (${unlocated.length})`}
                 </div>
                 <div className="text-xs text-slate-400">
-                  {symbolGroups.length > 0
+                  {unlocatedMarked.length === unlocated.length
+                    ? "These lines carry no device tag, so the numbering above comes from the symbols drawn on the sheet. Each line has its own colour; the stripe beside a line is the colour of its boxes."
+                    : symbolGroups.length > 0
                     ? "This drawing does not tag these items, but the symbols are on it. Press \u201cMark on drawing\u201d beside a line and click one of those devices \u2014 every identical symbol on the page is then found and numbered for you."
                     : useTags
                       ? "Positions above come from the drawing's own device tags. These items carry no tag of their own — normal for cable, containment, licences and schedule rows, which are measured or listed rather than drawn as a tagged symbol."
@@ -7894,7 +8274,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                 </div>
                 <div className="grid md:grid-cols-2 gap-2 mt-2">
                   {unlocated.map(it => {
-                    const color = systemColor(it.system_category);
+                    const color = colourOf(it);
                     const mapped = symbolMap[it.id];
                     const g = mapped && symbolBySig[mapped.sig];
                     const qty = Number(it.quantity);
@@ -9603,7 +9983,7 @@ function ProductsTab({ project }) {
                 </div>
                 <div className="text-xs text-slate-500">{p.model_number}</div>
                 <div className="text-xs text-slate-600 mt-2">{p.specification}</div>
-                {isFit && <div className="text-[10px] font-semibold text-emerald-700 mt-2">★ Best fit for {BUILDING_TYPES.find(b=>b[0]===project.building_type)?.[1]}</div>}
+                {isFit && <div className="text-[10px] font-semibold text-emerald-700 mt-2">★ Best fit for {buildingTypeLabel(project.building_type)}</div>}
                 {p.recommendation_reason && <div className="text-xs text-slate-500 mt-1 italic">{p.recommendation_reason}</div>}
                 {p.compliance_notes && <div className="text-xs text-emerald-700 mt-2">✓ {p.compliance_notes}</div>}
               </div>
@@ -10685,6 +11065,8 @@ const QADMIN_NAV = [
   { group: "Work", key: "myprojects", label: "My Projects", sub: "Open your own projects with the full workspace" },
   { group: "Work", key: "projects", label: "Project Monitoring", sub: "Every project across every customer" },
   { group: "Work", key: "pipeline", label: "Estimating & Procurement", sub: "Bid pipeline, budgets, enquiries and approvals" },
+  { group: "Work", key: "approvals", label: "Approval Tracking", sub: "Where every approval on your own projects is sitting" },
+  { group: "Work", key: "estima", label: "Estima AI", sub: "Ask about a project's drawings, quantities and rules" },
   { group: "Business", key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
   { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
   { group: "Business", key: "discounts", label: "Discounts", sub: "Coupon codes, negotiated prices, and who has what" },
@@ -10692,6 +11074,8 @@ const QADMIN_NAV = [
   { group: "Business", key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
   { group: "Platform", key: "health", label: "System Health", sub: "Live status of core platform services" },
   { group: "Platform", key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
+  { group: "Platform", key: "compliance", label: "Compliance Rules", sub: "The authority library, by country and city" },
+  { group: "Platform", key: "settings", label: "Settings", sub: "Your account details and sign-in" },
 ];
 
 // One place to name an audit row, so a new adjustment type cannot silently
@@ -10733,6 +11117,27 @@ function qPlanPillClass(plan) {
   if (plan === "professional") return "pill plan-professional";
   if (plan === "enterprise") return "pill plan-enterprise";
   return "pill plan-free";
+}
+
+// The admin portal is dark and the customer pages are written against the same
+// CSS variables, so they drop straight in. What they need is the project list,
+// which the admin portal does not otherwise load.
+function QAdminOwnProjects({ render, onOpen }) {
+  const { projects, loading, error } = useProjects();
+  if (loading) return <div className="card panel" style={{ padding: 18, fontSize: 13 }}>Loading…</div>;
+  if (error) return <div className="card panel" style={{ padding: 18, fontSize: 13, color: "#fca5a5" }}>{error}</div>;
+  return <div className="qp-admin-embed">{render(projects, onOpen)}</div>;
+}
+
+function QAdminSettings() {
+  const [email, setEmail] = useState("");
+  useEffect(() => {
+    (async () => {
+      try { const { data } = await sb.auth.getUser(); setEmail(data?.user?.email || ""); }
+      catch (e) { console.error("QAdminSettings getUser failed:", e); }
+    })();
+  }, []);
+  return <div className="qp-admin-embed"><SettingsPage email={email} bare /></div>;
 }
 
 function AdminPortal({ onBack }) {
@@ -10997,6 +11402,22 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "health" && (
               <QHealthView systemStatus={systemStatus} />
+            )}
+            {activeView === "approvals" && (
+              <QAdminOwnProjects render={(projects, open) => (
+                <ApprovalTrackingPage projects={projects} onOpenProject={open} bare />
+              )} onOpen={p => setOpenProject(p)} />
+            )}
+            {activeView === "estima" && (
+              <QAdminOwnProjects render={(projects, open) => (
+                <EstimaPage projects={projects} onOpenProject={open} bare />
+              )} onOpen={p => setOpenProject(p)} />
+            )}
+            {activeView === "compliance" && (
+              <QAdminOwnProjects render={projects => <CompliancePage projects={projects} bare />} onOpen={p => setOpenProject(p)} />
+            )}
+            {activeView === "settings" && (
+              <QAdminSettings />
             )}
             {activeView === "reports" && (
               <QReportsView reportsData={reportsData} exportBusy={exportBusy}
@@ -11768,7 +12189,7 @@ function QMyProjectsView({ onOpen }) {
                 <td className="name">{p.project_name}</td>
                 <td>{p.client_name || "—"}</td>
                 <td>{[p.city, p.country].filter(Boolean).join(", ") || "—"}</td>
-                <td>{(BUILDING_TYPES.find(b => b[0] === p.building_type) || [])[1] || p.building_type || "—"}</td>
+                <td>{buildingTypeLabel(p.building_type)}</td>
                 <td><span className={`pill st-${p.status === "active" ? "active" : "trial"}`}>{SYSTEM_LABEL(p.status || "active")}</span></td>
                 <td className="num">{p.updated_at ? new Date(p.updated_at).toLocaleDateString() : "—"}</td>
                 <td className="num"><button className="btn btn-sm">Open workspace</button></td>
@@ -12549,9 +12970,1122 @@ function QReportsView({ reportsData, exportBusy, onPayments, onTrials, onSubs, o
   );
 }
 
+// ---------------------------------------------------------------------------
+// PORTAL SHELL (2026-08-15)
+// One navigation for the whole product. Every destination named here is a real
+// page: nothing is listed that opens a "coming soon".
+// ---------------------------------------------------------------------------
+const PORTAL_NAV = [
+  ["", [
+    ["home",       "Home",              "\u2302"],
+    ["dashboard",  "Projects",          "\u25A4"],
+    ["drawings",   "Drawings",          "\u25F1"],
+    ["boq",        "BOQ",               "\u2261"],
+    ["markup",     "Markup",            "\u25CE"],
+    ["compliance", "Compliance",        "\u2713"],
+    ["reports",    "Reports",           "\u25A6"],
+    ["estima",     "Estima AI",         "\u2726"],
+    ["approvals",  "Approval Tracking", "\u2611"],
+  ]],
+  ["Workspace", [
+    ["team",     "Team",                    "\u263A"],
+    ["billing",  "Billing & Subscription",  "\u25CB"],
+    ["settings", "Settings",                "\u2699"],
+    ["help",     "Help & Support",          "?"],
+  ]],
+];
+const PORTAL_LABEL = Object.fromEntries(
+  PORTAL_NAV.flatMap(g => g[1]).map(([k, l]) => [k, l])
+);
+
+function PortalShell({ view, onNavigate, onUpgrade, children }) {
+  const current = view.name === "new" || view.name === "edit" ? "dashboard" : view.name;
+  const Item = ([key, label, icon]) => (
+    <button key={key} className={`qp-item ${current === key ? "on" : ""}`} onClick={() => onNavigate(key)}>
+      <span className="ic" aria-hidden="true">{icon}</span>
+      <span className="lb">{label}</span>
+    </button>
+  );
+  return (
+    <div className="qp-shell">
+      <aside className="qp-side">
+        <div className="qp-brand">
+          <img src={QUANTORA_LOGO_URI} alt="" />
+          <span><b>Quantora</b><span>AI Construction Platform</span></span>
+        </div>
+        {PORTAL_NAV.map(([group, items]) => (
+          <div key={group || "main"}>
+            {group ? <div className="qp-grp">{group}</div> : null}
+            {items.map(Item)}
+          </div>
+        ))}
+        <div className="qp-side-foot">
+          <b>Upgrade your plan</b>
+          <p>More AI pages, more projects and more seats for your team.</p>
+          <button onClick={onUpgrade}>Upgrade Plan</button>
+        </div>
+      </aside>
+      <div className="qp-main">
+        <div className="qp-strip">
+          {PORTAL_NAV.flatMap(g => g[1]).map(([key, label]) => (
+            <button key={`strip-${key}`} className={current === key ? "on" : ""} onClick={() => onNavigate(key)}>{label}</button>
+          ))}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HOME
+// The page a customer lands on. It answers one question -- what should I do
+// next -- and every number on it is counted from their own data rather than
+// stored, so it cannot drift out of step with the projects it describes.
+// ---------------------------------------------------------------------------
+const HOME_TILES = [
+  ["new",        "New Project",       "Set up a project and its location",   "\u002B", "#4f46e5", "rgba(79,70,229,.12)"],
+  ["drawings",   "Upload Drawings",   "PDF, DWG or image files",             "\u2912", "#0ea5e9", "rgba(14,165,233,.13)"],
+  ["boq",        "Generate BOQ",      "Let the AI measure and price",        "\u2261", "#10b981", "rgba(16,185,129,.13)"],
+  ["markup",     "Draw & Markup",     "Check what was measured, on the sheet","\u25CE", "#f59e0b", "rgba(245,158,11,.14)"],
+  ["compliance", "Compliance Check",  "Against local codes and standards",   "\u2713", "#8b5cf6", "rgba(139,92,246,.13)"],
+  ["reports",    "Reports",           "Export BOQ, estimates and documents", "\u25A6", "#f43f5e", "rgba(244,63,94,.12)"],
+];
+const HOME_FLOW = [
+  ["Upload", "Drawings", "#4f46e5", "rgba(79,70,229,.12)"],
+  ["AI", "Analysis & detection", "#0ea5e9", "rgba(14,165,233,.13)"],
+  ["BOQ", "Take-off generated", "#10b981", "rgba(16,185,129,.13)"],
+  ["Markup", "Checked on the drawing", "#f59e0b", "rgba(245,158,11,.14)"],
+  ["Compliance", "Local authority check", "#8b5cf6", "rgba(139,92,246,.13)"],
+  ["Export", "Report and Excel", "#f43f5e", "rgba(244,63,94,.12)"],
+];
+
+function greetingFor(d) {
+  const h = d.getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email }) {
+  // The name comes from the profile or not at all. Deriving it from the email
+  // turns estimator@ into "Estimator" and info@ into "Info", which is worse
+  // than a greeting with no name in it.
+  const [fullName, setFullName] = useState("");
+  const [projects, setProjects] = useState([]);
+  const [metrics, setMetrics] = useState({});
+  const [usage, setUsage] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => { load(); loadUsage(); loadName(); }, []);
+
+  async function loadName() {
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) return;
+      const { data } = await sb.from("profiles").select("full_name").eq("id", user.id).maybeSingle();
+      const n = String(data?.full_name || "").trim();
+      if (n) setFullName(n.split(/\s+/)[0]);
+    } catch (e) { console.error("HomePage.loadName failed:", e); }
+  }
+
+  async function loadUsage() {
+    try { setUsage(await callBilling("usage_summary", {})); }
+    catch (e) { console.error("HomePage usage_summary failed:", e); }
+  }
+
+  async function load() {
+    setLoading(true); setErr(null);
+    try {
+      const { data: proj, error } = await sb.from("projects").select("*").order("created_at", { ascending: false });
+      if (error) throw error;
+      setProjects(proj || []);
+      const [{ data: dRows }, { data: bRows }, { data: eRows }, { data: rRows }] = await Promise.all([
+        sb.from("drawings").select("id, project_id, created_at"),
+        sb.from("boq_items").select("project_id"),
+        sb.from("project_estimates").select("project_id"),
+        sb.from("analysis_runs").select("project_id, created_at").order("created_at", { ascending: false }).limit(500),
+      ]);
+      const tally = rows => (rows || []).reduce((a, r) => (r.project_id ? (a[r.project_id] = (a[r.project_id] || 0) + 1, a) : a), {});
+      const d = tally(dRows), b = tally(bRows);
+      const priced = new Set((eRows || []).map(r => r.project_id));
+      const last = {};
+      (rRows || []).forEach(r => { if (r.project_id && !last[r.project_id]) last[r.project_id] = r.created_at; });
+      const m = {};
+      (proj || []).forEach(p => {
+        m[p.id] = { drawings: d[p.id] || 0, boq: b[p.id] || 0, priced: priced.has(p.id), lastRun: last[p.id] || null };
+      });
+      setMetrics(m);
+    } catch (e) {
+      console.error("HomePage.load failed:", e);
+      setErr(e.message || "Could not load your projects.");
+    } finally { setLoading(false); }
+  }
+
+  // "Continue your work" is ordered by what was touched last, not by what was
+  // created last -- the project someone came back for is the one they were in.
+  const recent = [...projects].sort((a, b) => {
+    const ta = metrics[a.id]?.lastRun || a.created_at || "";
+    const tb = metrics[b.id]?.lastRun || b.created_at || "";
+    return tb.localeCompare(ta);
+  }).slice(0, 3);
+
+  const hello = fullName ? `, ${fullName}` : "";
+
+  return (
+    <div>
+      <div className="qp-hero">
+        <div>
+          <h1>{greetingFor(new Date())}{hello}</h1>
+          <p>Turn your construction drawings into a complete BOQ in minutes.</p>
+        </div>
+        <div className="acts">
+          <button className="qp-btn pri" onClick={onNewProject}>+ New Project</button>
+          <button className="qp-btn" onClick={() => onNavigate("drawings")}>Upload Drawings</button>
+        </div>
+      </div>
+
+      <h3 className="qp-sec">What would you like to do today?</h3>
+      <div className="qp-tiles">
+        {HOME_TILES.map(([key, title, sub, glyph, colour, tint]) => (
+          <button key={key} className="qp-tile" onClick={() => (key === "new" ? onNewProject() : onNavigate(key))}>
+            <span className="ic" style={{ background: tint, color: colour }} aria-hidden="true">{glyph}</span>
+            <b>{title}</b>
+            <span>{sub}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="qp-flow">
+        <h3 className="qp-sec">How Quantora works</h3>
+        <div className="qp-flow-row">
+          {HOME_FLOW.map(([title, sub, colour, tint], i) => (
+            <React.Fragment key={title}>
+              <div className="qp-step">
+                <span className="n" style={{ background: tint, color: colour }}>{i + 1}</span>
+                <span className="t"><b>{title}</b><span>{sub}</span></span>
+              </div>
+              {i < HOME_FLOW.length - 1 && <span className="qp-arrow" aria-hidden="true">&rarr;</span>}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+
+      <div className="qp-cols">
+        <div>
+          <div className="qp-card">
+            <h4>Continue your work</h4>
+            {err ? <div className="qp-empty">{err}</div>
+             : loading ? <div className="qp-empty">Loading…</div>
+             : recent.length === 0 ? (
+              <div className="qp-empty">
+                No projects yet.{" "}
+                <button onClick={onNewProject} className="underline font-semibold">Create your first one</button>.
+              </div>
+             ) : (
+              <div className="qdash-projs">
+                {recent.map(p => {
+                  const m = metrics[p.id] || {};
+                  const stage = stageOf(m);
+                  return (
+                    <div key={p.id} className="qdash-proj" onClick={() => onOpenProject(p)}>
+                      <div className="pn">{p.project_name}</div>
+                      <div className="pl">{p.city}, {p.country}</div>
+                      <div className="qproj-stats">
+                        <div><b>{m.drawings ?? 0}</b>drawings</div>
+                        <div><b>{m.boq ?? 0}</b>BOQ lines</div>
+                        <div><b>{m.priced ? "Yes" : "No"}</b>priced</div>
+                      </div>
+                      <div className="pm">
+                        <span><StagePill stage={stage} /></span>
+                        <span className="go">Continue &rarr;</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+             )}
+            {projects.length > 3 && (
+              <button className="qp-btn" style={{ marginTop: 12 }} onClick={() => onNavigate("dashboard")}>
+                View all {projects.length} projects
+              </button>
+            )}
+          </div>
+
+          <div className="qp-card">
+            <h4>Recent BOQs</h4>
+            {loading ? <div className="qp-empty">Loading…</div>
+             : projects.length === 0 ? <div className="qp-empty">Nothing measured yet.</div>
+             : (
+              <div className="qp-wrap">
+                <table className="qp-table">
+                  <thead><tr><th>Project</th><th>Drawings</th><th>BOQ lines</th><th>Status</th><th></th></tr></thead>
+                  <tbody>
+                    {projects.slice(0, 6).map(p => {
+                      const m = metrics[p.id] || {};
+                      const st = m.priced ? ["Priced", "#10b981"]
+                        : m.boq > 0 ? ["Complete", "#3b82f6"]
+                        : m.drawings > 0 ? ["Processing", "#f59e0b"]
+                        : ["Not started", "#94a3b8"];
+                      return (
+                        <tr key={p.id}>
+                          <td className="nm">{p.project_name}</td>
+                          <td>{m.drawings ?? 0}</td>
+                          <td>{m.boq ? m.boq : "—"}</td>
+                          <td><span className="qp-badge" style={{ color: st[1], borderColor: st[1] }}>{st[0]}</span></td>
+                          <td><button className="qp-btn" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => onOpenProject(p)}>Open</button></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+             )}
+          </div>
+        </div>
+
+        <div>
+          <div className="qp-card">
+            <h4>Your plan</h4>
+            {usage ? (
+              <>
+                <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 12 }}>
+                  {usage.plan?.name || "Free"}
+                </div>
+                {[["AI requests", usage.chat], ["Pages analysed", usage.pages], ["Projects", usage.projects]]
+                  .filter(([, u]) => u)
+                  .map(([label, u]) => (
+                    <Meter key={label} label={label} used={u.used} limit={u.limit} />
+                  ))}
+                <button className="qp-btn pri" style={{ width: "100%", marginTop: 6 }} onClick={onUpgrade}>Upgrade Plan</button>
+              </>
+            ) : (
+              <div style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>
+                Plan usage is loading. Open <button onClick={() => onNavigate("billing")} className="underline font-semibold">Billing</button> for the full picture.
+              </div>
+            )}
+          </div>
+
+          <div className="qp-card">
+            <h4>Quick access</h4>
+            <button className="qp-quick" onClick={() => onNavigate("compliance")}>Compliance rules <em>&rsaquo;</em></button>
+            <button className="qp-quick" onClick={() => onNavigate("approvals")}>Approval tracking <em>&rsaquo;</em></button>
+            <button className="qp-quick" onClick={() => onNavigate("reports")}>Reports &amp; exports <em>&rsaquo;</em></button>
+            <button className="qp-quick" onClick={() => onNavigate("team")}>Team members <em>&rsaquo;</em></button>
+            <button className="qp-quick" onClick={() => onNavigate("billing")}>Billing &amp; invoices <em>&rsaquo;</em></button>
+            <button className="qp-quick" onClick={() => onNavigate("settings")}>Settings <em>&rsaquo;</em></button>
+          </div>
+
+          <div className="qp-card">
+            <h4>Need help?</h4>
+            <button className="qp-quick" onClick={() => onNavigate("help")}>Getting started guide <em>&rsaquo;</em></button>
+            <button className="qp-quick" onClick={() => onNavigate("estima")}>Ask Estima AI <em>&rsaquo;</em></button>
+            <button className="qp-quick" onClick={() => onNavigate("help")}>Contact support <em>&rsaquo;</em></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shared furniture for the app-level pages.
+// ---------------------------------------------------------------------------
+function PageHead({ title, sub, right, bare }) {
+  // Embedded in a shell that has already named the section -- the admin portal
+  // prints the nav entry's title and subtitle above the page -- a second
+  // heading is just noise. The buttons still matter, so they stay.
+  if (bare) return right ? <div className="qp-card" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{right}</div> : null;
+  return (
+    <div className="qp-hero" style={{ padding: "18px 22px" }}>
+      <div>
+        <h1 style={{ fontSize: 21 }}>{title}</h1>
+        {sub && <p>{sub}</p>}
+      </div>
+      {right && <div className="acts">{right}</div>}
+    </div>
+  );
+}
+
+// A project chooser. Several pages are genuinely per-project -- an export or an
+// AI conversation has to be about something -- so rather than hide those behind
+// the project list, the page asks which one and then shows the real thing.
+function ProjectChooser({ value, onChange, projects, label = "Project" }) {
+  return (
+    <div className="qp-card" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--q-text-dim,#64748b)" }}>{label}</span>
+      <select
+        value={value || ""}
+        onChange={e => onChange(projects.find(p => p.id === e.target.value) || null)}
+        className="border rounded-lg px-3 py-2 text-sm bg-white"
+        style={{ minWidth: 240, maxWidth: "100%" }}
+      >
+        <option value="">Choose a project…</option>
+        {projects.map(p => (
+          <option key={p.id} value={p.id}>{p.project_name} — {p.city}, {p.country}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// Every app-level page needs the same project list. One hook, one query.
+function useProjects() {
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { data, error: e } = await sb.from("projects").select("*").order("created_at", { ascending: false });
+        if (e) throw e;
+        if (alive) setProjects(data || []);
+      } catch (e) {
+        console.error("useProjects failed:", e);
+        if (alive) setError(e.message || "Could not load projects.");
+      } finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+  return { projects, loading, error };
+}
+
+// ---------------------------------------------------------------------------
+// COMPLIANCE — standalone, by jurisdiction
+// Built independently of any project on purpose. The question "what does Dubai
+// require for a hotel" is asked while deciding whether to bid, which is before
+// the project exists.
+// ---------------------------------------------------------------------------
+function CompliancePage({ projects, bare }) {
+  const [locs, setLocs] = useState(null);
+  const [country, setCountry] = useState("");
+  const [city, setCity] = useState("");
+  const [rules, setRules] = useState([]);
+  const [system, setSystem] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { data, error } = await sb.from("supported_locations")
+          .select("country, city, region, sort_order").eq("is_active", true)
+          .order("sort_order", { ascending: true });
+        if (error) throw error;
+        if (!alive) return;
+        setLocs(data || []);
+        // Open on the jurisdiction the customer already works in rather than
+        // an alphabetical default they would have to change every time.
+        const first = projects[0];
+        const start = first?.country || (data || [])[0]?.country || "";
+        setCountry(start);
+        setCity(first?.country === start ? (first.city || "") : "");
+      } catch (e) {
+        console.error("supported_locations failed:", e);
+        if (alive) { setLocs([]); setErr(e.message); }
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const countries = useMemo(() => {
+    const seen = new Map();
+    (locs || []).forEach(r => { if (!seen.has(r.country)) seen.set(r.country, r.region || ""); });
+    return Array.from(seen, ([name, region]) => ({ name, region }));
+  }, [locs]);
+  const cities = useMemo(
+    () => (locs || []).filter(r => r.country === country && r.city).map(r => r.city),
+    [locs, country]
+  );
+
+  useEffect(() => { if (country) load(); }, [country, city]);
+
+  async function load() {
+    setLoading(true); setErr(null);
+    try {
+      const { data, error } = await sb.rpc("get_compliance_rules", { p_country: country, p_city: city || null });
+      if (error) throw error;
+      setRules(data || []);
+    } catch (e) {
+      console.error("get_compliance_rules failed:", e);
+      setErr(e.message || "Could not load the rules for this location.");
+      setRules([]);
+    } finally { setLoading(false); }
+  }
+
+  const systems = useMemo(
+    () => Array.from(new Set(rules.map(r => r.system_category))).sort(),
+    [rules]
+  );
+  const shown = system ? rules.filter(r => r.system_category === system) : rules;
+  const cityCount = rules.filter(r => r.match_level === "city").length;
+
+  return (
+    <div>
+      <PageHead
+        bare={bare}
+        title="Compliance & Rules"
+        sub="Authority requirements, approvals and certificates for a chosen country and city. No project needed — look a jurisdiction up before you bid."
+      />
+
+      <div className="qp-card" style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div>
+          <label className="text-xs font-semibold text-slate-600">Country</label>
+          <select value={country} onChange={e => { setCountry(e.target.value); setCity(""); }}
+            className="border rounded-lg px-3 py-2 text-sm bg-white block mt-1" style={{ minWidth: 200 }}>
+            {countries.length === 0 && <option value="">Loading…</option>}
+            {countries.map(c => <option key={c.name} value={c.name}>{c.name}{c.region ? ` — ${c.region}` : ""}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-slate-600">City</label>
+          <select value={city} onChange={e => setCity(e.target.value)}
+            className="border rounded-lg px-3 py-2 text-sm bg-white block mt-1" style={{ minWidth: 200 }}>
+            <option value="">All cities in {country || "this country"}</option>
+            {cities.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        {systems.length > 0 && (
+          <div>
+            <label className="text-xs font-semibold text-slate-600">System</label>
+            <select value={system} onChange={e => setSystem(e.target.value)}
+              className="border rounded-lg px-3 py-2 text-sm bg-white block mt-1" style={{ minWidth: 200 }}>
+              <option value="">All systems ({rules.length} rules)</option>
+              {systems.map(sy => <option key={sy} value={sy}>{SYSTEM_LABEL(sy)}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {loading ? <div className="qp-empty">Loading the rules for {city || country}…</div>
+       : err ? <div className="qp-empty" style={{ color: "#f43f5e", borderColor: "#f43f5e" }}>{err}</div>
+       : rules.length === 0 ? (
+        <div className="qp-empty">
+          No rules held for <strong>{city ? `${city}, ` : ""}{country}</strong> yet. The library covers the GCC,
+          South Asia, South East Asia, Hong Kong, the UK, the US and Australia. Ask us to add a jurisdiction and we will.
+        </div>
+       ) : (
+        <>
+          <p style={{ fontSize: 12, color: "var(--q-text-dimmer,#94a3b8)", margin: "0 0 12px 2px" }}>
+            {shown.length} rule{shown.length === 1 ? "" : "s"} shown
+            {city ? ` · ${cityCount} specific to ${city}, the rest national` : ` · every city in ${country}`}
+          </p>
+          <div className="grid md:grid-cols-2 gap-4">
+            {shown.map(r => (
+              <div key={r.id} className="bg-white border rounded-xl p-4">
+                <div className="flex items-center justify-between mb-1 gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wide bg-slate-900 text-white px-2 py-0.5 rounded-full">{SYSTEM_LABEL(r.system_category)}</span>
+                  <span className={"text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap " +
+                    (r.match_level === "city" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-slate-100 text-slate-500 border border-slate-200")}>
+                    {r.match_level === "city" ? (r.city || "City") : `${r.country} national`}
+                  </span>
+                </div>
+                <div className="text-sm font-semibold mt-2">{r.authority}</div>
+                <div className="text-sm text-slate-600 mt-1">{r.requirement}</div>
+                <div className="text-xs text-slate-500 mt-2 space-y-0.5">
+                  {r.required_approval && <div><strong>Approval:</strong> {r.required_approval}</div>}
+                  {r.required_certificate && <div><strong>Certificate:</strong> {r.required_certificate}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// APPROVAL TRACKING — every approval, every project, one list
+// ---------------------------------------------------------------------------
+function ApprovalTrackingPage({ projects, onOpenProject, bare }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [filter, setFilter] = useState("open");
+
+  useEffect(() => { load(); }, [projects.length]);
+
+  async function load() {
+    setLoading(true); setErr(null);
+    try {
+      const [{ data: tenders }, { data: aps }] = await Promise.all([
+        sb.from("tenders").select("id, project_id"),
+        sb.from("approvals").select("*").order("created_at", { ascending: false }),
+      ]);
+      const projectOfTender = Object.fromEntries((tenders || []).map(t => [t.id, t.project_id]));
+      const byId = Object.fromEntries(projects.map(p => [p.id, p]));
+      setRows((aps || []).map(a => ({ ...a, project: byId[projectOfTender[a.tender_id]] || null })));
+    } catch (e) {
+      console.error("ApprovalTrackingPage.load failed:", e);
+      setErr(e.message || "Could not load approvals.");
+    } finally { setLoading(false); }
+  }
+
+  const isOpen = a => a.status !== "approved" && a.status !== "rejected";
+  const counts = {
+    all: rows.length,
+    open: rows.filter(isOpen).length,
+    approved: rows.filter(a => a.status === "approved").length,
+    rejected: rows.filter(a => a.status === "rejected" || a.status === "changes_requested").length,
+  };
+  const shown = filter === "all" ? rows
+    : filter === "open" ? rows.filter(isOpen)
+    : filter === "approved" ? rows.filter(a => a.status === "approved")
+    : rows.filter(a => a.status === "rejected" || a.status === "changes_requested");
+
+  const tone = st => st === "approved" ? "#10b981"
+    : st === "rejected" || st === "changes_requested" ? "#f43f5e"
+    : "#f59e0b";
+
+  function waitingOn(a) {
+    const chain = Array.isArray(a.chain) ? a.chain : [];
+    const step = chain.find(c => c.step === a.current_step);
+    if (a.status === "approved") return "Complete";
+    if (a.status === "rejected") return "Returned";
+    if (!step) return "—";
+    return step.name || step.email || step.role || `Step ${a.current_step}`;
+  }
+
+  return (
+    <div>
+      <PageHead
+        bare={bare}
+        title="Approval Tracking"
+        sub="Every approval you have raised, across every project, with who it is currently sitting with."
+      />
+
+      <div className="qp-card" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {[["open", "Waiting"], ["approved", "Approved"], ["rejected", "Returned"], ["all", "All"]].map(([k, l]) => (
+          <button key={k} onClick={() => setFilter(k)}
+            className="qp-btn" style={filter === k ? { background: "#4f46e5", borderColor: "#4f46e5", color: "#fff" } : {}}>
+            {l} ({counts[k]})
+          </button>
+        ))}
+      </div>
+
+      {loading ? <div className="qp-empty">Loading…</div>
+       : err ? <div className="qp-empty" style={{ color: "#f43f5e", borderColor: "#f43f5e" }}>{err}</div>
+       : shown.length === 0 ? (
+        <div className="qp-empty">
+          {rows.length === 0
+            ? "No approvals raised yet. Open a project, run a supplier comparison, and send the recommendation for approval."
+            : "Nothing in this state."}
+        </div>
+       ) : (
+        <div className="qp-card">
+          <div className="qp-wrap">
+            <table className="qp-table">
+              <thead>
+                <tr><th>Approval</th><th>Project</th><th>Value</th><th>Waiting on</th><th>Raised</th><th>Status</th><th></th></tr>
+              </thead>
+              <tbody>
+                {shown.map(a => (
+                  <tr key={a.id}>
+                    <td className="nm">{a.title}</td>
+                    <td>{a.project ? a.project.project_name : "—"}</td>
+                    <td>{a.amount_cents ? `${a.currency || ""} ${(a.amount_cents / 100).toLocaleString()}` : "—"}</td>
+                    <td>{waitingOn(a)}</td>
+                    <td>{a.created_at ? new Date(a.created_at).toLocaleDateString() : "—"}</td>
+                    <td><span className="qp-badge" style={{ color: tone(a.status), borderColor: tone(a.status) }}>{String(a.status || "pending").replace(/_/g, " ")}</span></td>
+                    <td>
+                      {a.project && (
+                        <button className="qp-btn" style={{ padding: "5px 12px", fontSize: 12 }}
+                          onClick={() => onOpenProject(a.project)}>Open</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DRAWINGS — every sheet, every project
+// ---------------------------------------------------------------------------
+function DrawingsPage({ projects, onOpenProject }) {
+  const [rows, setRows] = useState([]);
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [marking, setMarking] = useState(null);
+
+  useEffect(() => { load(); }, [projects.length]);
+  async function load() {
+    setLoading(true); setErr(null);
+    try {
+      const { data, error } = await sb.from("drawings").select("*").order("created_at", { ascending: false });
+      if (error) throw error;
+      setRows(data || []);
+    } catch (e) {
+      console.error("DrawingsPage.load failed:", e);
+      setErr(e.message || "Could not load drawings.");
+    } finally { setLoading(false); }
+  }
+
+  const byId = Object.fromEntries(projects.map(p => [p.id, p]));
+  const term = q.trim().toLowerCase();
+  const shown = !term ? rows : rows.filter(d => {
+    const p = byId[d.project_id];
+    return [d.file_name, p?.project_name, p?.city].filter(Boolean).join(" ").toLowerCase().includes(term);
+  });
+
+  return (
+    <div>
+      <PageHead
+        title="Drawings"
+        sub="Every sheet uploaded across all of your projects. Open one to check the markup, or jump into the project it belongs to."
+      />
+      <div className="qp-card">
+        <div className="qsearch">
+          <span className="ic">&#9906;</span>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by sheet or project…" />
+          {q && <button className="clr" onClick={() => setQ("")} aria-label="Clear search">&times;</button>}
+        </div>
+      </div>
+
+      {loading ? <div className="qp-empty">Loading…</div>
+       : err ? <div className="qp-empty" style={{ color: "#f43f5e", borderColor: "#f43f5e" }}>{err}</div>
+       : shown.length === 0 ? (
+        <div className="qp-empty">
+          {rows.length === 0 ? "No drawings uploaded yet. Open a project and use Drawings & Upload." : `Nothing matches “${q}”.`}
+        </div>
+       ) : (
+        <div className="qp-card">
+          <div className="qp-wrap">
+            <table className="qp-table">
+              <thead><tr><th>Sheet</th><th>Project</th><th>Type</th><th>Uploaded</th><th></th></tr></thead>
+              <tbody>
+                {shown.slice(0, 200).map(d => {
+                  const p = byId[d.project_id];
+                  return (
+                    <tr key={d.id}>
+                      <td className="nm">{d.file_name}</td>
+                      <td>{p ? p.project_name : "—"}</td>
+                      <td>{String(d.file_type || "").toUpperCase() || "—"}</td>
+                      <td>{d.created_at ? new Date(d.created_at).toLocaleDateString() : "—"}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <button className="qp-btn" style={{ padding: "5px 12px", fontSize: 12, marginRight: 6 }}
+                          onClick={() => setMarking(d)}>Markup</button>
+                        {p && <button className="qp-btn" style={{ padding: "5px 12px", fontSize: 12 }}
+                          onClick={() => onOpenProject(p)}>Project</button>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {shown.length > 200 && (
+            <p style={{ fontSize: 11.5, color: "var(--q-text-dimmer,#94a3b8)", marginTop: 10 }}>
+              Showing the first 200 of {shown.length}. Narrow the search to see the rest.
+            </p>
+          )}
+        </div>
+       )}
+      {marking && <MarkupViewerModal drawing={marking} onClose={() => setMarking(null)} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BOQ — what has been measured, per project
+// ---------------------------------------------------------------------------
+function BoqPage({ projects, onOpenProject }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => { load(); }, [projects.length]);
+  async function load() {
+    setLoading(true); setErr(null);
+    try {
+      const { data, error } = await sb.from("boq_items").select("project_id, system_category, quantity, unit_cost_cents");
+      if (error) throw error;
+      setItems(data || []);
+    } catch (e) {
+      console.error("BoqPage.load failed:", e);
+      setErr(e.message || "Could not load the BOQ.");
+    } finally { setLoading(false); }
+  }
+
+  const per = {};
+  items.forEach(it => {
+    const r = per[it.project_id] || (per[it.project_id] = { lines: 0, systems: new Set(), valued: 0, priced: 0 });
+    r.lines++;
+    if (it.system_category) r.systems.add(it.system_category);
+    if (it.unit_cost_cents != null) {
+      r.priced++;
+      r.valued += Math.round((Number(it.quantity) || 0) * Number(it.unit_cost_cents));
+    }
+  });
+
+  const withBoq = projects.filter(p => per[p.id]);
+
+  return (
+    <div>
+      <PageHead
+        title="Bill of Quantities"
+        sub="What has been measured so far, project by project. Open one to edit lines, apply rates or export."
+      />
+      {loading ? <div className="qp-empty">Loading…</div>
+       : err ? <div className="qp-empty" style={{ color: "#f43f5e", borderColor: "#f43f5e" }}>{err}</div>
+       : withBoq.length === 0 ? (
+        <div className="qp-empty">Nothing measured yet. Upload a drawing package and run the analysis.</div>
+       ) : (
+        <div className="qp-card">
+          <div className="qp-wrap">
+            <table className="qp-table">
+              <thead><tr><th>Project</th><th>BOQ lines</th><th>Systems</th><th>Lines with a rate</th><th>Material value</th><th></th></tr></thead>
+              <tbody>
+                {withBoq.map(p => {
+                  const r = per[p.id];
+                  return (
+                    <tr key={p.id}>
+                      <td className="nm">{p.project_name}<div style={{ fontSize: 11, color: "var(--q-text-dimmer,#94a3b8)", fontWeight: 500 }}>{p.city}, {p.country}</div></td>
+                      <td>{r.lines}</td>
+                      <td>{r.systems.size}</td>
+                      <td>{r.priced} of {r.lines}</td>
+                      <td>{r.valued ? `$${(r.valued / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}</td>
+                      <td><button className="qp-btn" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => onOpenProject(p)}>Open</button></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p style={{ fontSize: 11.5, color: "var(--q-text-dimmer,#94a3b8)", marginTop: 10 }}>
+            Material value is quantity times unit rate for the lines that carry one. It is not the selling price —
+            labour, staff and margin are added on the Estimation page inside a project.
+          </p>
+        </div>
+       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MARKUP — pick a sheet and check it
+// ---------------------------------------------------------------------------
+function MarkupPage({ projects, onOpenProject }) {
+  return (
+    <div>
+      <PageHead
+        title="Markup"
+        sub="Open any sheet and see every measured item boxed and numbered on the drawing, each BOQ line in its own colour."
+      />
+      <DrawingsPage projects={projects} onOpenProject={onOpenProject} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// REPORTS / ESTIMA AI — per-project capabilities, reached without hunting for
+// the project first. Both render the existing tab rather than a second copy.
+// ---------------------------------------------------------------------------
+function ReportsPage({ projects, onOpenProject }) {
+  const [picked, setPicked] = useState(projects[0] || null);
+  useEffect(() => { if (!picked && projects.length) setPicked(projects[0]); }, [projects.length]);
+  return (
+    <div>
+      <PageHead
+        title="Reports & Exports"
+        sub="BOQ, estimate, tender documents and compliance, as Excel or a formatted report."
+        right={picked ? [<button key="o" className="qp-btn" onClick={() => onOpenProject(picked)}>Open project</button>] : null}
+      />
+      <ProjectChooser value={picked?.id} onChange={setPicked} projects={projects} label="Report for" />
+      {projects.length === 0 ? <div className="qp-empty">No projects yet.</div>
+       : !picked ? <div className="qp-empty">Choose a project to export.</div>
+       : <div className="qp-card"><ExportTab project={picked} /></div>}
+    </div>
+  );
+}
+
+function EstimaPage({ projects, onOpenProject, bare }) {
+  const [picked, setPicked] = useState(projects[0] || null);
+  useEffect(() => { if (!picked && projects.length) setPicked(projects[0]); }, [projects.length]);
+  return (
+    <div>
+      <PageHead
+        bare={bare}
+        title="Estima AI"
+        sub="Ask about a project's drawings, quantities, specification or the local rules — it answers from that project's own data."
+        right={picked ? [<button key="o" className="qp-btn" onClick={() => onOpenProject(picked)}>Open project</button>] : null}
+      />
+      <ProjectChooser value={picked?.id} onChange={setPicked} projects={projects} label="Ask about" />
+      {projects.length === 0 ? (
+        <div className="qp-empty">Estima AI answers questions about a project, so create one first.</div>
+      ) : !picked ? <div className="qp-empty">Choose a project to ask about.</div>
+       : <div className="qp-card"><ChatTab project={picked} /></div>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TEAM / BILLING / SETTINGS / HELP
+// ---------------------------------------------------------------------------
+function TeamPage() {
+  return (
+    <div>
+      <PageHead title="Team" sub="Who can reach your projects, and how many seats your plan allows." />
+      <div className="qp-card"><TeamPanel /></div>
+    </div>
+  );
+}
+
+function BillingPage({ onUpgrade }) {
+  const [usage, setUsage] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try { setUsage(await callBilling("usage_summary", {})); }
+      catch (e) { console.error("usage_summary failed:", e); setErr(e.message); }
+    })();
+  }, []);
+  return (
+    <div>
+      <PageHead
+        title="Billing & Subscription"
+        sub="Your plan, what you have used this period, and how to change it."
+        right={[<button key="u" className="qp-btn pri" onClick={onUpgrade}>Upgrade Plan</button>]}
+      />
+      <div className="qp-card">
+        {err ? <div style={{ fontSize: 13, color: "#f43f5e" }}>{err}</div>
+         : !usage ? <div className="qp-empty">Loading…</div>
+         : (
+          <>
+            <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{usage.plan?.name || "Free"}</div>
+            {usage.plan?.is_trial && usage.trial_days_remaining != null && (
+              <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+                Trial ends in {usage.trial_days_remaining} day{usage.trial_days_remaining === 1 ? "" : "s"}.
+              </p>
+            )}
+            <div style={{ marginTop: 12 }}>
+              {[["Projects", usage.projects], ["AI pages", usage.pages], ["Rework", usage.rework], ["AI chat", usage.chat]]
+                .filter(([, u]) => u)
+                .map(([label, u]) => <Meter key={label} label={label} used={u.used} limit={u.limit} />)}
+            </div>
+          </>
+         )}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage({ email, bare }) {
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("");
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) return;
+        const { data } = await sb.from("profiles").select("full_name, role").eq("id", user.id).maybeSingle();
+        if (data) { setName(data.full_name || ""); setRole(data.role || ""); }
+      } catch (e) { console.error("SettingsPage load failed:", e); }
+    })();
+  }, []);
+
+  async function saveName() {
+    setBusy("name"); setMsg(null);
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { error } = await sb.from("profiles").update({ full_name: name }).eq("id", user.id);
+      if (error) throw error;
+      setMsg({ ok: true, text: "Name saved." });
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
+    finally { setBusy(""); }
+  }
+
+  async function savePassword() {
+    setMsg(null);
+    if (pw1.length < 8) { setMsg({ ok: false, text: "Use at least 8 characters." }); return; }
+    if (pw1 !== pw2) { setMsg({ ok: false, text: "The two passwords do not match." }); return; }
+    setBusy("pw");
+    try {
+      const { error } = await sb.auth.updateUser({ password: pw1 });
+      if (error) throw error;
+      setPw1(""); setPw2("");
+      setMsg({ ok: true, text: "Password changed." });
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
+    finally { setBusy(""); }
+  }
+
+  return (
+    <div>
+      <PageHead bare={bare} title="Settings" sub="Your account details and sign-in." />
+      {msg && (
+        <div className="qp-card" style={{ color: msg.ok ? "#10b981" : "#f43f5e", fontSize: 13, fontWeight: 600 }}>
+          {msg.text}
+        </div>
+      )}
+      <div className="qp-card">
+        <h4>Your details</h4>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs font-semibold text-slate-600">Full name</label>
+            <input value={name} onChange={e => setName(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm mt-1" placeholder="Your name" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-600">Email</label>
+            <input value={email || ""} readOnly
+              className="w-full border rounded-lg px-3 py-2 text-sm mt-1 bg-slate-50 text-slate-500" />
+          </div>
+        </div>
+        <p style={{ fontSize: 11.5, color: "var(--q-text-dimmer,#94a3b8)", margin: "8px 0 12px" }}>
+          Your role on this account is <strong>{role || "member"}</strong>. Email is the sign-in address and is changed by support.
+        </p>
+        <button className="qp-btn pri" disabled={busy === "name"} onClick={saveName}>
+          {busy === "name" ? "Saving…" : "Save name"}
+        </button>
+      </div>
+
+      <div className="qp-card">
+        <h4>Change password</h4>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs font-semibold text-slate-600">New password</label>
+            <input type="password" value={pw1} onChange={e => setPw1(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm mt-1" placeholder="At least 8 characters" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-600">Repeat it</label>
+            <input type="password" value={pw2} onChange={e => setPw2(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm mt-1" />
+          </div>
+        </div>
+        <button className="qp-btn pri" style={{ marginTop: 12 }} disabled={busy === "pw"} onClick={savePassword}>
+          {busy === "pw" ? "Changing…" : "Change password"}
+        </button>
+      </div>
+
+      <div className="qp-card">
+        <h4>Sign out</h4>
+        <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+          Signs this browser out. Your projects and drawings are untouched.
+        </p>
+        <button className="qp-btn" onClick={() => sb.auth.signOut()}>Sign out</button>
+      </div>
+    </div>
+  );
+}
+
+function HelpPage({ onNavigate }) {
+  const STEPS = [
+    ["Create a project", "Name it and set the country and city — the location is what decides which authority rules apply."],
+    ["Upload the drawings", "PDF, DWG or images. A multi-page package can be classified page by page so you only pay to process the sheets you need."],
+    ["Let the AI measure", "It reads the drawings, produces the BOQ and tells you which system each line belongs to."],
+    ["Check it on the drawing", "Markup boxes every measured item on the sheet, numbered, each BOQ line in its own colour. This is the step that catches mistakes."],
+    ["Price it", "Apply rates, labour and staff on the Estimation page, then set your margin."],
+    ["Check compliance and export", "Compare against the local rules, then export the BOQ, the estimate or a full report."],
+  ];
+  return (
+    <div>
+      <PageHead title="Help & Support" sub="How the platform works, and how to reach us." />
+      <div className="qp-card">
+        <h4>Getting started</h4>
+        <ol style={{ paddingLeft: 18, margin: 0 }}>
+          {STEPS.map(([t, d]) => (
+            <li key={t} style={{ fontSize: 13, marginBottom: 10, lineHeight: 1.55 }}>
+              <strong>{t}.</strong> <span style={{ color: "var(--q-text-dim,#64748b)" }}>{d}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+      <div className="qp-card">
+        <h4>Ask the AI first</h4>
+        <p style={{ fontSize: 13, color: "var(--q-text-dim,#64748b)", marginBottom: 12, lineHeight: 1.55 }}>
+          Estima AI answers questions about your own project — what is in the BOQ, what the specification says,
+          what the local authority requires. It is usually faster than waiting for a reply.
+        </p>
+        <button className="qp-btn pri" onClick={() => onNavigate("estima")}>Open Estima AI</button>
+      </div>
+      <div className="qp-card">
+        <h4>Contact support</h4>
+        <p style={{ fontSize: 13, color: "var(--q-text-dim,#64748b)", lineHeight: 1.55 }}>
+          Email <a href="mailto:support@quantoraengineering.com" className="underline font-semibold">support@quantoraengineering.com</a> and
+          include the project name. If it is about a drawing, say which sheet — it saves a round trip.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// Everything under the top bar. Kept out of App so the routing reads as one
+// list rather than being tangled up with session, banners and modals.
+function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) {
+  const { projects } = useProjects();
+  const openProject = p => setView({ name: "project", project: p });
+  const go = name => setView({ name });
+
+  // A project workspace and the admin portal each own the whole width: both
+  // already carry their own navigation, and stacking a second one beside them
+  // leaves the actual work too narrow to use.
+  if (view.name === "project") {
+    return <ProjectWorkspace project={view.project}
+      onBack={()=>go("dashboard")} onHome={()=>go("home")}
+      onEdit={()=>setView({name:"edit", project:view.project})} onDeleted={()=>go("dashboard")} />;
+  }
+  if (view.name === "admin" && isPlatformAdmin) {
+    return <AdminPortal onBack={()=>go("home")} />;
+  }
+
+  const email = session?.user?.email;
+  const page = (() => {
+    switch (view.name) {
+      case "home":
+        return <HomePage onNavigate={go} onOpenProject={openProject}
+          onNewProject={()=>go("new")} onUpgrade={onOpenBilling} email={email} />;
+      case "dashboard":
+        return <Dashboard onOpenProject={openProject} onNewProject={()=>go("new")} onOpenBilling={onOpenBilling} />;
+      case "new":
+        return <NewProjectForm onCreated={openProject} onCancel={()=>go("dashboard")} />;
+      case "edit":
+        return <NewProjectForm existingProject={view.project} onCreated={openProject}
+          onCancel={()=>setView({name:"project", project:view.project})} />;
+      case "drawings":   return <DrawingsPage projects={projects} onOpenProject={openProject} />;
+      case "boq":        return <BoqPage projects={projects} onOpenProject={openProject} />;
+      case "markup":     return <MarkupPage projects={projects} onOpenProject={openProject} />;
+      case "compliance": return <CompliancePage projects={projects} />;
+      case "reports":    return <ReportsPage projects={projects} onOpenProject={openProject} />;
+      case "estima":     return <EstimaPage projects={projects} onOpenProject={openProject} />;
+      case "approvals":  return <ApprovalTrackingPage projects={projects} onOpenProject={openProject} />;
+      case "team":       return <TeamPage />;
+      case "billing":    return <BillingPage onUpgrade={onOpenBilling} />;
+      case "settings":   return <SettingsPage email={email} />;
+      case "help":       return <HelpPage onNavigate={go} />;
+      default:
+        return <HomePage onNavigate={go} onOpenProject={openProject}
+          onNewProject={()=>go("new")} onUpgrade={onOpenBilling} email={email} />;
+    }
+  })();
+
+  return (
+    <PortalShell view={view} onNavigate={go} onUpgrade={onOpenBilling}>
+      {page}
+    </PortalShell>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(undefined);
-  const [view, setView] = useState({ name: "dashboard" });
+  // Home, not the project list. Signing in should answer "what should I do
+  // next", and a bare list of projects does not.
+  const [view, setView] = useState({ name: "home" });
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState("signin");
   const [billingModal, setBillingModal] = useState({ open: false, reason: "" });
@@ -12683,7 +14217,7 @@ function App() {
             emoji -- a base character plus a variation selector -- and where the
             device font lacks that pair the browser draws a missing-glyph box,
             which is what a customer on Android was seeing. */}
-        <div className="font-bold cursor-pointer flex items-center gap-2" onClick={()=>setView({name:"dashboard"})}>
+        <div className="font-bold cursor-pointer flex items-center gap-2" onClick={()=>setView({name:"home"})}>
           <img src={QUANTORA_LOGO_URI} alt="" width="26" height="26"
                style={{ width: 26, height: 26, borderRadius: 6, display: "block" }} />
           <span>Quantora <span className="text-blue-700">Engineering</span></span>
@@ -12702,11 +14236,13 @@ function App() {
           <button onClick={()=>setBillingBanner(null)} className="text-xs underline">Dismiss</button>
         </div>
       )}
-      {view.name === "dashboard" && <Dashboard onOpenProject={(p)=>setView({name:"project", project:p})} onNewProject={()=>setView({name:"new"})} onOpenBilling={()=>setBillingModal({ open: true, reason: "" })} />}
-      {view.name === "new" && <NewProjectForm onCreated={(p)=>setView({name:"project", project:p})} onCancel={()=>setView({name:"dashboard"})} />}
-      {view.name === "project" && <ProjectWorkspace project={view.project} onBack={()=>setView({name:"dashboard"})} onEdit={()=>setView({name:"edit", project:view.project})} onDeleted={()=>setView({name:"dashboard"})} />}
-      {view.name === "edit" && <NewProjectForm existingProject={view.project} onCreated={(p)=>setView({name:"project", project:p})} onCancel={()=>setView({name:"project", project:view.project})} />}
-      {view.name === "admin" && isPlatformAdmin && <AdminPortal onBack={()=>setView({name:"dashboard"})} />}
+      <PortalBody
+        view={view}
+        setView={setView}
+        session={session}
+        isPlatformAdmin={isPlatformAdmin}
+        onOpenBilling={()=>setBillingModal({ open: true, reason: "" })}
+      />
       <UpgradePlanModal open={billingModal.open} reason={billingModal.reason} onClose={()=>setBillingModal({ open: false, reason: "" })} />
     </div>
   );
@@ -12865,6 +14401,164 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
   text-shadow:0 1px 1px rgba(0,0,0,0.35)}
 .qtr-item-active{border-color:#fb7185!important}
 </style>
+<style id="quantora-portal-shell">
+/* The app-level shell: permanent left navigation plus the page beside it.
+   Hand-written because the Tailwind build in this file is pre-purged -- any
+   class not already compiled into it does nothing at all. */
+.qp-shell{display:grid;grid-template-columns:1fr;gap:0;align-items:start;
+  max-width:1560px;margin:0 auto;padding:0 14px}
+.qp-side{display:none}
+.qp-main{min-width:0;padding:18px 0 40px}
+
+@media (min-width:1024px){
+  .qp-shell{grid-template-columns:236px minmax(0,1fr);gap:22px;padding:0 20px}
+  .qp-side{display:block;position:sticky;top:64px;align-self:start;
+    max-height:calc(100vh - 76px);overflow-y:auto;padding:16px 0 24px}
+}
+
+/* Narrow screens get the same destinations as a scrolling strip. A navigation
+   you have to open a menu to reach is a navigation nobody uses on a phone. */
+.qp-strip{display:flex;gap:7px;overflow-x:auto;padding:10px 2px 4px;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+.qp-strip::-webkit-scrollbar{display:none}
+.qp-strip button{white-space:nowrap;font-size:12.5px;font-weight:600;padding:7px 13px;
+  border-radius:999px;border:1px solid var(--q-border,#e2e8f0);
+  background:var(--q-panel,#fff);color:var(--q-text-dim,#64748b);cursor:pointer}
+.qp-strip button.on{background:#4f46e5;border-color:#4f46e5;color:#fff}
+/* After the base rule, not before it: at equal specificity the later
+   declaration wins whether or not a media query is wrapped around it, so a
+   display:none written above .qp-strip{display:flex} never takes effect. */
+@media (min-width:1024px){.qp-strip{display:none}}
+
+.qp-grp{padding:14px 12px 6px;font-size:9.5px;font-weight:800;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--q-text-dimmer,#94a3b8)}
+.qp-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  padding:9px 12px;border-radius:11px;font-size:13.5px;font-weight:600;
+  color:var(--q-text-dim,#64748b);background:none;border:0;cursor:pointer;
+  transition:background .12s,color .12s}
+.qp-item:hover{background:var(--q-panel-hover,#f1f5f9);color:var(--q-text,#0f172a)}
+.qp-item.on{background:#4f46e5;color:#fff}
+.qp-item .ic{width:19px;flex:none;text-align:center;font-size:14px;line-height:1}
+.qp-item .lb{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.qp-brand{display:flex;align-items:center;gap:10px;padding:4px 12px 14px}
+.qp-brand img{width:30px;height:30px;border-radius:8px;display:block}
+.qp-brand b{font-size:14px;font-weight:800;letter-spacing:-.2px;display:block;line-height:1.2}
+.qp-brand span{font-size:10px;color:var(--q-text-dimmer,#94a3b8);display:block}
+
+.qp-side-foot{margin:16px 10px 0;padding:14px;border-radius:14px;
+  background:linear-gradient(160deg,rgba(79,70,229,.13),rgba(79,70,229,.04));
+  border:1px solid rgba(79,70,229,.28)}
+.qp-side-foot b{display:block;font-size:12.5px;font-weight:800;margin-bottom:4px}
+.qp-side-foot p{font-size:11px;color:var(--q-text-dim,#64748b);line-height:1.5;margin-bottom:10px}
+.qp-side-foot button{width:100%;background:#4f46e5;color:#fff;border:0;border-radius:9px;
+  padding:8px;font-size:12px;font-weight:700;cursor:pointer}
+
+/* ---- Home ---- */
+.qp-hero{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);
+  border-radius:18px;padding:22px 24px;display:flex;align-items:center;
+  justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:20px}
+.qp-hero h1{font-size:23px;font-weight:800;letter-spacing:-.4px}
+.qp-hero p{font-size:13.5px;color:var(--q-text-dim,#64748b);margin-top:5px}
+.qp-hero .acts{display:flex;gap:10px;flex-wrap:wrap}
+.qp-btn{border-radius:11px;padding:10px 17px;font-size:13.5px;font-weight:700;cursor:pointer;
+  border:1px solid var(--q-border,#e2e8f0);background:var(--q-panel,#fff);color:var(--q-text,#0f172a)}
+.qp-btn.pri{background:#4f46e5;border-color:#4f46e5;color:#fff}
+
+.qp-sec{font-size:15px;font-weight:700;margin:0 0 11px}
+.qp-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:22px}
+@media (min-width:700px){.qp-tiles{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (min-width:1180px){.qp-tiles{grid-template-columns:repeat(6,minmax(0,1fr))}}
+.qp-tile{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);
+  border-radius:15px;padding:15px 14px;cursor:pointer;text-align:left;
+  transition:transform .12s,border-color .12s}
+.qp-tile:hover{transform:translateY(-2px);border-color:rgba(79,70,229,.55)}
+.qp-tile .ic{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;
+  justify-content:center;font-size:17px;margin-bottom:10px}
+.qp-tile b{display:block;font-size:13px;font-weight:700;line-height:1.3}
+.qp-tile span{display:block;font-size:11px;color:var(--q-text-dim,#64748b);margin-top:4px;line-height:1.45}
+
+/* Six steps, in the order the work is actually done. */
+.qp-flow{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);
+  border-radius:16px;padding:16px 18px;margin-bottom:22px}
+.qp-flow-row{display:flex;align-items:stretch;gap:8px;overflow-x:auto;padding-bottom:4px;
+  scrollbar-width:none}
+.qp-flow-row::-webkit-scrollbar{display:none}
+.qp-step{flex:1 0 132px;min-width:132px;display:flex;gap:9px;align-items:flex-start}
+.qp-step .n{width:30px;height:30px;border-radius:9px;flex:none;display:flex;
+  align-items:center;justify-content:center;font-size:13px;font-weight:800}
+.qp-step .t{min-width:0}
+.qp-step .t b{display:block;font-size:11px;font-weight:800;color:var(--q-text-dimmer,#94a3b8)}
+.qp-step .t span{display:block;font-size:12px;font-weight:600;line-height:1.35;margin-top:2px}
+.qp-arrow{align-self:center;color:var(--q-text-dimmer,#94a3b8);font-size:14px;flex:none}
+
+.qp-cols{display:grid;grid-template-columns:minmax(0,1fr);gap:20px;align-items:start}
+@media (min-width:1280px){.qp-cols{grid-template-columns:minmax(0,1fr) 312px}}
+
+.qp-card{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);
+  border-radius:16px;padding:16px 18px;margin-bottom:16px}
+.qp-card h4{font-size:9.5px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--q-text-dimmer,#94a3b8);margin-bottom:11px}
+.qp-quick{display:block;width:100%;text-align:left;border:0;background:none;cursor:pointer;
+  padding:9px 2px;font-size:12.5px;font-weight:600;color:var(--q-text,#0f172a);
+  border-bottom:1px solid var(--q-border,#e2e8f0)}
+.qp-quick:last-child{border-bottom:0}
+.qp-quick:hover{color:#4f46e5}
+.qp-quick em{font-style:normal;float:right;color:var(--q-text-dimmer,#94a3b8);font-weight:600}
+
+.qp-table{width:100%;border-collapse:collapse}
+.qp-table th{text-align:left;font-size:10px;font-weight:800;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--q-text-dimmer,#94a3b8);padding:8px 10px;
+  border-bottom:1px solid var(--q-border,#e2e8f0);white-space:nowrap}
+.qp-table td{font-size:12.5px;padding:11px 10px;border-bottom:1px solid var(--q-border,#e2e8f0);
+  color:var(--q-text,#0f172a);vertical-align:middle}
+.qp-table tr:last-child td{border-bottom:0}
+.qp-table .nm{font-weight:700;overflow-wrap:anywhere}
+.qp-wrap{overflow-x:auto}
+.qp-badge{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.07em;
+  text-transform:uppercase;padding:3px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.qp-empty{border:2px dashed var(--q-border,#e2e8f0);border-radius:14px;padding:30px;
+  text-align:center;color:var(--q-text-dimmer,#94a3b8);font-size:13px}
+
+/* A form control carrying bg-white gets its background from the dark theme's
+   .bg-white rule (class beats element) and its colour from the input/select
+   rule (nothing else sets one), which lands on #0f172a text over #12172a.
+   Element-plus-class outranks both halves, so the pair stays coherent. */
+select.bg-white,input.bg-white,textarea.bg-white{
+  background-color:#fff!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  border-color:#cbd5e1}
+select.bg-white option{background-color:#fff;color:#0f172a}
+select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102,241,.75)}
+/* The admin portal is the one place that genuinely wants dark controls, and it
+   already says so for its own scope -- don't undo that here. */
+.qadmin select.bg-white,.qp-admin-embed select.bg-white,
+.qadmin input.bg-white,.qp-admin-embed input.bg-white{
+  background-color:rgba(255,255,255,0.05)!important;color:#e8ecf4!important;
+  -webkit-text-fill-color:#e8ecf4!important;border-color:rgba(255,255,255,0.16)}
+.qadmin select.bg-white option,.qp-admin-embed select.bg-white option{
+  background-color:#101728;color:#e6ebf5}
+
+/* "underline" was never compiled into this file's purged Tailwind build, so
+   every "Clear the search" and "Create your first one" link in the app has been
+   rendering as plain text that does not look clickable. One rule fixes all of
+   them, old and new. */
+.underline{text-decoration:underline}
+
+/* Customer pages embedded in the admin portal. The admin portal has its own
+   dark palette under different variable names, so the shared pages are told
+   what dark means here rather than being rewritten for it. */
+.qp-admin-embed{--q-panel:rgba(255,255,255,0.03);--q-panel-hover:rgba(255,255,255,0.06);
+  --q-border:rgba(255,255,255,0.10);--q-text:#e8ecf4;--q-text-dim:#98a2b8;--q-text-dimmer:#6b7590}
+.qp-admin-embed .qp-hero{margin-top:0}
+.qp-admin-embed .bg-white{background:rgba(255,255,255,0.03) !important;color:#e8ecf4}
+.qp-admin-embed .border{border-color:rgba(255,255,255,0.10)}
+.qp-admin-embed select,.qp-admin-embed input{background:rgba(255,255,255,0.05);color:#e8ecf4;
+  border-color:rgba(255,255,255,0.14)}
+.qp-admin-embed .text-slate-600,.qp-admin-embed .text-slate-500{color:#98a2b8 !important}
+.qp-admin-embed .text-slate-400{color:#6b7590 !important}
+</style>
 <style id="quantora-estimation-ui">
 /* Utilities used by the grouped project navigation, the Estimation page and the
    Cost & Budget page. The app's Tailwind build is static and pre-purged, so any
@@ -12955,6 +14649,103 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
   letter-spacing:.12em;text-transform:uppercase;color:var(--q-text-dimmer,#94a3b8);
   padding:0 4px}
 .qws-sections-btn{display:inline-block}
+
+/* --------------------------------------------------------------------------
+   All-projects dashboard (2026-08-15). Projects left, account right.
+   -------------------------------------------------------------------------- */
+.qdash-kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:22px}
+@media (min-width:760px){.qdash-kpis{grid-template-columns:repeat(5,1fr)}}
+.qdash-kpi{position:relative;overflow:hidden;background:var(--q-panel,#fff);
+  border:1px solid var(--q-border,#e2e8f0);border-radius:14px;padding:14px 16px}
+.qdash-kpi i{position:absolute;left:0;top:0;bottom:0;width:3px}
+.qdash-kpi b{display:block;font-size:26px;font-weight:800;letter-spacing:-.6px;line-height:1.1}
+.qdash-kpi span{display:block;font-size:11.5px;color:var(--q-text-dim,#64748b);margin-top:3px}
+
+.qdash-grid{display:grid;grid-template-columns:1fr;gap:20px;align-items:start}
+@media (min-width:1100px){.qdash-grid{grid-template-columns:minmax(0,1fr) 320px}}
+.qdash-main{order:1;min-width:0}
+.qdash-rail{order:2;display:flex;flex-direction:column;gap:14px}
+@media (min-width:1100px){.qdash-rail{position:sticky;top:16px}}
+
+.qdash-card{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);
+  border-radius:16px;padding:16px}
+.qdash-card h4{font-size:9.5px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--q-text-dimmer,#94a3b8);margin-bottom:10px}
+.qdash-meter{margin-bottom:12px}
+.qdash-meter .ml{display:flex;justify-content:space-between;font-size:11.5px;
+  color:var(--q-text-dim,#64748b);margin-bottom:5px}
+.qdash-meter .ml b{color:var(--q-text,#0f172a);font-weight:700}
+.qdash-bar{height:6px;border-radius:999px;background:rgba(148,163,184,.22);overflow:hidden}
+.qdash-bar i{display:block;height:100%;border-radius:999px;background:#3b82f6}
+.qdash-bar.warn i{background:#f59e0b}
+.qdash-bar.over i{background:#f43f5e}
+
+.qdash-projs{display:grid;grid-template-columns:1fr;gap:14px}
+@media (min-width:640px){.qdash-projs{grid-template-columns:repeat(2,1fr)}}
+@media (min-width:1800px){.qdash-projs{grid-template-columns:repeat(3,1fr)}}
+.qdash-proj{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);
+  border-radius:16px;padding:18px 18px 16px;cursor:pointer;transition:transform .12s,border-color .12s;
+  min-width:0;overflow:hidden}
+.qdash-proj:hover{transform:translateY(-2px);border-color:rgba(99,102,241,.55)}
+.qdash-proj .pn{font-size:15.5px;font-weight:700;letter-spacing:-.2px;line-height:1.3;
+  overflow-wrap:anywhere;word-break:break-word}
+.qdash-proj .pl{font-size:12.5px;color:var(--q-text-dim,#64748b);margin-top:4px}
+.qdash-proj .pm{font-size:11.5px;color:var(--q-text-dimmer,#94a3b8);margin-top:10px;
+  padding-top:10px;border-top:1px solid var(--q-border,#e2e8f0);display:flex;
+  flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px 8px;min-width:0}
+.qdash-proj .pm > span{min-width:0;overflow-wrap:anywhere}
+.qdash-proj .go{font-weight:700;color:#6366f1}
+
+/* Persistent application rail, on the dashboard as well as inside a project. */
+.qapp{display:grid;grid-template-columns:1fr;gap:20px;align-items:start}
+@media (min-width:1000px){.qapp{grid-template-columns:212px minmax(0,1fr)}}
+.qapp-nav{display:none}
+@media (min-width:1000px){.qapp-nav{display:block;position:sticky;top:16px}}
+.qapp-nav .grp{padding:14px 14px 5px;font-size:9.5px;font-weight:800;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--q-text-dimmer,#94a3b8)}
+.qapp-nav a,.qapp-nav button{display:block;width:100%;text-align:left;padding:8px 14px;
+  font-size:13px;border-left:3px solid transparent;color:var(--q-text-dim,#64748b);
+  background:none;border-top:0;border-right:0;border-bottom:0;cursor:pointer}
+.qapp-nav button:hover{color:var(--q-text,#0f172a);background:rgba(148,163,184,.09)}
+.qapp-nav button.on{border-left-color:#6366f1;color:var(--q-text,#0f172a);font-weight:700;
+  background:rgba(99,102,241,.10)}
+.qapp-nav .proj{font-size:12.5px;padding:7px 14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qapp-brand{display:flex;align-items:center;gap:9px;padding:14px 14px 12px;
+  border-bottom:1px solid var(--q-border,#e2e8f0);margin-bottom:4px}
+.qapp-brand img{width:26px;height:26px;border-radius:7px;display:block}
+.qapp-brand span{font-size:13.5px;font-weight:800;letter-spacing:-.2px}
+.qapp-brand span i{font-style:normal;color:#5b9bff}
+
+.qsearch{position:relative;flex:0 1 auto;min-width:0}
+@media (max-width:560px){
+  .qsearch{flex:1 1 100%}
+  .qsearch input{width:100%;max-width:none}
+}
+.qsearch input{width:230px;max-width:52vw;font-size:13px;padding:8px 12px 8px 32px;border-radius:10px;
+  border:1px solid var(--q-border,#e2e8f0);background:var(--q-panel,#fff);color:var(--q-text,#0f172a)}
+.qsearch input::placeholder{color:var(--q-text-dimmer,#94a3b8)}
+.qsearch input:focus{outline:none;border-color:rgba(99,102,241,.6)}
+.qsearch .ic{position:absolute;left:11px;top:50%;transform:translateY(-50%);
+  font-size:13px;color:var(--q-text-dimmer,#94a3b8);pointer-events:none}
+.qsearch .clr{position:absolute;right:8px;top:50%;transform:translateY(-50%);border:0;background:none;
+  color:var(--q-text-dimmer,#94a3b8);cursor:pointer;font-size:15px;line-height:1;padding:2px 4px}
+
+/* Portfolio strip: how many projects sit at each stage. */
+.qstage{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:0 0 20px}
+@media (min-width:760px){.qstage{grid-template-columns:repeat(4,1fr)}}
+.qstage .st{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);
+  border-radius:14px;padding:12px 14px}
+.qstage .st b{display:block;font-size:22px;font-weight:800;line-height:1.15}
+.qstage .st span{display:block;font-size:11px;color:var(--q-text-dim,#64748b);margin-top:2px}
+.qstage .st em{display:block;font-style:normal;font-size:10px;color:var(--q-text-dimmer,#94a3b8);margin-top:4px}
+
+.qpill{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;border:1px solid}
+.qproj-stats{display:flex;flex-wrap:wrap;gap:10px 14px;margin-top:12px;padding-top:11px;
+  border-top:1px solid var(--q-border,#e2e8f0)}
+.qproj-stats div{font-size:11px;color:var(--q-text-dimmer,#94a3b8);
+  flex:0 1 auto;min-width:0;white-space:nowrap}
+.qproj-stats div b{display:block;font-size:15px;font-weight:800;color:var(--q-text,#0f172a);line-height:1.2}
 @media (min-width:768px){
   .qws-side{display:block}
   .qws-strip{display:none}
