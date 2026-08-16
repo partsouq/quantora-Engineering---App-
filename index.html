@@ -235,6 +235,12 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
 .hover\:text-slate-700:hover{color:var(--q-text) !important;}
 .hover\:text-slate-800:hover{color:var(--q-text) !important;}
 .hover\:text-slate-900:hover{color:#ffffff !important;}
+
+/* Two classes used by the High-Res Take-Off button that the pre-purged
+   Tailwind build does not contain, so they would be silent no-ops.
+   Tailwind's own values, to match the neighbouring buttons exactly. */
+.border-emerald-300{border-color:#6ee7b7}
+.hover\:bg-emerald-100:hover{background-color:#d1fae5}
 </style>
 <script>
   // Launch promotion window. One timestamp, read by the marketing page and by
@@ -1424,6 +1430,126 @@ function simpleBoqSubtotalsByUnit(lines) {
   const byUnit = {};
   lines.forEach(l => { byUnit[l.unit] = (byUnit[l.unit] || 0) + Number(l.qty || 0); });
   return Object.entries(byUnit).map(([unit, qty]) => `${qty} ${unit}`).join(", ");
+}
+
+// --------------------------------------------------------------------------
+// High-resolution tiled take-off
+// --------------------------------------------------------------------------
+
+// Pixels per millimetre of real sheet. 5.5 puts a 5mm device symbol on ~28px.
+// Raising this improves symbol legibility and raises cost roughly with its
+// square, because it multiplies both tile dimensions.
+const TILE_PX_PER_MM = 5.5;
+const MM_PER_PT = 0.352778;
+// Target pixel size of one tile. Anthropic works most efficiently at about
+// 1568px on the long edge; staying just under avoids a server-side downscale
+// that would throw away exactly the resolution we came here for.
+const TILE_TARGET_PX = 1450;
+const TILE_OVERLAP = 0.12;
+// Hard cap, mirrored by MAX_TILES_PER_RUN in ai-engine. If a sheet needs more
+// than this, resolution is stepped down until it fits rather than billing an
+// unbounded number of calls.
+const TILE_MAX_TILES = 12;
+
+function planTileGrid(pageWidthPt, pageHeightPt) {
+  let scale = MM_PER_PT * TILE_PX_PER_MM;
+  let cols, rows;
+  for (;;) {
+    const fullW = pageWidthPt * scale, fullH = pageHeightPt * scale;
+    // Core size that leaves room for the overlap margin on both sides.
+    const coreTarget = TILE_TARGET_PX / (1 + 2 * TILE_OVERLAP);
+    cols = Math.max(1, Math.ceil(fullW / coreTarget));
+    rows = Math.max(1, Math.ceil(fullH / coreTarget));
+    if (cols * rows <= TILE_MAX_TILES || scale <= 0.6) break;
+    // Too many tiles for this sheet size. Step the resolution down rather than
+    // silently cropping the sheet or blowing the cost cap.
+    scale *= 0.85;
+  }
+  return { scale, cols, rows };
+}
+
+// Renders one page of an already-parsed pdf.js document into overlapping tile
+// PNGs and uploads each to storage. Returns the geometry ai-engine needs to
+// put every counted symbol back onto the full page.
+async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onProgress) {
+  const page = await pdf.getPage(pageNumber);
+  const base = page.getViewport({ scale: 1 });
+  const { scale, cols, rows } = planTileGrid(base.width, base.height);
+  const vp = page.getViewport({ scale });
+  const fullW = vp.width, fullH = vp.height;
+  const coreW = fullW / cols, coreH = fullH / rows;
+  const marginX = coreW * TILE_OVERLAP, marginY = coreH * TILE_OVERLAP;
+
+  const stamp = Date.now();
+  const tiles = [];
+  let done = 0;
+  const total = cols * rows;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x0 = Math.max(0, c * coreW - marginX);
+      const y0 = Math.max(0, r * coreH - marginY);
+      const x1 = Math.min(fullW, (c + 1) * coreW + marginX);
+      const y1 = Math.min(fullH, (r + 1) * coreH + marginY);
+      const w = Math.round(x1 - x0), h = Math.round(y1 - y0);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      // White base: PDFs draw on transparency, and a transparent PNG shows up
+      // black once flattened, which would hide every line on the sheet.
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
+      // Draw the whole page shifted so only this tile's region lands on the
+      // canvas. Far cheaper than rasterising the full sheet and cropping.
+      await page.render({
+        canvasContext: ctx,
+        viewport: vp,
+        transform: [1, 0, 0, 1, -x0, -y0],
+      }).promise;
+
+      const blob = await new Promise(res => canvas.toBlob(res, "image/png"));
+      if (!blob) throw new Error(`Could not encode tile ${r + 1},${c + 1} of this sheet.`);
+      const path = `${projectId}/tiles/${drawingId}/${stamp}/p${pageNumber}-r${r}c${c}.png`;
+      const { error: upErr } = await sb.storage.from("drawings").upload(path, blob, {
+        contentType: "image/png", upsert: true,
+      });
+      if (upErr) throw new Error(`Could not upload tile ${r + 1},${c + 1}: ${upErr.message}`);
+
+      tiles.push({
+        path, row: r, col: c,
+        x0: x0 / fullW, y0: y0 / fullH, x1: x1 / fullW, y1: y1 / fullH,
+        // Where this tile's own responsibility starts and ends, as fractions
+        // OF THE TILE -- this is what stops neighbours counting each other's
+        // symbols.
+        core_x0: (c * coreW - x0) / (x1 - x0),
+        core_y0: (r * coreH - y0) / (y1 - y0),
+        core_x1: ((c + 1) * coreW - x0) / (x1 - x0),
+        core_y1: ((r + 1) * coreH - y0) / (y1 - y0),
+      });
+
+      // Let the canvas go before allocating the next one; a 12-tile A0 run
+      // would otherwise hold 12 large bitmaps live at once.
+      canvas.width = 0; canvas.height = 0;
+      done++;
+      if (onProgress) onProgress(done, total);
+    }
+  }
+
+  return { tiles, grid: { rows, cols }, scale, pxPerMm: scale / MM_PER_PT };
+}
+
+// Opens a stored PDF drawing with pdf.js. Shared by the tiler and anything
+// else that needs page geometry before deciding what to do.
+async function openStoredPdf(storagePath) {
+  if (!window.__PDFJS_OK__ || !window.pdfjsLib) {
+    throw new Error("The PDF renderer could not be loaded in this browser, so the high-resolution take-off is unavailable. A normal analysis still works.");
+  }
+  const { data: signed, error } = await sb.storage.from("drawings").createSignedUrl(storagePath, 600);
+  if (error) throw error;
+  const res = await fetch(signed.signedUrl);
+  if (!res.ok) throw new Error("Could not download the drawing file.");
+  const buf = await res.arrayBuffer();
+  return await window.pdfjsLib.getDocument({ data: buf }).promise;
 }
 
 async function callEngine(action, payload) {
@@ -7148,6 +7274,78 @@ function DrawingsTab({ project }) {
     for (const d of pending) { await analyze(d.id); }
   }
 
+  // High-resolution tiled take-off. Kept as a separate entry point rather than
+  // replacing analyze() because it costs several times as much per sheet: the
+  // user must choose it knowingly, and a scanned or vector-thin sheet that the
+  // normal pass handles fine should not silently start costing 7x.
+  const [tiling, setTiling] = useState({});
+  async function analyzeTiled(d) {
+    setErr("");
+    let pdf;
+    try {
+      setTiling(t => ({ ...t, [d.id]: "Opening drawing…" }));
+      pdf = await openStoredPdf(d.analysis_source_path || d.storage_path);
+    } catch (ex) {
+      setTiling(t => ({ ...t, [d.id]: null }));
+      setErr(ex.message);
+      return;
+    }
+
+    let pageNumber = 1;
+    if ((pdf.numPages || 1) > 1) {
+      const answer = window.prompt(
+        `This file has ${pdf.numPages} pages. A high-resolution take-off reads one sheet at a time.\n\nWhich page should it read?`,
+        "1"
+      );
+      if (answer === null) { setTiling(t => ({ ...t, [d.id]: null })); return; }
+      const n = parseInt(answer, 10);
+      if (!Number.isFinite(n) || n < 1 || n > pdf.numPages) {
+        setTiling(t => ({ ...t, [d.id]: null }));
+        setErr(`Page ${answer} is not in this file (it has ${pdf.numPages}).`);
+        return;
+      }
+      pageNumber = n;
+    }
+
+    // Tell them the cost before spending it, not after.
+    try {
+      const pg = await pdf.getPage(pageNumber);
+      const bvp = pg.getViewport({ scale: 1 });
+      const plan = planTileGrid(bvp.width, bvp.height);
+      const calls = plan.cols * plan.rows + 1;
+      const ok = window.confirm(
+        `High-resolution take-off\n\n` +
+        `This sheet will be rendered at ${(plan.scale / MM_PER_PT).toFixed(1)} pixels per millimetre and read as ` +
+        `${plan.cols} x ${plan.rows} overlapping tiles, so small device symbols such as cameras become legible.\n\n` +
+        `That means ${calls} AI calls instead of 1, so it costs roughly ${calls} times a normal analysis and takes a few minutes. ` +
+        `It counts as one page against your plan.\n\nRun it?`
+      );
+      if (!ok) { setTiling(t => ({ ...t, [d.id]: null })); return; }
+    } catch (ex) {
+      setTiling(t => ({ ...t, [d.id]: null }));
+      setErr("Could not read that page: " + ex.message);
+      return;
+    }
+
+    try {
+      const { tiles, grid } = await renderAndUploadTiles(
+        pdf, pageNumber, project.id, d.id,
+        (done, total) => setTiling(t => ({ ...t, [d.id]: `Rendering tile ${done} of ${total}…` }))
+      );
+      setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI…` }));
+      const started = await callEngine("analyze_drawing_tiled", {
+        project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid,
+      });
+      const summary = await pollAnalysisRun(started.run_id);
+      await load();
+      alert(`High-resolution take-off complete: ${summary.item_count} BOQ items from ${tiles.length} tiles (revision ${started.revision_number}).\n\n${summary.notes}`);
+    } catch (ex) {
+      setErr(ex.message);
+    } finally {
+      setTiling(t => ({ ...t, [d.id]: null }));
+    }
+  }
+
   async function analyze(drawingId) {
     setAnalyzing(a => ({...a, [drawingId]: true})); setErr("");
     try {
@@ -7296,6 +7494,13 @@ function DrawingsTab({ project }) {
                     {d.file_type === "pdf" && (
                       <button onClick={()=>setClassifyDrawing(d)} className="text-xs text-violet-700 border border-violet-300 bg-violet-50 px-3 py-2 rounded-lg font-semibold hover:bg-violet-100">
                         Classify & Select Pages
+                      </button>
+                    )}
+                    {(d.file_type === "pdf" || (d.analysis_source_type === "pdf")) && (
+                      <button onClick={()=>analyzeTiled(d)} disabled={anyAiCallInFlight || !!tiling[d.id]}
+                        title="Renders the sheet at full resolution and reads it in overlapping tiles, so small device symbols such as cameras are legible. Costs several times a normal analysis."
+                        className="text-xs text-emerald-800 border border-emerald-300 bg-emerald-50 px-3 py-2 rounded-lg font-semibold hover:bg-emerald-100 disabled:opacity-50">
+                        {tiling[d.id] || "High-Res Take-Off"}
                       </button>
                     )}
                     <button onClick={()=>analyze(d.id)} disabled={anyAiCallInFlight} title={anyAiCallInFlight && !analyzing[d.id] ? "Another AI analysis is already running -- please wait for it to finish first" : undefined} className="bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
