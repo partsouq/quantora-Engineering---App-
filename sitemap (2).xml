@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Quantora Engineering sitemap.
+  Upload to the repository root so it is served at
+  https://quantoraengineering.com/sitemap.xml, then submit that URL in Google
+  Search Console. The site is a single page, so this lists one URL. A sitemap
+  with one entry is still worth submitting: it is what tells Google the page
+  exists, instead of waiting for the page to be found.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://quantoraengineering.com/</loc>
+    <lastmod>2026-08-16</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>

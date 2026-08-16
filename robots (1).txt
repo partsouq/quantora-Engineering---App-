@@ -1,0 +1,8 @@
+# Quantora Engineering
+# Upload to the repository root, alongside index.html, so it is served at
+# https://quantoraengineering.com/robots.txt
+
+User-agent: *
+Allow: /
+
+Sitemap: https://quantoraengineering.com/sitemap.xml
