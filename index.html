@@ -263,6 +263,29 @@ const BUILDING_TYPES = [
 // answer onto a desalination plant, "Something else" lets the type be typed and
 // stores it slugged, so everything downstream that reads building_type -- the
 // product fit, the exports, the dashboard card -- treats it like any other value.
+// Scope of work. A short list because these are the packages that actually get
+// tendered separately; anything else is typed in, same pattern as project type.
+const PROJECT_SCOPES = [
+  ["supply_install_testing", "Supply, Installation, Testing & Commissioning"],
+  ["supply_only", "Supply Only"],
+  ["installation_only", "Installation Only"],
+  ["design_build", "Design & Build"],
+  ["design_only", "Design Only"],
+  ["mep_package", "Full MEP Package"],
+  ["elv_package", "ELV / Low Current Package"],
+  ["electrical_package", "Electrical Package"],
+  ["hvac_package", "HVAC Package"],
+  ["plumbing_package", "Plumbing & Drainage Package"],
+  ["fire_package", "Fire Alarm & Fire Fighting Package"],
+  ["maintenance", "Maintenance / Retrofit"],
+];
+function projectScopeLabel(v) {
+  if (!v) return "\u2014";
+  const hit = PROJECT_SCOPES.find(x => x[0] === v);
+  if (hit) return hit[1];
+  return String(v).split("_").filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
 function slugBuildingType(text){return String(text||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,48);}
 function buildingTypeLabel(v){if(!v)return "\u2014";const hit=BUILDING_TYPES.find(b=>b[0]===v);if(hit)return hit[1];return String(v).split("_").filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(" ");}
 
@@ -2126,9 +2149,9 @@ const QUANTORA_LANDING_HTML = `
   <div class="wrap hero-grid">
     <div>
       <span class="pill"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg> AI CONSTRUCTION INTELLIGENCE PLATFORM</span>
-      <h1>Transform Construction Drawings into <span class="grad-text">Engineering Intelligence and Complete BOQs</span></h1>
+      <h1>Transform Construction Drawings into <span class="grad-text">Engineering Intelligence, Complete BOQs and Live Market Pricing</span></h1>
       <div class="hero-poweredby">Powered by Quantora AI</div>
-      <p class="sub">Upload your project drawings and let Quantora Engineering automatically analyze, design, estimate, validate, and generate complete BOQs with engineering intelligence.</p>
+      <p class="sub">Upload your project drawings and let Quantora Engineering analyse, design, take off, validate and generate a complete BOQ &mdash; then price it against real supplier listings, with the source shown against every rate.</p>
       <div class="hero-ctas">
         <a class="btn btn-lg btn-grad" href="?auth=signup">Start Free Trial →</a>
         <a class="btn btn-lg btn-outline-lg" href="#works"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z" fill="currentColor" stroke="none"/></svg> Watch How It Works</a>
@@ -2451,7 +2474,7 @@ const QUANTORA_LANDING_HTML = `
           <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span><span style="opacity:.72;">Technical Submittal</span><span style="margin-left:8px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#fbbf24;border:1px solid rgba(251,191,36,0.45);border-radius:9999px;padding:1px 7px;vertical-align:1px;">Coming soon</span></div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Revision Comparison</div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>AI Assistant (project Q&amp;A)</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Revision Comparison</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Market Price Lookup (pay as you go)</div>
         </div>
       </div>
       <div class="panel">
@@ -2474,23 +2497,23 @@ const QUANTORA_LANDING_HTML = `
 <section>
   <div class="wrap" style="max-width:1040px;">
     <div class="kicker" style="justify-content:flex-start;text-align:left;"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg>Beyond BOQ</div>
-    <h2 class="sectitle" style="text-align:left;">One Platform, Every Output You Need</h2>
+    <h2 class="sectitle" style="text-align:left;">One Platform, Every Step of the Job</h2>
     <p class="secsub" style="text-align:left;margin:0 0 34px;">Quantora is bigger than a BOQ generator. It's a full AI engineering suite for your projects.</p>
     <div class="outputs-grid-3col">
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Quantity Take-Off</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Material Schedule</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Technical Submittal</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Complete BOQ</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Product Specifications</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Revision Comparison</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Floor-wise BOQ</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Compliance Report</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Cost Estimate</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Zone-wise BOQ</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Procurement BOQ</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>AI Design Recommendations</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>System-wise BOQ</div>
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>RFQ Package</div>
+      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Drawing Upload &amp; AI Take-Off</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Drawing Markup &amp; Verification</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>System Design (no drawings)</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Tender Document Intelligence</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Specification Review</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Compliance by Country &amp; City</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Take-Off &amp; BOQ Workspace</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Market Price Lookup (pay as you go)</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Estimation, Labour &amp; Margin</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Supplier Comparison</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Approval Tracking</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Cost &amp; Budget Analysis</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Product Recommendations</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Excel &amp; PDF Export</div>
     </div>
   </div>
 </section>
@@ -2935,7 +2958,30 @@ function LandingPage({ onGetStarted }) {
     }
     root.addEventListener("click", onLinkClick);
 
+    // Reveal sections as they scroll in. Guarded twice: no IntersectionObserver
+    // means the class is never applied at all, and a reduced-motion preference
+    // is honoured by the stylesheet, which neutralises .qtr-reveal entirely.
+    let revealObserver = null;
+    if (typeof IntersectionObserver === "function") {
+      const targets = root.querySelectorAll(".panel, .step, .card");
+      revealObserver = new IntersectionObserver((entries, obs) => {
+        entries.forEach(en => {
+          if (!en.isIntersecting) return;
+          en.target.classList.add("qtr-in");
+          obs.unobserve(en.target);   // reveal once; never fade back out
+        });
+      }, { rootMargin: "0px 0px -40px 0px", threshold: 0.08 });
+      targets.forEach((el, i) => {
+        el.classList.add("qtr-reveal");
+        // A small stagger so a row of cards arrives in sequence rather than
+        // snapping in as one block.
+        el.style.transitionDelay = `${Math.min(i % 4, 3) * 60}ms`;
+        revealObserver.observe(el);
+      });
+    }
+
     return () => {
+      if (revealObserver) revealObserver.disconnect();
       if (hamburgerBtn) hamburgerBtn.removeEventListener("click", openNav);
       if (mnavClose) mnavClose.removeEventListener("click", closeNav);
       navLinks.forEach((a) => a.removeEventListener("click", closeNav));
@@ -4109,6 +4155,13 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
   const [typeText, setTypeText] = useState(
     BUILDING_TYPES.some(b => b[0] === initialType) ? "" : buildingTypeLabel(initialType)
   );
+  // Same free-text escape as project type: an existing project may hold a scope
+  // that was typed rather than picked, and the form must open showing it.
+  const initialScope = isEdit ? (existingProject.project_scope || "") : "";
+  const [scopeOther, setScopeOther] = useState(!!initialScope && !PROJECT_SCOPES.some(x => x[0] === initialScope));
+  const [scopeText, setScopeText] = useState(
+    !initialScope || PROJECT_SCOPES.some(x => x[0] === initialScope) ? "" : projectScopeLabel(initialScope)
+  );
 
   function toggleSystem(sys) {
     setForm(f => ({ ...f, required_systems: f.required_systems.includes(sys) ? f.required_systems.filter(s=>s!==sys) : [...f.required_systems, sys] }));
@@ -4200,6 +4253,76 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
           <p className="text-[11px] text-slate-400 mt-1">
             The type steers which systems the AI expects to find and which products it recommends. Location still decides the authority rules.
           </p>
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-600">Scope of Work</label>
+          {scopeOther ? (
+            <div className="flex gap-2 mt-1">
+              <input
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                placeholder="e.g. Supply and commissioning of BMS only"
+                value={scopeText}
+                onChange={e => { setScopeText(e.target.value); setForm(f => ({ ...f, project_scope: slugBuildingType(e.target.value) })); }}
+              />
+              <button type="button" className="text-xs font-semibold border px-3 rounded-lg hover:bg-slate-50 whitespace-nowrap"
+                onClick={() => { setScopeOther(false); setForm(f => ({ ...f, project_scope: "" })); }}>
+                Pick from list
+              </button>
+            </div>
+          ) : (
+            <select
+              className="w-full border rounded-lg px-3 py-2 text-sm mt-1 bg-white"
+              value={form.project_scope || ""}
+              onChange={e => {
+                if (e.target.value === "__other__") { setScopeOther(true); setScopeText(""); setForm(f => ({ ...f, project_scope: "" })); }
+                else setForm(f => ({ ...f, project_scope: e.target.value }));
+              }}
+            >
+              <option value="">Not specified</option>
+              {PROJECT_SCOPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              <option value="__other__">Something else — type it…</option>
+            </select>
+          )}
+          <p className="text-[11px] text-slate-400 mt-1">
+            What this project is being priced for. It appears on exports and tells the estimate what is in and out of scope.
+          </p>
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-600">Required Systems</label>
+          <p className="text-[11px] text-slate-400 mt-1 mb-2">
+            Tick what this project covers. The AI uses it to know which systems to expect on a drawing — leaving it
+            blank is fine, it will then take whatever it finds.
+          </p>
+          <div className="space-y-3">
+            {Object.entries(SYSTEM_GROUPS).map(([group, systems]) => (
+              <div key={group}>
+                <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">{group}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {systems.map(sy => {
+                    const on = (form.required_systems || []).includes(sy);
+                    return (
+                      <button
+                        key={sy}
+                        type="button"
+                        onClick={() => toggleSystem(sy)}
+                        className={`text-xs px-2.5 py-1 rounded-full border ${on ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                      >
+                        {SYSTEM_LABEL(sy)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+          {(form.required_systems || []).length > 0 && (
+            <button type="button" onClick={() => setForm(f => ({ ...f, required_systems: [] }))}
+              className="text-[11px] underline text-slate-500 mt-2">
+              Clear all {(form.required_systems || []).length} selected
+            </button>
+          )}
         </div>
         <div className="flex gap-3 pt-2">
           <button disabled={busy} className="bg-slate-900 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">{busy ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save Changes" : "Create Project")}</button>
@@ -6713,7 +6836,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
 
 // "Project Information" card grid (2026-08-10) -- matches the requested
 // reference design: Location/Building Type/Floors, Project Scope/Status/
-// Start Date, Last Updated/Access Role/Data Security. Every value is real:
+// Start Date, Last Updated/Access Role. Every value is real:
 // Location/Building Type/Floors/Project Scope come straight off the project
 // row; Status reads the real `projects.status` column (defaulted 'active'
 // at creation, no UI to change it yet -- shown honestly as whatever it is,
@@ -6722,10 +6845,14 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
 // change) now genuinely bumps on every edit, so this card is never a stale
 // copy of the creation date dressed up as "Last Updated"; Access Role is
 // computed from the real signed-in user (Project Owner if `user.id ===
-// project.owner_id`, else their real `profiles.role`); Data Security is a
-// static but factually true statement (every project table is RLS-scoped to
-// its owner and the drawings storage bucket is private -- see Architecture
-// section), not a fabricated metric.
+// project.owner_id`, else their real `profiles.role`).
+//
+// The Data Security card was removed on 16 Aug. It read "Protected"
+// unconditionally -- true, since every project table is RLS-scoped and the
+// drawings bucket is private, but it checked nothing, so it looked like a live
+// status while being a constant. Client and Consultant went from Project Team
+// at the same time: neither is collected anywhere, so both showed an em-dash on
+// every project that has ever existed.
 function OverviewTab({ project, onViewFloors }) {
   const [access, setAccess] = useState(null); // { label }
   useEffect(() => {
@@ -6754,12 +6881,11 @@ function OverviewTab({ project, onViewFloors }) {
           <InfoCard icon="building" tone="violet" label="Building Type" value={buildingTypeLabel(project.building_type)} />
           <InfoCard icon="layers" tone="emerald" label="Floors" value={project.number_of_floors != null ? `${project.number_of_floors} Floors` : "—"}
             action={onViewFloors && <button onClick={onViewFloors} className="text-[11px] font-semibold text-blue-700 hover:underline shrink-0">View Floors →</button>} />
-          <InfoCard icon="target" tone="amber" label="Project Scope" value={project.project_scope || "—"} />
+          <InfoCard icon="target" tone="amber" label="Project Scope" value={projectScopeLabel(project.project_scope)} />
           <InfoCard icon="status" tone="teal" label="Status" value={statusInfo.label} dotTone={statusInfo.dot} />
           <InfoCard icon="calendar" tone="blue" label="Start Date" value={fmtDate(project.created_at)} />
           <InfoCard icon="calendar" tone="violet" label="Last Updated" value={fmtDateTime(project.updated_at)} />
           <InfoCard icon="user" tone="amber" label="Access Role" value={access?.label || "—"} />
-          <InfoCard icon="shield" tone="teal" label="Data Security" value="Protected" />
         </InfoCardGrid>
       </div>
 
@@ -6767,7 +6893,7 @@ function OverviewTab({ project, onViewFloors }) {
         <div className="text-sm font-semibold mb-3">Project Team &amp; Area</div>
         <div className="grid md:grid-cols-2 gap-4">
           {[
-            ["Client", project.client_name], ["Consultant", project.consultant_name], ["Contractor", project.contractor_name],
+            ["Contractor", project.contractor_name],
             ["Area", project.area_size ? `${project.area_size} ${project.area_unit}` : "-"],
           ].map(([l,v]) => (
             <div key={l} className="bg-white border rounded-xl p-4">
@@ -8549,6 +8675,304 @@ function DesignTab({ project }) {
 }
 
 // ---------------------------------------------------------------------------
+// PRICING BOQ (2026-08-15)
+// Indicative market rates against each consolidated BOQ line, each one carrying
+// the page it came from. Rates are written to boq_price_lookups and never to
+// boq_items.unit_cost_cents -- see the migration comment for why that
+// separation is the whole point of the feature.
+// ---------------------------------------------------------------------------
+function lineKeyFor(row) {
+  return [row.systemCategory || "other", row.description || "", row.unit || ""]
+    .join("|").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+function PricingBoqPanel({ project, consolidated, loading }) {
+  const [credits, refreshCredits] = useSearchCredits();
+  const [prices, setPrices] = useState({});
+  const [lastRun, setLastRun] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [loadingPrices, setLoadingPrices] = useState(true);
+  const [query, setQuery] = useState("");
+  // Nothing ticked to begin with. Every ticked line costs the customer real
+  // money, so the page must not assume which ones they want.
+  const [selected, setSelected] = useState({});
+
+  useEffect(() => { load(); }, [project.id]);
+
+  async function load() {
+    setLoadingPrices(true);
+    try {
+      const [{ data: rows }, { data: runs }] = await Promise.all([
+        sb.from("boq_price_lookups").select("*").eq("project_id", project.id),
+        sb.from("boq_price_runs").select("*").eq("project_id", project.id)
+          .order("created_at", { ascending: false }).limit(1),
+      ]);
+      const map = {};
+      (rows || []).forEach(r => { map[r.line_key] = r; });
+      setPrices(map);
+      setLastRun((runs || [])[0] || null);
+    } catch (e) {
+      console.error("PricingBoqPanel.load failed:", e);
+      setErr(e.message || "Could not load saved rates.");
+    } finally { setLoadingPrices(false); }
+  }
+
+  const MAX_PER_RUN = 40;
+  // Paid for and switched on. Mirrors exactly what ai-engine checks server-side
+  // -- this only decides whether to offer the button, never whether the search
+  // may run.
+  const searchOn = credits.enabled && credits.remaining > 0;
+  const allRows = consolidated || [];
+
+  const q = query.trim().toLowerCase();
+  const rows = !q ? allRows : allRows.filter(r =>
+    [r.description, r.technical_specification, r.systemCategory && SYSTEM_LABEL(r.systemCategory), r.unit]
+      .filter(Boolean).join(" ").toLowerCase().includes(q));
+
+  // Priced from the WHOLE selection, not just what the current search happens to
+  // be showing. A tick is a persistent choice; the search box is navigation. If
+  // this filtered too, someone who ticked three cameras, then searched "cable"
+  // to check something, then pressed the button would silently price nothing
+  // they had chosen.
+  const toPrice = allRows.filter(r => selected[lineKeyFor(r)]).slice(0, MAX_PER_RUN);
+  const selectedCount = allRows.filter(r => selected[lineKeyFor(r)]).length;
+  const shownAllSelected = rows.length > 0 && rows.every(r => selected[lineKeyFor(r)]);
+
+  function toggleLine(key) {
+    setSelected(sel => { const n = { ...sel }; if (n[key]) delete n[key]; else n[key] = true; return n; });
+  }
+  function toggleAllShown() {
+    setSelected(sel => {
+      const n = { ...sel };
+      if (shownAllSelected) rows.forEach(r => { delete n[lineKeyFor(r)]; });
+      else rows.forEach(r => { n[lineKeyFor(r)] = true; });
+      return n;
+    });
+  }
+
+  async function runLookup() {
+    if (!toPrice.length) {
+      setErr("Tick the lines you want priced first — nothing is selected, and a run with no lines would still cost a search.");
+      return;
+    }
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const res = await callEngine("price_boq", {
+        project_id: project.id,
+        currency: "USD",
+        lines: toPrice.map(r => ({
+          line_key: lineKeyFor(r),
+          description: r.description,
+          specification: r.technicalSpecification || r.technical_specification || null,
+          unit: r.unit,
+          quantity: r.totalQuantity ?? r.quantity ?? null,
+          system_category: r.systemCategory || null,
+        })),
+      });
+      await load();
+      await refreshCredits();
+      setMsg(
+        `Priced ${res.lines_priced} of ${res.lines_requested} lines using ${res.searches_used ?? "?"} web searches` +
+        (res.truncated ? `. ${res.truncated} further lines were not priced in this run.` : ".") +
+        (res.search_credits_remaining != null ? ` ${res.search_credits_remaining} searches left.` : "")
+      );
+    } catch (e) {
+      console.error("price_boq failed:", e);
+      setErr(e.message || "The rate lookup failed.");
+    } finally { setBusy(false); }
+  }
+
+  const money = (cents, cur) => cents == null ? "—"
+    : `${cur || "USD"} ${(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const confTone = c => c === "high" ? "#10b981" : c === "medium" ? "#f59e0b" : "#f43f5e";
+
+  let pricedCount = 0, extended = 0;
+  allRows.forEach(r => {
+    const p = prices[lineKeyFor(r)];
+    if (p && p.unit_rate_cents != null) {
+      pricedCount++;
+      const q = Number(r.totalQuantity ?? r.quantity ?? 0);
+      if (Number.isFinite(q)) extended += q * p.unit_rate_cents;
+    }
+  });
+
+  return (
+    <div>
+      <div className="qprice-note">
+        <b>These are reference prices, not quotations.</b> Each rate below is the lowest currently
+        advertised supply price the search could find for a product matching the line, on the page
+        linked beside it. It is not a bid rate: an advertised price typically excludes duty, freight,
+        VAT, wastage and the trade discount a contractor actually receives, and the product found may
+        be a close substitute rather than an exact match to the specification. Open the source and
+        check the match before using any of it. Nothing here is written into your estimate unless you
+        copy it across yourself.
+      </div>
+
+      <div className="qprice-bar">
+        <button
+          onClick={runLookup}
+          disabled={busy || loading || toPrice.length === 0 || !searchOn}
+          className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50"
+        >
+          {busy ? "Searching the market…"
+            : toPrice.length === 0 ? "Select lines to price"
+            : `Price ${toPrice.length} selected line${toPrice.length === 1 ? "" : "s"}`}
+        </button>
+        <div className="qsearch">
+          <span className="ic">&#9906;</span>
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search BOQ items…" />
+          {query && <button className="clr" onClick={() => setQuery("")} aria-label="Clear search">&times;</button>}
+        </div>
+        <span style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>
+          {allRows.length === 0 ? "No BOQ lines to price yet."
+            : `${selectedCount} selected of ${allRows.length} line${allRows.length === 1 ? "" : "s"}` +
+              (q ? ` · ${rows.length} matching “${query}”` : "") +
+              (selectedCount > MAX_PER_RUN ? ` · only the first ${MAX_PER_RUN} will run` : "")}
+        </span>
+        {lastRun && (
+          <span className="grow">
+            Last run {new Date(lastRun.created_at).toLocaleString()} · {lastRun.lines_priced}/{lastRun.lines_requested} priced
+            {lastRun.searches_used != null ? ` · ${lastRun.searches_used} searches` : ""}
+            {lastRun.region ? ` · ${lastRun.region}` : ""}
+          </span>
+        )}
+      </div>
+
+      {!credits.loading && !searchOn && (
+        <div className="bg-slate-100 border rounded-xl p-3 mb-3 text-sm" style={{ lineHeight: 1.6 }}>
+          <strong>Market search is switched off.</strong>{" "}
+          {credits.remaining <= 0
+            ? "Your search balance is empty. Top up under Settings and it will switch back on by itself as soon as the payment clears."
+            : "Switch it back on under Settings — you still have " + credits.remaining.toLocaleString() + " searches."}
+          {" "}Everything already priced below stays exactly as it is.
+        </div>
+      )}
+      {searchOn && (
+        <div style={{ fontSize: 11.5, color: "var(--q-text-dimmer,#94a3b8)", marginBottom: 10 }}>
+          {credits.remaining.toLocaleString()} searches left on this account. A run spends only what it uses,
+          and never more than the balance.
+        </div>
+      )}
+
+      {err && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-3 text-sm text-rose-700">{err}</div>}
+      {msg && <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-3 text-sm text-emerald-800">{msg}</div>}
+
+      {loading || loadingPrices ? (
+        <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">Loading…</div>
+      ) : allRows.length === 0 ? (
+        <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">
+          There is no BOQ to price yet. Upload drawings and run the take-off first.
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">
+          No BOQ line matches “{query}”.{" "}
+          <button onClick={() => setQuery("")} className="underline font-semibold">Clear the search</button>
+        </div>
+      ) : (
+        <div className="qprice-wrap">
+          <table className="qprice-table">
+            <thead>
+              <tr>
+                <th style={{ width: 34 }}>
+                  <input type="checkbox" checked={shownAllSelected} onChange={toggleAllShown}
+                    aria-label="Select all shown lines" style={{ cursor: "pointer" }} />
+                </th>
+                <th>Description</th>
+                <th className="num">Qty</th>
+                <th>Unit</th>
+                <th className="num">Unit rate</th>
+                <th className="num">Extended</th>
+                <th>Priced product &amp; source</th>
+                <th>Basis</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, idx) => {
+                const key = lineKeyFor(r);
+                const p = prices[key];
+                const qty = Number(r.totalQuantity ?? r.quantity ?? 0);
+                const ext = p && p.unit_rate_cents != null && Number.isFinite(qty)
+                  ? qty * p.unit_rate_cents : null;
+                return (
+                  <tr key={key + idx} style={selected[key] ? { background: "rgba(79,70,229,.07)" } : undefined}>
+                    <td>
+                      <input type="checkbox" checked={!!selected[key]} onChange={() => toggleLine(key)}
+                        aria-label={`Select ${r.description}`} style={{ cursor: "pointer" }} />
+                    </td>
+                    <td>
+                      <div className="qprice-desc">{r.description}</div>
+                      {r.systemCategory && (
+                        <div className="qprice-sub">{SYSTEM_LABEL(r.systemCategory)}</div>
+                      )}
+                    </td>
+                    <td className="num">{Number.isFinite(qty) ? qty.toLocaleString() : "—"}</td>
+                    <td>{r.unit || "—"}</td>
+                    <td className="num">
+                      {p && p.unit_rate_cents != null ? (
+                        <>
+                          {money(p.unit_rate_cents, p.currency)}
+                          <div style={{ marginTop: 4 }}>
+                            <span className="qprice-conf" style={{ color: confTone(p.confidence), borderColor: confTone(p.confidence) }}>
+                              {p.confidence || "low"}
+                            </span>
+                          </div>
+                        </>
+                      ) : p ? <span className="qprice-none">not found</span>
+                        : <span className="qprice-none">not priced</span>}
+                    </td>
+                    <td className="num">{ext != null ? money(ext, p.currency) : "—"}</td>
+                    <td>
+                      {p && p.unit_rate_cents != null ? (
+                        <>
+                          <div className="qprice-desc" style={{ fontWeight: 600 }}>{p.matched_product || "—"}</div>
+                          {p.source_url ? (
+                            <a className="qprice-src" href={p.source_url} target="_blank" rel="noopener noreferrer">
+                              {p.source_title || p.source_url}
+                            </a>
+                          ) : <span className="qprice-none">no source recorded</span>}
+                          {p.fetched_at && (
+                            <div className="qprice-sub">fetched {new Date(p.fetched_at).toLocaleDateString()}</div>
+                          )}
+                        </>
+                      ) : <span className="qprice-none">—</span>}
+                    </td>
+                    <td>
+                      <div className="qprice-sub" style={{ marginTop: 0 }}>
+                        {p?.basis_note || (p ? "—" : "Run the lookup to price this line.")}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="qprice-total">
+            <div>
+              <div className="l">Lines priced</div>
+              <div className="v">{pricedCount} / {allRows.length}</div>
+            </div>
+            <div>
+              <div className="l">Indicative material total</div>
+              <div className="v">{money(extended, "USD")}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pricedCount > 0 && pricedCount < allRows.length && (
+        <p style={{ fontSize: 11.5, color: "var(--q-text-dimmer,#94a3b8)", marginTop: 10, lineHeight: 1.6 }}>
+          The indicative total covers only the {pricedCount} line{pricedCount === 1 ? "" : "s"} that
+          returned a price. It is not the project cost — treat it as a sanity check on the lines it
+          does cover, not as a bottom line.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // BOQ Review tab
 // ---------------------------------------------------------------------------
 function BoqTab({ project }) {
@@ -8566,6 +8990,10 @@ function BoqTab({ project }) {
   // only what was physically taken off the drawings. Drives
   // buildSimpleBoqLines' opts.excludeEngineered.
   const [boqListType, setBoqListType] = useState("designed");
+  // Which of the three BOQ documents is on screen. "takeoff" and "designed"
+  // drive boqListType as before; "pricing" swaps the whole page for the market
+  // rate view, because it answers a different question and shares no columns.
+  const [boqView, setBoqView] = useState("designed");
   // `focusedItemKey` opens the persistent Breakdown/Evidence/Notes drill-down
   // panel below the Simple List table, scoped to one item via its "View"
   // action -- this replaces the former two-panel dashboard's per-bucket
@@ -9221,8 +9649,31 @@ function BoqTab({ project }) {
     );
   }
 
+  const BOQ_VIEWS = [
+    ["takeoff",  "Take-off BOQ",  "Only what was measured off the drawings"],
+    ["designed", "Designed BOQ",  "The complete system, including engineered accessories"],
+    ["pricing",  "Pricing BOQ",   "Indicative market rates, with sources"],
+  ];
+
   return (
     <div>
+      <div className="qboq-tabs">
+        {BOQ_VIEWS.map(([key, label, sub]) => (
+          <button
+            key={key}
+            className={`qboq-tab ${boqView === key ? "on" : ""}`}
+            onClick={() => { setBoqView(key); if (key !== "pricing") setBoqListType(key); }}
+          >
+            <b>{label}</b>
+            <span>{sub}</span>
+          </button>
+        ))}
+      </div>
+
+      {boqView === "pricing" ? (
+        <PricingBoqPanel project={project} consolidated={consolidatedAll} loading={loading} />
+      ) : (
+      <React.Fragment>
       <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 mb-4 text-xs text-amber-800">
         <strong>AI-generated estimate — provided "as is," for informational and preliminary planning purposes only, without warranty of any kind.</strong> This Bill of Quantities is produced by an automated AI system. It does not constitute engineering, quantity-surveying, or professional advice, and no professional relationship is created by its use. It has not been reviewed, verified, certified, or stamped by a licensed engineer or quantity surveyor. Confidence scores reflect AI extraction certainty, not independent verification — nothing here should be read as "100% accurate" until a licensed engineer has checked it. You are solely responsible for independently verifying all quantities, specifications, and cost figures before relying on this document for tendering, procurement, permitting, or construction. Quantora and its operators accept no liability for decisions made using this output.
       </div>
@@ -9361,13 +9812,8 @@ function BoqTab({ project }) {
           BOQ Type and Group By controls (below) replace what the dashboard
           used to offer, per "shift it to simple list view". */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <div>
-          <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">BOQ Type</label>
-          <select className="border rounded-lg px-3 py-1.5 text-sm" value={boqListType} onChange={e=>setBoqListType(e.target.value)}>
-            <option value="designed">Designed Engineering BOQ (complete system)</option>
-            <option value="takeoff">Takeoff BOQ (drawing quantities only)</option>
-          </select>
-        </div>
+        {/* The BOQ Type dropdown that used to sit here is now the sub-tab bar
+            at the top of the page -- one control, not two that could disagree. */}
         <div>
           <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">Group By</label>
           <select className="border rounded-lg px-3 py-1.5 text-sm" value={effectiveGroupBy} onChange={e=>setGroupBy(e.target.value)}>
@@ -9491,6 +9937,8 @@ function BoqTab({ project }) {
             <SystemDetailPanel bucketName={null} bucketRows={[rowsByKey[focusedItemKey]]} focusedKey={focusedItemKey} setFocusedKey={setFocusedItemKey} activeTab={activeSystemTab} setActiveTab={setActiveSystemTab} />
           )}
         </React.Fragment>
+      )}
+      </React.Fragment>
       )}
       </React.Fragment>
       )}
@@ -11884,7 +12332,14 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
               const statusClass = c.plan === "trial" ? (daysLeft != null && daysLeft <= 0 ? "pill st-churned" : "pill st-trial") : (isPaidActive ? "pill st-active" : "pill st-churned");
               return (
                 <tr key={c.id} onClick={() => onSelect(selectedId === c.id ? null : c.id)}>
-                  <td className="name">{c.name}</td>
+                  <td className="name">
+                    {c.name}
+                    {c.created_at && (
+                      <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text-dimmer)", marginTop: 2 }}>
+                        joined {new Date(c.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}
+                      </div>
+                    )}
+                  </td>
                   <td><span className={qPlanPillClass(c.plan)} style={{ textTransform: "capitalize" }}>{c.plan}</span></td>
                   <td className="num">{fin?.projects_count ?? 0}</td>
                   <td className="num">{fin?.drawings_count ?? 0}</td>
@@ -12998,7 +13453,7 @@ const PORTAL_LABEL = Object.fromEntries(
   PORTAL_NAV.flatMap(g => g[1]).map(([k, l]) => [k, l])
 );
 
-function PortalShell({ view, onNavigate, onUpgrade, children }) {
+function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, children }) {
   const current = view.name === "new" || view.name === "edit" ? "dashboard" : view.name;
   const Item = ([key, label, icon]) => (
     <button key={key} className={`qp-item ${current === key ? "on" : ""}`} onClick={() => onNavigate(key)}>
@@ -13026,6 +13481,15 @@ function PortalShell({ view, onNavigate, onUpgrade, children }) {
         </div>
       </aside>
       <div className="qp-main">
+        {onRefresh && (
+          <div className="qp-refresh-row">
+            <button className="qp-refresh" onClick={onRefresh} disabled={refreshing}
+              title="Re-read this page's data">
+              <span className={`ic ${refreshing ? "spin" : ""}`} aria-hidden="true">&#10227;</span>
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+        )}
         <div className="qp-strip">
           {PORTAL_NAV.flatMap(g => g[1]).map(([key, label]) => (
             <button key={`strip-${key}`} className={current === key ? "on" : ""} onClick={() => onNavigate(key)}>{label}</button>
@@ -13880,6 +14344,151 @@ function BillingPage({ onUpgrade }) {
   );
 }
 
+// One place that knows the company's market-search position, used by both the
+// Settings card and the Pricing BOQ panel so the two can never disagree about
+// whether the feature is on.
+function useSearchCredits() {
+  const [state, setState] = useState({ loading: true, enabled: false, remaining: 0, companyId: null, error: null });
+
+  async function refresh() {
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) { setState(s => ({ ...s, loading: false })); return; }
+      const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+      if (!prof?.company_id) { setState(s => ({ ...s, loading: false })); return; }
+      const { data: co, error } = await sb.from("companies")
+        .select("id, search_credits_remaining, pricing_search_enabled").eq("id", prof.company_id).maybeSingle();
+      if (error) throw error;
+      setState({
+        loading: false,
+        enabled: !!co?.pricing_search_enabled,
+        remaining: Number(co?.search_credits_remaining ?? 0),
+        companyId: prof.company_id,
+        error: null,
+      });
+    } catch (e) {
+      console.error("useSearchCredits failed:", e);
+      setState(s => ({ ...s, loading: false, error: e.message }));
+    }
+  }
+
+  useEffect(() => { refresh(); }, []);
+  return [state, refresh];
+}
+
+function SearchCreditsCard() {
+  const [credits, refreshCredits] = useSearchCredits();
+  const [packs, setPacks] = useState([]);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await sb.from("credit_packs")
+          .select("id, name, price_usd, search_credits, paddle_price_id, is_active, sort_order")
+          .eq("is_active", true).order("sort_order", { ascending: true });
+        setPacks((data || []).filter(p => Number(p.search_credits ?? 0) > 0));
+      } catch (e) { console.error("credit_packs load failed:", e); }
+    })();
+  }, []);
+
+  async function buy(pack) {
+    setBusy(pack.id); setMsg(null);
+    try {
+      const res = await callPaddleBilling("create_topup_checkout", { pack_id: pack.id });
+      if (res?.url) window.location.href = res.url;
+      else setMsg({ ok: false, text: "Checkout did not return a payment link." });
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally { setBusy(""); }
+  }
+
+  async function turnOff() {
+    setBusy("off"); setMsg(null);
+    try {
+      const { error } = await sb.from("companies")
+        .update({ pricing_search_enabled: false }).eq("id", credits.companyId);
+      if (error) throw error;
+      await refreshCredits();
+      setMsg({ ok: true, text: "Market search is off. Your remaining balance is kept." });
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally { setBusy(""); }
+  }
+
+  // Roughly what a balance buys, in the unit a customer actually thinks in.
+  // Stated as "about", because a run's search count depends on how varied the
+  // BOQ is -- claiming a precise number here would be a promise we cannot keep.
+  const approxRuns = Math.floor(credits.remaining / 10);
+
+  return (
+    <div className="qp-card">
+      <h4>Pricing BOQ — market search</h4>
+      <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", lineHeight: 1.6, marginBottom: 12 }}>
+        Looking up live market rates runs a real web search for each group of items, which we are
+        billed for. It is pay as you go: top up, and it switches on by itself as soon as the payment
+        clears. When the balance reaches zero it switches off by itself, so it can never run up a bill
+        you did not agree to.
+      </p>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
+        <span className="qp-badge" style={{
+          color: credits.enabled ? "#10b981" : "#94a3b8",
+          borderColor: credits.enabled ? "#10b981" : "#94a3b8",
+        }}>
+          {credits.loading ? "checking…" : credits.enabled ? "On" : "Off"}
+        </span>
+        <span style={{ fontSize: 13 }}>
+          <b style={{ fontSize: 18, fontWeight: 800 }}>{credits.remaining.toLocaleString()}</b>
+          <span style={{ color: "var(--q-text-dim,#64748b)" }}> searches remaining</span>
+          {approxRuns > 0 && (
+            <span style={{ color: "var(--q-text-dimmer,#94a3b8)" }}> · about {approxRuns} pricing run{approxRuns === 1 ? "" : "s"}</span>
+          )}
+        </span>
+        {credits.enabled && (
+          <button className="qp-btn" disabled={busy === "off"} onClick={turnOff}>
+            {busy === "off" ? "Turning off…" : "Turn off"}
+          </button>
+        )}
+      </div>
+
+      {msg && (
+        <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 12, color: msg.ok ? "#10b981" : "#f43f5e" }}>
+          {msg.text}
+        </div>
+      )}
+
+      {packs.length === 0 ? (
+        <div className="qp-empty" style={{ padding: 16 }}>Search top-ups are not on sale yet.</div>
+      ) : (
+        <>
+          <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", marginBottom: 8 }}>
+            {packs.map(p => (
+              <button key={p.id} className="qp-tile" disabled={!p.paddle_price_id || busy === p.id}
+                onClick={() => buy(p)} style={!p.paddle_price_id ? { opacity: .55, cursor: "not-allowed" } : {}}>
+                <b>{Number(p.search_credits).toLocaleString()} searches</b>
+                <span style={{ fontSize: 15, fontWeight: 800, color: "var(--q-text,#0f172a)", marginTop: 6, display: "block" }}>
+                  ${Number(p.price_usd).toFixed(0)}
+                </span>
+                <span>
+                  {busy === p.id ? "Opening checkout…"
+                    : !p.paddle_price_id ? "Not on sale yet"
+                    : `about ${Math.floor(Number(p.search_credits) / 10)} pricing runs`}
+                </span>
+              </button>
+            ))}
+          </div>
+          <p style={{ fontSize: 11, color: "var(--q-text-dimmer,#94a3b8)", lineHeight: 1.6 }}>
+            Credit is used only when a search actually runs, and a run never spends more than the
+            balance left. Unused credit does not expire.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function SettingsPage({ email, bare }) {
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
@@ -13973,6 +14582,8 @@ function SettingsPage({ email, bare }) {
         </button>
       </div>
 
+      <SearchCreditsCard />
+
       <div className="qp-card">
         <h4>Sign out</h4>
         <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
@@ -14029,6 +14640,17 @@ function HelpPage({ onNavigate }) {
 // list rather than being tangled up with session, banners and modals.
 function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) {
   const { projects } = useProjects();
+  // Bumping this remounts the page below, which re-runs every loader it has.
+  // Cheaper and far less disruptive than a browser reload, which would tear
+  // down the session and the whole app to achieve the same thing.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  function refreshPage() {
+    setRefreshing(true);
+    setRefreshKey(k => k + 1);
+    // Long enough to read as feedback, short enough not to feel like a wait.
+    setTimeout(() => setRefreshing(false), 650);
+  }
   const openProject = p => setView({ name: "project", project: p });
   const go = name => setView({ name });
 
@@ -14075,8 +14697,9 @@ function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) 
   })();
 
   return (
-    <PortalShell view={view} onNavigate={go} onUpgrade={onOpenBilling}>
-      {page}
+    <PortalShell view={view} onNavigate={go} onUpgrade={onOpenBilling}
+      onRefresh={refreshPage} refreshing={refreshing}>
+      <React.Fragment key={refreshKey}>{page}</React.Fragment>
     </PortalShell>
   );
 }
@@ -14430,6 +15053,18 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
    display:none written above .qp-strip{display:flex} never takes effect. */
 @media (min-width:1024px){.qp-strip{display:none}}
 
+.qp-refresh-row{display:flex;justify-content:flex-end;padding:12px 0 0}
+.qp-refresh{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;
+  padding:6px 13px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--q-border,#e2e8f0);background:var(--q-panel,#fff);
+  color:var(--q-text-dim,#64748b);transition:color .15s,border-color .15s}
+.qp-refresh:hover:not(:disabled){color:var(--q-text,#0f172a);border-color:rgba(99,102,241,.6)}
+.qp-refresh:disabled{opacity:.65;cursor:default}
+.qp-refresh .ic{font-size:13px;line-height:1;display:inline-block}
+.qp-refresh .ic.spin{animation:qpSpin .7s linear infinite}
+@keyframes qpSpin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.qp-refresh .ic.spin{animation:none}}
+
 .qp-grp{padding:14px 12px 6px;font-size:9.5px;font-weight:800;letter-spacing:.15em;
   text-transform:uppercase;color:var(--q-text-dimmer,#94a3b8)}
 .qp-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
@@ -14558,6 +15193,94 @@ select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102
   border-color:rgba(255,255,255,0.14)}
 .qp-admin-embed .text-slate-600,.qp-admin-embed .text-slate-500{color:#98a2b8 !important}
 .qp-admin-embed .text-slate-400{color:#6b7590 !important}
+</style>
+<style id="quantora-landing-motion">
+/* Landing-page motion. CSS only, and every rule here is inside the
+   prefers-reduced-motion guard at the bottom -- someone who has asked their
+   system for less movement gets a completely static page. */
+.quantora-landing-root .panel,
+.quantora-landing-root .step,
+.quantora-landing-root .card{transition:transform .22s cubic-bezier(.2,.7,.3,1),
+  box-shadow .22s ease,border-color .22s ease}
+.quantora-landing-root .panel:hover,
+.quantora-landing-root .card:hover{transform:translateY(-4px);
+  box-shadow:0 18px 40px -18px rgba(0,0,0,.55);border-color:rgba(99,102,241,.55)}
+.quantora-landing-root .step:hover{transform:translateY(-3px)}
+
+.quantora-landing-root .check-item{transition:color .16s ease,transform .16s ease}
+.quantora-landing-root .check-item:hover{color:#fff;transform:translateX(3px)}
+
+/* Reveal on scroll. The class is only ever ADDED by script; the base state
+   below is what an unstyled or script-less page shows, so the content is
+   visible either way. */
+.qtr-reveal{opacity:0;transform:translateY(16px);
+  transition:opacity .5s ease,transform .5s cubic-bezier(.2,.7,.3,1)}
+.qtr-reveal.qtr-in{opacity:1;transform:none}
+
+/* The gradient headline drifts slowly rather than sitting still. */
+.quantora-landing-root .grad-text{background-size:220% 100%;animation:qtrGrad 9s ease-in-out infinite}
+@keyframes qtrGrad{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+
+.quantora-landing-root .btn-grad{transition:transform .16s ease,box-shadow .16s ease}
+.quantora-landing-root .btn-grad:hover{transform:translateY(-2px);
+  box-shadow:0 14px 30px -12px rgba(99,102,241,.75)}
+
+@media (prefers-reduced-motion: reduce){
+  .quantora-landing-root .panel,.quantora-landing-root .step,.quantora-landing-root .card,
+  .quantora-landing-root .check-item,.quantora-landing-root .btn-grad{transition:none}
+  .quantora-landing-root .panel:hover,.quantora-landing-root .card:hover,
+  .quantora-landing-root .step:hover,.quantora-landing-root .btn-grad:hover{transform:none}
+  .quantora-landing-root .grad-text{animation:none}
+  .qtr-reveal{opacity:1;transform:none;transition:none}
+}
+</style>
+<style id="quantora-boq-pricing">
+/* BOQ sub-topic tabs and the Pricing BOQ table. Hand-written: the Tailwind in
+   this file is a pre-purged build, so a class that is not already compiled in
+   does nothing at all. */
+.qboq-tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.qboq-tab{flex:1 1 200px;min-width:0;text-align:left;padding:11px 14px;border-radius:13px;
+  border:1px solid var(--q-border,#e2e8f0);background:var(--q-panel,#fff);cursor:pointer;
+  transition:border-color .12s,background .12s}
+.qboq-tab b{display:block;font-size:13.5px;font-weight:700;color:var(--q-text,#0f172a)}
+.qboq-tab span{display:block;font-size:11px;margin-top:3px;line-height:1.4;
+  color:var(--q-text-dim,#64748b)}
+.qboq-tab:hover{border-color:rgba(79,70,229,.5)}
+.qboq-tab.on{background:#4f46e5;border-color:#4f46e5}
+.qboq-tab.on b,.qboq-tab.on span{color:#fff}
+.qboq-tab.on span{opacity:.85}
+
+.qprice-note{border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.10);
+  border-radius:13px;padding:12px 15px;margin-bottom:16px;font-size:12px;line-height:1.6;
+  color:var(--q-text,#0f172a)}
+.qprice-note b{font-weight:800}
+
+.qprice-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.qprice-bar .grow{margin-left:auto;font-size:12px;color:var(--q-text-dim,#64748b)}
+
+.qprice-wrap{overflow-x:auto;border:1px solid var(--q-border,#e2e8f0);border-radius:14px}
+.qprice-table{width:100%;border-collapse:collapse;min-width:900px}
+.qprice-table th{text-align:left;font-size:10px;font-weight:800;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--q-text-dimmer,#94a3b8);padding:10px 12px;
+  border-bottom:1px solid var(--q-border,#e2e8f0);white-space:nowrap;
+  background:var(--q-panel,#fff);position:sticky;top:0}
+.qprice-table td{font-size:12.5px;padding:11px 12px;vertical-align:top;
+  border-bottom:1px solid var(--q-border,#e2e8f0);color:var(--q-text,#0f172a)}
+.qprice-table tr:last-child td{border-bottom:0}
+.qprice-table td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.qprice-desc{font-weight:600;overflow-wrap:anywhere}
+.qprice-sub{font-size:11px;color:var(--q-text-dim,#64748b);margin-top:3px;line-height:1.45;
+  overflow-wrap:anywhere}
+.qprice-src{font-size:11px;color:#6366f1;text-decoration:underline;overflow-wrap:anywhere}
+.qprice-none{font-size:11.5px;color:var(--q-text-dimmer,#94a3b8);font-style:italic}
+.qprice-conf{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.07em;
+  text-transform:uppercase;padding:2px 7px;border-radius:999px;border:1px solid;white-space:nowrap}
+.qprice-total{display:flex;justify-content:flex-end;gap:26px;padding:14px 16px;flex-wrap:wrap;
+  border-top:1px solid var(--q-border,#e2e8f0);background:var(--q-panel-hover,#f8fafc)}
+.qprice-total div{text-align:right}
+.qprice-total .l{font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--q-text-dimmer,#94a3b8)}
+.qprice-total .v{font-size:17px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums}
 </style>
 <style id="quantora-estimation-ui">
 /* Utilities used by the grouped project navigation, the Estimation page and the
