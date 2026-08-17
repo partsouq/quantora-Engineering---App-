@@ -1521,9 +1521,53 @@ function planTileGrid(pageWidthPt, pageHeightPt) {
   return { scale, cols, rows };
 }
 
+// How white a tile must be before it is treated as empty and skipped. Severe on
+// purpose: a sparse tile holding three cameras is nowhere near 99.85% white, and
+// wrongly dropping a tile means a silently missing region of the BOQ.
+const TILE_BLANK_INK_THRESHOLD = 0.0015;
+
+// True when a tile has essentially no ink on it. Samples on a grid rather than
+// reading every pixel -- a 1550px tile is 2.4M pixels and the answer does not
+// need that precision.
+function tileLooksBlank(canvas) {
+  try {
+    const ctx = canvas.getContext("2d");
+    const { width: w, height: h } = canvas;
+    const step = 4;                                   // every 4th pixel each way
+    const data = ctx.getImageData(0, 0, w, h).data;
+    let sampled = 0, ink = 0;
+    for (let y = 0; y < h; y += step) {
+      for (let x = 0; x < w; x += step) {
+        const i = (y * w + x) * 4;
+        sampled++;
+        // Anything meaningfully off-white counts as ink. Drawings are black on
+        // white, and 245 tolerates JPEG-ish noise and light grey hatching.
+        if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) {
+          ink++;
+          // Early exit: once it is clearly not blank there is nothing to learn
+          // from the remaining samples.
+          if (ink / sampled > TILE_BLANK_INK_THRESHOLD * 4) return false;
+        }
+      }
+    }
+    return sampled > 0 && (ink / sampled) < TILE_BLANK_INK_THRESHOLD;
+  } catch (e) {
+    // A tainted canvas or a browser refusing getImageData must never cause a
+    // tile to be dropped. Fail toward analysing it.
+    console.warn("Blank-tile check unavailable, keeping tile:", e);
+    return false;
+  }
+}
+
 // Renders one page of an already-parsed pdf.js document into overlapping tile
-// PNGs and uploads each to storage. Returns the geometry ai-engine needs to
+// images and uploads them to storage. Returns the geometry ai-engine needs to
 // put every counted symbol back onto the full page.
+//
+// Rendering is done one full-width BAND per tile row, not once per tile.
+// page.render() with a translate transform does not render a crop -- pdf.js
+// walks the entire page operator list every call -- so per-tile rendering meant
+// twelve full-page renders of a dense A0 sheet. One render per row, then
+// drawImage crops out of that band, cuts it to three.
 async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onProgress) {
   const page = await pdf.getPage(pageNumber);
   const base = page.getViewport({ scale: 1 });
@@ -1535,60 +1579,99 @@ async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onPro
 
   const stamp = Date.now();
   const tiles = [];
-  let done = 0;
-  const total = cols * rows;
+  const pending = [];        // { path, blob, meta } queued for upload
+  let blankSkipped = 0;
 
   for (let r = 0; r < rows; r++) {
+    if (onProgress) onProgress({ phase: "render", row: r + 1, rows });
+
+    // One render for the whole row. Every tile in this row shares its y-range.
+    const bandY0 = Math.max(0, r * coreH - marginY);
+    const bandY1 = Math.min(fullH, (r + 1) * coreH + marginY);
+    const bandH = Math.round(bandY1 - bandY0);
+    const band = document.createElement("canvas");
+    band.width = Math.round(fullW); band.height = bandH;
+    const bctx = band.getContext("2d");
+    // PDFs draw onto transparency; without a white base the unpainted areas
+    // flatten to black and hide every line on the sheet.
+    bctx.fillStyle = "#ffffff"; bctx.fillRect(0, 0, band.width, band.height);
+    await page.render({
+      canvasContext: bctx,
+      viewport: vp,
+      transform: [1, 0, 0, 1, 0, -bandY0],
+    }).promise;
+
     for (let c = 0; c < cols; c++) {
       const x0 = Math.max(0, c * coreW - marginX);
-      const y0 = Math.max(0, r * coreH - marginY);
       const x1 = Math.min(fullW, (c + 1) * coreW + marginX);
-      const y1 = Math.min(fullH, (r + 1) * coreH + marginY);
-      const w = Math.round(x1 - x0), h = Math.round(y1 - y0);
+      const w = Math.round(x1 - x0), h = bandH;
 
       const canvas = document.createElement("canvas");
       canvas.width = w; canvas.height = h;
       const ctx = canvas.getContext("2d");
-      // White base: PDFs draw on transparency, and a transparent PNG shows up
-      // black once flattened, which would hide every line on the sheet.
-      ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
-      // Draw the whole page shifted so only this tile's region lands on the
-      // canvas. Far cheaper than rasterising the full sheet and cropping.
-      await page.render({
-        canvasContext: ctx,
-        viewport: vp,
-        transform: [1, 0, 0, 1, -x0, -y0],
-      }).promise;
+      // Pure pixel copy out of the band -- no PDF work at all.
+      ctx.drawImage(band, Math.round(x0), 0, w, h, 0, 0, w, h);
+
+      if (tileLooksBlank(canvas)) {
+        blankSkipped++;
+        canvas.width = 0; canvas.height = 0;
+        continue;
+      }
 
       const blob = await new Promise(res => canvas.toBlob(res, "image/png"));
-      if (!blob) throw new Error(`Could not encode tile ${r + 1},${c + 1} of this sheet.`);
-      const path = `${projectId}/tiles/${drawingId}/${stamp}/p${pageNumber}-r${r}c${c}.png`;
-      const { error: upErr } = await sb.storage.from("drawings").upload(path, blob, {
-        contentType: "image/png", upsert: true,
-      });
-      if (upErr) throw new Error(`Could not upload tile ${r + 1},${c + 1}: ${upErr.message}`);
-
-      tiles.push({
-        path, row: r, col: c,
-        x0: x0 / fullW, y0: y0 / fullH, x1: x1 / fullW, y1: y1 / fullH,
-        // Where this tile's own responsibility starts and ends, as fractions
-        // OF THE TILE -- this is what stops neighbours counting each other's
-        // symbols.
-        core_x0: (c * coreW - x0) / (x1 - x0),
-        core_y0: (r * coreH - y0) / (y1 - y0),
-        core_x1: ((c + 1) * coreW - x0) / (x1 - x0),
-        core_y1: ((r + 1) * coreH - y0) / (y1 - y0),
-      });
-
-      // Let the canvas go before allocating the next one; a 12-tile A0 run
-      // would otherwise hold 12 large bitmaps live at once.
       canvas.width = 0; canvas.height = 0;
-      done++;
-      if (onProgress) onProgress(done, total);
+      if (!blob) throw new Error(`Could not encode tile ${r + 1},${c + 1} of this sheet.`);
+
+      pending.push({
+        path: `${projectId}/tiles/${drawingId}/${stamp}/p${pageNumber}-r${r}c${c}.png`,
+        blob,
+        meta: {
+          row: r, col: c,
+          x0: x0 / fullW, y0: bandY0 / fullH, x1: x1 / fullW, y1: bandY1 / fullH,
+          // Where this tile's own responsibility starts and ends, as fractions
+          // OF THE TILE -- this is what stops neighbours counting each other's
+          // symbols.
+          core_x0: (c * coreW - x0) / (x1 - x0),
+          core_y0: (r * coreH - bandY0) / (bandY1 - bandY0),
+          core_x1: ((c + 1) * coreW - x0) / (x1 - x0),
+          core_y1: ((r + 1) * coreH - bandY0) / (bandY1 - bandY0),
+        },
+      });
     }
+    band.width = 0; band.height = 0;
   }
 
-  return { tiles, grid: { rows, cols }, scale, pxPerMm: scale / MM_PER_PT };
+  // Every tile that survived the blank check was dropped because the sheet is
+  // genuinely empty there -- but if that somehow accounted for all of them,
+  // analysing nothing would silently produce an empty BOQ. Refuse instead.
+  if (!pending.length) {
+    throw new Error("Every tile of this sheet appears to be blank. If the sheet is not blank, it may be a scanned image with very light lines — tell us and we will look at it.");
+  }
+
+  // Uploads are network-bound; four at a time turns twelve round trips into three.
+  let uploaded = 0;
+  const UP_CONCURRENCY = 4;
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(UP_CONCURRENCY, pending.length) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= pending.length) return;
+      const p = pending[i];
+      const { error: upErr } = await sb.storage.from("drawings").upload(p.path, p.blob, {
+        contentType: "image/png", upsert: true,
+      });
+      if (upErr) throw new Error(`Could not upload tile ${p.meta.row + 1},${p.meta.col + 1}: ${upErr.message}`);
+      uploaded++;
+      if (onProgress) onProgress({ phase: "upload", done: uploaded, total: pending.length });
+    }
+  }));
+
+  pending.forEach(p => tiles.push({ path: p.path, ...p.meta }));
+
+  return {
+    tiles, grid: { rows, cols }, scale, pxPerMm: scale / MM_PER_PT,
+    blankSkipped, plannedTiles: rows * cols,
+  };
 }
 
 // Opens a stored PDF drawing with pdf.js. Shared by the tiler and anything
@@ -7427,16 +7510,24 @@ function DrawingsTab({ project }) {
     if (!ok) { setTiling(t => ({ ...t, [d.id]: null })); return; }
 
     let totalItems = 0;
+    let totalBlankSkipped = 0;
     try {
       // Sequential, not parallel: ai-engine's findInFlightRun would hand back
       // the first run rather than starting a second for the same drawing.
       for (let i = 0; i < pages.length; i++) {
         const pageNumber = pages[i];
         const label = pages.length > 1 ? ` (sheet ${i + 1} of ${pages.length})` : "";
-        const { tiles, grid } = await renderAndUploadTiles(
+        const { tiles, grid, blankSkipped, plannedTiles } = await renderAndUploadTiles(
           pdf, pageNumber, project.id, d.id,
-          (done, total) => setTiling(t => ({ ...t, [d.id]: `Rendering tile ${done}/${total}${label}…` }))
+          (p) => setTiling(t => ({
+            ...t,
+            [d.id]: p.phase === "render"
+              ? `Rendering row ${p.row}/${p.rows}${label}…`
+              : `Uploading ${p.done}/${p.total}${label}…`,
+          }))
         );
+        if (blankSkipped) console.log(`Sheet ${pageNumber}: skipped ${blankSkipped} of ${plannedTiles} tiles as blank.`);
+        totalBlankSkipped += blankSkipped;
         setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
         const started = await callEngine("analyze_drawing_tiled", {
           project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid,
@@ -7445,7 +7536,11 @@ function DrawingsTab({ project }) {
         totalItems += summary.item_count || 0;
       }
       await load();
-      alert(`High-resolution take-off complete.\n\n${totalItems} BOQ items from ${pages.length} sheet${pages.length === 1 ? "" : "s"}, read at ${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre.`);
+      alert(
+        `High-resolution take-off complete.\n\n${totalItems} BOQ items from ${pages.length} sheet${pages.length === 1 ? "" : "s"}, ` +
+        `read at ${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre.` +
+        (totalBlankSkipped ? `\n\n${totalBlankSkipped} blank tile${totalBlankSkipped === 1 ? "" : "s"} were skipped — empty areas of the sheet, so nothing was counted there and no AI charge was incurred for them.` : "")
+      );
     } catch (ex) {
       setErr(ex.message);
     } finally {
@@ -8075,6 +8170,10 @@ function MarkupViewerModal({ drawing, onClose }) {
   const [items, setItems] = useState([]);
   const [imgUrl, setImgUrl] = useState(null);
   const [pageRenderFailed, setPageRenderFailed] = useState(false);
+  // "fit" or a multiplier. Fit on open, because the whole sheet is the first
+  // thing an estimator wants to see; zoom is how they then check a box sits on
+  // its symbol.
+  const [zoom, setZoom] = useState("fit");
   const [downloading, setDownloading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -8280,9 +8379,16 @@ function MarkupViewerModal({ drawing, onClose }) {
             w: boxWOf(t) * canvas.width, h: boxHOf(t) * canvas.height,
           }))
         : [];
-      const exportList = (symbolExport.length || tagExport.length)
-        ? symbolExport.concat(tagExport)
-        : legacyExportList();
+      // The download must show exactly what the viewer shows. It used to fall
+      // back to AI markers ONLY when there were no symbol or tag markers at all,
+      // so a sheet with one tag exported one box and dropped fifty.
+      const aiExport = aiMarkerItems.map(it => ({
+        color: colourOf(it),
+        label: null,
+        positions: positionsOf(it),
+        w: boxW(it) * canvas.width, h: boxH(it) * canvas.height,
+      }));
+      const exportList = symbolExport.concat(tagExport).concat(aiExport);
       function legacyExportList() { return useTags
         ? matchedTags.map(t => ({
             color: t.system ? systemColor(t.system) : "#94a3b8",
@@ -8445,6 +8551,14 @@ function MarkupViewerModal({ drawing, onClose }) {
   // system's tags stay, because a drawing that labels its cameras and leaves its
   // sockets bare should show both.
   const symbolSystems = new Set(symbolItems.map(s => s.item.system_category).filter(Boolean));
+  // Items whose devices are already boxed from the drawing's own geometry. Their
+  // AI coordinates would be a second box on the same camera, so they are skipped
+  // -- but ONLY these items. Suppressing the whole page because one item matched
+  // a symbol is what made markup look dead on Sheet 8.
+  const symbolMarkedIds = new Set(symbolItems.map(s => s.item.id));
+  // Everything the AI located that no symbol has already covered. This is the
+  // set that used to be thrown away whenever a single tag matched.
+  const aiMarkerItems = onPage.filter(it => !symbolMarkedIds.has(it.id));
 
   // Automatic count match, once per page, as soon as the symbols are known.
   // Only ever fills in items nobody has decided on -- a person's pick is never
@@ -8535,8 +8649,29 @@ function MarkupViewerModal({ drawing, onClose }) {
               </div>
             )}
             {imgUrl && (
-              <div className="qtr-markup-wrap relative border rounded-lg overflow-hidden bg-slate-100 mb-4"
-                style={pickingFor ? { cursor: "crosshair" } : undefined}
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <span className="text-[11px] text-slate-500 uppercase font-semibold">Zoom</span>
+                {[["fit", "Fit"], [1, "100%"], [2, "200%"], [4, "400%"]].map(([v, label]) => (
+                  <button key={String(v)} onClick={()=>setZoom(v)}
+                    className={`text-[11px] font-semibold px-2.5 py-1 rounded border ${zoom===v ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                    {label}
+                  </button>
+                ))}
+                <span className="text-[11px] text-slate-400">
+                  {zoom === "fit"
+                    ? "A device symbol on an A0 sheet is only a few pixels wide at fit — zoom in to see the boxes land on the symbols."
+                    : "Scroll inside the frame to pan."}
+                </span>
+              </div>
+            )}
+            {imgUrl && (
+              <div className={`qtr-markup-frame border rounded-lg bg-slate-100 mb-4 ${zoom === "fit" ? "overflow-hidden" : "overflow-auto"}`}
+                style={{
+                  ...(pickingFor ? { cursor: "crosshair" } : null),
+                  // Zoomed in, the frame becomes a viewport onto a larger image
+                  // rather than growing the page.
+                  ...(zoom === "fit" ? null : { maxHeight: "70vh" }),
+                }}
                 onClick={pickingFor ? (e => {
                   const r = e.currentTarget.getBoundingClientRect();
                   if (!r.width || !r.height) return;
@@ -8544,7 +8679,8 @@ function MarkupViewerModal({ drawing, onClose }) {
                   if (!hit) setError2("That click did not land on a repeated symbol. Zoom in and click the middle of the device.");
                   else setError2("");
                 }) : undefined}>
-                <img src={imgUrl} className="w-full block" alt={drawing.file_name} />
+                <div className="qtr-markup-wrap relative" style={zoom === "fit" ? { width: "100%" } : { width: `${zoom * 100}%` }}>
+                <img src={imgUrl} className="block w-full" alt={drawing.file_name} />
                 {symbolItems.map(({ item: it, group, source }) => {
                   const color = colourOf(it);
                   const isActive = activeItem === it.id;
@@ -8591,7 +8727,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                     </div>
                   );
                 })}
-                {!useSymbols && !useTags && onPage.map(it => {
+                {aiMarkerItems.map(it => {
                   const color = colourOf(it);
                   const w = boxW(it), h = boxH(it);
                   const isActive = activeItem === it.id;
@@ -8622,6 +8758,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                     </React.Fragment>
                   );
                 })}
+                </div>
               </div>
             )}
             {!pickingFor && imgUrl && !useSymbols && symbolGroups.length > 0 && (
