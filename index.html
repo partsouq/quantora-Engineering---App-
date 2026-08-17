@@ -241,6 +241,11 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
    Tailwind's own values, to match the neighbouring buttons exactly. */
 .border-emerald-300{border-color:#6ee7b7}
 .hover\:bg-emerald-100:hover{background-color:#d1fae5}
+
+/* Used by the BOQ delete controls; absent from the pre-purged Tailwind
+   build, so without these the hover and disabled states are no-ops. */
+.hover\:bg-rose-100:hover{background-color:#ffe4e6}
+.disabled\:opacity-40:disabled{opacity:.4}
 </style>
 <script>
   // Launch promotion window. One timestamp, read by the marketing page and by
@@ -9325,6 +9330,90 @@ function BoqTab({ project }) {
     setReviewItems(rows => rows.map(r => r.id === id ? { ...r, status } : r));
   }
 
+  // Deleting is scoped to whatever the current System Filter shows, never to
+  // "everything in the database regardless of what is on screen" -- someone
+  // looking at a filtered CCTV view who presses "delete all" means the CCTV
+  // lines they can see.
+  const [deleting, setDeleting] = useState(false);
+
+  // A consolidated line can be backed by several boq_items rows. Collect them
+  // from the row's evidence, which is where consolidateBoqItems records every
+  // source detection that fed the line.
+  function underlyingIdsFor(row) {
+    if (!row) return [];
+    return [...new Set((row.evidence || []).map(ev => ev.id).filter(Boolean))];
+  }
+
+  async function deleteBoqLine(rowKey) {
+    const row = rowsByKey[rowKey];
+    if (!row) return;
+    const ids = underlyingIdsFor(row);
+    if (!ids.length) {
+      alert("This line has no underlying records to delete.");
+      return;
+    }
+    // Say plainly that one visible line is several stored records, so a
+    // multi-row delete is never a surprise discovered afterwards.
+    const detail = ids.length > 1
+      ? `\n\nThis line is consolidated from ${ids.length} separate detections across your drawings. All ${ids.length} will be removed.`
+      : "";
+    if (!window.confirm(`Permanently delete this BOQ line?\n\n${row.description}\nQuantity ${row.totalQuantity} ${row.unit}${detail}\n\nThis cannot be undone. Re-running the drawing analysis would recreate it.`)) return;
+
+    setDeleting(true);
+    try {
+      const { error } = await sb.from("boq_items").delete().in("id", ids).eq("project_id", project.id);
+      if (error) throw error;
+      // Drop them locally too rather than re-fetching the whole BOQ: the
+      // consolidation, totals and detail panel all derive from rawItems, so
+      // they recompute correctly from this one change.
+      const gone = new Set(ids);
+      setRawItems(its => its.filter(i => !gone.has(i.id)));
+      if (focusedItemKey === rowKey) setFocusedItemKey(null);
+    } catch (e) {
+      console.error("deleteBoqLine failed:", e);
+      alert("Could not delete that line: " + (e.message || e));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  // Clears what is currently on screen. Used before re-running a drawing set
+  // from scratch, which is otherwise impossible without leaving the old lines
+  // stacked underneath the new ones.
+  async function deleteAllShownBoqLines() {
+    const ids = [...new Set(consolidated.flatMap(underlyingIdsFor))];
+    if (!ids.length) { alert("There are no BOQ lines to delete."); return; }
+    const scope = filterSystem === "all"
+      ? "every BOQ line in this project"
+      : `every ${SYSTEM_LABEL(filterSystem)} BOQ line in this project`;
+    if (!window.confirm(`Permanently delete ${scope}?\n\n${consolidated.length} consolidated line${consolidated.length===1?"":"s"}, made up of ${ids.length} stored record${ids.length===1?"":"s"}.\n\nThis cannot be undone. Your uploaded drawings are NOT deleted — you can run the take-off again afterwards.`)) return;
+    // Second confirm, because this one is not recoverable and the first click
+    // can be muscle memory.
+    if (!window.confirm(`Last check.\n\nDelete ${ids.length} BOQ record${ids.length===1?"":"s"} now?`)) return;
+
+    setDeleting(true);
+    try {
+      // Chunked: a project can hold thousands of rows and a single .in() list
+      // that long makes a URL long enough to be rejected before it reaches
+      // Postgres.
+      const CHUNK = 200;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const { error } = await sb.from("boq_items").delete().in("id", ids.slice(i, i + CHUNK)).eq("project_id", project.id);
+        if (error) throw error;
+      }
+      const gone = new Set(ids);
+      setRawItems(its => its.filter(i => !gone.has(i.id)));
+      setFocusedItemKey(null);
+      alert(`Deleted ${ids.length} BOQ record${ids.length===1?"":"s"}. Your drawings are untouched — use Analyze or High-Res Take-Off to rebuild the BOQ.`);
+    } catch (e) {
+      console.error("deleteAllShownBoqLines failed:", e);
+      alert("Could not delete the BOQ lines: " + (e.message || e));
+      await load();   // resync, since some chunks may have gone through
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function updateCost(id, field, dollarsStr) {
     const dollars = parseFloat(dollarsStr);
     const cents = Number.isFinite(dollars) ? Math.round(dollars * 100) : null;
@@ -9617,9 +9706,14 @@ function BoqTab({ project }) {
           )}
         </td>
         <td className="px-3 py-2 text-center">{statusBadge(row)}</td>
-        <td className="px-3 py-2 text-center">
+        <td className="px-3 py-2 text-center whitespace-nowrap">
           <button onClick={()=>onFocus(isFocused ? null : row.key)} className={`text-xs hover:underline ${isFocused ? "text-blue-700 font-semibold" : "text-blue-600"}`} title="View this item's breakdown/evidence/notes below">
             👁 {isFocused ? "Focused" : "View"}
+          </button>
+          <button onClick={()=>deleteBoqLine(row.key)} disabled={deleting}
+            className="text-xs text-rose-600 hover:underline ml-3 disabled:opacity-40"
+            title="Permanently delete this BOQ line">
+            Delete
           </button>
         </td>
       </tr>
@@ -10089,6 +10183,15 @@ function BoqTab({ project }) {
           </select>
         </div>
         <div className="text-sm text-slate-500 ml-auto self-end">{consolidated.length} consolidated line{consolidated.length===1?"":"s"} ({consolidated.reduce((s,r)=>s+r.sourceCount,0)} source detections)</div>
+        {consolidated.length > 0 && (
+          <div className="self-end">
+            <button onClick={deleteAllShownBoqLines} disabled={deleting}
+              title="Permanently delete the BOQ lines currently shown. Your uploaded drawings are not affected."
+              className="text-xs font-semibold text-rose-700 border border-rose-200 bg-rose-50 px-3 py-1.5 rounded-lg hover:bg-rose-100 disabled:opacity-50">
+              {deleting ? "Deleting…" : filterSystem === "all" ? "Delete all BOQ lines" : `Delete ${SYSTEM_LABEL(filterSystem)} lines`}
+            </button>
+          </div>
+        )}
       </div>
 
       {drawingIdsWithFlags.length > 0 && (
@@ -10152,9 +10255,14 @@ function BoqTab({ project }) {
                           <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${l.status === "Confirmed" ? "bg-emerald-100 text-emerald-700" : l.status === "Engineered" ? "bg-blue-100 text-blue-700" : "bg-violet-100 text-violet-700"}`}>{l.status}</span>
                         </td>
                         <td className="px-3 py-2 text-slate-500 text-xs">{l.remarks}</td>
-                        <td className="px-3 py-2 text-center">
+                        <td className="px-3 py-2 text-center whitespace-nowrap">
                           <button onClick={()=>{ const next = focusedItemKey === l.rowKey ? null : l.rowKey; setFocusedItemKey(next); setActiveSystemTab("breakdown"); }} className={`text-xs hover:underline ${focusedItemKey === l.rowKey ? "text-blue-700 font-semibold" : "text-blue-600"}`} title="View this item's breakdown/evidence/notes below">
                             👁 {focusedItemKey === l.rowKey ? "Focused" : "View"}
+                          </button>
+                          <button onClick={()=>deleteBoqLine(l.rowKey)} disabled={deleting}
+                            className="text-xs text-rose-600 hover:underline ml-3 disabled:opacity-40"
+                            title="Permanently delete this BOQ line">
+                            Delete
                           </button>
                         </td>
                       </tr>
