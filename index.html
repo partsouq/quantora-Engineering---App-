@@ -1441,64 +1441,20 @@ function simpleBoqSubtotalsByUnit(lines) {
 // High-resolution tiled take-off
 // --------------------------------------------------------------------------
 
-// Pixels per millimetre of real sheet. At 4.5 a 5mm device symbol is 22px
-// across and 2.5mm annotation text is 11px -- both readable. It also stays
-// above MIN_READABLE_PX_PER_MM below, so the resolution we deliver is never
-// worse than the resolution we use to judge a sheet unreadable.
-// Raising this improves legibility and raises cost roughly with its square,
-// since it multiplies both tile dimensions.
-const TILE_PX_PER_MM = 4.5;
+// Pixels per millimetre of real sheet. 5.5 puts a 5mm device symbol on ~28px.
+// Raising this improves symbol legibility and raises cost roughly with its
+// square, because it multiplies both tile dimensions.
+const TILE_PX_PER_MM = 5.5;
 const MM_PER_PT = 0.352778;
-// Target pixel size of one tile. Anthropic scales an image to fit about 1568px
-// on its long edge, so anything larger is downscaled again and the resolution
-// is thrown away. Sitting just under that ceiling is what keeps the tile COUNT
-// down: the grid is driven by the usable core size, not by the resolution.
-const TILE_TARGET_PX = 1560;
-// 8% of a ~1345px core is a 108px margin, about 24mm of real sheet. A device
-// symbol is ~5mm, so a symbol sitting on a cut line is still wholly inside its
-// neighbour's overlap with about five times the margin it needs.
-const TILE_OVERLAP = 0.08;
+// Target pixel size of one tile. Anthropic works most efficiently at about
+// 1568px on the long edge; staying just under avoids a server-side downscale
+// that would throw away exactly the resolution we came here for.
+const TILE_TARGET_PX = 1450;
+const TILE_OVERLAP = 0.12;
 // Hard cap, mirrored by MAX_TILES_PER_RUN in ai-engine. If a sheet needs more
 // than this, resolution is stepped down until it fits rather than billing an
 // unbounded number of calls.
 const TILE_MAX_TILES = 12;
-// Anthropic renders a PDF page to about this on its long edge, which is what
-// makes a whole-sheet pass unusable on large-format drawings.
-const WHOLE_SHEET_RASTER_PX = 1568;
-// A device symbol is ~5mm on a construction sheet and needs ~20px to be
-// countable, so ~4 px/mm is the floor for reading a sheet in one pass.
-const MIN_READABLE_PX_PER_MM = 4;
-// How many sheets one click may tile. A 20-page package at ~7 calls a page is
-// not something anyone should set off by accident.
-const MAX_AUTO_TILED_PAGES = 5;
-
-// Everything needed to decide how to read a page, and to explain the decision.
-function assessPageForAnalysis(viewportAtScale1) {
-  const longEdgeMm = Math.max(viewportAtScale1.width, viewportAtScale1.height) * MM_PER_PT;
-  const wholeSheetPxPerMm = WHOLE_SHEET_RASTER_PX / longEdgeMm;
-  const plan = planTileGrid(viewportAtScale1.width, viewportAtScale1.height);
-  return {
-    longEdgeMm,
-    wholeSheetPxPerMm,
-    needsTiling: wholeSheetPxPerMm < MIN_READABLE_PX_PER_MM,
-    sheetName: describeSheetSize(longEdgeMm),
-    grid: plan,
-    tilePxPerMm: plan.scale / MM_PER_PT,
-    calls: plan.cols * plan.rows + 1,
-  };
-}
-
-// Nearest ISO sheet, for a message a drawing office will recognise instantly.
-function describeSheetSize(longEdgeMm) {
-  const sizes = [["A4", 297], ["A3", 420], ["A2", 594], ["A1", 841], ["A0", 1189]];
-  let best = null, bestDiff = Infinity;
-  for (const [name, mm] of sizes) {
-    const diff = Math.abs(mm - longEdgeMm);
-    if (diff < bestDiff) { bestDiff = diff; best = name; }
-  }
-  // Only claim a standard size when it really is one; otherwise give the number.
-  return bestDiff <= 25 ? best : `${Math.round(longEdgeMm)}mm`;
-}
 
 function planTileGrid(pageWidthPt, pageHeightPt) {
   let scale = MM_PER_PT * TILE_PX_PER_MM;
@@ -7317,131 +7273,77 @@ function DrawingsTab({ project }) {
     } catch (ex) { alert("Could not delete drawing: " + ex.message); }
   }
 
-  // Accepts "1-3", "2,5", "1-3,7" and plain "4". Returns a sorted unique list
-  // of valid page numbers; anything unparseable simply contributes nothing,
-  // and an empty result is treated as an error by the caller rather than
-  // silently becoming "all pages".
-  function parsePageList(text, maxPage) {
-    const out = new Set();
-    String(text || "").split(",").forEach(part => {
-      const range = part.trim().match(/^(\d+)\s*-\s*(\d+)$/);
-      if (range) {
-        const a = parseInt(range[1], 10), b = parseInt(range[2], 10);
-        for (let n = Math.min(a, b); n <= Math.max(a, b); n++) {
-          if (n >= 1 && n <= maxPage) out.add(n);
-        }
-        return;
-      }
-      const n = parseInt(part.trim(), 10);
-      if (Number.isFinite(n) && n >= 1 && n <= maxPage) out.add(n);
-    });
-    return [...out].sort((a, b) => a - b);
-  }
-
   async function analyzeAllPending() {
     const pending = drawings.filter(d => canAnalyze(d) && !runs[d.id]);
     if (pending.length === 0) { alert("No un-analyzed drawings to run. Upload drawings first, or use Re-analyze on individual items below."); return; }
     for (const d of pending) { await analyze(d.id); }
   }
 
-  // One entry point. It measures the sheet and picks the method, because the
-  // customer cannot be expected to know that an A1 sheet defeats a whole-sheet
-  // AI pass -- that is our engineering detail, and leaking it into their
-  // workflow is exactly how Heena Khan ended up with a BOQ containing no
-  // cameras.
+  // High-resolution tiled take-off. Kept as a separate entry point rather than
+  // replacing analyze() because it costs several times as much per sheet: the
+  // user must choose it knowingly, and a scanned or vector-thin sheet that the
+  // normal pass handles fine should not silently start costing 7x.
   const [tiling, setTiling] = useState({});
-
-  async function analyzeAuto(d) {
+  async function analyzeTiled(d) {
     setErr("");
-    const isPdf = d.file_type === "pdf" || d.analysis_source_type === "pdf";
-
-    // Images and CAD text have no page geometry to measure, and pdf.js may
-    // simply not have loaded. Both fall back to the standard path rather than
-    // blocking the customer from analysing anything at all.
-    if (!isPdf || !window.__PDFJS_OK__ || !window.pdfjsLib) {
-      await analyze(d.id);
-      return;
-    }
-
-    let pdf, assessment;
+    let pdf;
     try {
-      setTiling(t => ({ ...t, [d.id]: "Measuring sheet…" }));
+      setTiling(t => ({ ...t, [d.id]: "Opening drawing…" }));
       pdf = await openStoredPdf(d.analysis_source_path || d.storage_path);
-      const page = await pdf.getPage(1);
-      assessment = assessPageForAnalysis(page.getViewport({ scale: 1 }));
     } catch (ex) {
-      // Could not measure it -- do not strand the customer, just use the
-      // standard path and say nothing clever.
-      console.warn("Could not measure drawing, falling back to standard analysis:", ex);
       setTiling(t => ({ ...t, [d.id]: null }));
-      await analyze(d.id);
+      setErr(ex.message);
       return;
     }
 
-    if (!assessment.needsTiling) {
-      // Small enough to read whole. This is the cheap path and it is correct
-      // here, so take it without comment.
-      setTiling(t => ({ ...t, [d.id]: null }));
-      await analyze(d.id);
-      return;
-    }
-
-    // Large-format sheet. Decide which pages, then confirm the cost.
-    const totalPages = pdf.numPages || 1;
-    let pages = [1];
-    if (totalPages > 1) {
-      const suggested = Math.min(totalPages, MAX_AUTO_TILED_PAGES);
+    let pageNumber = 1;
+    if ((pdf.numPages || 1) > 1) {
       const answer = window.prompt(
-        `This file has ${totalPages} pages, and each is a large ${assessment.sheetName} sheet that has to be read at high resolution.\n\n` +
-        `Which pages should be read? Enter numbers or a range, e.g. "1-3" or "2,5".\n` +
-        `Up to ${MAX_AUTO_TILED_PAGES} pages per run.`,
-        totalPages === 1 ? "1" : `1-${suggested}`
+        `This file has ${pdf.numPages} pages. A high-resolution take-off reads one sheet at a time.\n\nWhich page should it read?`,
+        "1"
       );
       if (answer === null) { setTiling(t => ({ ...t, [d.id]: null })); return; }
-      pages = parsePageList(answer, totalPages);
-      if (!pages.length) {
+      const n = parseInt(answer, 10);
+      if (!Number.isFinite(n) || n < 1 || n > pdf.numPages) {
         setTiling(t => ({ ...t, [d.id]: null }));
-        setErr(`Could not read "${answer}" as page numbers for a ${totalPages}-page file.`);
+        setErr(`Page ${answer} is not in this file (it has ${pdf.numPages}).`);
         return;
       }
-      if (pages.length > MAX_AUTO_TILED_PAGES) {
-        setTiling(t => ({ ...t, [d.id]: null }));
-        setErr(`That is ${pages.length} pages. Please run at most ${MAX_AUTO_TILED_PAGES} at a time — each large sheet takes several minutes to read properly.`);
-        return;
-      }
+      pageNumber = n;
     }
 
-    const totalCalls = assessment.calls * pages.length;
-    const ok = window.confirm(
-      `This is a ${assessment.sheetName} sheet.\n\n` +
-      `Read whole, it would come through at about ${assessment.wholeSheetPxPerMm.toFixed(1)} pixels per millimetre — ` +
-      `too coarse for device symbols like cameras and readers to be counted. Quantora will instead read it at ` +
-      `${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles.\n\n` +
-      `${pages.length === 1 ? "This takes a few minutes" : `${pages.length} sheets, a few minutes each`} and uses ${totalCalls} AI passes. ` +
-      `It still counts as ${pages.length} page${pages.length === 1 ? "" : "s"} against your plan.\n\nStart?`
-    );
-    if (!ok) { setTiling(t => ({ ...t, [d.id]: null })); return; }
-
-    let totalItems = 0;
+    // Tell them the cost before spending it, not after.
     try {
-      // Sequential, not parallel: ai-engine's findInFlightRun would hand back
-      // the first run rather than starting a second for the same drawing.
-      for (let i = 0; i < pages.length; i++) {
-        const pageNumber = pages[i];
-        const label = pages.length > 1 ? ` (sheet ${i + 1} of ${pages.length})` : "";
-        const { tiles, grid } = await renderAndUploadTiles(
-          pdf, pageNumber, project.id, d.id,
-          (done, total) => setTiling(t => ({ ...t, [d.id]: `Rendering tile ${done}/${total}${label}…` }))
-        );
-        setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
-        const started = await callEngine("analyze_drawing_tiled", {
-          project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid,
-        });
-        const summary = await pollAnalysisRun(started.run_id);
-        totalItems += summary.item_count || 0;
-      }
+      const pg = await pdf.getPage(pageNumber);
+      const bvp = pg.getViewport({ scale: 1 });
+      const plan = planTileGrid(bvp.width, bvp.height);
+      const calls = plan.cols * plan.rows + 1;
+      const ok = window.confirm(
+        `High-resolution take-off\n\n` +
+        `This sheet will be rendered at ${(plan.scale / MM_PER_PT).toFixed(1)} pixels per millimetre and read as ` +
+        `${plan.cols} x ${plan.rows} overlapping tiles, so small device symbols such as cameras become legible.\n\n` +
+        `That means ${calls} AI calls instead of 1, so it costs roughly ${calls} times a normal analysis and takes a few minutes. ` +
+        `It counts as one page against your plan.\n\nRun it?`
+      );
+      if (!ok) { setTiling(t => ({ ...t, [d.id]: null })); return; }
+    } catch (ex) {
+      setTiling(t => ({ ...t, [d.id]: null }));
+      setErr("Could not read that page: " + ex.message);
+      return;
+    }
+
+    try {
+      const { tiles, grid } = await renderAndUploadTiles(
+        pdf, pageNumber, project.id, d.id,
+        (done, total) => setTiling(t => ({ ...t, [d.id]: `Rendering tile ${done} of ${total}…` }))
+      );
+      setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI…` }));
+      const started = await callEngine("analyze_drawing_tiled", {
+        project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid,
+      });
+      const summary = await pollAnalysisRun(started.run_id);
       await load();
-      alert(`High-resolution take-off complete.\n\n${totalItems} BOQ items from ${pages.length} sheet${pages.length === 1 ? "" : "s"}, read at ${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre.`);
+      alert(`High-resolution take-off complete: ${summary.item_count} BOQ items from ${tiles.length} tiles (revision ${started.revision_number}).\n\n${summary.notes}`);
     } catch (ex) {
       setErr(ex.message);
     } finally {
@@ -7599,12 +7501,15 @@ function DrawingsTab({ project }) {
                         Classify & Select Pages
                       </button>
                     )}
-                    <button onClick={()=>analyzeAuto(d)} disabled={anyAiCallInFlight || !!tiling[d.id]}
-                      title={anyAiCallInFlight && !analyzing[d.id] && !tiling[d.id]
-                        ? "Another AI analysis is already running -- please wait for it to finish first"
-                        : "Quantora measures the sheet and reads it at whatever resolution its symbols need."}
-                      className="bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
-                      {tiling[d.id] || (analyzing[d.id] ? "Analyzing with AI…" : (runs[d.id] ? "Re-analyze" : "Analyze with AI"))}
+                    {(d.file_type === "pdf" || (d.analysis_source_type === "pdf")) && (
+                      <button onClick={()=>analyzeTiled(d)} disabled={anyAiCallInFlight || !!tiling[d.id]}
+                        title="Renders the sheet at full resolution and reads it in overlapping tiles, so small device symbols such as cameras are legible. Costs several times a normal analysis."
+                        className="text-xs text-emerald-800 border border-emerald-300 bg-emerald-50 px-3 py-2 rounded-lg font-semibold hover:bg-emerald-100 disabled:opacity-50">
+                        {tiling[d.id] || "High-Res Take-Off"}
+                      </button>
+                    )}
+                    <button onClick={()=>analyze(d.id)} disabled={anyAiCallInFlight} title={anyAiCallInFlight && !analyzing[d.id] ? "Another AI analysis is already running -- please wait for it to finish first" : undefined} className="bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
+                      {analyzing[d.id] ? "Analyzing with AI…" : (runs[d.id] ? "Re-analyze" : "Analyze with AI")}
                     </button>
                   </>
                 ) : d.discipline === "specification" ? <span className="text-xs text-slate-400">Reference document</span> : NEEDS_EXPORT_TYPES.includes(d.file_type) ? (
@@ -9499,7 +9404,7 @@ function BoqTab({ project }) {
       const gone = new Set(ids);
       setRawItems(its => its.filter(i => !gone.has(i.id)));
       setFocusedItemKey(null);
-      alert(`Deleted ${ids.length} BOQ record${ids.length===1?"":"s"}. Your drawings are untouched — press Analyze with AI to rebuild the BOQ.`);
+      alert(`Deleted ${ids.length} BOQ record${ids.length===1?"":"s"}. Your drawings are untouched — use Analyze or High-Res Take-Off to rebuild the BOQ.`);
     } catch (e) {
       console.error("deleteAllShownBoqLines failed:", e);
       alert("Could not delete the BOQ lines: " + (e.message || e));
