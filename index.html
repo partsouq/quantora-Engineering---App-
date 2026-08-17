@@ -261,6 +261,22 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
 /* The Located-items heading is uppercase; the device-coverage note inside it
    must read as a sentence. Not in the purged Tailwind build. */
 .normal-case{text-transform:none}
+
+/* Classes used by the Specification page that the pre-purged Tailwind build
+   does not contain. Tailwind's own values. Note gap-x-4/gap-y-1/min-w-0 were
+   ALREADY used by existing markup on this page and were silently doing
+   nothing, so this fixes a pre-existing layout bug as well. */
+.border-violet-300{border-color:#c4b5fd}
+.hover\:bg-violet-100:hover{background-color:#ede9fe}
+.w-2\/5{width:40%}
+.align-top{vertical-align:top}
+.gap-x-4{column-gap:1rem}
+.gap-y-1{row-gap:.25rem}
+.min-w-0{min-width:0px}
+
+/* Already used by the Comparison page's column labels and silently absent
+   from the purged Tailwind build. */
+.tracking-wider{letter-spacing:.05em}
 </style>
 <script>
   // Launch promotion window. One timestamp, read by the marketing page and by
@@ -376,7 +392,29 @@ const SYSTEM_GROUPS = {
   "Other": ["other"],
 };
 const ALL_SYSTEMS = Object.values(SYSTEM_GROUPS).flat();
-const SYSTEM_LABEL = s => s.split("_").map(w => w[0].toUpperCase()+w.slice(1)).join(" ");
+// Acronyms only. This helper doubles as a general slug prettifier for statuses,
+// plan ids, document types and disciplines, so any word NOT listed here keeps the
+// original title-case behaviour unchanged -- "pending" must not become "PENDING".
+// Wi-Fi keeps its hyphen: that is how the trademark is written and how every
+// specification it gets compared against writes it.
+const SYSTEM_LABEL_WORDS = {
+  cctv: "CCTV", wifi: "Wi-Fi", iptv: "IPTV", bms: "BMS", grms: "GRMS", anpr: "ANPR",
+  hvac: "HVAC", fcu: "FCU", ahu: "AHU", db: "DB", mep: "MEP", elv: "ELV", lv: "LV",
+  mv: "MV", hv: "HV", ups: "UPS", pa: "PA", av: "AV", it: "IT", ict: "ICT",
+  vesda: "VESDA", vrf: "VRF", vav: "VAV", crac: "CRAC", pabx: "PABX", sla: "SLA",
+  boq: "BOQ", rfq: "RFQ", nvr: "NVR", vms: "VMS", poe: "PoE", tv: "TV",
+};
+// Null-safe on purpose: this is called on spec_items.system_category, drawings.
+// discipline, companies.plan and a dozen other nullable columns. The old version
+// threw on null (`s.split`) and on the empty segment a trailing underscore leaves
+// (`w[0].toUpperCase()`) -- and a throw inside a render or an export loop takes
+// down the whole page or the whole workbook for one bad row.
+const SYSTEM_LABEL = s => {
+  if (s === null || s === undefined) return "\u2014";
+  const parts = String(s).split("_").filter(Boolean);
+  if (!parts.length) return "\u2014";
+  return parts.map(w => SYSTEM_LABEL_WORDS[w.toLowerCase()] || (w[0].toUpperCase() + w.slice(1))).join(" ");
+};
 
 // Distinct marker color per system category, for the drawing markup viewer.
 // Applied via inline style (hex values), NOT Tailwind classes -- this app's
@@ -1393,6 +1431,35 @@ function simpleBoqSumQty(arr) { return arr.reduce((s, e) => s + Number(e.quantit
 // unreferenced (dead code, matching this project's established low-risk
 // precedent) rather than deleted, since they backed the now-removed
 // per-location unrolling.
+// procurement-engine's tool schema declares parameter_results as an object keyed
+// by parameter name; earlier drafts of the prompt produced an array of rows. Both
+// shapes are accepted here rather than betting on one, and pass/ok booleans are
+// accepted alongside verdict strings, because a compliance table that silently
+// renders nothing is indistinguishable from a quotation that had no deviations --
+// the most dangerous possible failure for this feature.
+function normaliseParamResults(pr) {
+  if (!pr || typeof pr !== "object") return [];
+  const rows = Array.isArray(pr)
+    ? pr
+    : Object.entries(pr).map(([k, v]) => (
+        v && typeof v === "object" && !Array.isArray(v) ? { parameter: k, ...v } : { parameter: k, offered: v }
+      ));
+  return rows.map(p => {
+    // ?? not ||, so pass:false is a verdict and not a missing value.
+    const raw = p.verdict ?? p.result ?? p.pass ?? p.ok ?? p.compliant ?? null;
+    const verdict = raw === true ? "compliant"
+      : raw === false ? "non_compliant"
+      : (typeof raw === "string" && raw) ? raw
+      : "unknown";
+    return {
+      parameter: p.parameter ?? p.name ?? p.key ?? "—",
+      required: p.required ?? p.specified ?? p.spec ?? null,
+      offered: p.offered ?? p.quoted ?? p.actual ?? null,
+      verdict,
+    };
+  });
+}
+
 function buildSimpleBoqLines(consolidatedAll, opts) {
   opts = opts || {};
   const excludeEngineered = !!opts.excludeEngineered;
@@ -1728,10 +1795,15 @@ function xlFindHeaderRow(rows) {
 // Number format inferred from the column heading, so a cost column reads as
 // currency and a quantity column keeps its decimals without inventing any.
 function xlNumFmt(header) {
-  const h = String(header || "").toLowerCase();
-  if (/(cost|price|rate|amount|usd|value|total \(|subtotal)/.test(h)) return '#,##0.00';
+  const h = String(header || "").toLowerCase().trim();
+  // Percentages first: "Variance %" is a percentage, and it also contains a word
+  // on the money list.
   if (/(confidence|%|percent)/.test(h)) return '0"%"';
-  if (/(qty|quantity|count|items|lines|pages|no\.)/.test(h)) return '#,##0.####';
+  // Counts BEFORE money, so "Total Items" and "Priced Items" stay whole numbers
+  // even though "total" and "priced" would otherwise price them.
+  if (/(qty|quantity|count|items|lines|pages|no\.|headcount|months)/.test(h)) return '#,##0.####';
+  if (/(cost|price|rate|amount|usd|value|total \(|subtotal|budget|variance|margin|headroom|material|supply|subcontract|labour)/.test(h)
+      || h === "total") return '#,##0.00';
   return null;
 }
 
@@ -1787,6 +1859,16 @@ function xlWriteSheet(wb, name, rows, meta) {
     }
     const kv = ws.addRow(r);
     kv.getCell(1).font = { bold: true, size: 10 };
+    // A key/value row has no column heading to infer a format from, so the label
+    // in column A is used instead -- this is the block holding Cost to us, Margin
+    // and Sell price, which are the numbers a reader looks at first.
+    const kvFmt = xlNumFmt(r[0]);
+    if (kvFmt) {
+      for (let ci = 2; ci <= r.length; ci++) {
+        const cell = kv.getCell(ci);
+        if (typeof cell.value === "number") cell.numFmt = kvFmt;
+      }
+    }
   });
 
   if (header) {
@@ -5964,8 +6046,13 @@ function TenderIntelligenceTab({ project }) {
     setBusy("upload"); setError(null);
     try {
       for (const f of files) {
-        const path = `${project.id}/tender/${Date.now()}-${f.name}`;
-        const { error: upErr } = await sb.storage.from("drawings").upload(path, f, { upsert: false });
+        // MUST be the tenders bucket with the tender id as the first path
+        // segment: tender-engine downloads from `tenders`, and that bucket's RLS
+        // is user_can_see_tender(split_part(name,'/',1)). Uploading to `drawings`
+        // meant analyze_document could never find the file -- which is why no
+        // tender document has ever been successfully extracted.
+        const path = `${tender.id}/docs/${Date.now()}-${f.name}`;
+        const { error: upErr } = await sb.storage.from("tenders").upload(path, f, { upsert: false });
         if (upErr) throw upErr;
         const { data: { user } } = await sb.auth.getUser();
         const { data: row, error: insErr } = await sb.from("tender_documents").insert({
@@ -6693,6 +6780,13 @@ function ComparisonTab({ project }) {
   const [quotes, setQuotes]   = useState([]);
   const [qlines, setQlines]   = useState([]);
   const [view, setView]       = useState("total");
+  // Compliance verdicts per quotation line, and the requirements they were judged
+  // against, so the deviation can be shown as required-versus-offered.
+  const [compliance, setCompliance] = useState([]);
+  const [specItems, setSpecItems]   = useState([]);
+  const [busyQ, setBusyQ]           = useState(null);
+  const [vendorName, setVendorName] = useState("");
+  const [openQ, setOpenQ]           = useState(null);
 
   useEffect(() => { load(); }, [project.id]);
   useEffect(() => { if (pkgId) loadQuotes(pkgId); }, [pkgId]);
@@ -6704,6 +6798,10 @@ function ComparisonTab({ project }) {
       setTender(t);
       const { data: p } = await sb.from("rfq_packages").select("*").eq("tender_id", t.id).order("created_at", { ascending: false });
       setPacks(p || []);
+      // The requirements the quotes are judged against. Loaded once per tender,
+      // not per quotation, since every quote in a package answers the same set.
+      const { data: sp } = await sb.from("spec_items").select("*").eq("tender_id", t.id);
+      setSpecItems(sp || []);
       if (p && p.length) setPkgId(p[0].id);
     } catch (e) {
       console.error("ComparisonTab.load failed:", e);
@@ -6716,10 +6814,78 @@ function ComparisonTab({ project }) {
       const { data: q } = await sb.from("quotations").select("*").eq("package_id", id).order("uploaded_at");
       setQuotes(q || []);
       if (q && q.length) {
-        const { data: l } = await sb.from("quotation_lines").select("*").in("quotation_id", q.map(x => x.id)).order("line_no");
+        const ids = q.map(x => x.id);
+        const [{ data: l }, { data: c }] = await Promise.all([
+          sb.from("quotation_lines").select("*").in("quotation_id", ids).order("line_no"),
+          sb.from("quotation_compliance").select("*").in("quotation_id", ids),
+        ]);
         setQlines(l || []);
-      } else setQlines([]);
+        setCompliance(c || []);
+      } else { setQlines([]); setCompliance([]); }
     } catch (e) { setError(e.message); }
+  }
+
+  // Upload a supplier quotation. Goes to the tenders bucket under the tender id,
+  // because that is the only place procurement-engine looks.
+  async function uploadQuote(files) {
+    if (!files || !files.length || !pkgId || !tender) return;
+    if (!vendorName.trim()) { setError("Enter the supplier's name first — the comparison is meaningless without knowing whose quote this is."); return; }
+    setBusyQ("upload"); setError(null);
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      for (const f of files) {
+        const path = `${tender.id}/quotes/${Date.now()}-${f.name}`;
+        const { error: upErr } = await sb.storage.from("tenders").upload(path, f, { upsert: false });
+        if (upErr) throw upErr;
+        const { error: insErr } = await sb.from("quotations").insert({
+          tender_id: tender.id, package_id: pkgId, vendor_name: vendorName.trim(),
+          file_name: f.name, storage_path: path,
+          currency: pack?.currency || "AED", extraction_status: "pending", uploaded_by: user.id,
+        });
+        if (insErr) throw insErr;
+      }
+      setVendorName("");
+      await loadQuotes(pkgId);
+    } catch (e) {
+      console.error("uploadQuote failed:", e);
+      setError(e.message || "Could not upload the quotation.");
+    } finally { setBusyQ(null); }
+  }
+
+  // Three separate steps on purpose. Each costs a Claude call and each fails for
+  // its own reason -- a scanned quote fails extraction, a quote for a system whose
+  // specification has not been read fails matching. One "Analyse" button would
+  // give the customer a single opaque failure and no way to retry just the part
+  // that broke.
+  async function runQuoteStep(quoteId, action, label) {
+    setBusyQ(quoteId + action); setError(null);
+    try {
+      await callProcurement(action, { quotation_id: quoteId });
+      await loadQuotes(pkgId);
+    } catch (e) {
+      console.error(`${action} failed:`, e);
+      setError(`${label} failed: ${e.message}`);
+    } finally { setBusyQ(null); }
+  }
+
+  const specById = useMemo(() => { const m = {}; specItems.forEach(si => m[si.id] = si); return m; }, [specItems]);
+  const compByLine = useMemo(() => { const m = {}; compliance.forEach(c => { if (c.quotation_line_id) m[c.quotation_line_id] = c; }); return m; }, [compliance]);
+  // Worst verdict wins for the headline badge: one non-compliant line makes the
+  // whole offer non-compliant, which is how a tender panel reads it.
+  const VERDICT_RANK = { compliant: 0, deviation: 1, non_compliant: 2, unknown: 3 };
+  function worstVerdict(quoteId) {
+    const rows = compliance.filter(c => c.quotation_id === quoteId);
+    if (!rows.length) return null;
+    return rows.map(r => r.verdict || "unknown").sort((a,b)=>(VERDICT_RANK[b]??3)-(VERDICT_RANK[a]??3))[0];
+  }
+  function verdictClass(v) {
+    if (v === "compliant") return "bg-emerald-100 text-emerald-700";
+    if (v === "deviation") return "bg-amber-100 text-amber-800";
+    if (v === "non_compliant") return "bg-rose-100 text-rose-700";
+    return "bg-slate-100 text-slate-600";
+  }
+  function verdictLabel(v) {
+    return v === "compliant" ? "Compliant" : v === "deviation" ? "Deviation" : v === "non_compliant" ? "Non-compliant" : "Not checked";
   }
 
   const pack = packs.find(p => p.id === pkgId);
@@ -6778,10 +6944,75 @@ function ComparisonTab({ project }) {
         {pack && <div className="text-xs text-slate-500 pb-2.5">{BASIS_LABEL[pack.pricing_basis]} · quoted in {cur}</div>}
       </div>
 
+      {packs.length > 0 && (
+        <div className="bg-white border rounded-2xl p-4">
+          <h3 className="font-semibold text-slate-800 mb-1">Supplier quotations</h3>
+          <p className="text-xs text-slate-500 mb-3">
+            Upload each supplier's quotation, then read it, match it to the specification and check compliance.
+            Quantora compares what the supplier offered against what the project requires, parameter by parameter.
+          </p>
+          <div className="flex flex-wrap gap-2 items-end">
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Supplier name</label>
+              <input value={vendorName} onChange={e=>setVendorName(e.target.value)} placeholder="e.g. Al Fajer Trading"
+                className="border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <label className={`text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer ${busyQ ? "bg-slate-100 text-slate-400" : "bg-slate-900 text-white hover:bg-slate-800"}`}>
+              {busyQ === "upload" ? "Uploading…" : "Upload quotation"}
+              <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg" className="hidden" disabled={!!busyQ}
+                onChange={e => { uploadQuote(e.target.files); e.target.value = ""; }} />
+            </label>
+            {specItems.length === 0 && (
+              <span className="text-[11px] text-amber-700 pb-2.5">
+                No specification has been read yet — compliance needs one. Read your specification on the Specification page first.
+              </span>
+            )}
+          </div>
+
+          {quotes.length > 0 && (
+            <div className="mt-3 divide-y">
+              {quotes.map(q => {
+                const nLines = qlines.filter(l => l.quotation_id === q.id).length;
+                const nMapped = qlines.filter(l => l.quotation_id === q.id && l.spec_item_id).length;
+                const nChecked = compliance.filter(c => c.quotation_id === q.id).length;
+                return (
+                  <div key={q.id} className="py-2.5 flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium">{q.vendor_name}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {q.file_name || "no file"} · read: {q.extraction_status || "pending"}
+                        {nLines ? ` · ${nLines} lines` : ""}{nMapped ? ` · ${nMapped} matched` : ""}{nChecked ? ` · ${nChecked} checked` : ""}
+                      </div>
+                      {q.extraction_note && <div className="text-[11px] text-amber-700 mt-0.5">{q.extraction_note}</div>}
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                      <button onClick={()=>runQuoteStep(q.id, "extract_quotation", "Reading the quotation")} disabled={!!busyQ}
+                        className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50 disabled:opacity-50">
+                        {busyQ === q.id+"extract_quotation" ? "Reading…" : nLines ? "Re-read" : "1. Read quotation"}
+                      </button>
+                      <button onClick={()=>runQuoteStep(q.id, "map_quotation_lines", "Matching to the specification")} disabled={!!busyQ || !nLines}
+                        title={!nLines ? "Read the quotation first" : undefined}
+                        className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50 disabled:opacity-50">
+                        {busyQ === q.id+"map_quotation_lines" ? "Matching…" : "2. Match to specification"}
+                      </button>
+                      <button onClick={()=>runQuoteStep(q.id, "check_compliance", "Checking compliance")} disabled={!!busyQ || !nLines || specItems.length===0}
+                        title={specItems.length===0 ? "Read a specification first" : !nLines ? "Read the quotation first" : undefined}
+                        className="text-xs font-semibold border border-violet-300 bg-violet-50 text-violet-700 px-3 py-1.5 rounded-lg hover:bg-violet-100 disabled:opacity-50">
+                        {busyQ === q.id+"check_compliance" ? "Checking…" : "3. Check compliance"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {packs.length === 0 ? (
         <Empty>There are no enquiry packages yet. Create one on the RFQ Packages page, invite suppliers, and their quotations will be compared here.</Empty>
       ) : quotes.length === 0 ? (
-        <Empty>No quotation has been received against this package yet. Once a supplier's quotation is uploaded and read, it appears here ranked against the others.</Empty>
+        <Empty>No quotation has been uploaded against this package yet. Upload one above and it will be read, matched to your specification and compared here.</Empty>
       ) : (
         <>
           <div className="flex gap-3 flex-wrap">
@@ -6791,7 +7022,140 @@ function ComparisonTab({ project }) {
             <Kpi label="Our estimate" value={pack?.our_estimate_cents ? fmtMoney(pack.our_estimate_cents) : "—"} sub="for comparison" accent="slate" />
           </div>
 
-          <SubTabs tabs={[["total", "By package total", ranked.length], ["item", "By unit rate, line by line", perItem.length]]} value={view} onChange={setView} />
+          <SubTabs tabs={[["total", "By package total", ranked.length], ["item", "By unit rate, line by line", perItem.length], ["spec", "Specification compliance", compliance.length]]} value={view} onChange={setView} />
+
+          {view === "spec" && (
+            compliance.length === 0 ? (
+              <Empty>
+                No compliance check has been run yet. Read a quotation, match it to the specification, then press
+                <b> Check compliance</b> above. Quantora then compares each quoted item against the project requirement
+                parameter by parameter, and drafts a clarification for anything that deviates.
+              </Empty>
+            ) : (
+              <div className="space-y-4">
+                {quotes.map(q => {
+                  const lines = qlines.filter(l => l.quotation_id === q.id);
+                  const judged = lines.filter(l => compByLine[l.id]);
+                  const unjudged = lines.filter(l => !compByLine[l.id]);
+                  const wv = worstVerdict(q.id);
+                  if (!judged.length && !unjudged.length) return null;
+                  const counts = { compliant:0, deviation:0, non_compliant:0 };
+                  judged.forEach(l => { const v = compByLine[l.id].verdict; if (counts[v] != null) counts[v]++; });
+                  return (
+                    <div key={q.id} className="bg-white border rounded-2xl overflow-hidden">
+                      <div className="px-4 py-3 bg-slate-50 border-b flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <span className="font-semibold text-slate-800">{q.vendor_name}</span>
+                          {wv && <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full ${verdictClass(wv)}`}>{verdictLabel(wv)}</span>}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {counts.compliant} compliant · <span className="text-amber-700">{counts.deviation} deviation</span> · <span className="text-rose-700">{counts.non_compliant} non-compliant</span>
+                          {unjudged.length ? <span className="text-slate-400"> · {unjudged.length} unassessed</span> : null}
+                        </div>
+                      </div>
+
+                      <div className="divide-y">
+                        {judged.map(l => {
+                          const c = compByLine[l.id];
+                          const si = c.spec_item_id ? specById[c.spec_item_id] : null;
+                          const params = normaliseParamResults(c.parameter_results);
+                          const isOpen = openQ === l.id;
+                          return (
+                            <div key={l.id} className="px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium text-slate-800">{l.description}</div>
+                                  <div className="text-[11px] text-slate-500 mt-0.5">
+                                    Offered: {[l.offered_brand, l.offered_model].filter(Boolean).join(" ") || "brand not stated"}
+                                    {l.country_of_origin ? ` · origin ${l.country_of_origin}` : ""}
+                                    {l.quantity != null ? ` · ${l.quantity} ${l.unit || ""}` : ""}
+                                  </div>
+                                  {si && <div className="text-[11px] text-slate-400 mt-0.5">Against requirement: {si.item_name}{si.clause_ref ? ` (clause ${si.clause_ref})` : ""}</div>}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full ${verdictClass(c.verdict)}`}>{verdictLabel(c.verdict)}</span>
+                                  <button onClick={()=>setOpenQ(isOpen ? null : l.id)} className="text-[11px] text-blue-600 hover:underline">
+                                    {isOpen ? "Hide" : "Detail"}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {isOpen && (
+                                <div className="mt-2.5 space-y-2.5">
+                                  {params.length > 0 && (
+                                    <div className="border rounded-lg overflow-x-auto">
+                                      <table className="w-full text-xs">
+                                        <thead className="bg-slate-50 text-slate-500">
+                                          <tr>
+                                            <th className="text-left px-2.5 py-1.5 font-semibold">Parameter</th>
+                                            <th className="text-left px-2.5 py-1.5 font-semibold">Required</th>
+                                            <th className="text-left px-2.5 py-1.5 font-semibold">Offered</th>
+                                            <th className="text-left px-2.5 py-1.5 font-semibold">Verdict</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y">
+                                          {params.map((p, i) => {
+                                            const pv = p.verdict;
+                                            return (
+                                              <tr key={i} className={pv === "compliant" ? "" : "bg-amber-50"}>
+                                                <td className="px-2.5 py-1.5 text-slate-500 align-top">{p.parameter || p.name || "—"}</td>
+                                                <td className="px-2.5 py-1.5 text-slate-800 align-top">{p.required != null ? String(p.required) : "—"}</td>
+                                                <td className="px-2.5 py-1.5 text-slate-800 align-top">{p.offered != null ? String(p.offered) : "—"}</td>
+                                                <td className="px-2.5 py-1.5 align-top">
+                                                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${verdictClass(pv)}`}>{verdictLabel(pv)}</span>
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                  {c.rationale && <div className="text-xs text-slate-600"><b>Assessment:</b> {c.rationale}</div>}
+                                  <div className="text-[11px] text-slate-400 flex flex-wrap gap-x-4">
+                                    {c.tender_clause_ref && <span>Tender clause {c.tender_clause_ref}{c.tender_page ? `, p.${c.tender_page}` : ""}</span>}
+                                    {c.quotation_page && <span>Quotation p.{c.quotation_page}</span>}
+                                    {c.confidence != null && <span>Confidence {Math.round(c.confidence)}%</span>}
+                                  </div>
+                                  {c.clarification_draft && (
+                                    <div className="bg-slate-50 border rounded-lg p-2.5">
+                                      <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">Draft clarification to the supplier</div>
+                                      <div className="text-xs text-slate-700 whitespace-pre-wrap">{c.clarification_draft}</div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        {unjudged.length > 0 && (
+                          <div className="px-4 py-3 bg-slate-50">
+                            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
+                              Not matched to a requirement ({unjudged.length})
+                            </div>
+                            <p className="text-[11px] text-slate-500 mb-2">
+                              These quoted lines were not matched to anything in the specification, so they have not been
+                              judged. Unassessed is not the same as compliant — check them by hand, or read more of the
+                              specification and run the match again.
+                            </p>
+                            <div className="space-y-1">
+                              {unjudged.map(l => (
+                                <div key={l.id} className="text-xs text-slate-600">
+                                  {l.description}
+                                  {l.offered_brand ? ` — ${l.offered_brand}${l.offered_model ? " " + l.offered_model : ""}` : ""}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
 
           {view === "total" ? (
             <div className="bg-white border rounded-2xl overflow-x-auto">
@@ -6832,7 +7196,7 @@ function ComparisonTab({ project }) {
             </div>
           ) : perItem.length === 0 ? (
             <Empty>The quotations have no priced lines yet, so there is nothing to rank item by item.</Empty>
-          ) : (
+          ) : view === "item" ? (
             <div className="space-y-3">
               {perItem.map((it, idx) => (
                 <div key={idx} className="bg-white border rounded-2xl p-4">
@@ -6871,7 +7235,7 @@ function ComparisonTab({ project }) {
                 </div>
               ))}
             </div>
-          )}
+          ) : null}
 
           <Note>
             <b>The cheapest total and the cheapest line are rarely the same supplier.</b> If one bidder is L1 overall
@@ -11043,6 +11407,13 @@ function SpecificationTab({ project }) {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // The specification the customer actually gave us, extracted from their own
+  // document by tender-engine. Kept strictly apart from anything the AI wrote.
+  const [tender, setTender] = useState(null);
+  const [specItems, setSpecItems] = useState([]);
+  const [specDocs, setSpecDocs] = useState([]);
+  const [busySpec, setBusySpec] = useState(null);
+  const [view, setView] = useState("requirement");
 
   useEffect(() => { load(); }, [project.id]);
   async function load() {
@@ -11057,10 +11428,59 @@ function SpecificationTab({ project }) {
       ]);
       if (iErr) throw iErr; if (dErr) throw dErr; if (cErr) throw cErr;
       setRawItems(items || []); setDrawingRows(dr || []); setRules(cr || []);
+      // The tender row is created on first open and costs nothing -- it is the
+      // parent every extracted requirement hangs from.
+      const t = await ensureTender(project);
+      setTender(t);
+      const [{ data: sp }, { data: sd }] = await Promise.all([
+        sb.from("spec_items").select("*").eq("tender_id", t.id).order("system_category"),
+        sb.from("tender_documents").select("*").eq("tender_id", t.id).order("uploaded_at", { ascending: false }),
+      ]);
+      setSpecItems(sp || []);
+      setSpecDocs(sd || []);
     } catch (e) {
       console.error("SpecificationTab.load failed:", e);
       setError(e.message || "Could not load the project specification.");
     } finally { setLoading(false); }
+  }
+
+  // Same table and bucket as Tender Intelligence, so a document uploaded on
+  // either page is visible and readable from both.
+  async function uploadSpec(files) {
+    if (!files || !files.length || !tender) return;
+    setBusySpec("upload"); setError(null);
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      for (const f of files) {
+        // tenders bucket, tender id first -- see the note on the Tender
+        // Intelligence upload. The engines read from `tenders`, nowhere else.
+        const path = `${tender.id}/docs/${Date.now()}-${f.name}`;
+        const { error: upErr } = await sb.storage.from("tenders").upload(path, f, { upsert: false });
+        if (upErr) throw upErr;
+        const { data: row, error: insErr } = await sb.from("tender_documents").insert({
+          tender_id: tender.id, file_name: f.name, storage_path: path,
+          mime_type: f.type || null, size_bytes: f.size, doc_type: "specification",
+          classification_status: "pending", extraction_status: "pending", uploaded_by: user.id,
+        }).select().single();
+        if (insErr) throw insErr;
+        setSpecDocs(cur => [row, ...cur]);
+      }
+    } catch (e) {
+      console.error("uploadSpec failed:", e);
+      setError(e.message || "Could not upload the specification.");
+    } finally { setBusySpec(null); }
+  }
+
+  async function analyseSpec(docId) {
+    setBusySpec(docId); setError(null);
+    try {
+      await callTender("analyze_document", { tender_id: tender.id, document_id: docId });
+      await load();
+      setView("requirement");
+    } catch (e) {
+      console.error("analyze_document failed:", e);
+      setError(e.message || "Could not read the specification.");
+    } finally { setBusySpec(null); }
   }
 
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
@@ -11085,6 +11505,25 @@ function SpecificationTab({ project }) {
       .sort((a,b) => a.label.localeCompare(b.label));
   }, [consolidated, rules]);
 
+  // Extracted requirements grouped by system, paired with how many BOQ lines
+  // exist for the same system. Coverage, not a verdict.
+  const specBySystem = useMemo(() => {
+    const g = {};
+    specItems.forEach(si => { const c = si.system_category || "other"; (g[c] = g[c] || []).push(si); });
+    const boqCount = {};
+    consolidated.forEach(r => { boqCount[r.systemCategory] = (boqCount[r.systemCategory] || 0) + 1; });
+    return Object.entries(g)
+      .map(([cat, items]) => ({ cat, label: SYSTEM_LABEL(cat), items, boqCount: boqCount[cat] || 0 }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [specItems, consolidated]);
+
+  // Both directions of mismatch matter: specified scope nobody has taken off,
+  // and taken-off scope the specification does not mention.
+  const specCats = useMemo(() => new Set(specItems.map(si => si.system_category)), [specItems]);
+  const boqCats = useMemo(() => new Set(consolidated.map(r => r.systemCategory)), [consolidated]);
+  const specOnly = useMemo(() => [...specCats].filter(c => c && !boqCats.has(c)), [specCats, boqCats]);
+  const boqOnly = useMemo(() => [...boqCats].filter(c => c && !specCats.has(c)), [specCats, boqCats]);
+
   // Rules whose system_category has no matching BOQ item group yet (e.g. a
   // seeded regulation for a system this project hasn't taken off/designed
   // yet) -- shown separately rather than silently dropped.
@@ -11092,9 +11531,144 @@ function SpecificationTab({ project }) {
 
   return (
     <div>
-      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 mb-4 text-xs text-amber-800">
-        <strong>Project Specification — AI-generated, for informational and preliminary planning purposes only.</strong> Combines this project's BOQ items with the applicable authority requirements seeded for <strong>{project.city}, {project.country}</strong>. It is not a substitute for an independent code-compliance review by a licensed engineer, and the regulation library below is a reference starting set, not an exhaustive legal document.
+      {/* Two different things, never again shown as one: the requirement comes
+          from the customer's document, the take-off specification is the AI's own
+          wording against each counted item. */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        {[["requirement", `Project Requirement${specItems.length ? ` (${specItems.length})` : ""}`],
+          ["takeoff", "As Taken Off (AI-written)"]].map(([k, label]) => (
+          <button key={k} onClick={()=>setView(k)}
+            className={`text-sm font-semibold px-4 py-2 rounded-lg border ${view===k ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+            {label}
+          </button>
+        ))}
       </div>
+
+      {view === "takeoff" && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 mb-4 text-xs text-amber-800">
+          <strong>This is not your project specification.</strong> These are the specifications the AI wrote for each item while reading your drawings, from its own engineering knowledge — a competent starting point, not the project's requirement. For the requirement itself, upload your specification document under <strong>Project Requirement</strong>. The authority rules below are the seeded reference set for <strong>{project.city}, {project.country}</strong>, not an exhaustive legal document, and none of this replaces review by a licensed engineer.
+        </div>
+      )}
+
+      {view === "requirement" && (
+        <div className="space-y-4">
+          <div className="bg-white border rounded-xl p-4">
+            <h3 className="font-semibold text-slate-800 mb-1">Specification document</h3>
+            <p className="text-xs text-slate-500 mb-3">
+              Upload the project specification and Quantora will read it and list what the project actually
+              requires, system by system, with the clause and page each requirement came from. PDF or image.
+            </p>
+            <label className={`inline-block text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer ${busySpec ? "bg-slate-100 text-slate-400" : "bg-slate-900 text-white hover:bg-slate-800"}`}>
+              {busySpec === "upload" ? "Uploading…" : "Upload specification"}
+              <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg" className="hidden" disabled={!!busySpec}
+                onChange={e => { uploadSpec(e.target.files); e.target.value = ""; }} />
+            </label>
+
+            {specDocs.length > 0 && (
+              <div className="mt-3 divide-y">
+                {specDocs.map(d => (
+                  <div key={d.id} className="flex items-center justify-between py-2 gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">{d.file_name}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {d.doc_type || "unclassified"} · extraction: {d.extraction_status || "pending"}
+                      </div>
+                    </div>
+                    <button onClick={()=>analyseSpec(d.id)} disabled={!!busySpec}
+                      className="text-xs font-semibold border border-violet-300 bg-violet-50 text-violet-700 px-3 py-1.5 rounded-lg hover:bg-violet-100 disabled:opacity-50 whitespace-nowrap">
+                      {busySpec === d.id ? "Reading…" : (d.extraction_status === "extracted" ? "Re-read" : "Read specification")}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {specItems.length > 0 && (specOnly.length > 0 || boqOnly.length > 0) && (
+            <div className="bg-white border rounded-xl p-4 text-xs space-y-1.5">
+              <div className="font-semibold text-slate-700">Coverage against the BOQ</div>
+              {specOnly.length > 0 && (
+                <div className="text-amber-700">
+                  <strong>Specified but not in the BOQ:</strong> {specOnly.map(c=>SYSTEM_LABEL(c)).join(", ")} — the specification asks for these and nothing has been taken off for them yet.
+                </div>
+              )}
+              {boqOnly.length > 0 && (
+                <div className="text-slate-600">
+                  <strong>In the BOQ but not in the specification:</strong> {boqOnly.map(c=>SYSTEM_LABEL(c)).join(", ")} — either the specification does not cover them, or that part of it has not been read yet.
+                </div>
+              )}
+            </div>
+          )}
+
+          {specItems.length === 0 ? (
+            <div className="border-2 border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">
+              No specification has been read yet. Upload your document above and press
+              <strong> Read specification</strong>. Nothing appears here until it has actually been read,
+              so this page never presents a guess as your requirement.
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {specBySystem.map(group => (
+                <div key={group.cat} className="bg-white border rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 bg-slate-50 border-b flex items-center justify-between gap-3">
+                    <h3 className="font-semibold text-slate-800">{group.label}</h3>
+                    <span className="text-xs text-slate-500">
+                      <strong>{group.items.length}</strong> specified{" · "}
+                      <strong className={group.boqCount === 0 ? "text-amber-700" : ""}>{group.boqCount}</strong> in BOQ
+                    </span>
+                  </div>
+                  <div className="divide-y">
+                    {group.items.map(si => {
+                      const params = si.parameters && typeof si.parameters === "object" ? Object.entries(si.parameters) : [];
+                      return (
+                        <div key={si.id} className="px-4 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="font-medium text-sm text-slate-800">{si.item_name || "(unnamed requirement)"}</div>
+                            <div className="text-[11px] text-slate-400 whitespace-nowrap">
+                              {si.clause_ref ? `Clause ${si.clause_ref}` : ""}{si.clause_ref && si.page_number ? " · " : ""}{si.page_number ? `p.${si.page_number}` : ""}
+                            </div>
+                          </div>
+                          {si.description && <div className="text-xs text-slate-600 mt-1">{si.description}</div>}
+
+                          {params.length > 0 && (
+                            <div className="mt-2 border rounded-lg overflow-hidden">
+                              <table className="w-full text-xs">
+                                <tbody className="divide-y">
+                                  {params.map(([k, v]) => (
+                                    <tr key={k}>
+                                      <td className="px-2.5 py-1.5 bg-slate-50 text-slate-500 w-2/5 align-top">{k}</td>
+                                      <td className="px-2.5 py-1.5 text-slate-800">{typeof v === "object" ? JSON.stringify(v) : String(v)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-slate-500">
+                            {(si.specified_brands||[]).length > 0 && (
+                              <span><strong>Brands:</strong> {si.specified_brands.join(", ")}
+                                {si.approved_equal_allowed === false ? " (no approved equal)" : " (or approved equal)"}</span>
+                            )}
+                            {(si.standards||[]).length > 0 && <span><strong>Standards:</strong> {si.standards.join(", ")}</span>}
+                            {(si.required_certifications||[]).length > 0 && <span><strong>Certificates:</strong> {si.required_certifications.join(", ")}</span>}
+                            {si.origin_restriction && <span><strong>Origin:</strong> {si.origin_restriction}</span>}
+                            {si.quantity_hint != null && <span><strong>Qty in spec:</strong> {si.quantity_hint} {si.unit || ""}</span>}
+                            {si.confidence != null && <span><strong>Confidence:</strong> {Math.round(si.confidence)}%</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {view === "takeoff" && (
+      <div>
       {error ? (
         <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-4 flex items-center justify-between">
           <div className="text-sm text-rose-700">{error}</div>
@@ -11175,6 +11749,8 @@ function SpecificationTab({ project }) {
             </div>
           )}
         </div>
+      )}
+    </div>
       )}
     </div>
   );
@@ -11261,6 +11837,10 @@ function ComplianceTab({ project }) {
 // ---------------------------------------------------------------------------
 function ProductsTab({ project }) {
   const [bySystem, setBySystem] = useState({});
+  // The shared manufacturer directory, per system. Not an AI call and not a
+  // catalogue: names, country of origin and a tier note, nothing claimed about
+  // certification.
+  const [brandsBySystem, setBrandsBySystem] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   useEffect(() => { load(); }, [project.id]);
@@ -11270,14 +11850,30 @@ function ProductsTab({ project }) {
     try {
       const { data: items, error: itemsErr } = await sb.from("boq_items").select("system_category, description").eq("project_id", project.id);
       if (itemsErr) throw itemsErr;
-      const systems = [...new Set((items||[]).map(i=>i.system_category))];
+      const systems = [...new Set((items||[]).map(i=>i.system_category))].filter(Boolean);
+      // One query, not one per system. A nine-system project used to make nine
+      // sequential round trips before the page rendered anything.
+      const [{ data: prods, error: prodErr }, { data: brandRows }] = await Promise.all([
+        systems.length ? sb.from("product_catalog").select("*").in("system_category", systems) : Promise.resolve({ data: [] }),
+        systems.length ? sb.from("brands").select("name, manufacturer, country_of_origin, system_categories, notes, website").overlaps("system_categories", systems) : Promise.resolve({ data: [] }),
+      ]);
+      if (prodErr) throw prodErr;
       const result = {};
-      for (const sys of systems) {
-        const { data: prods, error: prodErr } = await sb.from("product_catalog").select("*").eq("system_category", sys);
-        if (prodErr) throw prodErr;
-        if (prods && prods.length) result[sys] = prods;
-      }
+      // Filtered here as well as in the query: this page's whole promise is
+      // "the systems in THIS project", and a catalogue row for a system the
+      // project does not contain is worse than no row at all.
+      (prods || []).filter(p => systems.includes(p.system_category))
+        .forEach(p => { (result[p.system_category] = result[p.system_category] || []).push(p); });
       setBySystem(result);
+      // A brand row can cover several systems (Bosch is CCTV, access control,
+      // public address and fire alarm), so it is filed under each system in this
+      // project rather than only the first.
+      const bBy = {};
+      systems.forEach(sysc => {
+        const hits = (brandRows || []).filter(b => (b.system_categories || []).includes(sysc));
+        if (hits.length) bBy[sysc] = hits.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      });
+      setBrandsBySystem(bBy);
     } catch (e) {
       console.error("ProductsTab.load failed:", e);
       setError(e.message || "Could not load product recommendations.");
@@ -11285,7 +11881,14 @@ function ProductsTab({ project }) {
       setLoading(false);
     }
   }
-  const tierColor = { premium: "bg-violet-100 text-violet-700", standard: "bg-blue-100 text-blue-700", budget: "bg-slate-100 text-slate-600" };
+  // The data says premium / mid / value; this map said premium / standard /
+  // budget, so every non-premium badge rendered with "undefined" as its classes.
+  const tierColor = {
+    premium: "bg-violet-100 text-violet-700",
+    mid: "bg-blue-100 text-blue-700", standard: "bg-blue-100 text-blue-700",
+    value: "bg-slate-100 text-slate-600", budget: "bg-slate-100 text-slate-600",
+  };
+  const tierOf = t => tierColor[String(t || "").toLowerCase()] || "bg-slate-100 text-slate-600";
   return (
     <div>
       <p className="text-sm text-slate-500 mb-4">Manufacturer/model recommendations for systems present in this project's BOQ (starter catalog — extendable).</p>
@@ -11294,13 +11897,32 @@ function ProductsTab({ project }) {
           <div className="text-sm text-rose-700">Couldn't load product recommendations: {error}</div>
           <button onClick={load} className="text-xs font-semibold bg-rose-600 text-white px-3 py-1.5 rounded-lg hover:bg-rose-700">Retry</button>
         </div>
-      ) : loading ? <div className="text-slate-400 text-sm">Loading…</div> : Object.keys(bySystem).length === 0 ? (
-        <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">No matching catalog entries yet — generate a BOQ first, or extend the product_catalog table for more systems.</div>
-      ) : Object.entries(bySystem).map(([sys, prods]) => (
+      ) : loading ? <div className="text-slate-400 text-sm">Loading…</div> : (Object.keys(bySystem).length === 0 && Object.keys(brandsBySystem).length === 0) ? (
+        <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">Nothing to suggest yet — analyse a drawing so there is a BOQ to match manufacturers against.</div>
+      ) : [...new Set([...Object.keys(bySystem), ...Object.keys(brandsBySystem)])].sort((a,b)=>SYSTEM_LABEL(a).localeCompare(SYSTEM_LABEL(b))).map(sys => (
         <div key={sys} className="mb-6">
           <h3 className="font-semibold mb-2">{SYSTEM_LABEL(sys)}</h3>
+          {(brandsBySystem[sys] || []).length > 0 && (
+            <div className="bg-white border rounded-xl p-4 mb-3">
+              <div className="text-xs font-semibold text-slate-600 mb-2">
+                Manufacturers for this system ({(brandsBySystem[sys] || []).length})
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {(brandsBySystem[sys] || []).map(b => (
+                  <span key={b.name} title={b.notes || ""}
+                    className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
+                    {b.name}{b.country_of_origin ? <span className="text-slate-400"> · {b.country_of_origin}</span> : null}
+                  </span>
+                ))}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-2">
+                Names and country of origin only. Certifications and local approvals are held against a specific model and
+                revision, not a brand — confirm them from the certificate before submitting.
+              </div>
+            </div>
+          )}
           <div className="grid md:grid-cols-3 gap-3">
-            {[...prods].sort((a,b) => {
+            {[...(bySystem[sys] || [])].sort((a,b) => {
               const aFit = (a.project_type_fit||[]).includes(project.building_type) ? 0 : 1;
               const bFit = (b.project_type_fit||[]).includes(project.building_type) ? 0 : 1;
               return aFit - bFit;
@@ -11310,7 +11932,7 @@ function ProductsTab({ project }) {
               <div key={p.id} className={`bg-white border rounded-xl p-4 ${isFit ? "ring-2 ring-emerald-400" : ""}`}>
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-sm">{p.manufacturer}</span>
-                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${tierColor[p.tier]}`}>{p.tier}</span>
+                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${tierOf(p.tier)}`}>{p.tier}</span>
                 </div>
                 <div className="text-xs text-slate-500">{p.model_number}</div>
                 <div className="text-xs text-slate-600 mt-2">{p.specification}</div>
@@ -11354,9 +11976,45 @@ function ExportTab({ project }) {
   // Basis sheet -- Compliance/Products already have dedicated tabs in the
   // app itself; folding them into this export is a reasonable next step,
   // not done in this pass.
+  //
+  // 2026-08-17: seven of those are now written -- Project Specification,
+  // Take-off BOQ, Designed BOQ, Supplier Comparison (the compliance sheet),
+  // Estimation, Cost & Budget and Product Recommendations. Still NOT separate
+  // sheets, stated plainly rather than faked: Assumptions and a standalone
+  // Calculation / Quantity Basis sheet.
   async function exportExcel(kind) {
     setBusy(true);
     try {
+      // The tender row is the parent of every specification and quotation
+      // record. limit(1) rather than maybeSingle(): nothing stops a project
+      // having two tender rows (there is no unique index on project_id), and
+      // maybeSingle() throws on the second one -- which would fail the whole
+      // export for a customer whose only mistake was creating a tender twice.
+      const { data: tRows } = await sb.from("tenders").select("*").eq("project_id", project.id).order("created_at").limit(1);
+      const tId = (tRows && tRows[0]) ? tRows[0].id : null;
+
+      const [{ data: specRows }, { data: quoteRows }] = await Promise.all([
+        tId ? sb.from("spec_items").select("*").eq("tender_id", tId).order("system_category") : Promise.resolve({ data: [] }),
+        tId ? sb.from("quotations").select("*").eq("tender_id", tId).order("uploaded_at") : Promise.resolve({ data: [] }),
+      ]);
+      // Quoted lines are fetched by quotation id, not by tender: quotation_lines
+      // has no tender_id, and an unfiltered select would pull every line from
+      // every other tender this user can see.
+      const qIds = (quoteRows || []).map(q => q.id);
+      const [
+        { data: qlineRows }, { data: complRows },
+        { data: estRow }, { data: labourRows }, { data: staffRows }, { data: budgetRows }, { data: catalogRows }, { data: brandRows },
+      ] = await Promise.all([
+        qIds.length ? sb.from("quotation_lines").select("*").in("quotation_id", qIds).order("line_no") : Promise.resolve({ data: [] }),
+        qIds.length ? sb.from("quotation_compliance").select("*").in("quotation_id", qIds) : Promise.resolve({ data: [] }),
+        sb.from("project_estimates").select("*").eq("project_id", project.id).maybeSingle(),
+        sb.from("estimate_labour").select("*").eq("project_id", project.id),
+        sb.from("estimate_staff").select("*").eq("project_id", project.id).order("sort_order"),
+        sb.from("system_budgets").select("*").eq("project_id", project.id),
+        sb.from("product_catalog").select("*"),
+        sb.from("brands").select("name, manufacturer, country_of_origin, system_categories, notes, website"),
+      ]);
+
       const [{ data: items }, { data: dr }, { data: rules }, { data: runs }, { data: costOpts }, { data: assumps }, { data: reviewRows }] = await Promise.all([
         sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id),
         sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", project.id),
@@ -11570,6 +12228,268 @@ function ExportTab({ project }) {
         ["Reason","Related Item","Status"],
         ...(reviewRows||[]).map(r => [r.reason, r.boq_item_id ? (itemDescByIdX[r.boq_item_id]||"") : "", r.status]),
       ], "Engineer Review Items");
+
+      // Cents in the database, currency units in the sheet -- Excel formats and
+      // sums a number, never a string, so this returns a number or "".
+      const centsOut = c => (c === null || c === undefined || c === "" ? "" : Number(c) / 100);
+
+      // ---------------------------------------------------------------- 12. Project Specification
+      // The requirement as extracted from the customer's own document, with the
+      // clause and page so any line can be traced back and argued from.
+      const specList = specRows || [];
+      addSheet(specList.length ? [
+        ...trialRow, [disclaimer], [],
+        ["System","Requirement","Description","Parameter","Required Value","Specified Brands","Approved Equal","Standards","Certifications","Origin Restriction","Qty in Spec","Unit","Clause","Page","Confidence %"],
+        // One row per PARAMETER, not per requirement: a specification is argued
+        // parameter by parameter, and a single cell holding eight of them cannot
+        // be filtered, sorted, or compared against a quotation.
+        ...specList.flatMap(si => {
+          const params = (si.parameters && typeof si.parameters === "object" && !Array.isArray(si.parameters))
+            ? Object.entries(si.parameters) : [];
+          const head = [SYSTEM_LABEL(si.system_category), si.item_name || "", si.description || ""];
+          const tail = [
+            (si.specified_brands || []).join(", "),
+            si.approved_equal_allowed === false ? "No" : "Yes",
+            (si.standards || []).join(", "),
+            (si.required_certifications || []).join(", "),
+            si.origin_restriction || "",
+            si.quantity_hint ?? "", si.unit || "",
+            si.clause_ref || "", si.page_number ?? "", si.confidence ?? "",
+          ];
+          return params.length
+            ? params.map(([pk, pv]) => [...head, pk, (pv && typeof pv === "object") ? JSON.stringify(pv) : (pv === null || pv === undefined ? "" : String(pv)), ...tail])
+            : [[...head, "", "", ...tail]];
+        }),
+      ] : [
+        ...trialRow, [disclaimer], [],
+        ["No specification document has been read for this project yet."],
+        ["Upload the project specification on the Specification page and press Read specification."],
+        ["This sheet then lists every requirement, parameter by parameter, with the clause and page it came from."],
+      ], "Project Specification");
+
+      // ---------------------------------------------------------------- 13/14. Take-off vs Designed
+      // Built from `consolidated`, the same kind-filtered set as the rest of the
+      // workbook, with excludeEngineered flipped -- so a procurement export's
+      // BOQ sheets stay consistent with its Consolidated BOQ sheet.
+      const takeoffLines = buildSimpleBoqLines(consolidated, { excludeEngineered: true });
+      const designedLines = buildSimpleBoqLines(consolidated, { excludeEngineered: false });
+      const simpleHeader = ["Line","System","Item Description","Building / Floor(s)","Qty","Unit","Status","Remarks"];
+      const simpleRow = l => [l.line, l.system, l.description, l.location, l.qty, l.unit, l.status, l.remarks];
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["Only what was physically measured off the drawings. Engineered accessories are excluded — see the Designed BOQ sheet."], [],
+        simpleHeader, ...takeoffLines.map(simpleRow),
+      ], "Take-off BOQ");
+      addSheet([
+        ...trialRow, [disclaimer], [],
+        ["The complete system: measured items plus the accessories needed to make them work, which no drawing draws. Engineering judgement, not measurement — check every line before pricing."], [],
+        simpleHeader, ...designedLines.map(simpleRow),
+      ], "Designed BOQ");
+
+      // ---------------------------------------------------------------- 15. Supplier Comparison
+      const quotes = quoteRows || [];
+      const qlines = qlineRows || [];
+      const specByIdX = {}; specList.forEach(si => { specByIdX[si.id] = si; });
+      const quoteById = {}; quotes.forEach(q => { quoteById[q.id] = q; });
+      const complByLine = {}; (complRows || []).forEach(c => { if (c.quotation_line_id) complByLine[c.quotation_line_id] = c; });
+      const VERDICT_TEXT = { compliant: "Compliant", deviation: "Deviation", non_compliant: "Non-compliant" };
+      addSheet(qlines.length ? [
+        ...trialRow, [disclaimer], [],
+        ["Supplier","Currency","Line","Quoted Item","Offered Brand","Offered Model","Origin","Qty","Unit","Unit Rate","Line Value","Compliance","Judged Against","Deviating Parameters","Tender Clause","Tender Page","Assessment","Clarification Needed"],
+        ...qlines.map(l => {
+          const q = quoteById[l.quotation_id] || {};
+          const c = complByLine[l.id] || null;
+          const si = (c && c.spec_item_id) ? specByIdX[c.spec_item_id] : null;
+          // Only the parameters that actually differ. Listing the compliant ones
+          // too would bury the three that matter in a cell of twenty.
+          const deviating = c
+            ? normaliseParamResults(c.parameter_results)
+                .filter(p => p.verdict !== "compliant")
+                .map(p => `${p.parameter}: required ${p.required ?? "—"}, offered ${p.offered ?? "—"}`)
+                .join(" | ")
+            : "";
+          return [
+            q.vendor_name || "", q.currency || "", l.line_no ?? "", l.description || "",
+            l.offered_brand || "", l.offered_model || "", l.country_of_origin || "",
+            l.quantity ?? "", l.unit || "", centsOut(l.unit_rate_cents), centsOut(l.total_cents),
+            c ? (VERDICT_TEXT[c.verdict] || "Not checked") : "Not checked",
+            si ? (si.item_name || "") : "not matched to a requirement",
+            deviating, (c && c.tender_clause_ref) || "", (c && c.tender_page != null) ? c.tender_page : "",
+            (c && c.rationale) || "", (c && c.clarification_draft) ? "Yes" : "",
+          ];
+        }),
+      ] : [
+        ...trialRow, [disclaimer], [],
+        ["No supplier quotation has been read for this project yet."],
+        ["Create an enquiry package on the RFQ Packages page, then upload each supplier's quotation on the Comparison page."],
+        ["Read it, match it to the specification, and check compliance — every quoted line then appears here with its rate, value and verdict."],
+      ], "Supplier Comparison");
+
+      // ---------------------------------------------------------------- 16. Estimation
+      // Deliberately re-aggregated from raw boq_items, with the same rounding and
+      // the same overrides the Estimation page uses, so the sheet and the screen
+      // cannot show two different estimates. See this patch's header note.
+      const est = estRow || {};
+      const estCurrency = est.currency || "AED";
+      const marginPct = Number(est.margin_pct ?? 14) || 0;
+      const labourBy = {}; (labourRows || []).forEach(r => { labourBy[r.system_category] = r; });
+      const matBySystem = {}, ratedBySystem = {};
+      (items || []).forEach(it => {
+        const k = it.system_category || "uncategorised";
+        if (matBySystem[k] === undefined) { matBySystem[k] = 0; ratedBySystem[k] = 0; }
+        if (it.unit_cost_cents !== null && it.unit_cost_cents !== undefined) {
+          matBySystem[k] += Math.round((Number(it.quantity) || 0) * Number(it.unit_cost_cents));
+          ratedBySystem[k] += 1;
+        }
+      });
+      // A typed package price replaces the BOQ-rate total for that system, which
+      // is what the estimator sees on screen.
+      const matOf = k => {
+        const ov = labourBy[k] ? labourBy[k].material_override_cents : null;
+        return (ov !== null && ov !== undefined) ? Number(ov) : (matBySystem[k] || 0);
+      };
+      const instOf = k => {
+        const r = labourBy[k];
+        if (!r) return 0;
+        return r.method === "sub"
+          ? Number(r.sub_price_cents || 0)
+          : Math.round((Number(r.team_size) || 0) * (Number(r.days) || 0) * Number(r.day_rate_cents || 0));
+      };
+      const staff = staffRows || [];
+      const staffTotal = staff.reduce((a, r) => a + Math.round((Number(r.headcount) || 0) * (Number(r.months) || 0) * Number(r.monthly_cost_cents || 0)), 0);
+      const estSystems = [...new Set([...Object.keys(matBySystem), ...Object.keys(labourBy)])]
+        .sort((a, b) => SYSTEM_LABEL(a).localeCompare(SYSTEM_LABEL(b)));
+      const estMatTotal = estSystems.reduce((a, k) => a + matOf(k), 0);
+      const estInstTotal = estSystems.reduce((a, k) => a + instOf(k), 0);
+      const estCost = estMatTotal + estInstTotal + staffTotal;
+      const estMargin = Math.round(estCost * marginPct / 100);
+      addSheet((estSystems.length || staff.length) ? [
+        ...trialRow, [disclaimer], [],
+        ["Currency", estCurrency], ["Margin %", marginPct],
+        ["Cost to us", centsOut(estCost)], ["Margin", centsOut(estMargin)], ["Sell price", centsOut(estCost + estMargin)],
+        ["Client budget", est.client_budget_cents == null ? "not set" : centsOut(est.client_budget_cents)], [],
+        ["System","Priced Items","Material / Supply","Installation or Subcontract","Cost Subtotal"],
+        ...estSystems.map(k => {
+          const mat = matOf(k), inst = instOf(k);
+          return [SYSTEM_LABEL(k), ratedBySystem[k] || 0, centsOut(mat), centsOut(inst), centsOut(mat + inst)];
+        }),
+        ["Project staff / preliminaries", "", "", centsOut(staffTotal), centsOut(staffTotal)],
+        ["Total cost", "", centsOut(estMatTotal), centsOut(estInstTotal + staffTotal), centsOut(estCost)],
+        // Margin is applied once to the whole cost, exactly as the Estimation page
+        // does it -- not spread per system, which would round differently and not
+        // add up to the sell price the customer was shown.
+        [], ["Margin is applied once to the total cost, not per system — the same way the Estimation page calculates it."],
+        // Headcount and months are one text cell rather than two numeric columns:
+        // the styled writer applies ONE header row's number formats to every body
+        // row in the sheet, so a second header lower down would have Months
+        // formatted as money by the main table's "Material / Supply" column.
+        ...(staff.length ? [[], ["Project staff — breakdown","Headcount × Months","Monthly Cost","","Total"],
+          ...staff.map(r => [r.role_label || "",
+            `${Number(r.headcount) || 0} × ${Number(r.months) || 0} months`,
+            centsOut(r.monthly_cost_cents), "",
+            centsOut(Math.round((Number(r.headcount) || 0) * (Number(r.months) || 0) * Number(r.monthly_cost_cents || 0)))])] : []),
+      ] : [
+        ...trialRow, [disclaimer], [],
+        ["No estimate has been prepared for this project yet."],
+        ["Enter unit rates on the BOQ page, then labour, staff and margin on the Estimation page."],
+        ["This sheet then shows material, installation, staff, margin and sell price for every system."],
+      ], "Estimation");
+
+      // ---------------------------------------------------------------- 17. Cost & Budget
+      const budgets = budgetRows || [];
+      const budgetBy = {}; budgets.forEach(b => { budgetBy[b.system_category] = b; });
+      const clientBudget = est.client_budget_cents == null ? null : Number(est.client_budget_cents);
+      const cbSystems = [...new Set([...estSystems, ...Object.keys(budgetBy)])]
+        .sort((a, b) => SYSTEM_LABEL(a).localeCompare(SYSTEM_LABEL(b)));
+      const budgetTotal = Object.values(budgetBy).reduce((a, b) => a + Number(b.budget_cents || 0), 0);
+      addSheet((budgets.length || clientBudget !== null) ? [
+        ...trialRow, [disclaimer], [],
+        ["Currency", estCurrency],
+        ["Client budget", clientBudget === null ? "not set" : centsOut(clientBudget)],
+        ["Budget source", est.budget_source || ""],
+        ["Estimated cost", centsOut(estCost)],
+        ["Sell price", centsOut(estCost + estMargin)],
+        ["Headroom against client budget", clientBudget === null ? "n/a" : centsOut(clientBudget - (estCost + estMargin))], [],
+        ["System","Budget","Estimated Cost","Variance","Variance %","Note"],
+        ...cbSystems.map(k => {
+          const bud = budgetBy[k] ? Number(budgetBy[k].budget_cents || 0) : 0;
+          const cost = matOf(k) + instOf(k);
+          const varc = bud - cost;
+          return [SYSTEM_LABEL(k),
+            budgetBy[k] ? centsOut(bud) : "not set",
+            centsOut(cost),
+            budgetBy[k] ? centsOut(varc) : "",
+            (budgetBy[k] && bud) ? Number(((varc / bud) * 100).toFixed(1)) : "",
+            (budgetBy[k] && budgetBy[k].note) || ""];
+        }),
+        ["Total", centsOut(budgetTotal), centsOut(estMatTotal + estInstTotal), centsOut(budgetTotal - (estMatTotal + estInstTotal)), "", "Excludes staff / preliminaries, which are not budgeted per system."],
+      ] : [
+        ...trialRow, [disclaimer], [],
+        ["No budget has been set for this project yet."],
+        ["Set the client budget and the per-system budgets on the Cost & Budget page."],
+        ["This sheet then compares budget against estimated cost and shows the variance for every system."],
+      ], "Cost & Budget");
+
+      // ---------------------------------------------------------------- 18. Product Recommendations
+      // One table, not two stacked ones. A Source column says whether the row is a
+      // manufacturer the tender itself names or a catalogue suggestion, which puts
+      // the specified brands for a system next to the catalogue equivalents for
+      // that same system -- and keeps one set of column formats for the sheet.
+      // Filtered to the systems this BOQ actually contains: the catalogue covers
+      // more, and rows for systems that are not in the project are noise.
+      const boqSystems = new Set(consolidated.map(r => r.systemCategory));
+      const catalog = (catalogRows || []).filter(p => boqSystems.has(p.system_category));
+      const specBrandRows = specList
+        .filter(si => (si.specified_brands || []).length && boqSystems.has(si.system_category))
+        .map(si => ["Named in the project specification", SYSTEM_LABEL(si.system_category),
+                    si.item_name || "", (si.specified_brands || []).join(", "), "", "",
+                    si.origin_restriction || "",
+                    si.description || "",
+                    si.approved_equal_allowed === false
+                      ? "This brand list is closed — no approved equal is permitted."
+                      : "An approved equal may be offered, subject to technical review.",
+                    (si.required_certifications || []).join(", "),
+                    si.clause_ref || "", si.page_number ?? "", ""]);
+      const catalogRowsOut = catalog
+        .sort((a, b) => SYSTEM_LABEL(a.system_category).localeCompare(SYSTEM_LABEL(b.system_category))
+          || String(a.manufacturer || "").localeCompare(String(b.manufacturer || "")))
+        .map(p => ["Catalogue suggestion", SYSTEM_LABEL(p.system_category), p.item_keyword || "",
+                   p.manufacturer || "", p.model_number || "", p.tier || "",
+                   // Blank, not guessed: product_catalog does not record origin.
+                   "",
+                   p.specification || "", p.recommendation_reason || "",
+                   p.compliance_notes || "", "", "", p.datasheet_url || ""]);
+      // The manufacturer directory: every brand that makes equipment for a system
+      // in this BOQ. No model number and no certification claim -- see the note in
+      // the seed migration. This is the group that makes the sheet useful on a
+      // project with no specification read and no catalogue coverage.
+      const namedAlready = new Set(specList.flatMap(si => (si.specified_brands || []).map(b => String(b).toLowerCase().trim())));
+      const catalogueMakers = new Set(catalog.map(p => String(p.manufacturer || "").toLowerCase().trim()));
+      const directoryRowsOut = (brandRows || [])
+        .filter(b => (b.system_categories || []).some(sc => boqSystems.has(sc)))
+        // Not repeated if the tender already names it or the catalogue already
+        // lists it -- the same manufacturer three times reads as padding.
+        .filter(b => !namedAlready.has(String(b.name).toLowerCase().trim())
+                  && !catalogueMakers.has(String(b.manufacturer || b.name).toLowerCase().trim()))
+        .flatMap(b => (b.system_categories || []).filter(sc => boqSystems.has(sc))
+          // Tier comes from the leading phrase of the note this project wrote
+          // ("Premium tier — commonly named…"), so the column is filled from the
+          // same record rather than from a second opinion about the same brand.
+          .map(sc => ["Manufacturer directory", SYSTEM_LABEL(sc), "", b.name, "",
+                      String(b.notes || "").split("\u2014")[0].replace(/\s*tier\s*$/i, "").trim(),
+                      b.country_of_origin || "", "", b.notes || "", "", "", "", b.website || ""]))
+        .sort((a, b) => String(a[1]).localeCompare(String(b[1])) || String(a[3]).localeCompare(String(b[3])));
+
+      addSheet((specBrandRows.length || catalogRowsOut.length || directoryRowsOut.length) ? [
+        ...trialRow, [disclaimer], [],
+        ["Verify availability, local approval and current model status before specifying or ordering. A brand named in the specification takes precedence over any suggestion below it; a catalogue entry is a suggestion, not an approved submittal."], [],
+        ["Source","System","Applies To","Manufacturer / Specified Brands","Model","Tier","Country / Origin","Specification","Notes","Certifications Required","Clause","Page","Datasheet"],
+        ...specBrandRows, ...catalogRowsOut, ...directoryRowsOut,
+      ] : [
+        ...trialRow, [disclaimer], [],
+        ["No product recommendations are available for this project yet."],
+        ["Read the project specification to list the brands the tender names, and the Products page suggests catalogue equivalents for the systems in your BOQ."],
+      ], "Product Recommendations");
 
       const fileName = `${project.project_name.replace(/[^a-z0-9]/gi,"_")}_BOQ_${kind}.xlsx`;
       const styled = await xlDownloadStyled(sheetDefs, fileName, {
