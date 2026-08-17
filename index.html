@@ -8174,6 +8174,13 @@ function MarkupViewerModal({ drawing, onClose }) {
   // thing an estimator wants to see; zoom is how they then check a box sits on
   // its symbol.
   const [zoom, setZoom] = useState("fit");
+  // The rendered page's real aspect ratio (width / height). Needed so "Fit" can
+  // fit the sheet inside the WINDOW rather than only inside the available width.
+  // A0 landscape as the opening assumption; corrected the moment a page renders.
+  const [imgAspect, setImgAspect] = useState(1189 / 841);
+  // Scrolled back to the top whenever a page renders, so the drawing is what you
+  // are looking at when the viewer opens rather than something above the fold.
+  const panelRef = useRef(null);
   const [downloading, setDownloading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -8228,7 +8235,9 @@ function MarkupViewerModal({ drawing, onClose }) {
       // JPEG, not PNG: about a tenth of the bytes for a line drawing. The marker
       // boxes are DOM overlays drawn on top of this, so nothing that carries
       // meaning passes through the compression.
+      setImgAspect(canvas.width / Math.max(1, canvas.height));
       setImgUrl(canvas.toDataURL("image/jpeg", 0.92));
+      if (panelRef.current) panelRef.current.scrollTop = 0;
       setPageNum(n);
       // Read this page's device tags once and keep them. Cheap, local, and the
       // only source of genuinely exact positions we have.
@@ -8604,7 +8613,8 @@ function MarkupViewerModal({ drawing, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6">
+      <div ref={panelRef} className="bg-white rounded-xl w-full max-h-[90vh] overflow-y-auto p-6"
+        style={{ maxWidth: "96vw" }}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Drawing Markup — {drawing.file_name}</h3>
           <div className="flex items-center gap-3">
@@ -8638,16 +8648,6 @@ function MarkupViewerModal({ drawing, onClose }) {
                 )}
               </div>
             )}
-            {presentSystems.length > 0 && (
-              <div className="flex flex-wrap gap-x-4 gap-y-1 mb-4 text-xs">
-                {presentSystems.map(cat => (
-                  <div key={cat} className="flex items-center gap-1.5">
-                    <span style={{ width: 10, height: 10, borderRadius: 999, background: systemColor(cat), display: "inline-block" }}></span>
-                    <span className="text-slate-600">{SYSTEM_LABEL(cat)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
             {imgUrl && (
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <span className="text-[11px] text-slate-500 uppercase font-semibold">Zoom</span>
@@ -8679,8 +8679,16 @@ function MarkupViewerModal({ drawing, onClose }) {
                   if (!hit) setError2("That click did not land on a repeated symbol. Zoom in and click the middle of the device.");
                   else setError2("");
                 }) : undefined}>
-                <div className="qtr-markup-wrap relative" style={zoom === "fit" ? { width: "100%" } : { width: `${zoom * 100}%` }}>
-                <img src={imgUrl} className="block w-full" alt={drawing.file_name} />
+                <div className="qtr-markup-wrap relative"
+                  style={zoom === "fit"
+                    // Aspect ratio on the wrapper plus a height-derived max width:
+                    // the box is exactly the image, so markers positioned in
+                    // percentages stay on their symbols. object-fit would
+                    // letterbox inside a bigger box and move every marker.
+                    ? { width: "100%", maxWidth: `calc(62vh * ${imgAspect})`, aspectRatio: String(imgAspect), margin: "0 auto" }
+                    : { width: `${zoom * 100}%`, aspectRatio: String(imgAspect) }}>
+                <img src={imgUrl} className="block" alt={drawing.file_name}
+                  style={{ width: "100%", height: "100%" }} />
                 {symbolItems.map(({ item: it, group, source }) => {
                   const color = colourOf(it);
                   const isActive = activeItem === it.id;
@@ -8759,6 +8767,16 @@ function MarkupViewerModal({ drawing, onClose }) {
                   );
                 })}
                 </div>
+              </div>
+            )}
+            {presentSystems.length > 0 && (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mb-4 text-xs">
+                {presentSystems.map(cat => (
+                  <div key={cat} className="flex items-center gap-1.5">
+                    <span style={{ width: 10, height: 10, borderRadius: 999, background: systemColor(cat), display: "inline-block" }}></span>
+                    <span className="text-slate-600">{SYSTEM_LABEL(cat)}</span>
+                  </div>
+                ))}
               </div>
             )}
             {!pickingFor && imgUrl && !useSymbols && symbolGroups.length > 0 && (
