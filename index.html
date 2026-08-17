@@ -112,6 +112,17 @@ window.__LIBS_READY__ = (async function () {
   // way the others above do; PDF export button just checks jsPDF itself is
   // present before offering to run.
   window.__PDF_LIBS_OK__ = !!(okJsPdf && okJsPdfAutotable);
+  // ExcelJS -- writes the styled BOQ workbook. SheetJS's community build cannot
+  // do bold, fills or borders (Pro-only), and presentation is the entire point of
+  // this export, so the styled path uses ExcelJS. Deliberately NOT part of the
+  // readiness gate: if it fails to load, the export falls back to the plain
+  // SheetJS workbook, which is worse-looking but complete. A missing style is a
+  // blemish; a missing export is a customer who cannot send their BOQ.
+  var okExcelJs = await __loadLib([
+    "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js",
+    "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"
+  ], function () { return typeof window.ExcelJS !== "undefined"; });
+  window.__EXCELJS_OK__ = !!okExcelJs;
   // pdf.js -- renders an uploaded PDF drawing's first page to a canvas so
   // the markup viewer can plot overlay markers on it, the same way it
   // already does for image uploads. Also a nice-to-have, not core --
@@ -1686,6 +1697,176 @@ async function openStoredPdf(storagePath) {
   if (!res.ok) throw new Error("Could not download the drawing file.");
   const buf = await res.arrayBuffer();
   return await window.pdfjsLib.getDocument({ data: buf }).promise;
+}
+
+// --------------------------------------------------------------------------
+// Styled workbook writer
+// --------------------------------------------------------------------------
+
+const XL_NAVY = "FF0F172A";
+const XL_BAND = "FFF6F8FC";
+const XL_AMBER_BG = "FFFFFBEB";
+const XL_AMBER_TX = "FFB45309";
+const XL_BORDER = "FFD8DEE9";
+const XL_MAX_COL_WIDTH = 62;
+const XL_MIN_COL_WIDTH = 9;
+
+// A header row is the first row of three or more cells that are all non-empty
+// strings. Data rows contain numbers, and a key/value sheet's rows are two cells
+// wide, so neither is mistaken for one. Returns -1 when the sheet has no table.
+function xlFindHeaderRow(rows) {
+  for (let i = 0; i < Math.min(rows.length, 12); i++) {
+    const r = rows[i];
+    if (!Array.isArray(r) || r.length < 3) continue;
+    const cells = r.filter(c => c !== null && c !== undefined && c !== "");
+    if (cells.length < 3 || cells.length !== r.length) continue;
+    if (cells.every(c => typeof c === "string" && c.length <= 60)) return i;
+  }
+  return -1;
+}
+
+// Number format inferred from the column heading, so a cost column reads as
+// currency and a quantity column keeps its decimals without inventing any.
+function xlNumFmt(header) {
+  const h = String(header || "").toLowerCase();
+  if (/(cost|price|rate|amount|usd|value|total \(|subtotal)/.test(h)) return '#,##0.00';
+  if (/(confidence|%|percent)/.test(h)) return '0"%"';
+  if (/(qty|quantity|count|items|lines|pages|no\.)/.test(h)) return '#,##0.####';
+  return null;
+}
+
+function xlIsWide(header) {
+  return /(description|specification|spec|note|reason|basis|remark|item name|assumption|optimi|compliance|evidence|file)/i
+    .test(String(header || ""));
+}
+
+// One styled sheet. `rows` is the same array-of-arrays the plain export builds.
+function xlWriteSheet(wb, name, rows, meta) {
+  const ws = wb.addWorksheet(String(name).substring(0, 31), {
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.3, right: 0.3, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } },
+    views: [{ showGridLines: false }],
+  });
+
+  const headerIdx = xlFindHeaderRow(rows);
+  const header = headerIdx >= 0 ? rows[headerIdx] : null;
+  const body = headerIdx >= 0 ? rows.slice(headerIdx + 1) : [];
+  // With no header row this is a key/value sheet (Executive Summary), and ALL of
+  // its rows are preamble. Treating them as "body" instead left the sheet blank,
+  // because the body is only rendered inside the `if (header)` branch below.
+  const preamble = headerIdx >= 0 ? rows.slice(0, headerIdx) : rows;
+  const colCount = Math.max(
+    header ? header.length : 0,
+    ...rows.map(r => (Array.isArray(r) ? r.length : 1)),
+    2
+  );
+
+  // ---- title block -------------------------------------------------------
+  const titleRow = ws.addRow([`${meta.projectName || "Project"} — ${name}`]);
+  titleRow.font = { bold: true, size: 14, color: { argb: XL_NAVY } };
+  titleRow.height = 22;
+  ws.mergeCells(titleRow.number, 1, titleRow.number, colCount);
+
+  const sub = [meta.location, meta.documentType, meta.generated].filter(Boolean).join("   ·   ");
+  const subRow = ws.addRow([sub]);
+  subRow.font = { size: 9.5, color: { argb: "FF64748B" } };
+  ws.mergeCells(subRow.number, 1, subRow.number, colCount);
+
+  // Rows that came before the header and are not the disclaimer: the trial
+  // notice, and every line of a key/value sheet.
+  const longText = t => typeof t === "string" && t.length > 160;
+  preamble.forEach(r => {
+    if (!Array.isArray(r) || r.length === 0 || (r.length === 1 && !r[0])) return;
+    if (longText(r[0])) {
+      const d = ws.addRow([r[0]]);
+      ws.mergeCells(d.number, 1, d.number, colCount);
+      d.font = { size: 8.5, italic: true, color: { argb: XL_AMBER_TX } };
+      d.alignment = { wrapText: true, vertical: "top" };
+      d.height = 42;
+      d.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_AMBER_BG } }; });
+      return;
+    }
+    const kv = ws.addRow(r);
+    kv.getCell(1).font = { bold: true, size: 10 };
+  });
+
+  if (header) {
+    ws.addRow([]);
+    const hr = ws.addRow(header);
+    hr.height = 26;
+    hr.eachCell(c => {
+      c.font = { bold: true, size: 9.5, color: { argb: "FFFFFFFF" } };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_NAVY } };
+      c.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      c.border = { top: { style: "thin", color: { argb: XL_NAVY } }, bottom: { style: "thin", color: { argb: XL_NAVY } },
+                   left: { style: "thin", color: { argb: XL_NAVY } }, right: { style: "thin", color: { argb: XL_NAVY } } };
+    });
+    // Frozen below the header, so column names survive scrolling a 400-line BOQ.
+    ws.views = [{ state: "frozen", ySplit: hr.number, showGridLines: false }];
+    ws.autoFilter = { from: { row: hr.number, column: 1 }, to: { row: hr.number, column: colCount } };
+    ws.pageSetup.printTitlesRow = `${hr.number}:${hr.number}`;
+
+    const fmts = header.map(xlNumFmt);
+    const wide = header.map(xlIsWide);
+    body.forEach((r, i) => {
+      if (!Array.isArray(r)) return;
+      const row = ws.addRow(r);
+      const banded = i % 2 === 1;
+      row.eachCell({ includeEmpty: true }, (c, col) => {
+        c.font = { size: 9 };
+        c.alignment = { vertical: "top", wrapText: !!wide[col - 1] };
+        c.border = { top: { style: "hair", color: { argb: XL_BORDER } }, bottom: { style: "hair", color: { argb: XL_BORDER } },
+                     left: { style: "hair", color: { argb: XL_BORDER } }, right: { style: "hair", color: { argb: XL_BORDER } } };
+        if (banded) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_BAND } };
+        // Only format cells that really hold a number -- a "TBD" in a quantity
+        // column must stay the word TBD, not become a broken number.
+        if (fmts[col - 1] && typeof c.value === "number") c.numFmt = fmts[col - 1];
+      });
+    });
+  }
+
+  // ---- column widths from the real content -------------------------------
+  for (let c = 1; c <= colCount; c++) {
+    let max = 0;
+    ws.getColumn(c).eachCell({ includeEmpty: false }, cell => {
+      // Every merged cell -- master included -- spans several columns, so its
+      // length is never evidence for the width of one of them. Skipping only the
+      // slaves left the master holding the 78-character subtitle, which pushed
+      // column A to the cap on every sheet.
+      if (cell.isMerged) return;
+      const v = cell.value;
+      if (typeof v === "string" && v.length > 160) return;
+      const len = v == null ? 0 : String(v.richText ? v.richText.map(t => t.text).join("") : v).length;
+      if (len > max) max = len;
+    });
+    ws.getColumn(c).width = Math.max(XL_MIN_COL_WIDTH, Math.min(XL_MAX_COL_WIDTH, max + 2.5));
+  }
+  return ws;
+}
+
+// Writes a styled .xlsx and triggers the download. Returns false if ExcelJS is
+// unavailable, so the caller can fall back to the plain SheetJS workbook rather
+// than leaving the customer with no file at all.
+async function xlDownloadStyled(sheetDefs, filename, meta) {
+  if (!window.__EXCELJS_OK__ || !window.ExcelJS) return false;
+  try {
+    const wb = new window.ExcelJS.Workbook();
+    wb.creator = "Quantora Engineering";
+    wb.created = new Date();
+    sheetDefs.forEach(({ name, rows }) => xlWriteSheet(wb, name, rows || [], meta || {}));
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    // Revoked on a delay: Safari has been known to cancel an in-flight download
+    // when the blob URL is revoked in the same tick as the click.
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return true;
+  } catch (e) {
+    console.error("Styled workbook failed, falling back to the plain export:", e);
+    return false;
+  }
 }
 
 async function callEngine(action, payload) {
@@ -11192,9 +11373,16 @@ function ExportTab({ project }) {
       const consolidated = kind !== "procurement" ? consolidatedAll : consolidatedAll.filter(r => r.reviewBucket === "confirmed");
 
       const wb = XLSX.utils.book_new();
+      // Sheets are collected rather than written immediately, so the styled
+      // writer can lay all of them out and the plain SheetJS workbook stays
+      // available as a fallback. None of the eleven sheets below changes.
+      const sheetDefs = [];
       const disclaimer = "AI-generated estimate — provided \"as is,\" for informational purposes only, without warranty of any kind. Not a substitute for review, verification, or certification by a licensed engineer. User assumes full responsibility for independently verifying all quantities, specifications, and costs before tendering, procurement, or construction. Quantora accepts no liability for its use.";
       const trialRow = isTrial ? [["Generated using Quantora Trial Version"], []] : [];
-      const addSheet = (rows, name) => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name.substring(0,31));
+      const addSheet = (rows, name) => {
+        sheetDefs.push({ name, rows });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name.substring(0,31));
+      };
 
       // 1. Executive Summary
       const systemsCount = new Set(consolidatedAll.map(r=>r.systemCategory)).size;
@@ -11203,8 +11391,14 @@ function ExportTab({ project }) {
       addSheet([
         ...trialRow, [disclaimer], [],
         ["Project", project.project_name], ["Client", project.client_name || ""], ["Consultant", project.consultant_name || ""],
-        ["Contractor", project.contractor_name || ""], ["Location", `${project.city}, ${project.country}`], ["Area", `${project.area_size ?? ""} ${project.area_unit ?? ""}`],
-        ["Export Type", kind], ["Generated", new Date().toISOString()], [],
+        ["Contractor", project.contractor_name || ""],
+        ["Location", [project.city, project.country].filter(Boolean).join(", ") || "—"],
+        ["Building Type", buildingTypeLabel(project.building_type)],
+        ["Scope of Work", projectScopeLabel(project.project_scope)],
+        ["Number of Floors", project.number_of_floors ?? "—"],
+        ["Area", project.area_size ? `${project.area_size} ${project.area_unit || ""}`.trim() : "—"],
+        ["Required Systems", (project.required_systems||[]).length ? project.required_systems.map(sy=>SYSTEM_LABEL(sy)).join(", ") : "—"],
+        ["Export Type", kind], ["Generated", new Date().toLocaleString()], [],
         ["Total Consolidated BOQ Items", consolidatedAll.length], ["Total Systems", systemsCount], ["Total Drawings", (dr||[]).length],
         ["Average AI Confidence", avgConf!=null ? `${avgConf}%` : "n/a"],
         ["Items Requiring Review", consolidatedAll.filter(r=>r.reviewBucket==="review_required").length],
@@ -11219,8 +11413,22 @@ function ExportTab({ project }) {
       // inflated by the reference-only sources also listed.
       addSheet([
         ...trialRow, [disclaimer], [],
-        ["Item Code","System","Item Name","Specification","Manufacturer","Model","Unit","Total Quantity","Confidence %","Status","Physical Sources","Reference Sources (not counted)","Quantity Discrepancy"],
-        ...consolidated.map(r => [r.itemCode, SYSTEM_LABEL(r.systemCategory), r.description, r.technical_specification||"", r.manufacturer||"", r.model_number||"", r.unit, r.quantityIsTbd?"TBD":r.totalQuantity, r.avgConfidence??"", r.reviewBucket, r.countableSourceCount, r.referenceOnlySourceCount, r.discrepancy ? `Physical ${r.discrepancy.physicalTotal} vs schedule ${r.discrepancy.scheduleTotal}` : ""]),
+        ["Item Code","System","Item Name","Specification","Manufacturer","Model","Building/Villa","Floor(s)","Zone(s)","Room(s)","Location","Unit","Total Quantity","Confidence %","Status","Physical Sources","Reference Sources (not counted)","Quantity Discrepancy"],
+        // Floor/zone/room use the SAME expressions as the Master BOQ sheet below,
+        // so the two sheets can never report different locations for one line.
+        ...consolidated.map(r => [
+          r.itemCode, SYSTEM_LABEL(r.systemCategory), r.description, r.technical_specification||"",
+          r.manufacturer||"", r.model_number||"", r.building||"",
+          r.floorBreakdown.map(fb=>fb.floor_label).join(", "),
+          r.zoneBreakdown.map(zb=>`${zb.floor_label}/${zb.zone}`).join(", "),
+          r.roomBreakdown.map(rb=>`${rb.floor_label}/${rb.room}`).join(", "),
+          // Free-text position the AI recorded, de-duplicated: the same location
+          // repeated once per source is noise, not information.
+          [...new Set(r.rawItems.map(x=>x.location).filter(Boolean))].join("; "),
+          r.unit, r.quantityIsTbd?"TBD":r.totalQuantity, r.avgConfidence??"", r.reviewBucket,
+          r.countableSourceCount, r.referenceOnlySourceCount,
+          r.discrepancy ? `Physical ${r.discrepancy.physicalTotal} vs schedule ${r.discrepancy.scheduleTotal}` : "",
+        ]),
       ], "Consolidated BOQ");
 
       // 2b. Master BOQ (Full Detail) -- the RFQ-ready, procurement-grade
@@ -11256,7 +11464,7 @@ function ExportTab({ project }) {
       const simpleLines = buildSimpleBoqLines(consolidated);
       addSheet([
         ...trialRow, [disclaimer], [],
-        ["Line","System","Item Description","Location","Qty","Unit","Status","Remarks"],
+        ["Line","System","Item Description","Building / Floor(s)","Qty","Unit","Status","Remarks"],
         ...simpleLines.map(l => [l.line, l.system, l.description, l.location, l.qty, l.unit, l.status, l.remarks]),
       ], "Simple BOQ");
 
@@ -11363,7 +11571,15 @@ function ExportTab({ project }) {
         ...(reviewRows||[]).map(r => [r.reason, r.boq_item_id ? (itemDescByIdX[r.boq_item_id]||"") : "", r.status]),
       ], "Engineer Review Items");
 
-      XLSX.writeFile(wb, `${project.project_name.replace(/[^a-z0-9]/gi,"_")}_BOQ_${kind}.xlsx`);
+      const fileName = `${project.project_name.replace(/[^a-z0-9]/gi,"_")}_BOQ_${kind}.xlsx`;
+      const styled = await xlDownloadStyled(sheetDefs, fileName, {
+        projectName: project.project_name,
+        location: [project.city, project.country].filter(Boolean).join(", "),
+        documentType: kind === "procurement" ? "Procurement / Tender Package" : "Bill of Quantities",
+        generated: `Generated ${new Date().toLocaleString()}`,
+      });
+      // Plain workbook if ExcelJS could not load. Same data, no styling.
+      if (!styled) XLSX.writeFile(wb, fileName);
     } finally { setBusy(false); }
   }
 
@@ -12341,7 +12557,15 @@ function AdminPortal({ onBack }) {
   const nav = QADMIN_NAV;
   const current = nav.find(n => n.key === activeView) || nav[0];
 
-  function downloadWorkbook(sheets, filename) {
+  // Same styled writer as the BOQ export, so an admin report and a customer BOQ
+  // look like they came from the same company.
+  async function downloadWorkbook(sheets, filename) {
+    const styled = await xlDownloadStyled(sheets, filename, {
+      projectName: "Quantora Engineering",
+      documentType: "Platform Report",
+      generated: `Generated ${new Date().toLocaleString()}`,
+    });
+    if (styled) return;
     const wb = XLSX.utils.book_new();
     sheets.forEach(({ name, rows }) => {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name.substring(0, 31));
@@ -12351,7 +12575,9 @@ function AdminPortal({ onBack }) {
 
   async function runExport(kind, fn) {
     setExportBusy(kind);
-    try { fn(); } finally { setExportBusy(""); }
+    // Awaited: downloadWorkbook became async when it gained the styled writer,
+    // and without this the spinner stops before the file exists.
+    try { await fn(); } finally { setExportBusy(""); }
   }
 
   function exportPayments() {
@@ -12363,7 +12589,7 @@ function AdminPortal({ onBack }) {
       ...payments.map(p => [p.date, p.company_name, p.type, p.amount_usd, p.balance_after_usd, p.description, p.stripe_payment_intent_id, p.stripe_checkout_session_id]),
     ];
     if (payments.length === 0) rows.push(["No wallet transactions recorded yet — Stripe payments will appear here once configured and processed."]);
-    downloadWorkbook([{ name: "Payments Received", rows }], `Quantora_Payments_Received_${new Date().toISOString().slice(0,10)}.xlsx`);
+    return downloadWorkbook([{ name: "Payments Received", rows }], `Quantora_Payments_Received_${new Date().toISOString().slice(0,10)}.xlsx`);
   }
 
   function exportTrials() {
@@ -12380,7 +12606,7 @@ function AdminPortal({ onBack }) {
       ["Company", "Trial Start", "Trial End", "Current Plan", "Status"],
       ...(reportsData?.trial_company_detail || []).map(c => [c.company_name, c.trial_start_date, c.trial_end_date, c.current_plan, c.status]),
     ];
-    downloadWorkbook([
+    return downloadWorkbook([
       { name: "Trial Summary", rows: summaryRows },
       { name: "Trial Detail", rows: detailRows },
     ], `Quantora_Trial_Summary_${new Date().toISOString().slice(0,10)}.xlsx`);
@@ -12392,7 +12618,7 @@ function AdminPortal({ onBack }) {
       ["Plan", "Total Companies", "Active Subscriptions", "Monthly Revenue (USD)"],
       ...(reportsData?.subscription_mix || []).map(p => [p.plan, p.company_count, p.active_count, p.monthly_revenue_usd]),
     ];
-    downloadWorkbook([{ name: "Subscription Types", rows }], `Quantora_Subscription_Types_${new Date().toISOString().slice(0,10)}.xlsx`);
+    return downloadWorkbook([{ name: "Subscription Types", rows }], `Quantora_Subscription_Types_${new Date().toISOString().slice(0,10)}.xlsx`);
   }
 
   function exportAiCost() {
@@ -12403,7 +12629,7 @@ function AdminPortal({ onBack }) {
       ["Date", "Requests", "Input Tokens", "Output Tokens", "Pages Processed", "Actual Cost (USD)", "Billed-Equivalent Cost (USD)"],
       ...days.map(d => [d.date, d.requests, d.input_tokens, d.output_tokens, d.page_count, d.actual_cost_usd, d.billed_equivalent_usd]),
     ];
-    downloadWorkbook([{ name: "AI Cost Daily", rows }], `Quantora_AI_Cost_Daily_${new Date().toISOString().slice(0,10)}.xlsx`);
+    return downloadWorkbook([{ name: "AI Cost Daily", rows }], `Quantora_AI_Cost_Daily_${new Date().toISOString().slice(0,10)}.xlsx`);
   }
 
   function exportStorage() {
@@ -12414,7 +12640,7 @@ function AdminPortal({ onBack }) {
       ["Company", "Storage Used (MB)"],
       ...(reportsData?.storage_by_company || []).map(s => [s.company_name, s.storage_mb]),
     ];
-    downloadWorkbook([{ name: "Storage Usage", rows }], `Quantora_Storage_Usage_${new Date().toISOString().slice(0,10)}.xlsx`);
+    return downloadWorkbook([{ name: "Storage Usage", rows }], `Quantora_Storage_Usage_${new Date().toISOString().slice(0,10)}.xlsx`);
   }
 
   function exportFullReport() {
@@ -12429,7 +12655,7 @@ function AdminPortal({ onBack }) {
       ["Trials — Converted", s.trial_converted_to_subscription ?? 0],
       ["Trial Conversion Rate (%)", s.conversion_rate_pct ?? "—"],
     ];
-    downloadWorkbook([
+    return downloadWorkbook([
       { name: "Summary", rows: summaryRows },
       { name: "Payments Received", rows: [["Date", "Company", "Type", "Amount (USD)", "Balance After (USD)", "Description"], ...(r.payments || []).map(p => [p.date, p.company_name, p.type, p.amount_usd, p.balance_after_usd, p.description])] },
       { name: "Trial Summary", rows: [["Company", "Trial Start", "Trial End", "Plan", "Status"], ...(r.trial_company_detail || []).map(c => [c.company_name, c.trial_start_date, c.trial_end_date, c.current_plan, c.status])] },
