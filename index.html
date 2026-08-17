@@ -246,6 +246,10 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
    build, so without these the hover and disabled states are no-ops. */
 .hover\:bg-rose-100:hover{background-color:#ffe4e6}
 .disabled\:opacity-40:disabled{opacity:.4}
+
+/* The Located-items heading is uppercase; the device-coverage note inside it
+   must read as a sentence. Not in the purged Tailwind build. */
+.normal-case{text-transform:none}
 </style>
 <script>
   // Launch promotion window. One timestamp, read by the marketing page and by
@@ -8104,11 +8108,28 @@ function MarkupViewerModal({ drawing, onClose }) {
     setRendering(true);
     try {
       const page = await pdf.getPage(n);
-      const viewport = page.getViewport({ scale: 1.5 });
+      // A FIXED multiplier made the image quality depend on the sheet size, and
+      // in the wrong direction: scale 1.5 gave an A4 only 1263px (too coarse to
+      // make out a device symbol) and an A1 3576px -- a 9 megapixel canvas whose
+      // PNG data URL runs to several megabytes and has to be held in memory,
+      // handed to an <img>, then read back again by the download compositor.
+      // Aim for a constant long edge instead, so every sheet size arrives usable
+      // and none arrives enormous.
+      const MARKUP_TARGET_PX = 3000;
+      const base = page.getViewport({ scale: 1 });
+      const scale = Math.min(4, Math.max(1, MARKUP_TARGET_PX / Math.max(base.width, base.height)));
+      const viewport = page.getViewport({ scale });
       const canvas = document.createElement("canvas");
-      canvas.width = viewport.width; canvas.height = viewport.height;
-      await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-      setImgUrl(canvas.toDataURL("image/png"));
+      canvas.width = Math.round(viewport.width); canvas.height = Math.round(viewport.height);
+      const cctx = canvas.getContext("2d");
+      // PDFs draw onto transparency; without a white base a JPEG flattens the
+      // unpainted areas to black and hides every line on the sheet.
+      cctx.fillStyle = "#ffffff"; cctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: cctx, viewport }).promise;
+      // JPEG, not PNG: about a tenth of the bytes for a line drawing. The marker
+      // boxes are DOM overlays drawn on top of this, so nothing that carries
+      // meaning passes through the compression.
+      setImgUrl(canvas.toDataURL("image/jpeg", 0.92));
       setPageNum(n);
       // Read this page's device tags once and keep them. Cheap, local, and the
       // only source of genuinely exact positions we have.
@@ -8330,6 +8351,19 @@ function MarkupViewerModal({ drawing, onClose }) {
     { x: it.coordinates.x || 0, y: it.coordinates.y || 0 },
     ...(Array.isArray(it.coordinates.instances) ? it.coordinates.instances : []),
   ];
+
+  // Device-level coverage, for a heading that reports what is actually boxed on
+  // the sheet rather than how many BOQ lines happen to carry one coordinate.
+  // Only countable lines are included: 350 m of cable tray is one route, so it
+  // can never be "349 short".
+  const deviceCoverage = items.reduce((acc, it) => {
+    const qty = Number(it.quantity);
+    const countable = Number.isFinite(qty) && qty > 0 && /^(no|nos|nr|pcs|each|ea)\.?$/i.test(String(it.unit || "").trim());
+    if (!countable) return acc;
+    acc.total += Math.floor(qty);
+    if (it.coordinates && it.coordinates.x != null) acc.found += positionsOf(it).length;
+    return acc;
+  }, { found: 0, total: 0 });
   // A device box comes back at 1-3% of the page. That is the right size for a
   // highlight but leaves nowhere to hang a number, so enforce a floor.
   const MIN_MARKER = 0.012;
@@ -8687,6 +8721,13 @@ function MarkupViewerModal({ drawing, onClose }) {
               <div className="mb-4">
                 <div className="text-xs font-semibold text-slate-500 uppercase mb-2">
                   Located items ({located.length}){pageCount > 1 ? ` — ${onPage.length} on page ${pageNum}` : ""}{hasCadInstances ? " — instance count shown where CAD data captured multiple exact positions" : ""}
+                  {deviceCoverage.total > 0 && (
+                    <span className={`ml-2 normal-case font-medium ${deviceCoverage.found < deviceCoverage.total ? "text-amber-700" : "text-emerald-700"}`}
+                      title="Counts individual devices, not BOQ lines. A line of 34 readers with one position contributes 1 here, not 34.">
+                      {deviceCoverage.found} of {deviceCoverage.total} device{deviceCoverage.total === 1 ? "" : "s"} boxed on the drawing
+                      {deviceCoverage.found < deviceCoverage.total ? " — the rest were counted but not located" : ""}
+                    </span>
+                  )}
                 </div>
                 <div className="grid md:grid-cols-2 gap-2">
                   {located.map(it => {
