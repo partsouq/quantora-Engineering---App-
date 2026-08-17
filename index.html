@@ -4833,7 +4833,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
           />
         </div>
         {/* Project type was removed from this form on 15 Aug to keep setup minimal, and
-            restored on Irfan's request the same day with a wider list and a free-text
+            restored the same day, by request, with a wider list and a free-text
             escape. Number of Floors, Project Scope, Required Systems, Client, Consultant
             and Area Size remain off the form; those columns still exist and are still
             read by exports and dashboard cards for projects created before the change. */}
@@ -6954,7 +6954,7 @@ function ComparisonTab({ project }) {
           <div className="flex flex-wrap gap-2 items-end">
             <div>
               <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Supplier name</label>
-              <input value={vendorName} onChange={e=>setVendorName(e.target.value)} placeholder="e.g. Al Fajer Trading"
+              <input value={vendorName} onChange={e=>setVendorName(e.target.value)} placeholder="e.g. Supplier A — Trading LLC"
                 className="border rounded-lg px-3 py-2 text-sm" />
             </div>
             <label className={`text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer ${busyQ ? "bg-slate-100 text-slate-400" : "bg-slate-900 text-white hover:bg-slate-800"}`}>
@@ -8017,8 +8017,8 @@ function DrawingsTab({ project }) {
   // One entry point. It measures the sheet and picks the method, because the
   // customer cannot be expected to know that an A1 sheet defeats a whole-sheet
   // AI pass -- that is our engineering detail, and leaking it into their
-  // workflow is exactly how Heena Khan ended up with a BOQ containing no
-  // cameras.
+  // workflow is exactly how a customer ends up with a security layout whose BOQ
+  // contains no cameras at all.
   const [tiling, setTiling] = useState({});
 
   async function analyzeAuto(d) {
