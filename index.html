@@ -8173,7 +8173,10 @@ function MarkupViewerModal({ drawing, onClose }) {
   // "fit" or a multiplier. Fit on open, because the whole sheet is the first
   // thing an estimator wants to see; zoom is how they then check a box sits on
   // its symbol.
-  const [zoom, setZoom] = useState("fit");
+  // "width"  -- full panel width, so the sheet lines up with the BOQ below it
+  // "whole"   -- constrained by viewport height, whole sheet visible at once
+  // a number  -- that multiple of the panel width, scrollable
+  const [zoom, setZoom] = useState("width");
   // The rendered page's real aspect ratio (width / height). Needed so "Fit" can
   // fit the sheet inside the WINDOW rather than only inside the available width.
   // A0 landscape as the opening assumption; corrected the moment a page renders.
@@ -8651,26 +8654,29 @@ function MarkupViewerModal({ drawing, onClose }) {
             {imgUrl && (
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <span className="text-[11px] text-slate-500 uppercase font-semibold">Zoom</span>
-                {[["fit", "Fit"], [1, "100%"], [2, "200%"], [4, "400%"]].map(([v, label]) => (
+                {[["width", "Fit width"], ["whole", "Whole sheet"], [2, "200%"], [4, "400%"]].map(([v, label]) => (
                   <button key={String(v)} onClick={()=>setZoom(v)}
                     className={`text-[11px] font-semibold px-2.5 py-1 rounded border ${zoom===v ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
                     {label}
                   </button>
                 ))}
                 <span className="text-[11px] text-slate-400">
-                  {zoom === "fit"
-                    ? "A device symbol on an A0 sheet is only a few pixels wide at fit — zoom in to see the boxes land on the symbols."
+                  {zoom === "width"
+                    ? "Full width, aligned with the BOQ below. Scroll down for the rest of the sheet."
+                    : zoom === "whole"
+                    ? "Whole sheet in view. A device symbol is only a few pixels at this size — use 200% or 400% to check a box sits on its symbol."
                     : "Scroll inside the frame to pan."}
                 </span>
               </div>
             )}
             {imgUrl && (
-              <div className={`qtr-markup-frame border rounded-lg bg-slate-100 mb-4 ${zoom === "fit" ? "overflow-hidden" : "overflow-auto"}`}
+              <div className={`qtr-markup-frame border rounded-lg bg-slate-100 mb-4 ${typeof zoom === "number" ? "overflow-auto" : "overflow-hidden"}`}
                 style={{
                   ...(pickingFor ? { cursor: "crosshair" } : null),
-                  // Zoomed in, the frame becomes a viewport onto a larger image
-                  // rather than growing the page.
-                  ...(zoom === "fit" ? null : { maxHeight: "70vh" }),
+                  // Only a numeric zoom turns the frame into a scrollable viewport.
+                  // "width" and "whole" must grow to the image so the sheet is one
+                  // continuous thing with the BOQ underneath it, not a window.
+                  ...(typeof zoom === "number" ? { maxHeight: "78vh" } : null),
                 }}
                 onClick={pickingFor ? (e => {
                   const r = e.currentTarget.getBoundingClientRect();
@@ -8680,12 +8686,14 @@ function MarkupViewerModal({ drawing, onClose }) {
                   else setError2("");
                 }) : undefined}>
                 <div className="qtr-markup-wrap relative"
-                  style={zoom === "fit"
-                    // Aspect ratio on the wrapper plus a height-derived max width:
-                    // the box is exactly the image, so markers positioned in
-                    // percentages stay on their symbols. object-fit would
-                    // letterbox inside a bigger box and move every marker.
-                    ? { width: "100%", maxWidth: `calc(62vh * ${imgAspect})`, aspectRatio: String(imgAspect), margin: "0 auto" }
+                  // Aspect ratio always lives on the wrapper, never object-fit on
+                  // the image: the wrapper IS the image's box, which is what keeps
+                  // percentage-positioned markers on their symbols. object-fit
+                  // would letterbox inside a larger box and shift every marker.
+                  style={zoom === "width"
+                    ? { width: "100%", aspectRatio: String(imgAspect) }
+                    : zoom === "whole"
+                    ? { width: "100%", maxWidth: `calc(72vh * ${imgAspect})`, aspectRatio: String(imgAspect), margin: "0 auto" }
                     : { width: `${zoom * 100}%`, aspectRatio: String(imgAspect) }}>
                 <img src={imgUrl} className="block" alt={drawing.file_name}
                   style={{ width: "100%", height: "100%" }} />
