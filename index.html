@@ -3457,7 +3457,16 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
     setBusy(true); setErr(""); setNotice("");
     try {
       if (mode === "signup") {
-        const { data, error } = await sb.auth.signUp({ email, password });
+        // Without emailRedirectTo, Supabase builds the confirmation link from the
+        // project's Site URL -- which was still the localhost:3000 default, so
+        // every customer received a link to their own machine. Same expression as
+        // resetPasswordForEmail below, so the link returns to whatever domain
+        // actually served the app instead of a hardcoded one.
+        // NOTE: this only works if the URL is on Supabase's Redirect allow-list
+        // (Authentication -> URL Configuration). Otherwise it silently falls back
+        // to Site URL again.
+        const emailRedirectTo = `${window.location.origin}${window.location.pathname}`;
+        const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo } });
         if (error) throw error;
         if (data.user) {
           // Company creation happens server-side (bootstrap_company/
@@ -4483,12 +4492,41 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
 
   async function submit(e) {
     e.preventDefault();
+
+    // The building_type column accepts 2-48 characters of [a-z0-9_] or NULL.
+    // Choosing "Something else" and submitting an empty or one-letter type would
+    // otherwise reach Postgres and come back as a raw constraint error -- the
+    // exact failure a customer reported. Caught here, where it can be explained.
+    if (typeOther) {
+      const slug = slugBuildingType(typeText);
+      if (!slug) {
+        setErr("Type what kind of project this is, or press \"Pick from list\" to choose one.");
+        return;
+      }
+      if (slug.length < 2) {
+        setErr("That project type is too short — give it at least two characters, e.g. \"Desalination plant\".");
+        return;
+      }
+    }
+    if (scopeOther) {
+      const scopeSlug = slugBuildingType(scopeText);
+      if (scopeText.trim() && !scopeSlug) {
+        setErr("That scope of work contains no usable characters — please describe it in words.");
+        return;
+      }
+    }
+
     setBusy(true); setErr("");
     try {
       const payload = {
         ...form,
         number_of_floors: form.number_of_floors ? parseInt(form.number_of_floors) : null,
         area_size: form.area_size ? parseFloat(form.area_size) : null,
+        // "" is not a building type. The column is nullable and "not specified"
+        // is a real answer, so send NULL instead of an empty string, which the
+        // constraint would reject.
+        building_type: form.building_type ? form.building_type : null,
+        project_scope: form.project_scope ? form.project_scope : null,
       };
       if (isEdit) {
         const { data, error } = await sb.from("projects").update(payload).eq("id", existingProject.id).select().single();
