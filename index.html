@@ -348,6 +348,31 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = "https://mcwcvyuvlkmqsivnzvjy.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1jd2N2eXV2bGttcXNpdm56dmp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUxNjQ5OTksImV4cCI6MjEwMDc0MDk5OX0.YhwsYhxZOyNjCKqeycQorP88TDqCSYRsZutwWnvoRY0";
+// Read BEFORE createClient(). supabase-js runs detectSessionInUrl on startup and
+// removes the token fragment from the address bar as soon as it parses it, so any
+// later read -- in a useEffect, say -- finds an empty hash and cannot tell an
+// email confirmation apart from an ordinary page load.
+//
+// Supabase puts the outcome in the fragment for token flows and in the query
+// string for errors, and which one it uses has changed between versions, so both
+// are read and merged rather than betting on either.
+const AUTH_RETURN = (function () {
+  try {
+    const h = new URLSearchParams(String(window.location.hash || "").replace(/^#/, ""));
+    const q = new URLSearchParams(String(window.location.search || ""));
+    const pick = (k) => h.get(k) || q.get(k) || null;
+    const desc = pick("error_description");
+    return {
+      type: pick("type"),
+      error: pick("error") || pick("error_code"),
+      errorDescription: desc ? decodeURIComponent(String(desc).replace(/\+/g, " ")) : null,
+      hasToken: !!(h.get("access_token") || q.get("code")),
+    };
+  } catch (_) {
+    return { type: null, error: null, errorDescription: null, hasToken: false };
+  }
+})();
+
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const FN_URL = `${SUPABASE_URL}/functions/v1/ai-engine`;
 
@@ -3664,7 +3689,7 @@ function SetNewPasswordScreen({ onDone }) {
   );
 }
 
-function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolved }) {
+function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolved, banner }) {
   const [mode, setMode] = useState(initialMode === "signup" ? "signup" : "signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -3700,6 +3725,35 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
   // Sends Supabase's recovery email. redirectTo comes back to this same page,
   // so the link works whichever domain the app is served from rather than a
   // hardcoded one that breaks the moment it moves.
+  // Set when a sign-in fails specifically because the address was never
+  // confirmed, or when the customer arrives back from an expired link. Only then
+  // is "resend" the right thing to offer -- shown always, it is just noise.
+  const [needsConfirm, setNeedsConfirm] = useState(false);
+
+  // An expired or already-used link is a dead end without this. resend() exists
+  // in supabase-js v2, but the CDN tag is pinned to the v2 major rather than an
+  // exact version, so a build without it falls back to signUp -- which re-sends
+  // the confirmation for an address that exists but is unconfirmed.
+  async function resendConfirmation() {
+    const addr = email.trim();
+    if (!addr) { setErr("Enter your email address first, then press Resend."); return; }
+    setBusy(true); setErr(""); setNotice("");
+    try {
+      const emailRedirectTo = `${window.location.origin}${window.location.pathname}`;
+      if (sb.auth && typeof sb.auth.resend === "function") {
+        const { error } = await sb.auth.resend({ type: "signup", email: addr, options: { emailRedirectTo } });
+        if (error) throw error;
+      } else {
+        const { error } = await sb.auth.signUp({ email: addr, password: password || undefined, options: { emailRedirectTo } });
+        if (error && !/already registered/i.test(error.message || "")) throw error;
+      }
+      setNeedsConfirm(false);
+      setNotice(`A new confirmation link is on its way to ${addr}. It expires in 24 hours — check your spam folder if it hasn't arrived in a few minutes.`);
+    } catch (ex) {
+      setErr(ex.message || "Could not send another confirmation email. Please try again.");
+    } finally { setBusy(false); }
+  }
+
   async function sendReset(e) {
     e.preventDefault();
     setBusy(true); setErr(""); setNotice("");
@@ -3739,14 +3793,38 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
           // filled in immediately after.
           await sb.from("profiles").insert({ id: data.user.id, full_name: fullName, role: "admin", company_id: null });
         }
-        if (!data.session) { setErr("Account created. If email confirmation is required, check your inbox, then sign in."); setMode("signin"); }
+        if (!data.session) {
+          // A green notice, not setErr's red box. This is the success path, and
+          // showing it in the same colour as a failure is why customers who had
+          // signed up perfectly well believed something had gone wrong.
+          setMode("signin");
+          setNeedsConfirm(true);
+          // The warning about the error page is deliberate. The confirmation
+          // happens on Supabase's server the instant the link is opened; only the
+          // page shown afterwards is wrong. Someone told this in advance treats
+          // that page as noise instead of as a failure, and comes back and signs
+          // in -- which works. Remove this sentence once the Site URL is fixed.
+          setNotice(`Account created. We've emailed a confirmation link to ${email.trim()}. Open it — if your browser then shows an error page, ignore it: your email is confirmed at that point. Come straight back here and sign in with the same email and password.`);
+        }
         else { await finishSignIn(); }
       } else {
         const { error } = await sb.auth.signInWithPassword({ email, password });
         if (error) throw error;
         await finishSignIn();
       }
-    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+    } catch (ex) {
+      const m = String(ex.message || "");
+      // Supabase returns a bare "Email not confirmed", which tells the customer
+      // nothing about what to do next.
+      if (/email not confirmed|not confirmed/i.test(m)) {
+        setNeedsConfirm(true);
+        setErr("This email hasn't been confirmed yet. Open the link in the email we sent you — or press Resend below for a new one.");
+      } else if (/invalid login credentials/i.test(m)) {
+        setErr("That email and password don't match an account. Check the address, or use \u201cForgot password\u201d below.");
+      } else {
+        setErr(m);
+      }
+    } finally { setBusy(false); }
   }
 
   return (
@@ -3757,6 +3835,20 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
           <div className="text-2xl font-bold text-slate-900">Quantora <span className="text-blue-700">Engineering</span></div>
           <div className="text-sm text-slate-500 mt-1">AI Quantity Surveyor · Design Engineer · MEP Consultant · Estimator · Procurement</div>
         </div>
+        {banner && (
+          <div className={`text-xs rounded-lg px-3 py-2 mb-4 border ${
+            banner.type === "success"
+              ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+              : "bg-amber-50 text-amber-800 border-amber-200"}`}>
+            {banner.text}
+          </div>
+        )}
+        {needsConfirm && (
+          <button type="button" onClick={resendConfirmation} disabled={busy}
+            className="w-full mb-4 text-xs font-semibold border border-emerald-200 text-emerald-800 bg-emerald-50 rounded-lg py-2 hover:bg-emerald-100 disabled:opacity-50">
+            {busy ? "Sending…" : "Resend confirmation email"}
+          </button>
+        )}
         {inviteToken && (
           <div className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-lg px-3 py-2 mb-4">
             You've been invited to join a team on Quantora — create an account or sign in below to join it.
@@ -3797,14 +3889,25 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
           <input type="email" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} required />
           <input type="password" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} required minLength={6} />
           {err && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{err}</div>}
+          {/* The main form had no notice channel at all -- only the forgot-password
+              form rendered one. That is why a successful signup was announced in
+              setErr's red box: red was the only colour that reached the screen. */}
+          {notice && <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{notice}</div>}
           <button disabled={busy} className="w-full bg-slate-900 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">
             {busy ? "Please wait…" : mode === "signup" ? "Create Account" : "Sign In"}
           </button>
           {mode === "signin" && (
-            <button type="button" onClick={()=>{setMode("forgot");setErr("");setNotice("");}}
-              className="w-full text-xs text-slate-500 hover:text-slate-800 py-1">
-              Forgot your password?
-            </button>
+            <>
+              <div className="text-[11px] text-slate-500 leading-relaxed bg-slate-50 border rounded-lg px-3 py-2">
+                <b>Opened your confirmation link and saw an error page?</b> Your email address is already
+                confirmed — the error is only the page it landed on. Sign in above with the same email and
+                password and you'll go straight in.
+              </div>
+              <button type="button" onClick={()=>{setMode("forgot");setErr("");setNotice("");}}
+                className="w-full text-xs text-slate-500 hover:text-slate-800 py-1">
+                Forgot your password?
+              </button>
+            </>
           )}
         </form>
         )}
@@ -16565,6 +16668,8 @@ function App() {
   const [inviteToken, setInviteToken] = useState(null);
   // True between clicking a password-recovery link and setting a new password.
   const [recovering, setRecovering] = useState(false);
+  // What to tell someone who has just come back from an email link.
+  const [authBanner, setAuthBanner] = useState(null);
 
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
@@ -16604,6 +16709,38 @@ function App() {
     if (inviteToken) return;
     callBilling("bootstrap_company", {}).catch((e) => console.error("bootstrap_company failed:", e));
   }, [session, inviteToken]);
+
+  // Coming back from a confirmation link. Three outcomes are possible and all
+  // three used to look identical to the customer -- the marketing page, with no
+  // message of any kind.
+  useEffect(() => {
+    if (AUTH_RETURN.error) {
+      const d = AUTH_RETURN.errorDescription || "";
+      const stale = /expired|invalid|already/i.test(d + " " + (AUTH_RETURN.error || ""));
+      setAuthBanner({
+        type: "error",
+        text: stale
+          ? "That confirmation link has expired or has already been used. Enter your email below and press Resend for a fresh one."
+          : (d || "That link could not be used. Please request a new one."),
+      });
+      setAuthMode("signin");
+      setShowAuth(true);
+    } else if (AUTH_RETURN.type === "signup" || AUTH_RETURN.type === "email_change") {
+      setAuthBanner({ type: "success", text: "Email confirmed. You can sign in now." });
+      setAuthMode("signin");
+      setShowAuth(true);
+    }
+    // Clear the tokens and error codes out of the address bar either way, so a
+    // refresh or a shared link does not replay any of this.
+    try {
+      if (AUTH_RETURN.type || AUTH_RETURN.error) {
+        const params = new URLSearchParams(window.location.search || "");
+        ["error", "error_code", "error_description", "code", "type"].forEach(k => params.delete(k));
+        const rest = params.toString();
+        window.history.replaceState({}, "", window.location.pathname + (rest ? `?${rest}` : ""));
+      }
+    } catch (_) {}
+  }, []);
 
   // v14: ?invite=<token> deep link -- someone was sent a team-invite link
   // (generated by an existing company admin via create_invite; Quantora
@@ -16678,7 +16815,7 @@ function App() {
   if (recovering && session) return <SetNewPasswordScreen onDone={()=>setRecovering(false)} />;
   if (!session) {
     if (!showAuth) return <LandingPage onGetStarted={(mode)=>{ setAuthMode(mode === "login" ? "signin" : "signup"); setShowAuth(true); }} />;
-    return <AuthScreen onAuthed={()=>{}} onBack={()=>setShowAuth(false)} initialMode={authMode} inviteToken={inviteToken} onInviteResolved={()=>setInviteToken(null)} />;
+    return <AuthScreen onAuthed={()=>{}} onBack={()=>setShowAuth(false)} initialMode={authMode} inviteToken={inviteToken} onInviteResolved={()=>setInviteToken(null)} banner={authBanner} />;
   }
 
   return (
