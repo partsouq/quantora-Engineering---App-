@@ -14841,7 +14841,7 @@ function QExecView({ overview, trial, systemStatus, reportsData, companies, perC
 // bonus_drawing_pages + plan_max_drawing_pages, so no extra fetch is needed
 // just to show "plan default + bonus = effective limit".
 function AdminQuotaControls({ company, onChanged }) {
-  const [bonusInput, setBonusInput] = useState("20");
+  const [bonusInput, setBonusInput] = useState(String(company?.bonus_drawing_pages ?? 0));
   const [trialDaysInput, setTrialDaysInput] = useState("7");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState("");
@@ -14864,8 +14864,9 @@ function AdminQuotaControls({ company, onChanged }) {
     setHistory([]);
     setHistoryLoaded(false);
     setPlanChoice("");
+    setBonusInput(String(company?.bonus_drawing_pages ?? 0));
     if (company?.id) loadHistory(company.id);
-  }, [company?.id]);
+  }, [company?.id, company?.bonus_drawing_pages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -14886,17 +14887,46 @@ function AdminQuotaControls({ company, onChanged }) {
     finally { setHistoryLoaded(true); }
   }
 
+  // The typed number is the TOTAL the customer should end up with, not an
+  // amount to add. Setting 10 and then 5 leaves them on 5.
   async function grantPages() {
-    const n = Number(bonusInput);
-    if (!Number.isFinite(n) || n === 0) { setMsg({ type: "err", text: "Enter a non-zero page count (e.g. 20, or -10 to reduce a previous grant)." }); return; }
+    const target = Number(bonusInput);
+    if (!Number.isFinite(target) || target < 0 || !Number.isInteger(target)) {
+      setMsg({ type: "err", text: "Enter the total number of bonus pages this customer should have — a whole number, 0 or more. 0 removes the bonus." });
+      return;
+    }
+    if (target > 5000) {
+      setMsg({ type: "err", text: "That is more than 5000 bonus pages. If it is really intended, do it in smaller steps." });
+      return;
+    }
     setBusy("pages"); setMsg(null);
     try {
-      const res = await callAdminAnalytics("grant_bonus_pages", { company_id: company.id, additional_pages: n, note: note || undefined });
-      setMsg({ type: "ok", text: `Done — ${company.name} now has ${res.bonus_drawing_pages} bonus page(s).` });
+      // Re-read the current figure from the server rather than trusting what
+      // this panel happens to be holding. The bug being fixed here IS a stale
+      // baseline, and computing the delta from stale props would rebuild it.
+      let current = company.bonus_drawing_pages ?? 0;
+      try {
+        const fresh = await callAdminAnalytics("list_companies", {});
+        const row = (fresh.companies || []).find(c => c.id === company.id);
+        if (row) current = row.bonus_drawing_pages ?? 0;
+      } catch (e) {
+        console.error("bonus pages: could not re-read the current value:", e);
+        setMsg({ type: "err", text: "Could not read this customer's current bonus, so nothing was changed. Try again." });
+        setBusy("");
+        return;
+      }
+      const delta = target - current;
+      if (delta === 0) {
+        setMsg({ type: "ok", text: `No change — ${company.name} already has ${target} bonus page(s).` });
+        setBusy("");
+        return;
+      }
+      const res = await callAdminAnalytics("grant_bonus_pages", { company_id: company.id, additional_pages: delta, note: note || undefined });
+      setMsg({ type: "ok", text: `Done — ${company.name} now has ${res.bonus_drawing_pages} bonus page(s) in total (was ${current}).` });
       await loadHistory(company.id);
       if (onChanged) await onChanged();
     } catch (e) {
-      setMsg({ type: "err", text: e.message || "Failed to grant bonus pages." });
+      setMsg({ type: "err", text: e.message || "Failed to set the bonus pages." });
     } finally { setBusy(""); }
   }
 
@@ -14994,9 +15024,17 @@ function AdminQuotaControls({ company, onChanged }) {
 
       {msg && <div style={{ fontSize: 12, marginBottom: 10, color: msg.type === "ok" ? "#86efac" : "#fca5a5" }}>{msg.text}</div>}
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
-        <input type="number" value={bonusInput} onChange={e => setBonusInput(e.target.value)} placeholder="e.g. 20" />
-        <button className="btn btn-sm" disabled={busy === "pages"} onClick={grantPages}>{busy === "pages" ? "Granting…" : "Grant Bonus Pages"}</button>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>Bonus pages, in total</span>
+        <input type="number" min="0" value={bonusInput} onChange={e => setBonusInput(e.target.value)} placeholder="e.g. 5"
+               style={{ width: 100 }} />
+        <button className="btn btn-sm" disabled={busy === "pages"} onClick={grantPages}>
+          {busy === "pages" ? "Saving…" : "Set Bonus Pages"}
+        </button>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginBottom: 12, lineHeight: 1.5 }}>
+        This is the total, not an amount to add. Setting 10 and then 5 leaves this customer on 5.
+        Set 0 to remove the bonus. The plan's own page limit is untouched either way.
       </div>
 
       {company.plan === "trial" && (
