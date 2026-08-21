@@ -7748,6 +7748,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
       ["estimation", "Estimation"],
     ]],
     ["Procurement", [
+      ["vendors", "Vendors & Suppliers"],
       ["rfq", "RFQ Packages"],
       ["comparison", "Comparison"],
       ["approvals", "Approvals"],
@@ -7869,6 +7870,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
             </>
           )}
           {tab === "tender"        && <TenderIntelligenceTab project={project} />}
+          {tab === "vendors"       && <VendorsTab project={project} />}
           {tab === "rfq"           && <RfqPackagesTab project={project} />}
           {tab === "comparison"    && <ComparisonTab project={project} />}
           {tab === "approvals"     && <ApprovalsTab project={project} />}
@@ -8205,11 +8207,80 @@ function DrawingsTab({ project }) {
       return;
     }
 
+    // Defined here so both the planned high-resolution path below and the
+    // truncation fallback just above can run exactly the same take-off.
+    async function runTiled(pages) {
+      let totalItems = 0;
+      let totalBlankSkipped = 0;
+      try {
+        // Sequential, not parallel: ai-engine's findInFlightRun would hand back
+        // the first run rather than starting a second for the same drawing.
+        for (let i = 0; i < pages.length; i++) {
+          const pageNumber = pages[i];
+          const label = pages.length > 1 ? ` (sheet ${i + 1} of ${pages.length})` : "";
+          const { tiles, grid, blankSkipped, plannedTiles } = await renderAndUploadTiles(
+            pdf, pageNumber, project.id, d.id,
+            (p) => setTiling(t => ({
+              ...t,
+              [d.id]: p.phase === "render"
+                ? `Rendering row ${p.row}/${p.rows}${label}…`
+                : `Uploading ${p.done}/${p.total}${label}…`,
+            }))
+          );
+          if (blankSkipped) console.log(`Sheet ${pageNumber}: skipped ${blankSkipped} of ${plannedTiles} tiles as blank.`);
+          totalBlankSkipped += blankSkipped;
+          setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
+          const started = await callEngine("analyze_drawing_tiled", {
+            project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid,
+          });
+          const summary = await pollAnalysisRun(started.run_id);
+          totalItems += summary.item_count || 0;
+        }
+        await load();
+        alert(
+          totalItems === 0
+            ? `No BOQ items were produced.\n\nEvery tile of ${pages.length === 1 ? "this sheet" : `all ${pages.length} sheets`} was read at ` +
+              `${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, and nothing countable for the systems Quantora reads ` +
+              `(MEP and ELV) was found.\n\nIf this is a civil, structural or architectural drawing, Quantora does not read those yet. ` +
+              `If it is a specification or a schedule rather than a drawing, upload it on the Specification page instead — ` +
+              `it reads those clause by clause.\n\nOpen the drawing's analysis notes for what the AI actually saw on each tile.`
+            : `High-resolution take-off complete.\n\n${totalItems} BOQ items from ${pages.length} sheet${pages.length === 1 ? "" : "s"}, ` +
+              `read at ${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre.` +
+              (totalBlankSkipped ? `\n\n${totalBlankSkipped} blank tile${totalBlankSkipped === 1 ? "" : "s"} were skipped — empty areas of the sheet, so nothing was counted there and no AI charge was incurred for them.` : "")
+        );
+      } catch (ex) {
+        setErr(ex.message);
+      } finally {
+        setTiling(t => ({ ...t, [d.id]: null }));
+      }
+    }
+
     if (!assessment.needsTiling) {
       // Small enough to read whole. This is the cheap path and it is correct
-      // here, so take it without comment.
+      // here, so take it without comment -- unless the sheet turns out to be so
+      // dense that the BOQ will not fit in one response, which no measurement of
+      // the PAGE can predict. Only the attempt reveals it.
       setTiling(t => ({ ...t, [d.id]: null }));
-      await analyze(d.id);
+      const tileCount = assessment.grid.cols * assessment.grid.rows;
+      await analyze(d.id, {
+        onTruncated: async (msg) => {
+          // A 1x1 grid is one request with the same output ceiling. Offering it
+          // would spend the customer's money to fail identically.
+          if (tileCount < 2) { setErr(msg); return; }
+          const n = Math.min(pdf.numPages || 1, MAX_AUTO_TILED_PAGES);
+          const pages = [];
+          for (let i = 1; i <= n; i++) pages.push(i);
+          const ok = window.confirm(
+            `${msg}\n\n` +
+            `Quantora can read this sheet as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles instead. ` +
+            `Each tile is read separately, so the BOQ comes back in pieces small enough to be complete.\n\n` +
+            `That takes a few minutes and uses ${assessment.calls * pages.length} AI passes instead of one. ` +
+            `It still counts as ${pages.length} page${pages.length === 1 ? "" : "s"} against your plan.\n\nRead it that way now?`
+          );
+          if (!ok) { setErr(msg); return; }
+          await runTiled(pages);
+        },
+      });
       return;
     }
 
@@ -8249,46 +8320,13 @@ function DrawingsTab({ project }) {
     );
     if (!ok) { setTiling(t => ({ ...t, [d.id]: null })); return; }
 
-    let totalItems = 0;
-    let totalBlankSkipped = 0;
-    try {
-      // Sequential, not parallel: ai-engine's findInFlightRun would hand back
-      // the first run rather than starting a second for the same drawing.
-      for (let i = 0; i < pages.length; i++) {
-        const pageNumber = pages[i];
-        const label = pages.length > 1 ? ` (sheet ${i + 1} of ${pages.length})` : "";
-        const { tiles, grid, blankSkipped, plannedTiles } = await renderAndUploadTiles(
-          pdf, pageNumber, project.id, d.id,
-          (p) => setTiling(t => ({
-            ...t,
-            [d.id]: p.phase === "render"
-              ? `Rendering row ${p.row}/${p.rows}${label}…`
-              : `Uploading ${p.done}/${p.total}${label}…`,
-          }))
-        );
-        if (blankSkipped) console.log(`Sheet ${pageNumber}: skipped ${blankSkipped} of ${plannedTiles} tiles as blank.`);
-        totalBlankSkipped += blankSkipped;
-        setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
-        const started = await callEngine("analyze_drawing_tiled", {
-          project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid,
-        });
-        const summary = await pollAnalysisRun(started.run_id);
-        totalItems += summary.item_count || 0;
-      }
-      await load();
-      alert(
-        `High-resolution take-off complete.\n\n${totalItems} BOQ items from ${pages.length} sheet${pages.length === 1 ? "" : "s"}, ` +
-        `read at ${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre.` +
-        (totalBlankSkipped ? `\n\n${totalBlankSkipped} blank tile${totalBlankSkipped === 1 ? "" : "s"} were skipped — empty areas of the sheet, so nothing was counted there and no AI charge was incurred for them.` : "")
-      );
-    } catch (ex) {
-      setErr(ex.message);
-    } finally {
-      setTiling(t => ({ ...t, [d.id]: null }));
-    }
+    await runTiled(pages);
   }
 
-  async function analyze(drawingId) {
+  // opts.onTruncated: called instead of setErr when the run failed specifically
+  // because the BOQ did not fit in one AI response. That is the one failure the
+  // caller may be able to recover from, by re-reading the sheet as tiles.
+  async function analyze(drawingId, opts) {
     setAnalyzing(a => ({...a, [drawingId]: true})); setErr("");
     try {
       // Loop instead of recursing into a fresh analyze() call on a confirmed
@@ -8302,7 +8340,13 @@ function DrawingsTab({ project }) {
           const started = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawingId, confirm_retry_after_failures: confirmRetryAfterFailures });
           const summary = await pollAnalysisRun(started.run_id);
           await load();
-          alert(`AI analysis complete: ${summary.item_count} BOQ items generated (revision ${started.revision_number}).\n\n${summary.notes}`);
+          // A run that produced nothing is not a completion, and saying so is the
+          // difference between one puzzled customer and seven identical retries.
+          alert(
+            (summary.item_count || 0) === 0
+              ? `No BOQ items were produced from this drawing.\n\n${summary.notes}`
+              : `AI analysis complete: ${summary.item_count} BOQ items generated (revision ${started.revision_number}).\n\n${summary.notes}`
+          );
           return;
         } catch (ex) {
           // See callEngine's requires_confirmation handling above -- this
@@ -8313,6 +8357,12 @@ function DrawingsTab({ project }) {
           if (ex.requiresConfirmation && window.confirm(`${ex.message}\n\nClick OK to retry anyway, or Cancel to stop here.`)) {
             confirmRetryAfterFailures = true;
             continue;
+          }
+          // Matched on the engine's own wording for stop_reason === "max_tokens".
+          // Every other failure stays a plain error.
+          if (opts && opts.onTruncated && /output limit|more Bill of Quantities detail than fits/i.test(ex.message || "")) {
+            await opts.onTruncated(ex.message);
+            return;
           }
           setErr(ex.message);
           return;
@@ -12000,12 +12050,383 @@ function ComplianceTab({ project }) {
 // ---------------------------------------------------------------------------
 // Product recommendations tab
 // ---------------------------------------------------------------------------
+// A supplier list a customer already keeps will not match a schema chosen here, so
+// this matches headers case- and space-insensitively, accepts the obvious synonyms,
+// allows any column order, and requires only a name. Rejecting a file over a column
+// called "Supplier" rather than "Name" is how a feature goes unused.
+const VENDOR_IMPORT_FIELDS = {
+  name: ["name", "vendor", "vendorname", "supplier", "suppliername", "company", "companyname"],
+  country: ["country"],
+  city: ["city", "emirate", "town"],
+  contact_name: ["contact", "contactname", "person", "contactperson"],
+  email: ["email", "emailaddress", "mail"],
+  phone: ["phone", "telephone", "tel", "mobile", "contactnumber"],
+  website: ["website", "web", "url", "site"],
+  system_categories: ["systems", "systemcategories", "system", "category", "categories", "scope"],
+  brands: ["brands", "brand", "makes", "principals", "lines"],
+  typical_lead_time_days: ["leadtime", "leadtimedays", "typicalleadtimedays", "delivery", "deliverydays"],
+  stock_position: ["stock", "stockposition", "availability"],
+  notes: ["notes", "note", "remarks", "comment", "comments"],
+};
+
+// Handles quoted fields containing commas and doubled quotes, which is what a
+// spreadsheet actually exports.
+function parseCsvRows(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  const s = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (s[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+      continue;
+    }
+    if (c === '"') { inQuotes = true; continue; }
+    if (c === "," || c === "\t") { row.push(field); field = ""; continue; }
+    if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; continue; }
+    field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(v => String(v).trim() !== ""));
+}
+
+function normaliseHeader(h) {
+  return String(h || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+// Turns pasted text into vendor rows. Returns { rows, errors } rather than throwing:
+// one unusable line in a fifty-line paste should not discard the other forty-nine.
+function parseVendorImport(text) {
+  const raw = parseCsvRows(text);
+  if (!raw.length) return { rows: [], errors: ["Nothing to import — the box was empty."] };
+  const header = raw[0].map(normaliseHeader);
+  const colFor = {};
+  Object.entries(VENDOR_IMPORT_FIELDS).forEach(([field, aliases]) => {
+    const idx = header.findIndex(h => aliases.includes(h));
+    if (idx !== -1) colFor[field] = idx;
+  });
+  if (colFor.name === undefined) {
+    return { rows: [], errors: ['No "Name" column found. The first line must be a header row containing at least a name column (Name, Supplier, Vendor or Company).'] };
+  }
+  const rows = [], errors = [];
+  const splitList = v => String(v || "").split(/[;,|]/).map(x => x.trim()).filter(Boolean);
+  raw.slice(1).forEach((r, i) => {
+    const get = f => (colFor[f] === undefined ? "" : String(r[colFor[f]] ?? "").trim());
+    const name = get("name");
+    if (!name) { errors.push(`Line ${i + 2}: no supplier name — skipped.`); return; }
+    const lead = get("typical_lead_time_days").replace(/[^0-9]/g, "");
+    rows.push({
+      name,
+      country: get("country") || null,
+      city: get("city") || null,
+      contact_name: get("contact_name") || null,
+      email: get("email") || null,
+      phone: get("phone") || null,
+      website: get("website") || null,
+      // Systems are stored as slugs so they match boq_items.system_category.
+      system_categories: splitList(get("system_categories")).map(x => x.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")),
+      brands: splitList(get("brands")),
+      typical_lead_time_days: lead ? Number(lead) : null,
+      stock_position: get("stock_position") || null,
+      notes: get("notes") || null,
+    });
+  });
+  return { rows, errors };
+}
+
+
+// Suppliers a company can actually send an enquiry to. Deliberately per-company:
+// a contractor's approved supplier list is their commercial property, and RLS
+// enforces that (`vendors_insert/update/delete` require user_in_company).
+function VendorsTab({ project }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [notice, setNotice] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [companyId, setCompanyId] = useState(null);
+  const [editing, setEditing] = useState(null);   // vendor row being edited, or "new"
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [filterCountry, setFilterCountry] = useState("");
+  const [filterSystem, setFilterSystem] = useState("");
+
+  useEffect(() => { load(); }, [project.id]);
+
+  async function load() {
+    setLoading(true); setErr("");
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { data: profile } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+      setCompanyId(profile?.company_id ?? null);
+      const { data, error } = await sb.from("vendors").select("*").order("name");
+      if (error) throw error;
+      setRows(data || []);
+    } catch (e) {
+      console.error("VendorsTab.load failed:", e);
+      setErr(e.message || "Could not load your suppliers.");
+    } finally { setLoading(false); }
+  }
+
+  const blank = () => ({
+    name: "", country: project.country || "", city: project.city || "",
+    contact_name: "", email: "", phone: "", website: "",
+    system_categories: [], brands: [], typical_lead_time_days: null,
+    stock_position: "", notes: "", authorised_distributor: false, prequalified: false,
+  });
+
+  async function save(v) {
+    if (!v.name || !v.name.trim()) { setErr("A supplier needs a name."); return; }
+    if (!companyId) { setErr("Your account has no company yet — reload the page and try again."); return; }
+    setSaving(true); setErr(""); setNotice("");
+    try {
+      const payload = {
+        company_id: companyId,
+        name: v.name.trim(),
+        country: v.country || null, city: v.city || null,
+        contact_name: v.contact_name || null, email: v.email || null,
+        phone: v.phone || null, website: v.website || null,
+        system_categories: v.system_categories || [], brands: v.brands || [],
+        typical_lead_time_days: v.typical_lead_time_days ?? null,
+        stock_position: v.stock_position || null, notes: v.notes || null,
+        authorised_distributor: !!v.authorised_distributor,
+        prequalified: !!v.prequalified,
+      };
+      const { error } = v.id
+        ? await sb.from("vendors").update(payload).eq("id", v.id)
+        : await sb.from("vendors").insert(payload);
+      if (error) throw error;
+      setEditing(null);
+      setNotice(v.id ? "Supplier updated." : `${payload.name} added.`);
+      await load();
+    } catch (e) {
+      console.error("VendorsTab.save failed:", e);
+      setErr(e.message || "Could not save this supplier.");
+    } finally { setSaving(false); }
+  }
+
+  async function remove(v) {
+    if (!window.confirm(`Delete ${v.name}? This does not affect any RFQ already sent to them.`)) return;
+    setSaving(true); setErr("");
+    try {
+      const { error } = await sb.from("vendors").delete().eq("id", v.id);
+      if (error) throw error;
+      await load();
+    } catch (e) { setErr(e.message); } finally { setSaving(false); }
+  }
+
+  async function runImport() {
+    const { rows: parsed, errors } = parseVendorImport(importText);
+    if (!parsed.length) { setErr(errors.join(" ") || "Nothing could be read from that."); return; }
+    if (!companyId) { setErr("Your account has no company yet — reload the page and try again."); return; }
+    setSaving(true); setErr(""); setNotice("");
+    try {
+      const payload = parsed.map(p => ({ ...p, company_id: companyId }));
+      const { error } = await sb.from("vendors").insert(payload);
+      if (error) throw error;
+      setImportOpen(false); setImportText("");
+      setNotice(`${payload.length} supplier${payload.length === 1 ? "" : "s"} imported.` + (errors.length ? ` ${errors.length} line(s) skipped: ${errors.slice(0,3).join(" ")}` : ""));
+      await load();
+    } catch (e) {
+      console.error("VendorsTab.import failed:", e);
+      setErr(e.message || "Could not import those suppliers.");
+    } finally { setSaving(false); }
+  }
+
+  const countries = [...new Set(rows.map(r => r.country).filter(Boolean))].sort();
+  const systems = [...new Set(rows.flatMap(r => r.system_categories || []))].sort();
+  const shown = rows.filter(r =>
+    (!filterCountry || r.country === filterCountry) &&
+    (!filterSystem || (r.system_categories || []).includes(filterSystem)));
+
+  if (loading) return <div className="text-slate-400 text-sm">Loading your suppliers…</div>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500 max-w-3xl leading-relaxed">
+        Your own approved suppliers. Once a supplier lists the systems and brands it carries, it appears
+        automatically against matching lines on <b>Product Recommendations</b>, and the AI brand suggestions
+        can name it as a local source. Nothing here is shared with other companies.
+      </p>
+
+      {err && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{err}</div>}
+      {notice && <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{notice}</div>}
+
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={()=>{setEditing(blank());setErr("");setNotice("");}}
+            className="text-xs font-semibold bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-800">+ Add supplier</button>
+          <button onClick={()=>{setImportOpen(o=>!o);setErr("");setNotice("");}}
+            className="text-xs font-semibold border px-3 py-2 rounded-lg hover:bg-slate-50">Import a list</button>
+        </div>
+        {rows.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <select value={filterCountry} onChange={e=>setFilterCountry(e.target.value)}
+              className="border rounded-lg px-2 py-1.5 text-xs">
+              <option value="">All countries</option>
+              {countries.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={filterSystem} onChange={e=>setFilterSystem(e.target.value)}
+              className="border rounded-lg px-2 py-1.5 text-xs">
+              <option value="">All systems</option>
+              {systems.map(c => <option key={c} value={c}>{SYSTEM_LABEL(c)}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {importOpen && (
+        <div className="bg-white border rounded-xl p-4 space-y-3">
+          <div className="text-sm font-semibold text-slate-800">Paste your supplier list</div>
+          <div className="text-xs text-slate-500 leading-relaxed">
+            Copy the rows straight out of Excel, including the header row. Column order does not matter and only a
+            name is required. Recognised headings: <b>Name</b>, Country, City, Contact, Email, Phone, Website,
+            Systems, Brands, Lead time, Stock, Notes. Separate multiple systems or brands with semicolons.
+          </div>
+          <textarea value={importText} onChange={e=>setImportText(e.target.value)} rows={7}
+            style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12 }}
+            placeholder={"Name,Country,City,Systems,Brands,Lead time,Email\nAcme Security Trading,UAE,Dubai,cctv;access_control,Axis;HID,21,sales@example.com"}
+            className="w-full border rounded-lg px-3 py-2" />
+          <div className="flex items-center gap-2">
+            <button disabled={saving} onClick={runImport}
+              className="text-xs font-semibold bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
+              {saving ? "Importing…" : "Import"}
+            </button>
+            <button onClick={()=>{setImportOpen(false);setImportText("");}}
+              className="text-xs text-slate-500 hover:text-slate-800 px-2 py-2">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {editing && (
+        <div className="bg-white border rounded-xl p-4 space-y-3">
+          <div className="text-sm font-semibold text-slate-800">{editing.id ? "Edit supplier" : "New supplier"}</div>
+          <div className="grid md:grid-cols-3 gap-3">
+            {[["name","Supplier name"],["country","Country"],["city","City"],
+              ["contact_name","Contact person"],["email","Email"],["phone","Phone"],
+              ["website","Website"],["stock_position","Stock position"]].map(([k,label]) => (
+              <div key={k}>
+                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">{label}</label>
+                <input value={editing[k] || ""} onChange={e=>setEditing({...editing, [k]: e.target.value})}
+                  className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+            ))}
+            <div>
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Lead time (days)</label>
+              <input value={editing.typical_lead_time_days ?? ""} inputMode="numeric"
+                onChange={e=>setEditing({...editing, typical_lead_time_days: e.target.value.replace(/[^0-9]/g,"") ? Number(e.target.value.replace(/[^0-9]/g,"")) : null})}
+                className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Systems they supply</label>
+              <input value={(editing.system_categories || []).join(", ")}
+                onChange={e=>setEditing({...editing, system_categories: e.target.value.split(",").map(x=>x.trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"")).filter(Boolean)})}
+                placeholder="cctv, access_control, fire_alarm"
+                className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Brands they carry</label>
+              <input value={(editing.brands || []).join(", ")}
+                onChange={e=>setEditing({...editing, brands: e.target.value.split(",").map(x=>x.trim()).filter(Boolean)})}
+                placeholder="Axis Communications, HID Global"
+                className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Notes</label>
+              <input value={editing.notes || ""} onChange={e=>setEditing({...editing, notes: e.target.value})}
+                className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </div>
+          </div>
+          <div className="flex items-center gap-4 flex-wrap">
+            <label className="text-xs text-slate-600 flex items-center gap-2">
+              <input type="checkbox" checked={!!editing.authorised_distributor}
+                onChange={e=>setEditing({...editing, authorised_distributor: e.target.checked})} />
+              Authorised distributor
+            </label>
+            <label className="text-xs text-slate-600 flex items-center gap-2">
+              <input type="checkbox" checked={!!editing.prequalified}
+                onChange={e=>setEditing({...editing, prequalified: e.target.checked})} />
+              Prequalified by us
+            </label>
+          </div>
+          <div className="text-[11px] text-slate-400 leading-relaxed">
+            Tick "Authorised distributor" only where you have seen the certificate. It is a claim a consultant can
+            check, and being wrong about it costs a submittal.
+          </div>
+          <div className="flex items-center gap-2">
+            <button disabled={saving} onClick={()=>save(editing)}
+              className="text-xs font-semibold bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
+              {saving ? "Saving…" : "Save supplier"}
+            </button>
+            <button onClick={()=>setEditing(null)} className="text-xs text-slate-500 hover:text-slate-800 px-2 py-2">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">
+          No suppliers yet. Add one above, or paste your existing list straight out of Excel.
+        </div>
+      ) : (
+        <div className="bg-white border rounded-xl overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
+              <tr>
+                <th className="text-left font-bold py-2 px-3">Supplier</th>
+                <th className="text-left font-bold py-2 px-3">Location</th>
+                <th className="text-left font-bold py-2 px-3">Systems</th>
+                <th className="text-left font-bold py-2 px-3">Brands</th>
+                <th className="text-right font-bold py-2 px-3">Lead time</th>
+                <th className="text-left font-bold py-2 px-3">Contact</th>
+                <th className="text-right font-bold py-2 px-3"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {shown.map(v => (
+                <tr key={v.id} className="hover:bg-slate-50">
+                  <td className="py-2 px-3">
+                    <div className="font-medium text-slate-800">{v.name}</div>
+                    <div className="text-[11px] text-slate-400">
+                      {v.authorised_distributor ? "Authorised distributor" : ""}
+                      {v.authorised_distributor && v.prequalified ? " · " : ""}
+                      {v.prequalified ? "Prequalified" : ""}
+                    </div>
+                  </td>
+                  <td className="py-2 px-3 text-slate-600 text-xs">{[v.city, v.country].filter(Boolean).join(", ") || "—"}</td>
+                  <td className="py-2 px-3 text-xs text-slate-600">{(v.system_categories||[]).map(SYSTEM_LABEL).join(", ") || "—"}</td>
+                  <td className="py-2 px-3 text-xs text-slate-600">{(v.brands||[]).join(", ") || "—"}</td>
+                  <td className="py-2 px-3 text-right text-xs tabular-nums text-slate-600">{v.typical_lead_time_days != null ? `${v.typical_lead_time_days} d` : "—"}</td>
+                  <td className="py-2 px-3 text-xs text-slate-600">{v.email || v.phone || v.contact_name || "—"}</td>
+                  <td className="py-2 px-3 text-right whitespace-nowrap">
+                    <div className="flex items-center justify-end gap-3">
+                      <button onClick={()=>{setEditing({...v});setErr("");}} className="text-xs text-blue-600 hover:underline">Edit</button>
+                      <button onClick={()=>remove(v)} className="text-xs text-rose-600 hover:underline">Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {shown.length === 0 && (
+                <tr><td colSpan={7} className="py-6 text-center text-slate-400 text-sm">No supplier matches that filter.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProductsTab({ project }) {
   const [bySystem, setBySystem] = useState({});
   // The shared manufacturer directory, per system. Not an AI call and not a
   // catalogue: names, country of origin and a tier note, nothing claimed about
   // certification.
   const [brandsBySystem, setBrandsBySystem] = useState({});
+  // The company's own suppliers, matched to each system in this BOQ.
+  const [vendorsBySystem, setVendorsBySystem] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   useEffect(() => { load(); }, [project.id]);
@@ -12018,9 +12439,13 @@ function ProductsTab({ project }) {
       const systems = [...new Set((items||[]).map(i=>i.system_category))].filter(Boolean);
       // One query, not one per system. A nine-system project used to make nine
       // sequential round trips before the page rendered anything.
-      const [{ data: prods, error: prodErr }, { data: brandRows }] = await Promise.all([
+      const [{ data: prods, error: prodErr }, { data: brandRows }, { data: vendorRows }] = await Promise.all([
         systems.length ? sb.from("product_catalog").select("*").in("system_category", systems) : Promise.resolve({ data: [] }),
         systems.length ? sb.from("brands").select("name, manufacturer, country_of_origin, system_categories, notes, website").overlaps("system_categories", systems) : Promise.resolve({ data: [] }),
+        // Not filtered server-side: a supplier who listed only brands and no
+        // systems still matches below, and that row would never come back from an
+        // overlaps() on system_categories.
+        sb.from("vendors").select("*"),
       ]);
       if (prodErr) throw prodErr;
       const result = {};
@@ -12039,6 +12464,32 @@ function ProductsTab({ project }) {
         if (hits.length) bBy[sysc] = hits.sort((a, b) => String(a.name).localeCompare(String(b.name)));
       });
       setBrandsBySystem(bBy);
+
+      // Two ways to match, because a supplier's own list is usually brands rather
+      // than systems. Whichever way it matched is recorded and shown.
+      const vBy = {};
+      systems.forEach(sysc => {
+        const brandNames = new Set((brandRows || [])
+          .filter(b => (b.system_categories || []).includes(sysc))
+          .map(b => String(b.name).toLowerCase().trim()));
+        const hits = (vendorRows || []).map(v => {
+          const bySystem = (v.system_categories || []).includes(sysc);
+          const matchedBrands = (v.brands || []).filter(b => brandNames.has(String(b).toLowerCase().trim()));
+          if (!bySystem && !matchedBrands.length) return null;
+          return { ...v, __bySystem: bySystem, __brands: matchedBrands };
+        }).filter(Boolean);
+        if (hits.length) {
+          const sameCountry = v => (project.country && v.country && v.country.toLowerCase() === String(project.country).toLowerCase()) ? 0 : 1;
+          hits.sort((a, b) =>
+            sameCountry(a) - sameCountry(b)
+            || (b.authorised_distributor ? 1 : 0) - (a.authorised_distributor ? 1 : 0)
+            || (b.prequalified ? 1 : 0) - (a.prequalified ? 1 : 0)
+            || (a.typical_lead_time_days ?? 9999) - (b.typical_lead_time_days ?? 9999)
+            || String(a.name).localeCompare(String(b.name)));
+          vBy[sysc] = hits;
+        }
+      });
+      setVendorsBySystem(vBy);
     } catch (e) {
       console.error("ProductsTab.load failed:", e);
       setError(e.message || "Could not load product recommendations.");
@@ -12062,11 +12513,41 @@ function ProductsTab({ project }) {
           <div className="text-sm text-rose-700">Couldn't load product recommendations: {error}</div>
           <button onClick={load} className="text-xs font-semibold bg-rose-600 text-white px-3 py-1.5 rounded-lg hover:bg-rose-700">Retry</button>
         </div>
-      ) : loading ? <div className="text-slate-400 text-sm">Loading…</div> : (Object.keys(bySystem).length === 0 && Object.keys(brandsBySystem).length === 0) ? (
+      ) : loading ? <div className="text-slate-400 text-sm">Loading…</div> : (Object.keys(bySystem).length === 0 && Object.keys(brandsBySystem).length === 0 && Object.keys(vendorsBySystem).length === 0) ? (
         <div className="border-2 border-dashed rounded-xl p-8 text-center text-slate-400 text-sm">Nothing to suggest yet — analyse a drawing so there is a BOQ to match manufacturers against.</div>
-      ) : [...new Set([...Object.keys(bySystem), ...Object.keys(brandsBySystem)])].sort((a,b)=>SYSTEM_LABEL(a).localeCompare(SYSTEM_LABEL(b))).map(sys => (
+      ) : [...new Set([...Object.keys(bySystem), ...Object.keys(brandsBySystem), ...Object.keys(vendorsBySystem)])].sort((a,b)=>SYSTEM_LABEL(a).localeCompare(SYSTEM_LABEL(b))).map(sys => (
         <div key={sys} className="mb-6">
           <h3 className="font-semibold mb-2">{SYSTEM_LABEL(sys)}</h3>
+          {(vendorsBySystem[sys] || []).length > 0 && (
+            <div className="bg-white border rounded-xl p-4 mb-3">
+              <div className="text-xs font-semibold text-slate-600 mb-2">
+                Your suppliers for this system ({(vendorsBySystem[sys] || []).length})
+              </div>
+              <div className="divide-y">
+                {(vendorsBySystem[sys] || []).map(v => (
+                  <div key={v.id} className="py-2 flex items-start justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-800">
+                        {v.name}
+                        {v.authorised_distributor && <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 ml-2">Authorised</span>}
+                        {v.prequalified && <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 ml-2">Prequalified</span>}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {[v.city, v.country].filter(Boolean).join(", ") || "location not recorded"}
+                        {v.typical_lead_time_days != null ? ` · ${v.typical_lead_time_days} day lead time` : ""}
+                        {v.email ? ` · ${v.email}` : v.phone ? ` · ${v.phone}` : ""}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        {v.__brands && v.__brands.length
+                          ? `Carries ${v.__brands.join(", ")}`
+                          : "Listed as supplying this system"}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {(brandsBySystem[sys] || []).length > 0 && (
             <div className="bg-white border rounded-xl p-4 mb-3">
               <div className="text-xs font-semibold text-slate-600 mb-2">
@@ -12083,6 +12564,7 @@ function ProductsTab({ project }) {
               <div className="text-[11px] text-slate-400 mt-2">
                 Names and country of origin only. Certifications and local approvals are held against a specific model and
                 revision, not a brand — confirm them from the certificate before submitting.
+                {(vendorsBySystem[sys] || []).length === 0 && " Add your own suppliers on the Vendors & Suppliers page and they will appear here against the systems and brands they carry."}
               </div>
             </div>
           )}
