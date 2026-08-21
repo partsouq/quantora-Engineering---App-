@@ -14110,6 +14110,18 @@ function QSupportView({ companyNameById }) {
   const [shots, setShots] = useState({});
   const [noteDraft, setNoteDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  // The conversation on the open report. Loaded per report rather than all at
+  // once: the inbox lists up to 500 tickets and almost none of them are open.
+  const [thread, setThread] = useState({});
+
+  async function loadThread(ticketId) {
+    try {
+      const { data, error } = await sb.from("support_messages").select("*")
+        .eq("ticket_id", ticketId).order("created_at", { ascending: true });
+      if (error) throw error;
+      setThread(t => ({ ...t, [ticketId]: data || [] }));
+    } catch (e) { console.error("loadThread failed:", e); }
+  }
 
   useEffect(() => { load(); }, []);
   async function load() {
@@ -14272,7 +14284,7 @@ function QSupportView({ companyNameById }) {
             return (
               <div key={t.id} style={{ borderTop: "1px solid var(--border-soft)", padding: "12px 0" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, cursor: "pointer" }}
-                     onClick={() => { const next = isOpen ? null : t.id; setOpenId(next); setNoteDraft(next ? (t.admin_notes || "") : ""); if (next) signShots(t); }}>
+                     onClick={() => { const next = isOpen ? null : t.id; setOpenId(next); setNoteDraft(next ? (t.admin_notes || "") : ""); if (next) { signShots(t); loadThread(t.id); } }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 700 }}>{qSupportLabel(t.kind, t.category)}</div>
                     <div style={{ fontSize: 12, color: "var(--text-dimmer)", marginTop: 2 }}>
@@ -14308,6 +14320,18 @@ function QSupportView({ companyNameById }) {
                         ))}
                       </div>
                     )}
+                    {/* The reply the customer actually sees, kept clearly
+                        separate from the internal note below it. */}
+                    <div style={{ marginTop: 12, borderTop: "1px solid var(--border-soft)", paddingTop: 10 }}>
+                      <div style={{ fontSize: 11, color: "var(--text-dimmer)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+                        Conversation with the customer
+                      </div>
+                      <SupportThreadView ticket={t} messages={thread[t.id] || []} isAdmin
+                        onChanged={() => loadThread(t.id)} compact />
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-dimmer)", textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 12 }}>
+                      Internal note — not shown to the customer
+                    </div>
                     <textarea value={noteDraft} onChange={e => setNoteDraft(e.target.value)} rows={2}
                       placeholder="Internal note — what you found, what you changed"
                       style={{ width: "100%", marginTop: 10, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-soft)", borderRadius: 10, padding: "8px 10px", fontSize: 12.5, color: "inherit", resize: "vertical" }} />
@@ -17586,7 +17610,7 @@ function SupportModal({ open, initial, onClose }) {
             <p className="text-sm text-slate-600 mt-2 leading-relaxed">
               {kind === "improvement"
                 ? "Your answer is recorded. What customers ask for most is what gets built first, so this genuinely decides the order of work."
-                : `We have your report, along with the project and page you were on. ${SUPPORT_REPLY_PROMISE}`}
+                : `We have your report, along with the project and page you were on. ${SUPPORT_REPLY_PROMISE} The reply arrives in the bell at the top of this page, where you can answer back.`}
             </p>
             {kind !== "improvement" && <SupportContactRow subject="Quantora support" />}
             <div className="flex gap-2 mt-5 justify-end">
@@ -17891,6 +17915,272 @@ function PulseBar() {
       )}
       <button onClick={close} aria-label="Dismiss"
         style={{ ...word, color: "var(--q-text-dim,#94a3b8)", fontSize: 16, padding: "2px 8px" }}>&times;</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// IN-PLATFORM MESSAGES
+//
+// A report used to be a one-shot: the customer sent it and then waited for a
+// reply that arrived somewhere else entirely -- an email or a WhatsApp message
+// with none of the project, drawing or screenshot context attached, and no
+// record inside the platform that any of it happened.
+//
+// Each report is now a thread. The bell in the top bar carries the unread
+// count, both sides read and reply in the same place, and the conversation sits
+// next to the thing it is about. The customer's original report text is not
+// copied into the message table -- it stays on the ticket and is rendered as
+// the first message here, so there is one copy of it and it cannot drift.
+// ---------------------------------------------------------------------------
+
+// Polled rather than subscribed. A websocket would be tidier, but this is a few
+// hundred rows behind RLS on a minute timer, and a dropped subscription that
+// silently stops delivering is a worse failure than a slightly late badge.
+const SUPPORT_POLL_MS = 60 * 1000;
+
+function useSupportThreads(isAdmin, sessionKey) {
+  const [tickets, setTickets] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  async function reload() {
+    try {
+      const [{ data: t }, { data: m }] = await Promise.all([
+        sb.from("support_tickets").select("*").order("created_at", { ascending: false }).limit(200),
+        sb.from("support_messages").select("*").order("created_at", { ascending: true }).limit(1000),
+      ]);
+      setTickets((t || []).filter(r => r.kind !== "rating" && r.kind !== "pulse"));
+      setMessages(m || []);
+    } catch (e) {
+      console.error("useSupportThreads failed (non-fatal):", e);
+    } finally { setLoaded(true); }
+  }
+
+  useEffect(() => {
+    if (!sessionKey) return;
+    let alive = true;
+    const run = () => { if (alive) reload(); };
+    run();
+    const id = setInterval(run, SUPPORT_POLL_MS);
+    return () => { alive = false; clearInterval(id); };
+  }, [sessionKey, isAdmin]);
+
+  const byTicket = {};
+  messages.forEach(m => { (byTicket[m.ticket_id] = byTicket[m.ticket_id] || []).push(m); });
+
+  // Unread is always "sent by the other side and not yet read by me".
+  const unreadFor = tid => (byTicket[tid] || []).filter(m =>
+    isAdmin ? (!m.from_admin && !m.read_by_admin_at) : (m.from_admin && !m.read_by_customer_at)).length;
+  const unread = tickets.reduce((n, t) => n + unreadFor(t.id), 0);
+
+  return { tickets, byTicket, unread, unreadFor, loaded, reload };
+}
+
+function SupportThreadView({ ticket, messages, isAdmin, onChanged, compact }) {
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const endRef = useRef(null);
+
+  useEffect(() => {
+    // Opening a thread is what marks it read -- not receiving it, and not
+    // glancing at the badge.
+    (async () => {
+      try { await sb.rpc("mark_support_thread_read", { p_ticket_id: ticket.id }); onChanged && onChanged(); }
+      catch (e) { console.error("mark read failed (non-fatal):", e); }
+    })();
+  }, [ticket.id]);
+
+  useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ block: "end" }); } catch (_) {} }, [messages.length]);
+
+  async function send() {
+    const text = body.trim();
+    if (!text) return;
+    setBusy(true); setErr("");
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) throw new Error("Your session has expired — please sign in again.");
+      const { error } = await sb.from("support_messages").insert({
+        ticket_id: ticket.id, sender_user_id: user.id, from_admin: !!isAdmin, body: text,
+      });
+      if (error) throw error;
+      // An admin answering is doing the work, so the report stops being "new".
+      if (isAdmin && ticket.status === "new") {
+        try { await sb.from("support_tickets").update({ status: "in_progress" }).eq("id", ticket.id); } catch (_) {}
+      }
+      setBody("");
+      onChanged && onChanged();
+    } catch (e) {
+      console.error("send reply failed:", e);
+      setErr(e.message || "Could not send that.");
+    } finally { setBusy(false); }
+  }
+
+  const bubble = mine => ({
+    maxWidth: "82%", alignSelf: mine ? "flex-end" : "flex-start",
+    background: mine ? "rgba(99,102,241,0.18)" : "var(--q-panel-2,#f1f5f9)",
+    border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 12,
+    padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap",
+    color: "var(--q-text,#0f172a)",
+  });
+  const stamp = { fontSize: 10.5, color: "var(--q-text-dim,#94a3b8)", marginTop: 3 };
+
+  // The report itself, shown as the opening message rather than stored twice.
+  const first = {
+    id: "__ticket__", from_admin: false, created_at: ticket.created_at,
+    body: [qSupportLabel(ticket.kind, ticket.category), ticket.message || ""].filter(Boolean).join("\n"),
+  };
+  const all = [first, ...(messages || [])];
+
+  return (
+    <div>
+      <div style={{
+        display: "flex", flexDirection: "column", gap: 10,
+        maxHeight: compact ? 260 : 380, overflowY: "auto", padding: "4px 2px 8px",
+      }}>
+        {all.map(m => {
+          const mine = isAdmin ? m.from_admin : !m.from_admin;
+          return (
+            <div key={m.id} style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start" }}>
+              <div style={bubble(mine)}>{m.body}</div>
+              <div style={stamp}>
+                {m.from_admin ? "Quantora support" : (isAdmin ? (ticket.contact_email || "Customer") : "You")}
+                {" · "}{new Date(m.created_at).toLocaleString()}
+              </div>
+            </div>
+          );
+        })}
+        <div ref={endRef} />
+      </div>
+
+      <textarea rows={compact ? 2 : 3} value={body} onChange={e => setBody(e.target.value)}
+        placeholder={isAdmin ? "Reply to the customer…" : "Write a message…"}
+        onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }}
+        style={{
+          width: "100%", resize: "vertical", fontSize: 13,
+          background: "var(--q-panel-2,#fff)", color: "var(--q-text,#0f172a)",
+          border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 10, padding: "8px 10px",
+        }} />
+      {err && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-2">{err}</div>}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+        <span style={{ fontSize: 10.5, color: "var(--q-text-dim,#94a3b8)" }}>Ctrl + Enter sends</span>
+        <button className="qp-btn pri" disabled={busy || !body.trim()} onClick={send}
+          style={{ fontSize: 12.5, padding: "7px 16px", opacity: busy || !body.trim() ? 0.5 : 1 }}>
+          {busy ? "Sending…" : "Send"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The bell, and the panel behind it.
+function MessagesBell({ isPlatformAdmin, sessionKey }) {
+  const [open, setOpen] = useState(false);
+  const [openTicketId, setOpenTicketId] = useState(null);
+  const { tickets, byTicket, unread, unreadFor, loaded, reload } = useSupportThreads(!!isPlatformAdmin, sessionKey);
+
+  const openTicket = tickets.find(t => t.id === openTicketId) || null;
+
+  function lastLine(t) {
+    const list = byTicket[t.id] || [];
+    const last = list.length ? list[list.length - 1] : null;
+    const text = last ? last.body : (t.message || qSupportLabel(t.kind, t.category));
+    return String(text).replace(/\s+/g, " ").slice(0, 70);
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => { setOpen(o => !o); setOpenTicketId(null); if (!open) reload(); }}
+        title="Messages" aria-label="Messages"
+        style={{ position: "relative", background: "none", border: "none", cursor: "pointer", padding: "2px 4px", lineHeight: 1 }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+             strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--q-text-dim,#64748b)", display: "block" }}>
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        </svg>
+        {unread > 0 && (
+          <span style={{
+            position: "absolute", top: -3, right: -4, minWidth: 16, height: 16, borderRadius: 999,
+            background: "#e11d48", color: "#fff", fontSize: 10, fontWeight: 800,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
+          }}>{unread > 9 ? "9+" : unread}</span>
+        )}
+      </button>
+
+      {open && (
+        <React.Fragment>
+          {/* Click-away. A bare document listener would also swallow the click
+              that opened it, which is the classic version of this bug. */}
+          <div onClick={() => setOpen(false)}
+               style={{ position: "fixed", inset: 0, zIndex: 44, background: "transparent" }} />
+          <div className="bg-white border" style={{
+            position: "absolute", right: 0, top: 30, width: 380, maxWidth: "90vw", zIndex: 45,
+            borderRadius: 14, padding: 14, boxShadow: "0 14px 40px rgba(0,0,0,0.4)",
+          }}>
+            {openTicket ? (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <button onClick={() => setOpenTicketId(null)}
+                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "var(--q-text-dim,#64748b)" }}>
+                    &larr; All messages
+                  </button>
+                  <span style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--q-text-dim,#94a3b8)" }}>
+                    {openTicket.status === "resolved" ? "Resolved" : openTicket.status === "in_progress" ? "In progress" : "New"}
+                  </span>
+                </div>
+                <SupportThreadView ticket={openTicket} messages={byTicket[openTicket.id] || []}
+                  isAdmin={!!isPlatformAdmin} onChanged={reload} compact />
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8, color: "var(--q-text,#0f172a)" }}>Messages</div>
+                {!loaded ? (
+                  <div style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", padding: "10px 0" }}>Loading…</div>
+                ) : tickets.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", padding: "10px 0", lineHeight: 1.55 }}>
+                    Nothing yet. Report a problem or ask for help and the conversation appears here — you will get
+                    the reply in the platform rather than by email.
+                  </div>
+                ) : (
+                  <div style={{ maxHeight: 380, overflowY: "auto" }}>
+                    {tickets.slice(0, 40).map(t => {
+                      const n = unreadFor(t.id);
+                      return (
+                        <button key={t.id} onClick={() => setOpenTicketId(t.id)}
+                          style={{
+                            display: "block", width: "100%", textAlign: "left", cursor: "pointer",
+                            background: n ? "rgba(99,102,241,0.10)" : "transparent",
+                            border: "none", borderTop: "1px solid var(--q-border,#e2e8f0)", padding: "10px 4px",
+                          }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                            <span style={{ fontSize: 12.5, fontWeight: n ? 800 : 600, color: "var(--q-text,#0f172a)" }}>
+                              {qSupportLabel(t.kind, t.category)}
+                            </span>
+                            {n > 0 && <span style={{
+                              flexShrink: 0, background: "#e11d48", color: "#fff", fontSize: 10, fontWeight: 800,
+                              borderRadius: 999, padding: "1px 7px",
+                            }}>{n}</span>}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: "var(--q-text-dim,#64748b)", marginTop: 3 }}>
+                            {isPlatformAdmin && t.contact_email ? t.contact_email + " · " : ""}{lastLine(t)}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <div style={{ borderTop: "1px solid var(--q-border,#e2e8f0)", marginTop: 8, paddingTop: 10 }}>
+                  <button className="qp-btn" style={{ fontSize: 12.5, padding: "7px 14px" }}
+                    onClick={() => { setOpen(false); supportOpen({ page: "messages" }); }}>
+                    New message
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </React.Fragment>
+      )}
     </div>
   );
 }
@@ -18214,6 +18504,9 @@ function App() {
           {isPlatformAdmin && (
             <button onClick={()=>setView({name:"admin"})} className="text-xs font-semibold text-violet-700 hover:text-violet-900">Admin</button>
           )}
+          {/* Keyed on the user id so signing in as someone else rebuilds the
+              poller rather than showing the previous account's count. */}
+          <MessagesBell isPlatformAdmin={isPlatformAdmin} sessionKey={session.user.id} />
           <span className="qtr-nav-email text-xs text-slate-500">{session.user.email}</span>
           <button onClick={()=>sb.auth.signOut()} className="text-xs text-slate-500 hover:text-slate-900">Sign Out</button>
         </div>
