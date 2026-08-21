@@ -14094,6 +14094,7 @@ const QSUPPORT_STATUS = [
 ];
 
 function qSupportLabel(kind, category) {
+  if (kind === "outreach") return "Message from Quantora";
   if (kind === "improvement") return "Improvement request";
   if (kind === "rating") return category === "accurate" ? "Rated accurate" : "Rated not accurate";
   const table = kind === "help" ? SUPPORT_HELP_TOPICS : SUPPORT_ISSUE_CATEGORIES;
@@ -15160,6 +15161,9 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
                   ))}
               </div>
             </div>
+          </div>
+          <div className="detail" style={{ marginTop: 8 }}>
+            <QCustomerPeople company={selected} />
           </div>
           <div className="detail" style={{ marginTop: 8 }}>
             <AdminQuotaControls company={selected} onChanged={onQuotaChanged} />
@@ -18027,11 +18031,14 @@ function SupportThreadView({ ticket, messages, isAdmin, onChanged, compact }) {
   const stamp = { fontSize: 10.5, color: "var(--q-text-dim,#94a3b8)", marginTop: 3 };
 
   // The report itself, shown as the opening message rather than stored twice.
-  const first = {
+  // An 'outreach' thread was opened by us and has no customer report behind it,
+  // so there is nothing to synthesise -- and rendering one would attribute a
+  // message to the customer that they never wrote.
+  const first = ticket.kind === "outreach" ? null : {
     id: "__ticket__", from_admin: false, created_at: ticket.created_at,
     body: [qSupportLabel(ticket.kind, ticket.category), ticket.message || ""].filter(Boolean).join("\n"),
   };
-  const all = [first, ...(messages || [])];
+  const all = first ? [first, ...(messages || [])] : (messages || []);
 
   return (
     <div>
@@ -18180,6 +18187,311 @@ function MessagesBell({ isPlatformAdmin, sessionKey }) {
             )}
           </div>
         </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WHO IS SIGNED IN
+//
+// auth.users already records last_sign_in_at, but it is reachable only with the
+// service role, it holds one timestamp rather than a history, and it cannot say
+// whether the tab is still open. So the app writes its own row: one per browser
+// session, stamped on sign-in and refreshed every two minutes while the tab is
+// in the foreground.
+//
+// "Online" is derived from last_seen_at rather than stored as a flag. A stored
+// flag goes stale the moment a laptop lid closes and then lies for hours.
+//
+// Location is the browser's own reported time zone, not an IP lookup. It is
+// accurate enough to know a customer is in Dubai or Mumbai, needs no third
+// party, and is not a covert trace of where somebody physically is.
+// ---------------------------------------------------------------------------
+const ACTIVITY_BEAT_MS = 2 * 60 * 1000;
+const ONLINE_WINDOW_MS = 5 * 60 * 1000;   // two missed beats
+
+function qIsOnline(lastSeen) {
+  if (!lastSeen) return false;
+  const t = new Date(lastSeen).getTime();
+  return Number.isFinite(t) && (Date.now() - t) < ONLINE_WINDOW_MS;
+}
+
+function qAgo(ts) {
+  if (!ts) return "never";
+  const ms = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(ms)) return "—";
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+function useActivityHeartbeat(session) {
+  const uid = session && session.user ? session.user.id : null;
+  const email = session && session.user ? session.user.email : null;
+  useEffect(() => {
+    if (!uid) return;
+    let alive = true;
+
+    // Per browser session, so returning tomorrow writes a NEW row rather than
+    // overwriting the record of today -- that history is the point.
+    let key;
+    try {
+      key = window.sessionStorage.getItem("q_session_key");
+      if (!key) {
+        key = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        window.sessionStorage.setItem("q_session_key", key);
+      }
+    } catch (_) { key = "nostore-" + Date.now().toString(36); }
+
+    async function beat(first) {
+      try {
+        const row = { user_id: uid, session_key: key, last_seen_at: new Date().toISOString() };
+        if (first) {
+          row.email = email || null;
+          try {
+            const { data: prof } = await sb.from("profiles").select("company_id, full_name").eq("id", uid).maybeSingle();
+            row.company_id = prof?.company_id || null;
+            row.full_name = prof?.full_name || null;
+          } catch (e) { console.error("heartbeat profile lookup failed (non-fatal):", e); }
+          try { row.user_agent = String(navigator.userAgent || "").slice(0, 300); } catch (_) {}
+          try { row.time_zone = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (_) {}
+          try { row.language = navigator.language || null; } catch (_) {}
+        }
+        // Only the columns present are written, so a later beat updates
+        // last_seen_at and leaves started_at and the browser details alone.
+        const { error } = await sb.from("user_activity").upsert(row, { onConflict: "user_id,session_key" });
+        if (error) throw error;
+      } catch (e) {
+        // Never let presence tracking interfere with using the product.
+        console.error("heartbeat failed (non-fatal):", e);
+      }
+    }
+
+    beat(true);
+    const id = setInterval(() => {
+      // A backgrounded tab is not someone using Quantora, and counting it as
+      // online is the difference between a useful signal and a decorative one.
+      if (alive && !document.hidden) beat(false);
+    }, ACTIVITY_BEAT_MS);
+    function onVisible() { if (alive && !document.hidden) beat(false); }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { alive = false; clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, [uid]);
+}
+
+// Compose a message to one customer. This creates a thread OWNED BY THE
+// CUSTOMER, so it lands in their bell beside their own reports rather than in
+// some separate admin-only channel they would never think to look at.
+function AdminMessageModal({ person, company, onClose, onSent }) {
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(false);
+
+  async function send() {
+    const text = body.trim();
+    if (!text) return;
+    setBusy(true); setErr("");
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { data: ticket, error: tErr } = await sb.from("support_tickets").insert({
+        user_id: person.id,
+        company_id: company?.id || null,
+        contact_email: person.email || null,
+        kind: "outreach",
+        opened_by_admin: true,
+        status: "in_progress",
+        page_context: "admin",
+      }).select("id").single();
+      if (tErr) throw tErr;
+      const { error: mErr } = await sb.from("support_messages").insert({
+        ticket_id: ticket.id, sender_user_id: user.id, from_admin: true, body: text,
+      });
+      if (mErr) throw mErr;
+      setDone(true);
+      onSent && onSent();
+    } catch (e) {
+      console.error("AdminMessageModal.send failed:", e);
+      setErr(e.message || "Could not send that message.");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="bg-white border rounded-2xl max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-bold">
+          {done ? "Message sent" : `Message ${person.full_name || person.email || "this customer"}`}
+        </h3>
+        {done ? (
+          <div>
+            <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+              It is in their bell now, in the same place as their own reports. Their reply comes back to you
+              in Support &amp; Feedback and in your own bell.
+            </p>
+            <div className="flex gap-2 mt-5 justify-end">
+              <button onClick={onClose} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Close</button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <p className="text-sm text-slate-600 mt-2 mb-3 leading-relaxed">
+              {company?.name ? `${company.name} · ` : ""}{person.email || "no email recorded yet"}
+            </p>
+            <textarea rows={5} value={body} onChange={e => setBody(e.target.value)}
+              placeholder="e.g. I re-ran the B1 drawing after fixing the duplicate lines — please open the BOQ and tell me if the parking sensor count looks right now."
+              style={{
+                width: "100%", resize: "vertical", fontSize: 13,
+                background: "var(--q-panel-2,#fff)", color: "var(--q-text,#0f172a)",
+                border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 10, padding: "9px 11px",
+              }} />
+            {err && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-3">{err}</div>}
+            <div className="flex gap-2 mt-5 justify-end">
+              <button onClick={onClose} disabled={busy}
+                className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Cancel</button>
+              <button onClick={send} disabled={busy || !body.trim()}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white"
+                style={{ background: busy || !body.trim() ? "#93c5fd" : "#2563eb", border: "none",
+                         cursor: busy || !body.trim() ? "not-allowed" : "pointer" }}>
+                {busy ? "Sending…" : "Send message"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// The people inside one customer company: who they are, where they are, whether
+// they are here right now, and every sign-in on record.
+function QCustomerPeople({ company }) {
+  const [people, setPeople] = useState([]);
+  const [acts, setActs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [openHistory, setOpenHistory] = useState(null);
+  const [messaging, setMessaging] = useState(null);
+  // Re-derives "online" without another round trip -- the data is already here,
+  // it is only the clock that has moved.
+  const [, setTick] = useState(0);
+
+  useEffect(() => { load(); }, [company.id]);
+  useEffect(() => { const id = setInterval(() => setTick(t => t + 1), 60000); return () => clearInterval(id); }, []);
+
+  async function load() {
+    setLoading(true); setErr("");
+    try {
+      const { data: profs, error: pErr } = await sb.from("profiles")
+        .select("id, full_name, role, created_at").eq("company_id", company.id);
+      if (pErr) throw pErr;
+      const ids = (profs || []).map(p => p.id);
+      let rows = [];
+      if (ids.length) {
+        // Queried by user_id rather than company_id: a session that began before
+        // the customer had a company would carry a null company_id and would
+        // otherwise vanish from this list.
+        const { data: a, error: aErr } = await sb.from("user_activity")
+          .select("*").in("user_id", ids).order("last_seen_at", { ascending: false }).limit(400);
+        if (aErr) throw aErr;
+        rows = a || [];
+      }
+      setPeople(profs || []);
+      setActs(rows);
+    } catch (e) {
+      console.error("QCustomerPeople.load failed:", e);
+      setErr(e.message || "Could not load the people on this account.");
+    } finally { setLoading(false); }
+  }
+
+  const byUser = {};
+  acts.forEach(a => { (byUser[a.user_id] = byUser[a.user_id] || []).push(a); });
+
+  const rowStyle = { display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+                     gap: 12, padding: "11px 0", borderTop: "1px solid var(--border-soft)" };
+
+  return (
+    <div>
+      <div className="section-label" style={{ marginTop: 0 }}>People on this account</div>
+      {err && <div style={{ fontSize: 12.5, color: "#fca5a5", padding: "8px 0" }}>{err}</div>}
+      {loading ? (
+        <div style={{ fontSize: 12.5, color: "var(--text-dimmer)", padding: "8px 0" }}>Loading…</div>
+      ) : people.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: "var(--text-dimmer)", padding: "8px 0" }}>
+          No user profile is linked to this company yet.
+        </div>
+      ) : people.map(p => {
+        const sessions = byUser[p.id] || [];
+        const latest = sessions[0] || null;
+        const online = qIsOnline(latest && latest.last_seen_at);
+        const email = (sessions.find(s => s.email) || {}).email || null;
+        const tz = (sessions.find(s => s.time_zone) || {}).time_zone || null;
+        const showing = openHistory === p.id;
+        return (
+          <div key={p.id} style={rowStyle}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{
+                  width: 8, height: 8, borderRadius: 999, flexShrink: 0,
+                  background: online ? "#4ade80" : "#64748b",
+                  boxShadow: online ? "0 0 0 3px rgba(74,222,128,0.18)" : "none",
+                }} />
+                <span style={{ fontSize: 13.5, fontWeight: 700 }}>{p.full_name || "(no name set)"}</span>
+                <span style={{ fontSize: 11, color: online ? "#86efac" : "var(--text-dimmer)" }}>
+                  {online ? "Online now" : `Last seen ${qAgo(latest && latest.last_seen_at)}`}
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 4 }}>
+                {email || "email not recorded yet"}
+                {tz ? ` · ${tz}` : ""}
+                {p.role ? ` · ${p.role}` : ""}
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 3 }}>
+                {sessions.length
+                  ? `${sessions.length} sign-in${sessions.length === 1 ? "" : "s"} recorded`
+                  : "no sign-in recorded since activity tracking was switched on"}
+                {sessions.length > 0 && (
+                  <button onClick={() => setOpenHistory(showing ? null : p.id)}
+                    style={{ marginLeft: 8, background: "none", border: "none", cursor: "pointer",
+                             color: "#93c5fd", fontSize: 11.5, fontWeight: 700 }}>
+                    {showing ? "hide history" : "view history"}
+                  </button>
+                )}
+              </div>
+              {showing && (
+                <div style={{ marginTop: 8, paddingLeft: 16 }}>
+                  {sessions.slice(0, 25).map(s => (
+                    <div key={s.id} style={{ fontSize: 11.5, color: "var(--text-dim)", padding: "3px 0" }}>
+                      {new Date(s.started_at).toLocaleString()}
+                      {" — active until "}{new Date(s.last_seen_at).toLocaleTimeString()}
+                      {s.time_zone ? ` · ${s.time_zone}` : ""}
+                      {s.language ? ` · ${s.language}` : ""}
+                    </div>
+                  ))}
+                  {sessions.length > 25 && (
+                    <div style={{ fontSize: 11, color: "var(--text-dimmer)", padding: "3px 0" }}>
+                      …and {sessions.length - 25} earlier
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <button className="btn btn-sm" style={{ flexShrink: 0 }}
+              onClick={() => setMessaging({ ...p, email })}>
+              Message
+            </button>
+          </div>
+        );
+      })}
+
+      {messaging && (
+        <AdminMessageModal person={messaging} company={company}
+          onClose={() => setMessaging(null)} onSent={load} />
       )}
     </div>
   );
@@ -18447,6 +18759,10 @@ function App() {
     window.addEventListener("open-support", onSupport);
     return () => window.removeEventListener("open-support", onSupport);
   }, []);
+
+  // Records this browser session and keeps it alive, which is what the admin
+  // Customers page reads to show who is online and when they last signed in.
+  useActivityHeartbeat(session);
 
   // Coming back from Stripe Checkout: show a small banner, then clean the
   // URL so a refresh doesn't re-trigger it.
