@@ -3743,6 +3743,29 @@ function SetNewPasswordScreen({ onDone }) {
   );
 }
 
+
+// Common misspellings of the domains almost every customer actually uses.
+// Deliberately a short, certain list rather than a clever edit-distance guess:
+// suggesting "did you mean gmail.com?" to somebody at a real company domain is
+// worse than saying nothing.
+const EMAIL_DOMAIN_TYPOS = {
+  "gmial.com": "gmail.com", "gmai.com": "gmail.com", "gmail.co": "gmail.com",
+  "gmail.con": "gmail.com", "gnail.com": "gmail.com", "gmaill.com": "gmail.com",
+  "gmail.cm": "gmail.com", "gmali.com": "gmail.com", "gamil.com": "gmail.com",
+  "hotmial.com": "hotmail.com", "hotmai.com": "hotmail.com", "hotmail.co": "hotmail.com",
+  "yahho.com": "yahoo.com", "yaho.com": "yahoo.com", "yahoo.co": "yahoo.com",
+  "outlok.com": "outlook.com", "outllok.com": "outlook.com", "outlook.co": "outlook.com",
+  "iclould.com": "icloud.com", "icloud.co": "icloud.com",
+};
+
+function suggestEmailFix(addr) {
+  const at = String(addr || "").lastIndexOf("@");
+  if (at < 1) return null;
+  const domain = addr.slice(at + 1).toLowerCase().trim();
+  const fixed = EMAIL_DOMAIN_TYPOS[domain];
+  return fixed ? addr.slice(0, at + 1) + fixed : null;
+}
+
 function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolved, banner }) {
   const [mode, setMode] = useState(initialMode === "signup" ? "signup" : "signin");
   const [email, setEmail] = useState("");
@@ -3752,6 +3775,13 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
   const [err, setErr] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  // Set when signup is one click from sending an email. Shows the address back
+  // for checking -- the only thing that catches a valid-looking address with
+  // the wrong name in it, which is exactly how this project's bounces happened.
+  const [confirmAddress, setConfirmAddress] = useState(false);
+  // Seconds remaining before Resend can be pressed again. One mistyped address
+  // pressed four times is four bounces, not one.
+  const [resendWait, setResendWait] = useState(0);
 
   // v14: when arriving via an invite link (?invite=<token>), join the
   // INVITING company instead of getting a brand-new trial company of one's
@@ -3788,9 +3818,16 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
   // in supabase-js v2, but the CDN tag is pinned to the v2 major rather than an
   // exact version, so a build without it falls back to signUp -- which re-sends
   // the confirmation for an address that exists but is unconfirmed.
+  useEffect(() => {
+    if (resendWait <= 0) return;
+    const id = setTimeout(() => setResendWait(w => w - 1), 1000);
+    return () => clearTimeout(id);
+  }, [resendWait]);
+
   async function resendConfirmation() {
     const addr = email.trim();
     if (!addr) { setErr("Enter your email address first, then press Resend."); return; }
+    if (resendWait > 0) return;
     setBusy(true); setErr(""); setNotice("");
     try {
       const emailRedirectTo = `${window.location.origin}${window.location.pathname}`;
@@ -3802,6 +3839,7 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
         if (error && !/already registered/i.test(error.message || "")) throw error;
       }
       setNeedsConfirm(false);
+      setResendWait(60);
       setNotice(`A new confirmation link is on its way to ${addr}. It expires in 24 hours — check your spam folder if it hasn't arrived in a few minutes.`);
     } catch (ex) {
       setErr(ex.message || "Could not send another confirmation email. Please try again.");
@@ -3825,6 +3863,16 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
 
   async function submit(e) {
     e.preventDefault();
+    // A confirmation email to a wrong address is a bounce, and enough bounces
+    // cost the whole project its ability to send anything at all. One click to
+    // read the address back is a cheap way to avoid that.
+    if (mode === "signup" && !confirmAddress) {
+      const addr = email.trim();
+      if (!addr) { setErr("Enter your email address."); return; }
+      setErr(""); setNotice("");
+      setConfirmAddress(true);
+      return;
+    }
     setBusy(true); setErr(""); setNotice("");
     try {
       if (mode === "signup") {
@@ -3858,6 +3906,7 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
           // page shown afterwards is wrong. Someone told this in advance treats
           // that page as noise instead of as a failure, and comes back and signs
           // in -- which works. Remove this sentence once the Site URL is fixed.
+          setConfirmAddress(false);
           setNotice(`Account created. We've emailed a confirmation link to ${email.trim()}. Open it — if your browser then shows an error page, ignore it: your email is confirmed at that point. Come straight back here and sign in with the same email and password.`);
         }
         else { await finishSignIn(); }
@@ -3899,8 +3948,9 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
         )}
         {needsConfirm && (
           <button type="button" onClick={resendConfirmation} disabled={busy}
-            className="w-full mb-4 text-xs font-semibold border border-emerald-200 text-emerald-800 bg-emerald-50 rounded-lg py-2 hover:bg-emerald-100 disabled:opacity-50">
-            {busy ? "Sending…" : "Resend confirmation email"}
+            disabled={busy || resendWait > 0}
+            className="w-full mb-4 text-xs font-semibold border border-emerald-200 text-emerald-800 bg-emerald-50 rounded-lg py-2 disabled:opacity-50">
+            {busy ? "Sending…" : resendWait > 0 ? `Resend confirmation email (wait ${resendWait}s)` : "Resend confirmation email"}
           </button>
         )}
         {inviteToken && (
@@ -3940,15 +3990,47 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
             <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Full name" value={fullName} onChange={e=>setFullName(e.target.value)} required />
             <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Company name (optional)" value={companyName} onChange={e=>setCompanyName(e.target.value)} />
           </>}
-          <input type="email" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} required />
+          <input type="email" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Email" value={email}
+            onChange={e=>{ setEmail(e.target.value); if (confirmAddress) setConfirmAddress(false); }} required />
           <input type="password" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} required minLength={6} />
           {err && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{err}</div>}
           {/* The main form had no notice channel at all -- only the forgot-password
               form rendered one. That is why a successful signup was announced in
               setErr's red box: red was the only colour that reached the screen. */}
           {notice && <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{notice}</div>}
+
+          {/* One click between typing an address and emailing it. A confirmation
+              sent to an address that does not exist is a bounce, and enough of
+              those cost this project the ability to send any mail at all. */}
+          {mode === "signup" && confirmAddress && (() => {
+            const fix = suggestEmailFix(email.trim());
+            return (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-3">
+                <div className="text-xs text-amber-800 font-semibold">Is this address right?</div>
+                <div className="text-sm text-slate-900 mt-1" style={{ wordBreak: "break-all", fontWeight: 700 }}>
+                  {email.trim()}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                  We can only send your confirmation link here. One wrong letter and it never arrives.
+                </div>
+                {fix && (
+                  <button type="button" onClick={() => { setEmail(fix); setConfirmAddress(false); }}
+                    className="text-xs font-semibold text-blue-700 mt-2 hover:underline">
+                    Did you mean {fix}?
+                  </button>
+                )}
+                <button type="button" onClick={() => setConfirmAddress(false)}
+                  className="block text-xs font-semibold text-slate-600 mt-2 hover:underline">
+                  &larr; Let me change it
+                </button>
+              </div>
+            );
+          })()}
+
           <button disabled={busy} className="w-full bg-slate-900 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">
-            {busy ? "Please wait…" : mode === "signup" ? "Create Account" : "Sign In"}
+            {busy ? "Please wait…"
+              : mode === "signup" ? (confirmAddress ? "Yes — send my confirmation link" : "Create Account")
+              : "Sign In"}
           </button>
           {mode === "signin" && (
             <>
@@ -4808,7 +4890,9 @@ function LocationFields({ country, city, onChange }) {
             <button
               type="button"
               className="text-xs text-blue-600 whitespace-nowrap px-2"
-              onClick={() => { setCountryOther(false); setCityOther(false); onChange({ country: "UAE", city: "Dubai" }); }}
+              // Back to blank, not back to Dubai. Restoring a default here
+              // would let the very thing this patch removes back in.
+              onClick={() => { setCountryOther(false); setCityOther(false); onChange({ country: "", city: "" }); }}
             >Use list</button>
           </div>
         ) : (
@@ -4819,12 +4903,18 @@ function LocationFields({ country, city, onChange }) {
             onChange={e => {
               const v = e.target.value;
               if (v === "__other__") { setCountryOther(true); setCityOther(true); onChange({ country: "", city: "" }); return; }
-              const first = (rows || []).find(r => r.country === v && r.city);
+              // Deliberately does NOT auto-pick the country's first city.
+              // City selects the municipal authority, so guessing it is the
+              // same mistake as defaulting the country was.
               setCityOther(false);
-              onChange({ country: v, city: first ? first.city : "" });
+              onChange({ country: v, city: "" });
             }}
           >
-            {!rows && <option value={country}>{country || "Loading…"}</option>}
+            {/* An empty-valued first option is what makes `required` above
+                actually stop the form. Without it the select can never be
+                empty, so it could never fail validation. */}
+            <option value="">Select country…</option>
+            {!rows && country && <option value={country}>{country}</option>}
             {countries.map(c => <option key={c.name} value={c.name}>{c.region ? `${c.name} — ${c.region}` : c.name}</option>)}
             <option value="__other__">Other (not listed)…</option>
           </select>
@@ -4861,12 +4951,14 @@ function LocationFields({ country, city, onChange }) {
               onChange({ country, city: v });
             }}
           >
+            <option value="">Select city…</option>
             {cities.map(c => <option key={c} value={c}>{c}</option>)}
             <option value="__other__">Other (not listed)…</option>
           </select>
         )}
         <div className="text-[11px] text-slate-400 mt-1">
-          Compliance requirements follow this location. A city without its own rules uses the country's.
+          Compliance requirements follow this location, so choose the country and city the work is actually in —
+          a city without its own rules uses the country's.
         </div>
       </div>
     </>
@@ -4885,7 +4977,9 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     required_systems: existingProject.required_systems || [],
   } : {
     project_name: "", client_name: "", consultant_name: "", contractor_name: "",
-    country: "UAE", city: "Dubai", building_type: "residential_building",
+    // Blank, not UAE/Dubai. See LocationFields: a pre-filled location is never
+    // validated and is silently wrong for every project outside it.
+    country: "", city: "", building_type: "residential_building",
     number_of_floors: "", area_size: "", area_unit: "sqm", project_scope: "", required_systems: [],
   });
   const [busy, setBusy] = useState(false);
@@ -4934,6 +5028,17 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
         setErr("That scope of work contains no usable characters — please describe it in words.");
         return;
       }
+    }
+    // Checked here as well as by the browser. Native validation is easy to lose
+    // to a stray formNoValidate or a browser quirk, and this one decides which
+    // authority's rules the compliance check runs against.
+    if (!String(form.country || "").trim()) {
+      setErr("Choose the country this project is in — it decides which authority's rules apply.");
+      return;
+    }
+    if (!String(form.city || "").trim()) {
+      setErr("Choose the city this project is in, or pick \u201cOther\u201d and type it.");
+      return;
     }
 
     setBusy(true); setErr("");
@@ -14956,12 +15061,19 @@ function AdminQuotaControls({ company, onChanged }) {
     const until = needsReason
       ? new Date(Date.now() + Number(grantDays) * 86400000).toLocaleDateString()
       : null;
+    // Only mentioned when there is something to lose, so the warning stays
+    // meaningful instead of becoming a line everyone clicks past.
+    const bonusNow = company.bonus_drawing_pages || 0;
+    const bonusWarning = bonusNow > 0
+      ? `\n\nTheir ${bonusNow} bonus page(s) will be cleared — after this they are on exactly the ${label} plan. Set the bonus again afterwards if you still want it.`
+      : "";
     if (!window.confirm(
       `Move "${company.name}" from ${company.plan || "free"} to ${label}?` +
       (until
         ? `\n\nAccess runs for ${grantDays} day(s), until ${until}, then reverts to ${company.plan || "free"} automatically.` +
           `\n\nNo payment is taken — this is a grant, not a sale.`
-        : "\n\nThis changes what the customer can use immediately.")
+        : "\n\nThis changes what the customer can use immediately.") +
+      bonusWarning
     )) return;
     setBusy("plan"); setMsg(null);
     try {
@@ -14970,7 +15082,9 @@ function AdminQuotaControls({ company, onChanged }) {
         reason_code: reasonCode || undefined,
         ...(needsReason ? { grant_days: Number(grantDays) } : {}),
       });
-      setMsg({ type: "ok", text: `Done — ${res.company_name} moved from ${res.previous_plan} to ${res.plan_name}.${res.audit_recorded ? "" : " (Warning: the audit row could not be written.)"}` });
+      setMsg({ type: "ok", text: `Done — ${res.company_name} moved from ${res.previous_plan} to ${res.plan_name}.`
+        + (bonusNow > 0 ? ` ${bonusNow} bonus page(s) were cleared.` : "")
+        + (res.audit_recorded ? "" : " (Warning: the audit row could not be written.)") });
       setPlanChoice(""); setReasonCode(""); setGrantDays("30");
       if (res.paddle_noted) setMsg(m => ({ ...m, text: m.text + " The reason was also recorded on the Paddle customer." }));
       await loadHistory(company.id);
@@ -15035,6 +15149,7 @@ function AdminQuotaControls({ company, onChanged }) {
       <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginBottom: 12, lineHeight: 1.5 }}>
         This is the total, not an amount to add. Setting 10 and then 5 leaves this customer on 5.
         Set 0 to remove the bonus. The plan's own page limit is untouched either way.
+        Changing the plan clears the bonus, so grant it after the plan, not before.
       </div>
 
       {company.plan === "trial" && (
@@ -16429,6 +16544,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email })
         </div>
       </div>
 
+      <CountryPrompt />
       <FeedbackNudge />
 
       <h3 className="qp-sec">What would you like to do today?</h3>
@@ -18426,7 +18542,7 @@ function QCustomerPeople({ company }) {
     setLoading(true); setErr("");
     try {
       const { data: profs, error: pErr } = await sb.from("profiles")
-        .select("id, full_name, role, created_at").eq("company_id", company.id);
+        .select("id, full_name, role, country, created_at").eq("company_id", company.id);
       if (pErr) throw pErr;
       const ids = (profs || []).map(p => p.id);
       let rows = [];
@@ -18486,6 +18602,9 @@ function QCustomerPeople({ company }) {
               </div>
               <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 4 }}>
                 {email || "email not recorded yet"}
+                {/* Their answer first, the browser's time zone second. One is
+                    what they told us, the other is where the laptop is. */}
+                {p.country ? ` · ${p.country}` : ""}
                 {tz ? ` · ${tz}` : ""}
                 {p.role ? ` · ${p.role}` : ""}
               </div>
@@ -18531,6 +18650,90 @@ function QCustomerPeople({ company }) {
         <AdminMessageModal person={messaging} company={company}
           onClose={() => setMessaging(null)} onSent={load} />
       )}
+    </div>
+  );
+}
+
+// Where the CUSTOMER is, which is not where their project is.
+//
+// The platform recorded only projects.country, so a customer in India working
+// on a project in Muscat looked like an Omani customer. That is the difference
+// between knowing which market to sell into and guessing.
+//
+// Asked on Home rather than at signup on purpose. A required field on the
+// signup form costs conversions on the one screen where friction is most
+// expensive, and it would only ever capture NEW customers -- a card also
+// reaches everyone already here. Skipping it blocks nothing.
+function CountryPrompt() {
+  const [show, setShow] = useState(false);
+  const [countries, setCountries] = useState([]);
+  const [choice, setChoice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const KEY = "q_country_asked";
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        if (qLocalGet(KEY)) return;
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) return;
+        const { data: prof } = await sb.from("profiles").select("country").eq("id", user.id).maybeSingle();
+        // Already answered, on this device or any other. The profile is the
+        // real record; localStorage only stops us re-asking after a skip.
+        if (prof && prof.country) return;
+        const { data: locs } = await sb.from("supported_locations")
+          .select("country, sort_order").eq("is_active", true).order("sort_order", { ascending: true });
+        const seen = [];
+        (locs || []).forEach(r => { if (r.country && !seen.includes(r.country)) seen.push(r.country); });
+        if (!alive) return;
+        setCountries(seen);
+        setShow(true);
+      } catch (e) { console.error("CountryPrompt failed (non-fatal):", e); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  if (!show) return null;
+
+  function skip() { qLocalSet(KEY, "1"); setShow(false); }
+
+  async function save() {
+    if (!choice) return;
+    setBusy(true);
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { error } = await sb.from("profiles").update({ country: choice }).eq("id", user.id);
+      if (error) throw error;
+      qLocalSet(KEY, "1");
+      setShow(false);
+    } catch (e) {
+      console.error("CountryPrompt save failed:", e);
+      // Not worth an error banner over an optional question.
+      skip();
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="bg-white border" style={{
+      borderRadius: 14, padding: "14px 16px", marginBottom: 18,
+      display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10,
+    }}>
+      <div className="text-slate-600" style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+        <b className="text-slate-900">Which country do you work from?</b>{" "}
+        It helps us add the right authority rules and price for your market. This is about you, not your project.
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <select className="border rounded-lg px-3 py-2 text-sm" value={choice}
+          onChange={e => setChoice(e.target.value)} style={{ minWidth: 190 }}>
+          <option value="">Select country…</option>
+          {countries.map(c => <option key={c} value={c}>{c}</option>)}
+          <option value="Other">Other</option>
+        </select>
+        <button className="qp-btn pri" disabled={!choice || busy} onClick={save}
+          style={{ opacity: !choice || busy ? 0.5 : 1 }}>{busy ? "Saving…" : "Save"}</button>
+        <button className="qp-btn" onClick={skip}>Skip</button>
+      </div>
     </div>
   );
 }
