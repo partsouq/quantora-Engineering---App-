@@ -3770,8 +3770,14 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
   const [mode, setMode] = useState(initialMode === "signup" ? "signup" : "signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [companyName, setCompanyName] = useState("");
+  // Country is asked here, at the one moment the customer is definitely
+  // filling in a form, instead of as a card on the dashboard they can skip.
+  // It decides which authority rules and which price list apply to them.
+  const [country, setCountry] = useState("");
+  const [countryList, setCountryList] = useState([]);
   const [err, setErr] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -3818,6 +3824,25 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
   // in supabase-js v2, but the CDN tag is pinned to the v2 major rather than an
   // exact version, so a build without it falls back to signUp -- which re-sends
   // the confirmation for an address that exists but is unconfirmed.
+  // supported_locations is world-readable (locations_public_read), so this
+  // works on the signup screen with no session. If it fails the select still
+  // renders with "Other", so a network hiccup cannot lock anyone out of
+  // creating an account.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { data } = await sb.from("supported_locations")
+          .select("country, sort_order").eq("is_active", true)
+          .order("sort_order", { ascending: true });
+        const seen = [];
+        (data || []).forEach(r => { if (r.country && seen.indexOf(r.country) < 0) seen.push(r.country); });
+        if (alive) setCountryList(seen);
+      } catch (e) { console.error("country list failed (non-fatal):", e); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
   useEffect(() => {
     if (resendWait <= 0) return;
     const id = setTimeout(() => setResendWait(w => w - 1), 1000);
@@ -3868,7 +3893,14 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
     // read the address back is a cheap way to avoid that.
     if (mode === "signup" && !confirmAddress) {
       const addr = email.trim();
+      // Checked here as well as with `required` on the inputs, because the
+      // address-confirmation step below submits the form a second time and a
+      // browser only enforces `required` on the first pass.
+      if (!firstName.trim()) { setErr("Enter your first name."); return; }
+      if (!lastName.trim())  { setErr("Enter your second name."); return; }
       if (!addr) { setErr("Enter your email address."); return; }
+      if (!password || password.length < 6) { setErr("Choose a password of at least 6 characters."); return; }
+      if (!country) { setErr("Select the country you work from."); return; }
       setErr(""); setNotice("");
       setConfirmAddress(true);
       return;
@@ -3885,16 +3917,19 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
         // (Authentication -> URL Configuration). Otherwise it silently falls back
         // to Site URL again.
         const emailRedirectTo = `${window.location.origin}${window.location.pathname}`;
-        const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo } });
+        const fn = firstName.trim(), ln = lastName.trim();
+        const whole = (fn + " " + ln).trim();
+        // These ride along on the auth user itself. That matters: when email
+        // confirmation is on there is no session at this point, so anything
+        // written straight to `profiles` from here is rejected by RLS and lost
+        // — which is exactly why every existing profile has a null name. A
+        // trigger on auth.users (handle_new_auth_user) reads this metadata and
+        // creates the profile row server-side, confirmed or not.
+        const { data, error } = await sb.auth.signUp({
+          email, password,
+          options: { emailRedirectTo, data: { first_name: fn, last_name: ln, full_name: whole, country } },
+        });
         if (error) throw error;
-        if (data.user) {
-          // Company creation happens server-side (bootstrap_company/
-          // accept_invitation below) — a direct client insert into
-          // `companies` is blocked by RLS (no INSERT policy exists for
-          // anon/authenticated), so company_id starts null here and gets
-          // filled in immediately after.
-          await sb.from("profiles").insert({ id: data.user.id, full_name: fullName, role: "admin", company_id: null });
-        }
         if (!data.session) {
           // A green notice, not setErr's red box. This is the success path, and
           // showing it in the same colour as a failure is why customers who had
@@ -3909,7 +3944,20 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
           setConfirmAddress(false);
           setNotice(`Account created. We've emailed a confirmation link to ${email.trim()}. Open it — if your browser then shows an error page, ignore it: your email is confirmed at that point. Come straight back here and sign in with the same email and password.`);
         }
-        else { await finishSignIn(); }
+        else {
+          // Session straight away (confirmation switched off). The trigger has
+          // already written the profile; this only repairs it if that failed.
+          try {
+            const { data: prof } = await sb.from("profiles").select("full_name, country").eq("id", data.user.id).maybeSingle();
+            if (!prof || !prof.full_name || !prof.country) {
+              await sb.from("profiles").upsert({
+                id: data.user.id, role: "admin",
+                first_name: fn, last_name: ln, full_name: whole, country,
+              }, { onConflict: "id" });
+            }
+          } catch (pErr) { console.error("profile self-heal failed (non-fatal):", pErr); }
+          await finishSignIn();
+        }
       } else {
         const { error } = await sb.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -3987,8 +4035,21 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
         {mode !== "forgot" && (
         <form onSubmit={submit} className="space-y-3">
           {mode === "signup" && <>
-            <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Full name" value={fullName} onChange={e=>setFullName(e.target.value)} required />
-            <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Company name (optional)" value={companyName} onChange={e=>setCompanyName(e.target.value)} />
+            <div className="grid grid-cols-2 gap-3">
+              <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="First name"
+                value={firstName} onChange={e=>setFirstName(e.target.value)} autoComplete="given-name" required />
+              <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Second name"
+                value={lastName} onChange={e=>setLastName(e.target.value)} autoComplete="family-name" required />
+            </div>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Company name (optional)"
+              value={companyName} onChange={e=>setCompanyName(e.target.value)} />
+            <select className="w-full border rounded-lg px-3 py-2 text-sm" value={country}
+              onChange={e=>setCountry(e.target.value)} required
+              style={{ color: country ? undefined : "var(--q-text-dimmer,#94a3b8)" }}>
+              <option value="">Country you work from…</option>
+              {countryList.map(c => <option key={c} value={c}>{c}</option>)}
+              <option value="Other">Other</option>
+            </select>
           </>}
           <input type="email" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Email" value={email}
             onChange={e=>{ setEmail(e.target.value); if (confirmAddress) setConfirmAddress(false); }} required />
@@ -16492,16 +16553,71 @@ function greetingFor(d) {
   return "Good evening";
 }
 
+// ---------------------------------------------------------------------------
+// HOME — rebuilt to the approved dashboard design (2026-08-22).
+//
+// Every figure on this page comes from the customer's own rows. Three panels
+// that appeared in the approved picture are NOT here, and that is deliberate:
+//
+//   "Time saved"        no source exists. It would have been invented.
+//   Compliance %        boq_items.compliance_status is null on all 448 rows,
+//                       so a percentage would be fiction. Replaced with AI
+//                       pages used, which is real and is the number that
+//                       actually decides whether someone upgrades.
+//   "AED 120,540 saved" cost_optimizations.estimated_savings_note is free text,
+//                       not a number, so it cannot be summed. The COUNT of
+//                       findings is shown instead, which is true.
+//   Map                 there is no map anywhere in Quantora.
+//
+// The search box is real: it filters the projects already loaded, by name and
+// by city, and opens the one you pick.
+// ---------------------------------------------------------------------------
+function qDayKey(d) { return new Date(d).toISOString().slice(0, 10); }
+
+// Seven day counts from whatever rows carry a created_at. Returns the series
+// plus its own max, so a sparkline can scale to itself rather than to a
+// hardcoded ceiling that would flatten every small account.
+function qSeries7(rows, field) {
+  const days = [];
+  for (let i = 6; i >= 0; i--) days.push(qDayKey(Date.now() - i * 86400000));
+  const tally = {};
+  (rows || []).forEach(r => { const k = r && r[field] ? qDayKey(r[field]) : null; if (k) tally[k] = (tally[k] || 0) + 1; });
+  const vals = days.map(d => tally[d] || 0);
+  return { vals, max: Math.max(1, ...vals) };
+}
+
+function QSpark({ series, colour }) {
+  const { vals, max } = series;
+  const w = 96, h = 40, step = vals.length > 1 ? w / (vals.length - 1) : w;
+  const pts = vals.map((v, i) => `${(i * step).toFixed(1)},${(h - 4 - (v / max) * (h - 10)).toFixed(1)}`).join(" ");
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
+      <polyline points={pts} fill="none" stroke={colour} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function QDonut({ pct, colour }) {
+  const r = 24, c = 2 * Math.PI * r;
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  return (
+    <svg width="62" height="62" viewBox="0 0 62 62" aria-hidden="true">
+      <circle cx="31" cy="31" r={r} fill="none" stroke="rgba(255,255,255,.10)" strokeWidth="7" />
+      <circle cx="31" cy="31" r={r} fill="none" stroke={colour} strokeWidth="7" strokeLinecap="round"
+        strokeDasharray={c} strokeDashoffset={c * (1 - p / 100)} transform="rotate(-90 31 31)" />
+    </svg>
+  );
+}
+
 function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email }) {
-  // The name comes from the profile or not at all. Deriving it from the email
-  // turns estimator@ into "Estimator" and info@ into "Info", which is worse
-  // than a greeting with no name in it.
   const [fullName, setFullName] = useState("");
   const [projects, setProjects] = useState([]);
   const [metrics, setMetrics] = useState({});
   const [usage, setUsage] = useState(null);
+  const [extra, setExtra] = useState({ drawingRows: [], boqRows: [], runs: [], findings: 0, review: 0 });
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [q, setQ] = useState("");
 
   useEffect(() => { load(); loadUsage(); loadName(); }, []);
 
@@ -16526,12 +16642,15 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email })
       const { data: proj, error } = await sb.from("projects").select("*").order("created_at", { ascending: false });
       if (error) throw error;
       setProjects(proj || []);
-      const [{ data: dRows }, { data: bRows }, { data: eRows }, { data: rRows }] = await Promise.all([
-        sb.from("drawings").select("id, project_id, created_at"),
-        sb.from("boq_items").select("project_id"),
-        sb.from("project_estimates").select("project_id"),
-        sb.from("analysis_runs").select("project_id, created_at").order("created_at", { ascending: false }).limit(500),
-      ]);
+      const [{ data: dRows }, { data: bRows }, { data: eRows }, { data: rRows }, { data: optRows }, { data: revRows }] =
+        await Promise.all([
+          sb.from("drawings").select("id, project_id, created_at"),
+          sb.from("boq_items").select("project_id, created_at, review_status").limit(BOQ_FETCH_LIMIT),
+          sb.from("project_estimates").select("project_id"),
+          sb.from("analysis_runs").select("project_id, created_at, status").order("created_at", { ascending: false }).limit(500),
+          sb.from("cost_optimizations").select("id, status"),
+          sb.from("boq_review_items").select("id, status"),
+        ]);
       const tally = rows => (rows || []).reduce((a, r) => (r.project_id ? (a[r.project_id] = (a[r.project_id] || 0) + 1, a) : a), {});
       const d = tally(dRows), b = tally(bRows);
       const priced = new Set((eRows || []).map(r => r.project_id));
@@ -16542,180 +16661,247 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email })
         m[p.id] = { drawings: d[p.id] || 0, boq: b[p.id] || 0, priced: priced.has(p.id), lastRun: last[p.id] || null };
       });
       setMetrics(m);
+      setExtra({
+        drawingRows: dRows || [], boqRows: bRows || [], runs: rRows || [],
+        findings: (optRows || []).filter(r => r.status !== "rejected").length,
+        review: (revRows || []).filter(r => r.status !== "resolved").length,
+      });
     } catch (e) {
       console.error("HomePage.load failed:", e);
       setErr(e.message || "Could not load your projects.");
     } finally { setLoading(false); }
   }
 
-  // "Continue your work" is ordered by what was touched last, not by what was
-  // created last -- the project someone came back for is the one they were in.
-  const recent = [...projects].sort((a, b) => {
-    const ta = metrics[a.id]?.lastRun || a.created_at || "";
-    const tb = metrics[b.id]?.lastRun || b.created_at || "";
-    return tb.localeCompare(ta);
-  }).slice(0, 3);
-
   const hello = fullName ? `, ${fullName}` : "";
+  const recent = [...projects].sort((a, b) => {
+    const la = metrics[a.id]?.lastRun || a.created_at, lb = metrics[b.id]?.lastRun || b.created_at;
+    return new Date(lb) - new Date(la);
+  });
+
+  const totals = {
+    projects: projects.length,
+    drawings: extra.drawingRows.length,
+    boq: Object.values(metrics).reduce((n, m) => n + (m.boq || 0), 0),
+  };
+  const pagesUsed  = usage?.pages?.used ?? null;
+  const pagesLimit = usage?.pages?.limit ?? null;
+  const pagesPct = (pagesUsed != null && pagesLimit) ? Math.round((pagesUsed / pagesLimit) * 100) : null;
+
+  const sevenAgo = Date.now() - 7 * 86400000;
+  const since = rows => (rows || []).filter(r => r.created_at && new Date(r.created_at).getTime() >= sevenAgo).length;
+  const week = {
+    drawings: since(extra.drawingRows),
+    boq: since(extra.boqRows),
+    runs: since(extra.runs),
+    failed: (extra.runs || []).filter(r => r.status === "failed" && r.created_at && new Date(r.created_at).getTime() >= sevenAgo).length,
+  };
+
+  const hits = q.trim()
+    ? projects.filter(p => `${p.project_name} ${p.city || ""} ${p.country || ""}`.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 6)
+    : [];
+
+  const STATUS = p => {
+    const m = metrics[p.id] || {};
+    if (m.priced) return ["Priced", "c"];
+    if (m.boq) return ["Taken off", "p"];
+    if (m.drawings) return ["Uploaded", "r"];
+    return ["New", "n"];
+  };
 
   return (
-    <div>
-      <div className="qp-hero">
+    <div className="qh">
+      <div className="qh-hi">
         <div>
-          <h1>{greetingFor(new Date())}{hello}</h1>
+          <h1>{greetingFor(new Date())}{hello} <span aria-hidden="true">👋</span></h1>
           <p>Turn your construction drawings into a complete BOQ in minutes.</p>
         </div>
-        <div className="acts">
-          <button className="qp-btn pri" onClick={onNewProject}>+ New Project</button>
-          <button className="qp-btn" onClick={() => onNavigate("drawings")}>Upload Drawings</button>
+        <div className="qh-acts">
+          <button className="qh-btn pri" onClick={onNewProject}>+ New Project</button>
+          <button className="qh-btn" onClick={() => onNavigate("drawings")}>Upload Drawings</button>
         </div>
       </div>
 
       <CountryPrompt />
       <FeedbackNudge />
 
-      <h3 className="qp-sec">What would you like to do today?</h3>
-      <div className="qp-tiles">
+      {/* Hero. The search is real -- it filters the projects already loaded. */}
+      <section className="qh-hero">
+        <div className="qh-hero-txt">
+          <h3>What would you like to work on today?</h3>
+          <p>Upload drawings, start a new project, or jump back into one you have open.</p>
+          <div className="qh-hero-row">
+            <input className="qh-find" placeholder="Find a project by name or city…"
+              value={q} onChange={e => setQ(e.target.value)} />
+            <button className="qh-btn pri" onClick={onNewProject}>+ New Project</button>
+          </div>
+          {q.trim() && (
+            <div className="qh-hits">
+              {hits.length === 0 ? <div className="qh-hit none">No project matches “{q.trim()}”.</div>
+                : hits.map(p => (
+                  <button key={p.id} className="qh-hit" onClick={() => onOpenProject(p)}>
+                    <b>{p.project_name}</b><span>{[p.city, p.country].filter(Boolean).join(", ") || "No location"}</span>
+                  </button>
+                ))}
+            </div>
+          )}
+        </div>
+        <svg className="qh-iso" viewBox="0 0 300 155" aria-hidden="true">
+          <defs>
+            <linearGradient id="qhg1" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stopColor="#7c3aed" stopOpacity=".85" /><stop offset="1" stopColor="#22d3ee" stopOpacity=".5" /></linearGradient>
+            <linearGradient id="qhg2" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#a78bfa" stopOpacity=".95" /><stop offset="1" stopColor="#4c1d95" stopOpacity=".5" /></linearGradient>
+          </defs>
+          <path d="M150 118 40 90l110-28 110 28Z" fill="url(#qhg1)" opacity=".55" />
+          <path d="M150 96 55 72l95-24 95 24Z" fill="url(#qhg1)" opacity=".75" />
+          <path d="M150 74 70 54l80-20 80 20Z" fill="url(#qhg1)" />
+          <path d="M150 34 118 42v22l32 8 32-8V42Z" fill="url(#qhg2)" />
+          <path d="M150 12 126 18v24l24 6 24-6V18Z" fill="url(#qhg2)" opacity=".9" />
+          <path d="M150 12 126 18l24 6 24-6Z" fill="#c4b5fd" opacity=".85" />
+          <g stroke="#67e8f9" strokeWidth="1" opacity=".8"><path d="M150 74v22M110 62v22M190 62v22" /></g>
+        </svg>
+      </section>
+
+      <h3 className="qh-sec">What would you like to do today?</h3>
+      <div className="qh-grid3">
         {HOME_TILES.map(([key, title, sub, glyph, colour, tint]) => (
-          <button key={key} className="qp-tile" onClick={() => (key === "new" ? onNewProject() : onNavigate(key))}>
+          <button key={key} className="qh-act" onClick={() => (key === "new" ? onNewProject() : onNavigate(key))}>
             <span className="ic" style={{ background: tint, color: colour }} aria-hidden="true">{glyph}</span>
-            <b>{title}</b>
-            <span>{sub}</span>
+            <span className="tx"><b>{title}</b><span>{sub}</span></span>
+            <span className="arw" aria-hidden="true">&rsaquo;</span>
           </button>
         ))}
       </div>
 
-      <div className="qp-flow">
-        <h3 className="qp-sec">How Quantora works</h3>
-        <div className="qp-flow-row">
-          {HOME_FLOW.map(([title, sub, colour, tint], i) => (
-            <React.Fragment key={title}>
-              <div className="qp-step">
-                <span className="n" style={{ background: tint, color: colour }}>{i + 1}</span>
-                <span className="t"><b>{title}</b><span>{sub}</span></span>
-              </div>
-              {i < HOME_FLOW.length - 1 && <span className="qp-arrow" aria-hidden="true">&rarr;</span>}
-            </React.Fragment>
-          ))}
+      <h3 className="qh-sec">Your last seven days</h3>
+      <div className="qh-strip">
+        {[
+          ["Drawings",  `${week.drawings} uploaded`,        "#3b82f6", "drawings"],
+          ["Analyses",  `${week.runs} run`,                 "#8b5cf6", "drawings"],
+          ["BOQ",       `${week.boq} lines produced`,       "#10b981", "boq"],
+          ["Needs review", `${extra.review} item${extra.review === 1 ? "" : "s"}`, "#f59e0b", "boq"],
+          ["Cost findings", `${extra.findings} to look at`, "#0ea5e9", "boq"],
+          ["Failed runs", `${week.failed} this week`,       week.failed ? "#ef4444" : "#64748b", "drawings"],
+        ].map(([t, s2, c, go]) => (
+          <button key={t} onClick={() => onNavigate(go)}>
+            <span className="dot" style={{ background: c }} aria-hidden="true" />
+            <span className="tx"><b>{t}</b><span>{s2}</span></span>
+          </button>
+        ))}
+      </div>
+
+      <div className="qh-grid4">
+        <div className="qh-kpi">
+          <div className="hd"><span className="ic" style={{ background: "rgba(139,92,246,.16)", color: "#a78bfa" }}>▣</span><b>Projects</b></div>
+          <div className="bd"><div><div className="n">{totals.projects}</div><div className="lb">Active projects</div></div>
+            <QSpark series={qSeries7(projects, "created_at")} colour="#a78bfa" /></div>
+        </div>
+        <div className="qh-kpi">
+          <div className="hd"><span className="ic" style={{ background: "rgba(59,130,246,.16)", color: "#60a5fa" }}>▤</span><b>Drawings</b></div>
+          <div className="bd"><div><div className="n">{totals.drawings}</div><div className="lb">Uploaded, all projects</div></div>
+            <QSpark series={qSeries7(extra.drawingRows, "created_at")} colour="#38bdf8" /></div>
+        </div>
+        <div className="qh-kpi">
+          <div className="hd"><span className="ic" style={{ background: "rgba(16,185,129,.16)", color: "#34d399" }}>≡</span><b>BOQ items</b></div>
+          <div className="bd"><div><div className="n">{totals.boq.toLocaleString()}</div><div className="lb">Lines measured</div></div>
+            <QSpark series={qSeries7(extra.boqRows, "created_at")} colour="#34d399" /></div>
+        </div>
+        <div className="qh-kpi">
+          <div className="hd"><span className="ic" style={{ background: "rgba(245,158,11,.16)", color: "#fbbf24" }}>◔</span><b>AI pages</b></div>
+          <div className="bd">
+            <div><div className="n">{pagesUsed == null ? "—" : pagesUsed}{pagesLimit ? <span className="of"> / {pagesLimit}</span> : null}</div>
+              <div className="lb">{pagesLimit ? "Used this period" : "Loading your plan…"}</div></div>
+            <QDonut pct={pagesPct == null ? 0 : pagesPct} colour={pagesPct != null && pagesPct >= 85 ? "#f87171" : "#fbbf24"} />
+          </div>
         </div>
       </div>
 
-      <div className="qp-cols">
-        <div>
-          <div className="qp-card">
-            <h4>Continue your work</h4>
-            {err ? <div className="qp-empty">{err}</div>
-             : loading ? <div className="qp-empty">Loading…</div>
-             : recent.length === 0 ? (
-              <div className="qp-empty">
-                No projects yet.{" "}
-                <button onClick={onNewProject} className="underline font-semibold">Create your first one</button>.
-              </div>
-             ) : (
-              <div className="qdash-projs">
-                {recent.map(p => {
-                  const m = metrics[p.id] || {};
-                  const stage = stageOf(m);
-                  return (
-                    <div key={p.id} className="qdash-proj" onClick={() => onOpenProject(p)}>
-                      <div className="pn">{p.project_name}</div>
-                      <div className="pl">{p.city}, {p.country}</div>
-                      <div className="qproj-stats">
-                        <div><b>{m.drawings ?? 0}</b>drawings</div>
-                        <div><b>{m.boq ?? 0}</b>BOQ lines</div>
-                        <div><b>{m.priced ? "Yes" : "No"}</b>priced</div>
-                      </div>
-                      <div className="pm">
-                        <span><StagePill stage={stage} /></span>
-                        <span className="go">Continue &rarr;</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-             )}
-            {projects.length > 3 && (
-              <button className="qp-btn" style={{ marginTop: 12 }} onClick={() => onNavigate("dashboard")}>
-                View all {projects.length} projects
-              </button>
-            )}
-          </div>
-
-          <div className="qp-card">
-            <h4>Recent BOQs</h4>
-            {loading ? <div className="qp-empty">Loading…</div>
-             : projects.length === 0 ? <div className="qp-empty">Nothing measured yet.</div>
-             : (
-              <div className="qp-wrap">
-                <table className="qp-table">
-                  <thead><tr><th>Project</th><th>Drawings</th><th>BOQ lines</th><th>Status</th><th></th></tr></thead>
-                  <tbody>
-                    {projects.slice(0, 6).map(p => {
-                      const m = metrics[p.id] || {};
-                      const st = m.priced ? ["Priced", "#10b981"]
-                        : m.boq > 0 ? ["Complete", "#3b82f6"]
-                        : m.drawings > 0 ? ["Processing", "#f59e0b"]
-                        : ["Not started", "#94a3b8"];
-                      return (
-                        <tr key={p.id}>
-                          <td className="nm">{p.project_name}</td>
-                          <td>{m.drawings ?? 0}</td>
-                          <td>{m.boq ? m.boq : "—"}</td>
-                          <td><span className="qp-badge" style={{ color: st[1], borderColor: st[1] }}>{st[0]}</span></td>
-                          <td><button className="qp-btn" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => onOpenProject(p)}>Open</button></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-             )}
-          </div>
+      <div className="qh-two">
+        <div className="qh-card">
+          <div className="qh-ph">Your recent projects</div>
+          {err ? <div className="qh-empty">{err}</div>
+           : loading ? <div className="qh-empty">Loading…</div>
+           : recent.length === 0 ? (
+            <div className="qh-empty">No projects yet. <button className="lnk" onClick={onNewProject}>Create your first one →</button></div>
+           ) : (
+            <div className="qh-tbl">
+              <table>
+                <thead><tr><th>Project</th><th>Location</th><th className="r">Drawings</th><th className="r">BOQ</th><th>Last run</th><th>Status</th></tr></thead>
+                <tbody>
+                  {recent.slice(0, 5).map(p => {
+                    const m = metrics[p.id] || {}; const [label, cls] = STATUS(p);
+                    return (
+                      <tr key={p.id} onClick={() => onOpenProject(p)}>
+                        <td className="nm">{p.project_name}</td>
+                        <td>{[p.city, p.country].filter(Boolean).join(", ") || "—"}</td>
+                        <td className="r">{m.drawings || 0}</td>
+                        <td className="r">{m.boq || 0}</td>
+                        <td>{m.lastRun ? new Date(m.lastRun).toLocaleDateString() : "—"}</td>
+                        <td><span className={`qh-pill ${cls}`}>{label}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {recent.length > 0 && <button className="qh-viewall" onClick={() => onNavigate("dashboard")}>View all projects →</button>}
         </div>
 
-        <div>
-          <div className="qp-card">
-            <h4>Your plan</h4>
-            {usage ? (
-              <>
-                <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 12 }}>
-                  {usage.plan?.name || "Free"}
+        <div className="qh-card">
+          <div className="qh-ph">What the AI flagged<small>From your own analyses — nothing estimated</small></div>
+          <button className="qh-ins" onClick={() => onNavigate("boq")}>
+            <span className="ic" style={{ background: "rgba(14,165,233,.16)", color: "#38bdf8" }}>◈</span>
+            <span className="tx"><b>Cost findings</b><span className="v">{extra.findings}</span>
+              <span>Cheaper alternatives proposed, never applied on their own</span></span><span className="arw">&rsaquo;</span>
+          </button>
+          <button className="qh-ins" onClick={() => onNavigate("boq")}>
+            <span className="ic" style={{ background: "rgba(245,158,11,.16)", color: "#fbbf24" }}>!</span>
+            <span className="tx"><b>Needs engineer review</b><span className="v">{extra.review}</span>
+              <span>Lines the AI would not guess a quantity for</span></span><span className="arw">&rsaquo;</span>
+          </button>
+          <button className="qh-ins" onClick={() => onNavigate("markup")}>
+            <span className="ic" style={{ background: "rgba(139,92,246,.16)", color: "#a78bfa" }}>◎</span>
+            <span className="tx"><b>Check the markup</b><span className="v">{totals.boq.toLocaleString()}</span>
+              <span>Every measured line, boxed on the drawing</span></span><span className="arw">&rsaquo;</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="qh-two">
+        <div className="qh-card qh-trial">
+          <div className="t"><span className="mk">Q</span>{usage?.plan?.name || "Your plan"}</div>
+          {usage ? (
+            <React.Fragment>
+              {[["Pages processed", usage?.pages?.used, usage?.pages?.limit, "linear-gradient(90deg,#38bdf8,#2563eb)"],
+                ["Projects", usage?.projects?.used, usage?.projects?.limit, "linear-gradient(90deg,#a78bfa,#7c3aed)"],
+                ["Chat requests", usage?.chat?.used, usage?.chat?.limit, "linear-gradient(90deg,#34d399,#059669)"],
+              ].filter(r => r[1] != null).map(([label, used, limit, grad]) => (
+                <div className="mtr" key={label}>
+                  <div className="r"><span>{label}</span><b>{used}{limit ? ` / ${limit}` : ""}</b></div>
+                  <div className="bar"><i style={{ width: limit ? `${Math.min(100, (used / limit) * 100)}%` : "6%", background: grad }} /></div>
                 </div>
-                {[["AI requests", usage.chat], ["Pages analysed", usage.pages], ["Projects", usage.projects]]
-                  .filter(([, u]) => u)
-                  .map(([label, u]) => (
-                    <Meter key={label} label={label} used={u.used} limit={u.limit} />
-                  ))}
-                <button className="qp-btn pri" style={{ width: "100%", marginTop: 6 }} onClick={onUpgrade}>Upgrade Plan</button>
-              </>
-            ) : (
-              <div style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>
-                Plan usage is loading. Open <button onClick={() => onNavigate("billing")} className="underline font-semibold">Billing</button> for the full picture.
-              </div>
-            )}
-          </div>
+              ))}
+              {usage?.trial_days_remaining != null && (
+                <div className="ends">Trial ends in {usage.trial_days_remaining} day{usage.trial_days_remaining === 1 ? "" : "s"}</div>
+              )}
+            </React.Fragment>
+          ) : <div className="qh-empty">Loading your plan…</div>}
+          <button className="qh-upg" onClick={onUpgrade}>Upgrade plan</button>
+        </div>
 
-          <div className="qp-card">
-            <h4>Quick access</h4>
-            <button className="qp-quick" onClick={() => onNavigate("compliance")}>Compliance rules <em>&rsaquo;</em></button>
-            <button className="qp-quick" onClick={() => onNavigate("approvals")}>Approval tracking <em>&rsaquo;</em></button>
-            <button className="qp-quick" onClick={() => onNavigate("reports")}>Reports &amp; exports <em>&rsaquo;</em></button>
-            <button className="qp-quick" onClick={() => onNavigate("team")}>Team members <em>&rsaquo;</em></button>
-            <button className="qp-quick" onClick={() => onNavigate("billing")}>Billing &amp; invoices <em>&rsaquo;</em></button>
-            <button className="qp-quick" onClick={() => onNavigate("settings")}>Settings <em>&rsaquo;</em></button>
-          </div>
-
-          <div className="qp-card">
-            <h4>Need help?</h4>
-            <button className="qp-quick" onClick={() => onNavigate("help")}>Getting started guide <em>&rsaquo;</em></button>
-            <button className="qp-quick" onClick={() => onNavigate("estima")}>Ask Estima AI <em>&rsaquo;</em></button>
-            <button className="qp-quick" onClick={() => onNavigate("help")}>Contact support <em>&rsaquo;</em></button>
-          </div>
+        <div className="qh-card qh-res">
+          <div className="qh-ph">Quick access</div>
+          {[["compliance", "Compliance rules"], ["approvals", "Approval tracking"], ["reports", "Reports & exports"],
+            ["team", "Team members"], ["billing", "Billing & invoices"], ["help", "Help & support"]].map(([k, l]) => (
+            <button key={k} onClick={() => onNavigate(k)}>{l}<span>&rsaquo;</span></button>
+          ))}
         </div>
       </div>
     </div>
   );
 }
+
 
 // ---------------------------------------------------------------------------
 // Shared furniture for the app-level pages.
@@ -17476,7 +17662,16 @@ function SettingsPage({ email, bare }) {
     setBusy("name"); setMsg(null);
     try {
       const { data: { user } } = await sb.auth.getUser();
-      const { error } = await sb.from("profiles").update({ full_name: name }).eq("id", user.id);
+      // Signup now stores the two halves separately, so editing the one field
+      // here has to keep them in step or the admin Customers page and this page
+      // start disagreeing about the same person.
+      const whole = name.trim().replace(/\s+/g, " ");
+      const sp = whole.indexOf(" ");
+      const { error } = await sb.from("profiles").update({
+        full_name: whole,
+        first_name: sp < 0 ? (whole || null) : whole.slice(0, sp),
+        last_name:  sp < 0 ? null : whole.slice(sp + 1),
+      }).eq("id", user.id);
       if (error) throw error;
       setMsg({ ok: true, text: "Name saved." });
     } catch (e) { setMsg({ ok: false, text: e.message }); }
@@ -19276,6 +19471,128 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
   min-width:12px;text-align:center;pointer-events:none;white-space:nowrap;
   text-shadow:0 1px 1px rgba(0,0,0,0.35)}
 .qtr-item-active{border-color:#fb7185!important}
+</style>
+<style id="quantora-home-v2">
+/* The approved dashboard. Hand-written because the Tailwind build in this file
+   is pre-purged -- any class not already compiled does nothing at all. Every
+   colour goes through the same --q-* tokens as the rest of the portal, so a
+   future light theme picks this page up with everything else. */
+.qh{display:flex;flex-direction:column;gap:18px}
+.qh-hi{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.qh-hi h1{font-size:22px;font-weight:800;letter-spacing:-.02em;margin:0}
+.qh-hi p{font-size:13px;color:var(--q-text-dim,#64748b);margin:3px 0 0}
+.qh-acts{display:flex;gap:10px;flex-wrap:wrap}
+.qh-btn{border-radius:11px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;
+  border:1px solid var(--q-border,#e2e8f0);background:var(--q-panel,#fff);color:var(--q-text,#0f172a)}
+.qh-btn.pri{border:none;background:linear-gradient(90deg,#6366f1,#4f46e5);color:#fff;
+  box-shadow:0 8px 22px rgba(79,70,229,.35)}
+
+.qh-hero{border:1px solid rgba(139,92,246,.28);border-radius:18px;padding:22px 24px;display:flex;align-items:center;
+  gap:20px;position:relative;overflow:hidden;
+  background:linear-gradient(110deg, rgba(76,29,149,.5) 0%, rgba(30,27,75,.5) 42%, var(--q-panel,#fff) 100%)}
+.qh-hero:after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(520px 240px at 88% 40%, rgba(34,211,238,.15), transparent 70%)}
+.qh-hero-txt{position:relative;z-index:2;flex:1;min-width:0}
+.qh-hero h3{font-size:15.5px;font-weight:800;margin:0 0 5px}
+.qh-hero p{font-size:12.5px;color:var(--q-text-dim,#64748b);margin:0 0 15px}
+.qh-hero-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.qh-find{flex:1;min-width:200px;max-width:340px;border-radius:10px;padding:9px 13px;font-size:12.5px;
+  border:1px solid var(--q-border-strong,#cbd5e1);background:var(--q-panel-2,#fff);color:var(--q-text,#0f172a)}
+.qh-hits{position:relative;z-index:3;margin-top:10px;max-width:420px;
+  border:1px solid var(--q-border,#e2e8f0);border-radius:12px;background:var(--q-panel,#fff);overflow:hidden}
+.qh-hit{display:block;width:100%;text-align:left;padding:9px 13px;border:none;cursor:pointer;
+  background:transparent;border-top:1px solid var(--q-border,#e2e8f0)}
+.qh-hit:first-child{border-top:none}
+.qh-hit b{display:block;font-size:12.5px;color:var(--q-text,#0f172a)}
+.qh-hit span{font-size:11px;color:var(--q-text-dimmer,#94a3b8)}
+.qh-hit.none{color:var(--q-text-dim,#64748b);font-size:12.5px;cursor:default}
+.qh-iso{position:relative;z-index:2;width:280px;height:145px;flex:none}
+@media (max-width:900px){.qh-iso{display:none}}
+
+.qh-sec{font-size:14.5px;font-weight:700;margin:2px 0 -6px}
+.qh-grid3{display:grid;grid-template-columns:repeat(1,minmax(0,1fr));gap:12px}
+@media (min-width:760px){.qh-grid3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (min-width:1180px){.qh-grid3{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.qh-act{display:flex;align-items:center;gap:13px;padding:15px 16px;text-align:left;cursor:pointer;
+  border:1px solid var(--q-border,#e2e8f0);border-radius:14px;background:var(--q-panel,#fff)}
+.qh-act .ic{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  flex:none;font-size:18px;font-weight:800}
+.qh-act .tx{min-width:0}
+.qh-act b{display:block;font-size:13.5px;font-weight:700;color:var(--q-text,#0f172a)}
+.qh-act .tx span{font-size:11.5px;color:var(--q-text-dim,#64748b)}
+.qh-act .arw{margin-left:auto;color:var(--q-text-dimmer,#94a3b8);font-size:17px}
+
+.qh-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid var(--q-border,#e2e8f0);
+  border-radius:14px;overflow:hidden;background:var(--q-panel,#fff)}
+@media (min-width:760px){.qh-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (min-width:1180px){.qh-strip{grid-template-columns:repeat(6,minmax(0,1fr))}}
+.qh-strip button{display:flex;align-items:center;gap:10px;padding:13px 14px;background:none;cursor:pointer;
+  border:none;border-right:1px solid var(--q-border,#e2e8f0);border-top:1px solid var(--q-border,#e2e8f0);text-align:left}
+.qh-strip button:nth-child(-n+3){border-top:none}
+.qh-strip .dot{width:9px;height:9px;border-radius:99px;flex:none}
+.qh-strip b{display:block;font-size:11.5px;font-weight:700;color:var(--q-text,#0f172a);white-space:nowrap}
+.qh-strip .tx span{display:block;font-size:10.5px;color:var(--q-text-dimmer,#94a3b8)}
+
+.qh-grid4{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media (min-width:1180px){.qh-grid4{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.qh-kpi{border:1px solid var(--q-border,#e2e8f0);border-radius:14px;background:var(--q-panel,#fff);padding:15px 16px}
+.qh-kpi .hd{display:flex;align-items:center;gap:9px;margin-bottom:11px}
+.qh-kpi .hd .ic{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px}
+.qh-kpi .hd b{font-size:12.5px;font-weight:700}
+.qh-kpi .bd{display:flex;align-items:flex-end;justify-content:space-between;gap:10px}
+.qh-kpi .n{font-size:28px;font-weight:800;letter-spacing:-.02em;line-height:1}
+.qh-kpi .n .of{font-size:13px;font-weight:600;color:var(--q-text-dimmer,#94a3b8)}
+.qh-kpi .lb{font-size:11px;color:var(--q-text-dim,#64748b);margin-top:6px}
+
+.qh-two{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
+@media (min-width:1180px){.qh-two{grid-template-columns:minmax(0,1.5fr) minmax(0,1fr)}}
+.qh-card{border:1px solid var(--q-border,#e2e8f0);border-radius:14px;background:var(--q-panel,#fff);overflow:hidden}
+.qh-ph{padding:15px 16px 12px;font-size:14px;font-weight:700}
+.qh-ph small{display:block;font-size:11.5px;color:var(--q-text-dim,#64748b);font-weight:500;margin-top:2px}
+.qh-empty{padding:16px;font-size:12.5px;color:var(--q-text-dim,#64748b)}
+.qh-empty .lnk{background:none;border:none;color:#818cf8;font-weight:700;cursor:pointer;font-size:12.5px}
+.qh-tbl{overflow-x:auto}
+.qh-tbl table{width:100%;border-collapse:collapse}
+.qh-tbl th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--q-text-dimmer,#94a3b8);
+  text-align:left;padding:9px 16px;background:var(--q-panel-2,#f8fafc);font-weight:700;white-space:nowrap}
+.qh-tbl td{padding:11px 16px;font-size:12.5px;border-top:1px solid var(--q-border,#e2e8f0);
+  color:var(--q-text-dim,#64748b);white-space:nowrap}
+.qh-tbl td.nm{color:var(--q-text,#0f172a);font-weight:600}
+.qh-tbl th.r,.qh-tbl td.r{text-align:right}
+.qh-tbl tbody tr{cursor:pointer}
+.qh-pill{display:inline-block;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:99px}
+.qh-pill.c{background:rgba(34,197,94,.16);color:#86efac}
+.qh-pill.p{background:rgba(59,130,246,.16);color:#93c5fd}
+.qh-pill.r{background:rgba(245,158,11,.16);color:#fcd34d}
+.qh-pill.n{background:rgba(148,163,184,.16);color:#cbd5e1}
+.qh-viewall{display:block;width:100%;text-align:left;padding:11px 16px;font-size:12px;color:#818cf8;
+  font-weight:700;background:none;border:none;border-top:1px solid var(--q-border,#e2e8f0);cursor:pointer}
+
+.qh-ins{display:flex;align-items:center;gap:11px;padding:12px 16px;width:100%;text-align:left;cursor:pointer;
+  background:none;border:none;border-top:1px solid var(--q-border,#e2e8f0)}
+.qh-ins .ic{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex:none;font-size:15px}
+.qh-ins .tx{min-width:0}
+.qh-ins b{display:block;font-size:12px;font-weight:700;color:var(--q-text,#0f172a)}
+.qh-ins .v{display:block;font-size:15px;font-weight:800;margin:1px 0;color:var(--q-text,#0f172a)}
+.qh-ins .tx span:last-child{font-size:10.5px;color:var(--q-text-dimmer,#94a3b8)}
+.qh-ins .arw{margin-left:auto;color:var(--q-text-dimmer,#94a3b8);font-size:17px}
+
+.qh-trial{padding:16px}
+.qh-trial .t{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:800;margin-bottom:14px}
+.qh-trial .mk{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,#6366f1,#22d3ee);
+  display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#05070d}
+.qh-trial .mtr{margin-bottom:12px}
+.qh-trial .r{display:flex;justify-content:space-between;font-size:11.5px;color:var(--q-text-dim,#64748b);margin-bottom:5px}
+.qh-trial .r b{color:var(--q-text,#0f172a)}
+.qh-trial .bar{height:6px;border-radius:99px;background:rgba(148,163,184,.22);overflow:hidden}
+.qh-trial .bar i{display:block;height:100%;border-radius:99px}
+.qh-trial .ends{font-size:11px;color:#a5b4fc;margin:10px 0 13px}
+.qh-upg{width:100%;border:none;border-radius:11px;padding:11px;font-size:13px;font-weight:800;color:#fff;cursor:pointer;
+  background:linear-gradient(90deg,#6366f1,#8b5cf6,#ec4899);box-shadow:0 10px 24px rgba(139,92,246,.3)}
+.qh-res button{display:flex;align-items:center;justify-content:space-between;width:100%;padding:11px 16px;
+  border:none;border-top:1px solid var(--q-border,#e2e8f0);background:none;cursor:pointer;
+  font-size:12.5px;color:var(--q-text-dim,#64748b);text-align:left}
+.qh-res button span{color:var(--q-text-dimmer,#94a3b8);font-size:15px}
 </style>
 <style id="quantora-portal-shell">
 /* The app-level shell: permanent left navigation plus the page beside it.
