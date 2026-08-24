@@ -405,6 +405,44 @@ function projectScopeLabel(v) {
   return String(v).split("_").filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
+// The project reference, rendered the same way everywhere it appears. Click to
+// copy: this string gets written on quotations, invoices and site reports, so
+// the copy path matters more than it looks.
+function ProjectRef({ value, size = "md" }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return null;
+  const big = size === "lg";
+  function copy(e) {
+    e.stopPropagation();
+    try {
+      // clipboard.writeText needs a secure context; the textarea fallback is
+      // what keeps this working on plain http and older browsers.
+      if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(value);
+      else {
+        const ta = document.createElement("textarea");
+        ta.value = value; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); document.body.removeChild(ta);
+      }
+      setCopied(true); setTimeout(() => setCopied(false), 1400);
+    } catch (err) { console.error("copy failed (non-fatal):", err); }
+  }
+  return (
+    <button type="button" onClick={copy} title={`Project reference ${value} — click to copy`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        fontSize: big ? 13 : 11.5, fontWeight: 700, letterSpacing: ".02em",
+        padding: big ? "4px 10px" : "2px 8px", borderRadius: 7,
+        border: "1px solid var(--q-border,#e2e8f0)",
+        background: "var(--q-panel-2,#f1f5f9)", color: "var(--q-text-dim,#475569)",
+        cursor: "pointer", whiteSpace: "nowrap", verticalAlign: "middle",
+      }}>
+      {copied ? "Copied" : value}
+    </button>
+  );
+}
+
 function slugBuildingType(text){return String(text||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,48);}
 function buildingTypeLabel(v){if(!v)return "\u2014";const hit=BUILDING_TYPES.find(b=>b[0]===v);if(hit)return hit[1];return String(v).split("_").filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(" ");}
 
@@ -2980,10 +3018,11 @@ const QUANTORA_LANDING_HTML = `
   <div class="wrap">
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>Your AI Team</div>
     <h2 class="sectitle">Your Digital Engineering Team</h2>
-    <p class="secsub">Four specialized AI experts working on every project, around the clock.</p>
+    <p class="secsub">Seven specialised AI experts working on every project, around the clock &mdash; across all four dashboards.</p>
     <div class="team-grid">
       <div class="team-card">
         <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#a5b4fc;"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V2.5h6V4"/><path d="M9 10.5h6M9 14.5h6"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#3987e522;color:#3987e5;border:1px solid #3987e555;">Estimation dashboard</div>
         <h3>AI Quantity Surveyor</h3>
         <div class="sec-list small">
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Accurate quantity take-off</div>
@@ -2994,6 +3033,7 @@ const QUANTORA_LANDING_HTML = `
       </div>
       <div class="team-card">
         <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#93c5fd;"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#3987e522;color:#3987e5;border:1px solid #3987e555;">Estimation dashboard</div>
         <h3>AI Design Engineer</h3>
         <div class="sec-list small">
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>System design &amp; layout review</div>
@@ -3004,6 +3044,7 @@ const QUANTORA_LANDING_HTML = `
       </div>
       <div class="team-card">
         <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#86efac;"><circle cx="12" cy="12" r="9"/><path d="M8 12.3l2.7 2.7L16 9.5"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#3987e522;color:#3987e5;border:1px solid #3987e555;">Estimation dashboard</div>
         <h3>AI Compliance Consultant</h3>
         <div class="sec-list small">
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Code &amp; standard compliance checks</div>
@@ -3014,12 +3055,46 @@ const QUANTORA_LANDING_HTML = `
       </div>
       <div class="team-card">
         <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#d8b4fe;"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#3987e522;color:#3987e5;border:1px solid #3987e555;">Estimation dashboard</div>
         <h3>AI Procurement Assistant</h3>
         <div class="sec-list small">
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>RFQ &amp; tender package prep</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Supplier &amp; product matching</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Comparative price analysis</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Purchase order tracking</div>
+        </div>
+      </div>
+      <div class="team-card">
+        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#fcd34d;"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 6h6v6"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#c9850022;color:#c98500;border:1px solid #c9850055;">Sales dashboard</div>
+        <h3>AI Sales Manager</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Pipeline value by stage</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Monthly target tracking</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Win rate and loss analysis</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Bid deadlines and ownership</div>
+        </div>
+      </div>
+      <div class="team-card">
+        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#6ee7b7;"><path d="M3 21V9l9-6 9 6v12"/><path d="M9 21v-6h6v6"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#199e7022;color:#199e70;border:1px solid #199e7055;">Operations dashboard</div>
+        <h3>AI Project Manager</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Delivery stage by project</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Progress against programme</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Overdue milestone alerts</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Site issues by severity</div>
+        </div>
+      </div>
+      <div class="team-card">
+        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#c4b5fd;"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5h5M9.5 14.5h5"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#9085e922;color:#9085e9;border:1px solid #9085e955;">Revenue dashboard</div>
+        <h3>AI Accounts Manager</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Contract value and claims</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Certification tracking</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Receivables ageing</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Retention and collection</div>
         </div>
       </div>
     </div>
@@ -3155,6 +3230,17 @@ const QUANTORA_LANDING_HTML = `
       <p style="text-align:center;font-size:13px;color:var(--text-dimmer);margin-top:14px;">Quantora Mall — Phase 1 · upload drawings, read the tender, take-off, BOQ, compliance, estimate, enquiry, comparison and approval · 1 min 38 s · no sound</p>
     </div>
 
+    <div style="max-width:1000px;margin:0 auto 54px;">
+      <h3 style="text-align:center;font-size:19px;font-weight:800;margin-bottom:6px;">Four dashboards, one project reference</h3>
+      <p class="secsub" style="margin:0 auto 20px;max-width:70ch;">Estimation, sales, operations and revenue &mdash; separate screens for separate teams, following the same job from the day you bid it to the day you are paid.</p>
+      <div style="position:relative;border-radius:16px;overflow:hidden;border:1px solid rgba(148,163,184,0.18);box-shadow:0 24px 70px rgba(0,0,0,0.55);background:#070b14;">
+        <video autoplay muted loop playsinline preload="metadata" poster="dashboards-poster.jpg" style="display:block;width:100%;height:auto;">
+          <source src="dashboards.mp4" type="video/mp4" />
+        </video>
+      </div>
+      <p style="text-align:center;font-size:13px;color:var(--text-dimmer);margin-top:14px;">Sample project data &middot; 27 s &middot; no sound</p>
+    </div>
+
     <div class="steps">
       <div class="step">
         <div class="step-num" style="background:#6366f1;">01</div>
@@ -3223,7 +3309,7 @@ const QUANTORA_LANDING_HTML = `
   <div class="wrap" style="max-width:1040px;">
     <div class="kicker" style="justify-content:flex-start;text-align:left;"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg>Beyond BOQ</div>
     <h2 class="sectitle" style="text-align:left;">One Platform, Every Step of the Job</h2>
-    <p class="secsub" style="text-align:left;margin:0 0 34px;">Quantora is bigger than a BOQ generator. It's a full AI engineering suite for your projects.</p>
+    <p class="secsub" style="text-align:left;margin:0 0 34px;">Quantora is bigger than a BOQ generator. Four dashboards &mdash; estimation, sales, operations and revenue &mdash; each with its own screens, all following the same project reference from the day you bid it to the day you are paid.</p>
     <div class="outputs-grid-3col">
       <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Drawing Upload &amp; AI Take-Off</div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Drawing Markup &amp; Verification</div>
@@ -3238,6 +3324,9 @@ const QUANTORA_LANDING_HTML = `
           <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Approval Tracking</div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Cost &amp; Budget Analysis</div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Product Recommendations</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Sales Pipeline &amp; Targets</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Project Operations &amp; Programme</div>
+          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Revenue, Claims &amp; Collections</div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Excel &amp; PDF Export</div>
     </div>
   </div>
@@ -3499,13 +3588,14 @@ const QUANTORA_LANDING_HTML = `
       <div class="soon-col">
         <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M5 15s-1-5 4-9c4-3.5 9-4 9-4s-.5 5-4 9c-4 5-9 4-9 4z"/><circle class="fill-solid" cx="14.7" cy="9.3" r="1.4"/><path d="M9 15l-3 3M6.2 12.2l-3 3"/></svg>What's Next</div>
         <h2>Coming Soon</h2>
-        <p>We're just getting started — here's what's on the roadmap.</p>
+        <p>The four division dashboards are live. Here is what comes next.</p>
         <div class="soon-list">
-          <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg>AI Cost Estimation</div>
           <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg>AI Scheduling</div>
           <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M3 21V9l9-6 9 6v12"/><path d="M9 21v-6h6v6"/></svg>AI BIM</div>
           <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M4 4l16 16M20 4L4 20"/></svg>AI Clash Detection</div>
-          <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 6h6v6"/></svg>AI Progress Tracking</div>
+          
+          
+          
           <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>AI Site Monitoring</div>
           <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg>AI Procurement Marketplace</div>
         </div>
@@ -4873,6 +4963,9 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
                 <div className="pn">{p.project_name}</div>
                 <StagePill stage={stageOf(metrics[p.id])} />
               </div>
+              {p.project_ref && (
+                <div style={{ marginTop: 4, marginBottom: 2 }}><ProjectRef value={p.project_ref} /></div>
+              )}
               <div className="pl">{p.city}, {p.country} · {buildingTypeLabel(p.building_type)}
                 {p.number_of_floors ? ` · ${p.number_of_floors} floors` : ""}
                 {p.area_size ? ` · ${p.area_size} ${p.area_unit}` : ""}</div>
@@ -8098,7 +8191,10 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
       </div>
       <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">{project.project_name}</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <h1 className="text-2xl font-bold">{project.project_name}</h1>
+            <ProjectRef value={project.project_ref} size="lg" />
+          </div>
           <p className="text-slate-500 text-sm">
             {project.client_name ? `${project.client_name} · ` : ""}{project.city}, {project.country}
             {" · "}{buildingTypeLabel(project.building_type)}
@@ -16893,6 +16989,19 @@ function QReportsView({ reportsData, exportBusy, onPayments, onTrials, onSubs, o
 // One navigation for the whole product. Every destination named here is a real
 // page: nothing is listed that opens a "coming soon".
 // ---------------------------------------------------------------------------
+// The four divisions. `adminOnly` marks the ones with no data behind them yet:
+// they are built and reachable for the platform owner, and invisible to
+// customers until they have something to show.
+const PORTAL_DIVISIONS = [
+  ["Pre-contract", [["dashboard", "Estimation",  "\u25A4", false]]],
+  ["Commercial",   [["sales",     "Sales",       "\u2197", false]]],
+  ["Delivery",     [["operations","Operations",  "\u2692", false]]],
+  ["Finance",      [["revenue",   "Revenue",     "\u25CE", false]]],
+];
+const DIVISION_KEYS = PORTAL_DIVISIONS.flatMap(g => g[1]).map(d => d[0]);
+const DIVISION_META = Object.fromEntries(
+  PORTAL_DIVISIONS.flatMap(g => g[1]).map(d => [d[0], { label: d[1], icon: d[2], adminOnly: d[3] }]));
+
 const PORTAL_NAV = [
   ["", [
     ["home",       "Home",              "\u2302"],
@@ -16916,7 +17025,7 @@ const PORTAL_LABEL = Object.fromEntries(
   PORTAL_NAV.flatMap(g => g[1]).map(([k, l]) => [k, l])
 );
 
-function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, children }) {
+function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, isPlatformAdmin, children }) {
   const current = view.name === "new" || view.name === "edit" ? "dashboard" : view.name;
   const Item = ([key, label, icon]) => (
     <button key={key} className={`qp-item ${current === key ? "on" : ""}`} onClick={() => onNavigate(key)}>
@@ -16931,7 +17040,40 @@ function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, child
           <img src={QUANTORA_LOGO_URI} alt="" />
           <span><b>Quantora</b><span>AI Construction Platform</span></span>
         </div>
-        {PORTAL_NAV.map(([group, items]) => (
+        {/* Home first, then the divisions, then the pages that serve them. */}
+        {PORTAL_NAV.slice(0, 1).map(([group, items]) => (
+          <div key="top">{items.slice(0, 1).map(Item)}</div>
+        ))}
+        {PORTAL_DIVISIONS.map(([group, items]) => {
+          const visible = items.filter(d => !d[3] || isPlatformAdmin);
+          if (!visible.length) return null;
+          return (
+            <div key={group}>
+              <div className="qp-grp">{group}</div>
+              {visible.map(([key, label, icon, adminOnly]) => (
+                <button key={key} className={`qp-item ${current === key ? "on" : ""}`}
+                  onClick={() => onNavigate(key)}
+                  title={adminOnly ? `${label} — in development, only you can see this` : label}>
+                  <span className="ic" aria-hidden="true">{icon}</span>
+                  <span className="lb">{label}</span>
+                  {adminOnly && (
+                    <span aria-label="in development" title="In development — customers cannot see this"
+                      style={{ marginLeft: "auto", fontSize: 9, fontWeight: 800, letterSpacing: ".04em",
+                               padding: "1px 6px", borderRadius: 5, flex: "none",
+                               background: "rgba(245,158,11,.18)", color: "#fcd34d" }}>DEV</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+        {PORTAL_NAV.slice(0, 1).map(([group, items]) => (
+          <div key="work">
+            <div className="qp-grp">Project work</div>
+            {items.slice(2).map(Item)}
+          </div>
+        ))}
+        {PORTAL_NAV.slice(1).map(([group, items]) => (
           <div key={group || "main"}>
             {group ? <div className="qp-grp">{group}</div> : null}
             {items.map(Item)}
@@ -17050,7 +17192,7 @@ function QDonut({ pct, colour }) {
   );
 }
 
-function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email }) {
+function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, isPlatformAdmin }) {
   const [fullName, setFullName] = useState("");
   const [projects, setProjects] = useState([]);
   const [metrics, setMetrics] = useState({});
@@ -17202,6 +17344,37 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email })
           <g stroke="#67e8f9" strokeWidth="1" opacity=".8"><path d="M150 74v22M110 62v22M190 62v22" /></g>
         </svg>
       </section>
+
+      {/* Divisions. Estimation is live for everyone; the other three appear
+          only for the platform owner until they have data behind them. */}
+      <h3 className="qh-sec">Your divisions</h3>
+      <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#94a3b8)", margin: "-6px 0 13px", lineHeight: 1.6 }}>
+        Each team has its own dashboard. Nothing is shared between them except the project reference.
+      </p>
+      <div className="qh-grid3" style={{ marginBottom: 26 }}>
+        {[
+          ["dashboard",  "Estimation & Procurement", "Take-off, BOQ, RFQ and comparison", "\u25A4", "#3987e5", false],
+          ["sales",      "Sales",                    "Pipeline, targets, bids and win rate", "\u2197", "#c98500", false],
+          ["operations", "Operations",               "Programme, progress, site issues",  "\u2692", "#199e70", false],
+          ["revenue",    "Revenue",                  "Invoices, certification, collection", "\u25CE", "#9085e9", false],
+        ].filter(([, , , , , adminOnly]) => !adminOnly || isPlatformAdmin)
+         .map(([key, title, sub, glyph, colour, adminOnly]) => (
+          <button key={key} className="qh-act" onClick={() => onNavigate(key)}
+            style={{ borderTop: `2px solid ${colour}` }}>
+            <span className="ic" style={{ background: colour + "22", color: colour }} aria-hidden="true">{glyph}</span>
+            <span className="tx">
+              <b>{title}</b>
+              <span>{sub}</span>
+            </span>
+            {adminOnly && (
+              <span title="In development — customers cannot see this"
+                style={{ marginLeft: "auto", fontSize: 9, fontWeight: 800, letterSpacing: ".04em",
+                         padding: "1px 6px", borderRadius: 5, flex: "none", alignSelf: "center",
+                         background: "rgba(245,158,11,.18)", color: "#fcd34d" }}>DEV</span>
+            )}
+          </button>
+        ))}
+      </div>
 
       <h3 className="qh-sec">What would you like to do today?</h3>
       <div className="qh-grid3">
@@ -19561,6 +19734,957 @@ function CountryPrompt() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Division dashboards — shared pieces
+// ---------------------------------------------------------------------------
+// Series colours are a data encoding, not brand decoration, so they are the
+// validated dark categorical slots rather than the portal indigo. Checked
+// against this surface with the palette validator: all six checks pass.
+const DIV_SERIES = ["#3987e5", "#c98500", "#199e70", "#9085e9", "#d55181", "#d95926"];
+const DIV_GOOD = "#2e9e5b", DIV_WARN = "#c98500", DIV_BAD = "#e05252";
+
+function divMoney(v, cur) {
+  const n = Number(v) || 0;
+  const c = cur || "AED";
+  if (Math.abs(n) >= 1000000) return `${c} ${(n / 1000000).toFixed(n >= 10000000 ? 1 : 2)}M`;
+  return `${c} ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+function divMonthStart(d) { const x = d ? new Date(d) : new Date(); return new Date(x.getFullYear(), x.getMonth(), 1); }
+function divDaysUntil(d) {
+  if (!d) return null;
+  return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000);
+}
+
+function DivStat({ label, value, note, tone }) {
+  return (
+    <div className="qp-card" style={{ padding: "15px 17px" }}>
+      <div style={{ fontSize: 11.5, color: "var(--q-text-dim,#64748b)", fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 29, fontWeight: 800, letterSpacing: "-.025em", lineHeight: 1.05,
+                    margin: "7px 0 3px", color: tone || "var(--q-text,#0f172a)" }}>{value}</div>
+      {note ? <div style={{ fontSize: 11.5, color: "var(--q-text-dimmer,#94a3b8)" }}>{note}</div> : null}
+    </div>
+  );
+}
+
+// Horizontal bars. Length encodes magnitude; the label sits outside the bar so
+// it is readable whatever the value.
+function DivBars({ rows, colour, format }) {
+  const max = rows.reduce((a, r) => Math.max(a, Number(r.value) || 0), 0) || 1;
+  if (!rows.length) return null;
+  return (
+    <div>
+      {rows.map((r, i) => (
+        <div key={r.label} style={{ display: "grid", gridTemplateColumns: "minmax(90px,150px) minmax(0,1fr) auto",
+                                    gap: 12, alignItems: "center", padding: "6px 0" }}>
+          <span style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", overflow: "hidden",
+                         textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.label}>{r.label}</span>
+          <span style={{ display: "block", height: 16, borderRadius: 4, overflow: "hidden",
+                         background: "var(--q-panel-2,#f1f5f9)" }}>
+            <span style={{ display: "block", height: "100%", borderRadius: "0 4px 4px 0",
+                           width: `${Math.max(2, (Number(r.value) || 0) / max * 100)}%`,
+                           background: Array.isArray(colour) ? colour[i % colour.length] : colour }} />
+          </span>
+          <span style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>
+            {format ? format(r) : r.value}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Actual as the bar, target as a tick — one axis, never two scales.
+function DivBullet({ actual, target, colour }) {
+  const t = Number(target) || 0, a = Number(actual) || 0;
+  const scale = Math.max(t, a) || 1;
+  return (
+    <div style={{ position: "relative", height: 16, borderRadius: 4, background: "var(--q-panel-2,#f1f5f9)" }}>
+      <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: "0 4px 4px 0",
+                     width: `${Math.min(100, a / scale * 100)}%`, background: colour || DIV_SERIES[0] }} />
+      {t > 0 && (
+        <span title={`Target ${t}`} style={{ position: "absolute", top: -3, bottom: -3, width: 2,
+          left: `calc(${Math.min(100, t / scale * 100)}% - 1px)`, borderRadius: 1,
+          background: "var(--q-text,#0f172a)", boxShadow: "0 0 0 2px var(--q-panel,#fff)" }} />
+      )}
+    </div>
+  );
+}
+
+function DivPill({ tone, children }) {
+  const map = { good: [DIV_GOOD, "rgba(46,158,91,.16)"], warn: [DIV_WARN, "rgba(201,133,0,.16)"],
+                bad: [DIV_BAD, "rgba(224,82,82,.16)"], flat: ["var(--q-text-dim,#64748b)", "rgba(148,163,184,.16)"] };
+  const [fg, bg] = map[tone] || map.flat;
+  return <span style={{ display: "inline-block", fontSize: 10.5, fontWeight: 800, padding: "3px 9px",
+                        borderRadius: 99, background: bg, color: fg, whiteSpace: "nowrap" }}>{children}</span>;
+}
+
+// The state that decides whether a customer comes back. Never a blank chart:
+// say what the screen is for and offer the one action that fills it.
+function DivEmpty({ title, body, actionLabel, onAction }) {
+  return (
+    <div className="qp-card" style={{ textAlign: "center", padding: "34px 24px" }}>
+      <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>{title}</div>
+      <p style={{ fontSize: 13, color: "var(--q-text-dim,#64748b)", lineHeight: 1.65,
+                  maxWidth: "58ch", margin: "0 auto 16px" }}>{body}</p>
+      {actionLabel ? <button className="qp-btn pri" onClick={onAction}>{actionLabel}</button> : null}
+    </div>
+  );
+}
+
+const BID_STAGES = [["identified","Identified"],["bidding","Bidding"],["submitted","Submitted"],
+                    ["negotiation","Negotiation"],["won","Won"],["lost","Lost"],["no_bid","No bid"]];
+const BID_STAGE_LABEL = Object.fromEntries(BID_STAGES);
+const LOSS_REASONS = [["price","Price too high"],["incumbent","Lost to incumbent"],
+  ["not_compliant","Not compliant with spec"],["programme","Delivery programme"],
+  ["no_response","Client never responded"],["withdrew","We withdrew / no bid"],
+  ["client_cancelled","Client cancelled"],["other","Other"]];
+const LOSS_LABEL = Object.fromEntries(LOSS_REASONS);
+const DELIVERY_STAGES = [["design","Design"],["procurement","Procurement"],["installation","Installation"],
+  ["testing","Testing & commissioning"],["handover","Handover"],["complete","Complete"]];
+const DELIVERY_LABEL = Object.fromEntries(DELIVERY_STAGES);
+
+
+function SalesPage({ onNavigate }) {
+  const [bids, setBids] = useState(null);
+  const [target, setTarget] = useState(null);
+  const [people, setPeople] = useState([]);
+  const [err, setErr] = useState("");
+  const [edit, setEdit] = useState(null);      // the bid being edited
+  const [busy, setBusy] = useState(false);
+  const [targetOpen, setTargetOpen] = useState(false);
+  const [targetVal, setTargetVal] = useState("");
+
+  const monthStart = divMonthStart();
+  const monthKey = monthStart.toISOString().slice(0, 10);
+
+  async function load() {
+    setErr("");
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+      const companyId = prof && prof.company_id;
+      const { data: t, error: tErr } = await sb.from("tenders")
+        .select("id, tender_name, tender_ref, client_name, city, country, bid_value, currency, owner_id, stage, probability, submission_deadline, expected_award, outcome_at, loss_reason, won_by, project_id")
+        .order("submission_deadline", { ascending: true, nullsFirst: false });
+      if (tErr) throw tErr;
+      setBids(t || []);
+      if (companyId) {
+        const { data: mates } = await sb.from("profiles")
+          .select("id, full_name, first_name, last_name").eq("company_id", companyId);
+        setPeople(mates || []);
+        const { data: tg } = await sb.from("sales_targets")
+          .select("*").eq("company_id", companyId).is("user_id", null).eq("period_month", monthKey).maybeSingle();
+        setTarget(tg || null);
+        setTargetVal(tg ? String(tg.target_value) : "");
+      }
+    } catch (e) { setErr(e.message); setBids([]); }
+  }
+  useEffect(() => { load(); }, []);
+
+  const nameOf = id => {
+    const p = people.find(x => x.id === id);
+    if (!p) return "Unassigned";
+    return (p.full_name || [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unassigned").trim();
+  };
+
+  const stats = useMemo(() => {
+    const b = bids || [];
+    const open = b.filter(x => ["identified","bidding","submitted","negotiation"].includes(x.stage));
+    const wonThisMonth = b.filter(x => x.stage === "won" && x.outcome_at && new Date(x.outcome_at) >= monthStart);
+    const closed = b.filter(x => ["won","lost"].includes(x.stage));
+    const won = b.filter(x => x.stage === "won");
+    return {
+      open, wonThisMonth, closed, won,
+      achieved: wonThisMonth.reduce((a, x) => a + (Number(x.bid_value) || 0), 0),
+      weighted: open.reduce((a, x) => a + (Number(x.bid_value) || 0) * ((x.probability ?? 0) / 100), 0),
+      winRate: closed.length ? Math.round(won.length / closed.length * 100) : null,
+      pipeline: BID_STAGES.slice(0, 4).map(([k, label]) => ({
+        label, value: open.filter(x => x.stage === k).reduce((a, x) => a + (Number(x.bid_value) || 0), 0),
+        count: open.filter(x => x.stage === k).length,
+      })),
+      losses: LOSS_REASONS.map(([k, label]) => ({
+        label, value: b.filter(x => x.stage === "lost" && x.loss_reason === k).length,
+      })).filter(r => r.value > 0).sort((a, b2) => b2.value - a.value),
+      closing: open.filter(x => x.submission_deadline).slice(0, 8),
+    };
+  }, [bids, people]);
+
+  async function saveBid(e) {
+    e.preventDefault();
+    setBusy(true); setErr("");
+    try {
+      const patch = {
+        bid_value: edit.bid_value === "" ? null : Number(edit.bid_value),
+        owner_id: edit.owner_id || null,
+        stage: edit.stage,
+        expected_award: edit.expected_award || null,
+        loss_reason: edit.stage === "lost" ? (edit.loss_reason || null) : null,
+        won_by: edit.stage === "lost" ? (edit.won_by || null) : null,
+      };
+      const { error } = await sb.from("tenders").update(patch).eq("id", edit.id);
+      if (error) throw error;
+      setEdit(null); await load();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+
+  async function saveTarget(e) {
+    e.preventDefault();
+    setBusy(true); setErr("");
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+      if (!prof || !prof.company_id) throw new Error("No company on your profile yet.");
+      const { error } = await sb.from("sales_targets").upsert({
+        company_id: prof.company_id, user_id: null, period_month: monthKey,
+        target_value: Number(targetVal) || 0, target_count: 0,
+      }, { onConflict: "company_id,user_id,period_month" });
+      if (error) throw error;
+      setTargetOpen(false); await load();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+
+  if (bids === null) return <div className="qp-card">Loading…</div>;
+
+  const targetValue = target ? Number(target.target_value) : 0;
+  const pct = targetValue > 0 ? Math.round(stats.achieved / targetValue * 100) : null;
+  const noValues = bids.length > 0 && bids.every(b => b.bid_value == null);
+
+  return (
+    <div>
+      <PageHead title="Sales" sub="Pipeline, targets, bids and win rate."
+        right={<button className="qp-btn" onClick={() => setTargetOpen(true)}>Set this month's target</button>} />
+
+      {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
+
+      {bids.length === 0 ? (
+        <DivEmpty
+          title="No bids yet"
+          body="This dashboard is built from your tenders. Add a tender on the Tender Intelligence page inside a project, then set its value, owner and stage here — the pipeline, win rate and targets all follow from that."
+          actionLabel="Go to projects" onAction={() => onNavigate("dashboard")} />
+      ) : (
+        <>
+          {noValues && (
+            <div className="qp-card" style={{ borderColor: "rgba(245,158,11,.4)" }}>
+              <b style={{ fontSize: 13, color: "#b45309" }}>None of your bids has a value yet.</b>
+              <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", marginTop: 5, lineHeight: 1.6 }}>
+                Pipeline and target figures stay at zero until a bid carries a number. Open any bid below and set its value.
+              </p>
+            </div>
+          )}
+
+          <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
+            <div className="qp-card" style={{ padding: "15px 17px" }}>
+              <div style={{ fontSize: 11.5, color: "var(--q-text-dim,#64748b)", fontWeight: 600 }}>Won this month</div>
+              <div style={{ fontSize: 29, fontWeight: 800, letterSpacing: "-.025em", lineHeight: 1.05, margin: "7px 0 3px" }}>
+                {divMoney(stats.achieved)}
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--q-text-dimmer,#94a3b8)" }}>
+                {targetValue > 0 ? `of ${divMoney(targetValue)} target` : "no target set"}
+              </div>
+              {targetValue > 0 && (
+                <div style={{ marginTop: 11 }}>
+                  <DivBullet actual={stats.achieved} target={targetValue} />
+                  <div style={{ fontSize: 11.5, color: "var(--q-text-dimmer,#94a3b8)", marginTop: 7 }}>
+                    {pct}% of target · the tick is the target
+                  </div>
+                </div>
+              )}
+            </div>
+            <DivStat label="Weighted pipeline" value={divMoney(stats.weighted)}
+              note={`${stats.open.length} live opportunit${stats.open.length === 1 ? "y" : "ies"}`} />
+            <DivStat label="Win rate" value={stats.winRate === null ? "—" : `${stats.winRate}%`}
+              note={stats.winRate === null ? "no closed bids yet" : `${stats.won.length} won of ${stats.closed.length} closed`} />
+            <DivStat label="Jobs won this month" value={stats.wonThisMonth.length}
+              note={`${bids.length} bid${bids.length === 1 ? "" : "s"} in total`} />
+          </div>
+
+          <div className="qp-cols">
+            <div className="qp-card">
+              <h4>Pipeline by stage</h4>
+              <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+                Where the money sits. Bar length is value; the count follows it.
+              </p>
+              {stats.pipeline.every(r => !r.value && !r.count)
+                ? <div className="qp-empty">Nothing open.</div>
+                : <DivBars rows={stats.pipeline} colour={DIV_SERIES}
+                    format={r => <>{divMoney(r.value)} <span style={{ color: "var(--q-text-dimmer,#94a3b8)", fontWeight: 600 }}>· {r.count}</span></>} />}
+            </div>
+            <div className="qp-card">
+              <h4>Why we lost</h4>
+              <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+                Recorded when a bid is marked lost.
+              </p>
+              {stats.losses.length === 0
+                ? <div className="qp-empty">No lost bids recorded yet.</div>
+                : <DivBars rows={stats.losses} colour={DIV_SERIES[1]} format={r => r.value} />}
+            </div>
+          </div>
+
+          <div className="qp-card">
+            <h4>Bids</h4>
+            <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+              Click any row to set its value, owner, stage and outcome.
+            </p>
+            <div style={{ overflowX: "auto" }}>
+              <table className="qp-table">
+                <thead><tr><th>Bid</th><th>Client</th><th>Owner</th><th>Stage</th>
+                  <th style={{ textAlign: "right" }}>Value</th><th style={{ textAlign: "right" }}>Due</th></tr></thead>
+                <tbody>
+                  {bids.map(b => {
+                    const d = divDaysUntil(b.submission_deadline);
+                    const open = ["identified","bidding","submitted","negotiation"].includes(b.stage);
+                    return (
+                      <tr key={b.id} style={{ cursor: "pointer" }} onClick={() => setEdit({
+                        id: b.id, tender_name: b.tender_name,
+                        bid_value: b.bid_value ?? "", owner_id: b.owner_id || "",
+                        stage: b.stage, expected_award: b.expected_award || "",
+                        loss_reason: b.loss_reason || "", won_by: b.won_by || "",
+                      })}>
+                        <td style={{ fontWeight: 600 }}>{b.tender_name}</td>
+                        <td>{b.client_name || "—"}</td>
+                        <td>{nameOf(b.owner_id)}</td>
+                        <td><DivPill tone={b.stage === "won" ? "good" : b.stage === "lost" ? "bad" : "flat"}>
+                          {BID_STAGE_LABEL[b.stage] || b.stage}</DivPill></td>
+                        <td style={{ textAlign: "right", fontWeight: 700 }}>
+                          {b.bid_value == null ? <span style={{ color: "#b45309" }}>set a value</span> : divMoney(b.bid_value, b.currency)}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {d === null || !open ? "—" :
+                            <DivPill tone={d <= 3 ? "bad" : d <= 7 ? "warn" : "flat"}>{d < 0 ? "overdue" : `${d} days`}</DivPill>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {edit && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}
+             onClick={() => !busy && setEdit(null)}>
+          <form onClick={e => e.stopPropagation()} onSubmit={saveBid} className="qp-card"
+                style={{ maxWidth: 460, width: "100%", margin: 0 }}>
+            <h4 style={{ marginBottom: 4 }}>{edit.tender_name}</h4>
+            <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 14 }}>
+              These four fields are what the pipeline, the win rate and the loss analysis are built from.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Bid value</label>
+                <input type="number" step="any" min="0" className="w-full border rounded-lg px-3 py-2 text-sm"
+                  placeholder="e.g. 4200000" value={edit.bid_value}
+                  onChange={e => setEdit(s => ({ ...s, bid_value: e.target.value }))} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Owner</label>
+                <select className="w-full border rounded-lg px-3 py-2 text-sm" value={edit.owner_id}
+                  onChange={e => setEdit(s => ({ ...s, owner_id: e.target.value }))}>
+                  <option value="">Unassigned</option>
+                  {people.map(p => <option key={p.id} value={p.id}>{nameOf(p.id)}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Stage</label>
+                <select className="w-full border rounded-lg px-3 py-2 text-sm" value={edit.stage}
+                  onChange={e => setEdit(s => ({ ...s, stage: e.target.value }))}>
+                  {BID_STAGES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+              {edit.stage === "lost" && (
+                <>
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Why did we lose it?</label>
+                    <select className="w-full border rounded-lg px-3 py-2 text-sm" value={edit.loss_reason}
+                      onChange={e => setEdit(s => ({ ...s, loss_reason: e.target.value }))} required>
+                      <option value="">Select a reason…</option>
+                      {LOSS_REASONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Who won it? (optional)</label>
+                    <input className="w-full border rounded-lg px-3 py-2 text-sm" value={edit.won_by}
+                      onChange={e => setEdit(s => ({ ...s, won_by: e.target.value }))} />
+                  </div>
+                </>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="qp-btn" onClick={() => setEdit(null)} disabled={busy}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {targetOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}
+             onClick={() => !busy && setTargetOpen(false)}>
+          <form onClick={e => e.stopPropagation()} onSubmit={saveTarget} className="qp-card"
+                style={{ maxWidth: 400, width: "100%", margin: 0 }}>
+            <h4 style={{ marginBottom: 4 }}>Target for this month</h4>
+            <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 14 }}>
+              The value of work you intend to win this month, for the whole company.
+            </p>
+            <input type="number" step="any" min="0" className="w-full border rounded-lg px-3 py-2 text-sm"
+              placeholder="e.g. 4500000" value={targetVal} onChange={e => setTargetVal(e.target.value)} required />
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Save target"}</button>
+              <button type="button" className="qp-btn" onClick={() => setTargetOpen(false)} disabled={busy}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function OperationsPage({ onNavigate }) {
+  const [projects, setProjects] = useState(null);
+  const [milestones, setMilestones] = useState([]);
+  const [issues, setIssues] = useState([]);
+  const [err, setErr] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [issueFor, setIssueFor] = useState(null);
+  const [issueTitle, setIssueTitle] = useState("");
+  const [issueSev, setIssueSev] = useState("warning");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setErr("");
+    try {
+      const { data: p, error: pErr } = await sb.from("projects")
+        .select("id, project_name, project_ref, city, country, delivery_stage, percent_complete, status")
+        .order("created_at", { ascending: false });
+      if (pErr) throw pErr;
+      setProjects(p || []);
+      const ids = (p || []).map(x => x.id);
+      if (ids.length) {
+        const { data: ms } = await sb.from("project_milestones").select("*").in("project_id", ids);
+        setMilestones(ms || []);
+        const { data: iss } = await sb.from("project_issues").select("*").in("project_id", ids).eq("status", "open");
+        setIssues(iss || []);
+      } else { setMilestones([]); setIssues([]); }
+    } catch (e) { setErr(e.message); setProjects([]); }
+  }
+  useEffect(() => { load(); }, []);
+
+  const stats = useMemo(() => {
+    const p = (projects || []).filter(x => x.status !== "archived");
+    const today = new Date(); today.setHours(0,0,0,0);
+    const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    const overdue = milestones.filter(m => !m.actual_date && m.planned_date && new Date(m.planned_date) < today);
+    const dueThisMonth = milestones.filter(m => !m.actual_date && m.planned_date &&
+      new Date(m.planned_date) >= today && new Date(m.planned_date) <= monthEnd);
+    // "Behind" means a milestone has slipped, not a hunch.
+    const behindIds = new Set(overdue.map(m => m.project_id));
+    return {
+      live: p, overdue, dueThisMonth, behindIds,
+      stages: DELIVERY_STAGES.map(([k, label]) => ({
+        label, value: p.filter(x => x.delivery_stage === k).length })).filter(r => r.value > 0),
+      unstaged: p.filter(x => !x.delivery_stage).length,
+    };
+  }, [projects, milestones]);
+
+  async function saveStage(e) {
+    e.preventDefault(); setBusy(true); setErr("");
+    try {
+      const { error } = await sb.from("projects").update({
+        delivery_stage: edit.delivery_stage || null,
+        percent_complete: edit.percent_complete === "" ? null : Number(edit.percent_complete),
+      }).eq("id", edit.id);
+      if (error) throw error;
+      setEdit(null); await load();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+
+  async function addIssue(e) {
+    e.preventDefault(); setBusy(true); setErr("");
+    try {
+      const { error } = await sb.from("project_issues").insert({
+        project_id: issueFor, title: issueTitle.trim(), severity: issueSev, status: "open" });
+      if (error) throw error;
+      setIssueFor(null); setIssueTitle(""); setIssueSev("warning"); await load();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+
+  async function closeIssue(id) {
+    try {
+      await sb.from("project_issues").update({ status: "closed", closed_at: new Date().toISOString() }).eq("id", id);
+      await load();
+    } catch (ex) { setErr(ex.message); }
+  }
+
+  if (projects === null) return <div className="qp-card">Loading…</div>;
+
+  return (
+    <div>
+      <PageHead title="Operations" sub="Delivery stage, progress against programme, and what is blocking site." />
+      {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
+
+      {projects.length === 0 ? (
+        <DivEmpty title="No projects yet"
+          body="Operations follows the projects you are delivering. Create a project and set its delivery stage, and this fills in."
+          actionLabel="Create a project" onAction={() => onNavigate("new")} />
+      ) : (
+        <>
+          <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
+            <DivStat label="Live projects" value={stats.live.length}
+              note={stats.unstaged ? `${stats.unstaged} without a stage` : "all staged"} />
+            <DivStat label="Milestones due this month" value={stats.dueThisMonth.length} note="planned completion dates" />
+            <DivStat label="Overdue milestones" value={stats.overdue.length}
+              tone={stats.overdue.length ? DIV_BAD : undefined} note="past their planned date" />
+            <DivStat label="Open issues" value={issues.length}
+              tone={issues.some(i => i.severity === "critical") ? DIV_BAD : issues.length ? DIV_WARN : undefined}
+              note={`${issues.filter(i => i.severity === "critical").length} critical`} />
+          </div>
+
+          <div className="qp-cols">
+            <div className="qp-card">
+              <h4>Projects by stage</h4>
+              <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+                Where the work sits in the delivery cycle.
+              </p>
+              {stats.stages.length === 0
+                ? <div className="qp-empty">No project has a delivery stage yet — set one below.</div>
+                : <DivBars rows={stats.stages} colour={DIV_SERIES} format={r => r.value} />}
+            </div>
+            <div className="qp-card">
+              <h4>Open issues</h4>
+              <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+                Anything blocking site progress.
+              </p>
+              {issues.length === 0 ? <div className="qp-empty">Nothing open.</div> : (
+                <div style={{ overflowX: "auto" }}>
+                  <table className="qp-table">
+                    <tbody>
+                      {issues.map(i => {
+                        const proj = projects.find(p => p.id === i.project_id);
+                        const days = Math.max(0, Math.round((Date.now() - new Date(i.opened_at).getTime()) / 86400000));
+                        return (
+                          <tr key={i.id}>
+                            <td style={{ fontWeight: 600 }}>{i.title}
+                              <div style={{ fontSize: 11, color: "var(--q-text-dimmer,#94a3b8)" }}>
+                                {proj ? proj.project_name : "—"}</div></td>
+                            <td><DivPill tone={i.severity === "critical" ? "bad" : i.severity === "warning" ? "warn" : "flat"}>
+                              {i.severity}</DivPill></td>
+                            <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{days}d</td>
+                            <td style={{ textAlign: "right" }}>
+                              <button className="qp-btn" style={{ fontSize: 11, padding: "4px 9px" }}
+                                onClick={() => closeIssue(i.id)}>Close</button></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="qp-card">
+            <h4>Delivery</h4>
+            <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+              Click a row to set its stage and progress. A project is “behind” when a milestone has passed its planned date.
+            </p>
+            <div style={{ overflowX: "auto" }}>
+              <table className="qp-table">
+                <thead><tr><th>Ref</th><th>Project</th><th style={{ width: "26%" }}>Progress</th>
+                  <th style={{ textAlign: "right" }}>%</th><th>Stage</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {stats.live.map(p => {
+                    const behind = stats.behindIds.has(p.id);
+                    const pc = p.percent_complete == null ? null : Number(p.percent_complete);
+                    return (
+                      <tr key={p.id}>
+                        <td onClick={() => setEdit({ id: p.id, project_name: p.project_name,
+                              delivery_stage: p.delivery_stage || "", percent_complete: p.percent_complete ?? "" })}
+                            style={{ cursor: "pointer" }}>
+                          <ProjectRef value={p.project_ref} /></td>
+                        <td style={{ fontWeight: 600, cursor: "pointer" }}
+                            onClick={() => setEdit({ id: p.id, project_name: p.project_name,
+                              delivery_stage: p.delivery_stage || "", percent_complete: p.percent_complete ?? "" })}>
+                          {p.project_name}</td>
+                        <td>{pc === null ? <span style={{ fontSize: 12, color: "var(--q-text-dimmer,#94a3b8)" }}>not set</span>
+                          : <DivBullet actual={pc} target={100} colour={behind ? DIV_SERIES[5] : DIV_SERIES[2]} />}</td>
+                        <td style={{ textAlign: "right", fontWeight: 700 }}>{pc === null ? "—" : `${pc}%`}</td>
+                        <td>{p.delivery_stage ? <DivPill tone="flat">{DELIVERY_LABEL[p.delivery_stage]}</DivPill>
+                          : <span style={{ fontSize: 12, color: "#b45309" }}>set a stage</span>}</td>
+                        <td>{behind ? <DivPill tone="warn">Behind</DivPill> : <DivPill tone="good">On track</DivPill>}</td>
+                        <td style={{ textAlign: "right" }}>
+                          <button className="qp-btn" style={{ fontSize: 11, padding: "4px 9px" }}
+                            onClick={() => setIssueFor(p.id)}>+ Issue</button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {edit && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}
+             onClick={() => !busy && setEdit(null)}>
+          <form onClick={e => e.stopPropagation()} onSubmit={saveStage} className="qp-card"
+                style={{ maxWidth: 400, width: "100%", margin: 0 }}>
+            <h4 style={{ marginBottom: 12 }}>{edit.project_name}</h4>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Delivery stage</label>
+                <select className="w-full border rounded-lg px-3 py-2 text-sm" value={edit.delivery_stage}
+                  onChange={e => setEdit(s => ({ ...s, delivery_stage: e.target.value }))}>
+                  <option value="">Not set</option>
+                  {DELIVERY_STAGES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Percent complete</label>
+                <input type="number" min="0" max="100" step="any" className="w-full border rounded-lg px-3 py-2 text-sm"
+                  placeholder="e.g. 45" value={edit.percent_complete}
+                  onChange={e => setEdit(s => ({ ...s, percent_complete: e.target.value }))} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="qp-btn" onClick={() => setEdit(null)} disabled={busy}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {issueFor && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}
+             onClick={() => !busy && setIssueFor(null)}>
+          <form onClick={e => e.stopPropagation()} onSubmit={addIssue} className="qp-card"
+                style={{ maxWidth: 420, width: "100%", margin: 0 }}>
+            <h4 style={{ marginBottom: 12 }}>Raise an issue</h4>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <input className="w-full border rounded-lg px-3 py-2 text-sm" required
+                placeholder="e.g. Cameras held at customs" value={issueTitle}
+                onChange={e => setIssueTitle(e.target.value)} />
+              <select className="w-full border rounded-lg px-3 py-2 text-sm" value={issueSev}
+                onChange={e => setIssueSev(e.target.value)}>
+                <option value="critical">Critical — site is stopped</option>
+                <option value="warning">Warning — will stop site if not solved</option>
+                <option value="low">Low — keep an eye on it</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Raise issue"}</button>
+              <button type="button" className="qp-btn" onClick={() => setIssueFor(null)} disabled={busy}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function RevenuePage({ onNavigate }) {
+  const [projects, setProjects] = useState(null);
+  const [contracts, setContracts] = useState([]);
+  const [claims, setClaims] = useState([]);
+  const [receipts, setReceipts] = useState([]);
+  const [err, setErr] = useState("");
+  const [contractFor, setContractFor] = useState(null);
+  const [claimFor, setClaimFor] = useState(null);
+  const [form, setForm] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setErr("");
+    try {
+      const { data: p, error: pErr } = await sb.from("projects")
+        .select("id, project_name, project_ref, status").order("created_at", { ascending: false });
+      if (pErr) throw pErr;
+      setProjects(p || []);
+      const ids = (p || []).map(x => x.id);
+      if (ids.length) {
+        const [c, a, r] = await Promise.all([
+          sb.from("project_contracts").select("*").in("project_id", ids),
+          sb.from("payment_applications").select("*").in("project_id", ids).order("claim_no"),
+          sb.from("payment_receipts").select("*").in("project_id", ids),
+        ]);
+        setContracts(c.data || []); setClaims(a.data || []); setReceipts(r.data || []);
+      } else { setContracts([]); setClaims([]); setReceipts([]); }
+    } catch (e) { setErr(e.message); setProjects([]); }
+  }
+  useEffect(() => { load(); }, []);
+
+  const sum = (arr, f) => arr.reduce((a, x) => a + (Number(f(x)) || 0), 0);
+
+  const stats = useMemo(() => {
+    const secured   = sum(contracts, c => c.contract_value);
+    const invoiced  = sum(claims, c => c.amount_claimed);
+    const certified = sum(claims, c => c.amount_certified);
+    const collected = sum(receipts, r => r.amount);
+    const retention = contracts.reduce((a, c) =>
+      a + (Number(c.contract_value) || 0) * ((Number(c.retention_pct) || 0) / 100), 0);
+    // Ageing runs from the certification date: that is when the money became
+    // owed. An uncertified claim is not yet a receivable.
+    const today = Date.now();
+    const buckets = [["0–30 days", 0, 30], ["31–60 days", 31, 60], ["61–90 days", 61, 90], ["90+ days", 91, 1e9]];
+    const perProject = {};
+    claims.forEach(c => {
+      perProject[c.project_id] = perProject[c.project_id] || { claimed: 0, certified: 0 };
+      perProject[c.project_id].claimed += Number(c.amount_claimed) || 0;
+      perProject[c.project_id].certified += Number(c.amount_certified) || 0;
+    });
+    const recByProject = {};
+    receipts.forEach(r => { recByProject[r.project_id] = (recByProject[r.project_id] || 0) + (Number(r.amount) || 0); });
+
+    // Outstanding is certified-not-yet-received, aged by the certification date,
+    // oldest certified money first.
+    const outstandingRows = [];
+    Object.keys(perProject).forEach(pid => {
+      const owed = perProject[pid].certified - (recByProject[pid] || 0);
+      if (owed <= 0.005) return;
+      const certs = claims.filter(c => c.project_id === pid && c.certified_at)
+        .sort((a, b) => new Date(a.certified_at) - new Date(b.certified_at));
+      const oldest = certs[0] ? certs[0].certified_at : null;
+      outstandingRows.push({ pid, owed, oldest });
+    });
+    const aging = buckets.map(([label, lo, hi]) => ({
+      label,
+      value: outstandingRows.filter(r => {
+        if (!r.oldest) return lo === 0;
+        const d = Math.floor((today - new Date(r.oldest).getTime()) / 86400000);
+        return d >= lo && d <= hi;
+      }).reduce((a, r) => a + r.owed, 0),
+    }));
+
+    return { secured, invoiced, certified, collected, retention,
+             outstanding: Math.max(0, certified - collected), aging, perProject, recByProject };
+  }, [contracts, claims, receipts]);
+
+  async function saveContract(e) {
+    e.preventDefault(); setBusy(true); setErr("");
+    try {
+      const { error } = await sb.from("project_contracts").upsert({
+        project_id: contractFor,
+        contract_value: Number(form.contract_value) || 0,
+        retention_pct: Number(form.retention_pct) || 0,
+        payment_terms_days: Number(form.payment_terms_days) || 30,
+      }, { onConflict: "project_id" });
+      if (error) throw error;
+      setContractFor(null); setForm({}); await load();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+
+  async function saveClaim(e) {
+    e.preventDefault(); setBusy(true); setErr("");
+    try {
+      const existing = claims.filter(c => c.project_id === claimFor);
+      const nextNo = existing.reduce((a, c) => Math.max(a, c.claim_no), 0) + 1;
+      const certified = form.amount_certified === "" || form.amount_certified == null
+        ? null : Number(form.amount_certified);
+      const { data: ins, error } = await sb.from("payment_applications").insert({
+        project_id: claimFor, claim_no: nextNo,
+        amount_claimed: Number(form.amount_claimed) || 0,
+        amount_certified: certified,
+        certified_at: certified == null ? null : (form.certified_at || new Date().toISOString().slice(0, 10)),
+        status: certified == null ? "submitted" : "certified",
+      }).select("id").single();
+      if (error) throw error;
+      // A receipt only exists if money actually arrived — recording it here
+      // saves a second trip for the common case.
+      if (form.received && Number(form.received) > 0) {
+        const { error: rErr } = await sb.from("payment_receipts").insert({
+          project_id: claimFor, application_id: ins.id, amount: Number(form.received),
+        });
+        if (rErr) throw rErr;
+      }
+      setClaimFor(null); setForm({}); await load();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+
+  if (projects === null) return <div className="qp-card">Loading…</div>;
+  const live = projects.filter(p => p.status !== "archived");
+  const noContracts = contracts.length === 0;
+
+  const STEPS = [
+    ["Secured",   stats.secured,   DIV_SERIES[0]],
+    ["Invoiced",  stats.invoiced,  DIV_SERIES[3]],
+    ["Certified", stats.certified, DIV_SERIES[1]],
+    ["Collected", stats.collected, DIV_SERIES[2]],
+  ];
+  const stepMax = Math.max(...STEPS.map(s => s[1]), 1);
+
+  return (
+    <div>
+      <PageHead title="Revenue" sub="What was won, what has been claimed, and what has actually arrived." />
+      {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
+
+      {live.length === 0 ? (
+        <DivEmpty title="No projects yet"
+          body="Revenue follows the projects you have been awarded. Create a project, set its contract value, then record claims against it."
+          actionLabel="Create a project" onAction={() => onNavigate("new")} />
+      ) : noContracts ? (
+        <DivEmpty title="No contract values set"
+          body="Set the awarded value on a project and this dashboard starts working — the four-stage view, the ageing and the per-project table all build from it."
+          actionLabel="Set the first contract value"
+          onAction={() => { setContractFor(live[0].id); setForm({ contract_value: "", retention_pct: 5, payment_terms_days: 30 }); }} />
+      ) : (
+        <>
+          <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
+            <DivStat label="Secured" value={divMoney(stats.secured)} note="value of contracts awarded" />
+            <DivStat label="Collected" value={divMoney(stats.collected)} tone={DIV_GOOD}
+              note={stats.secured ? `${Math.round(stats.collected / stats.secured * 100)}% of secured value` : ""} />
+            <DivStat label="Outstanding" value={divMoney(stats.outstanding)}
+              tone={stats.outstanding > 0 ? DIV_WARN : undefined} note="certified but not yet received" />
+            <DivStat label="Retention held" value={divMoney(stats.retention)} note="released at defects liability end" />
+          </div>
+
+          <div className="qp-cols">
+            <div className="qp-card">
+              <h4>Where the money stops</h4>
+              <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 14 }}>
+                Same money, four stages. The gaps are where cash is stuck.
+              </p>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 150 }}>
+                {STEPS.map(([label, v, col]) => (
+                  <div key={label} style={{ flex: 1, display: "flex", flexDirection: "column",
+                                            justifyContent: "flex-end", alignItems: "center", gap: 7 }}>
+                    <span style={{ fontSize: 12, fontWeight: 800 }}>{divMoney(v)}</span>
+                    <span style={{ width: "100%", borderRadius: "4px 4px 0 0",
+                                   height: Math.max(4, v / stepMax * 110), background: col }} />
+                    <span style={{ fontSize: 11, color: "var(--q-text-dimmer,#94a3b8)" }}>{label}</span>
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 14, lineHeight: 1.6 }}>
+                {divMoney(Math.max(0, stats.secured - stats.invoiced))} of won work is not yet invoiced,
+                and {divMoney(stats.outstanding)} is certified but unpaid.
+              </p>
+            </div>
+            <div className="qp-card">
+              <h4>Receivables ageing</h4>
+              <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+                Counted from the certification date — when the money became owed.
+              </p>
+              {stats.aging.every(a => !a.value)
+                ? <div className="qp-empty">Nothing outstanding.</div>
+                : <DivBars rows={stats.aging} colour={["#7fb2ea", "#5b98e0", "#3987e5", "#1f5fb0"]}
+                    format={r => divMoney(r.value)} />}
+            </div>
+          </div>
+
+          <div className="qp-card">
+            <h4>Project by project</h4>
+            <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+              Click the contract value to set it. Add a claim to record what you have invoiced and certified.
+            </p>
+            <div style={{ overflowX: "auto" }}>
+              <table className="qp-table">
+                <thead><tr><th>Ref</th><th>Project</th>
+                  <th style={{ textAlign: "right" }}>Contract</th><th style={{ textAlign: "right" }}>Invoiced</th>
+                  <th style={{ textAlign: "right" }}>Certified</th><th style={{ textAlign: "right" }}>Received</th>
+                  <th style={{ textAlign: "right" }}>Outstanding</th><th></th></tr></thead>
+                <tbody>
+                  {live.map(p => {
+                    const c = contracts.find(x => x.project_id === p.id);
+                    const agg = stats.perProject[p.id] || { claimed: 0, certified: 0 };
+                    const got = stats.recByProject[p.id] || 0;
+                    const out = Math.max(0, agg.certified - got);
+                    return (
+                      <tr key={p.id}>
+                        <td><ProjectRef value={p.project_ref} /></td>
+                        <td style={{ fontWeight: 600 }}>{p.project_name}</td>
+                        <td style={{ textAlign: "right", cursor: "pointer" }}
+                            onClick={() => { setContractFor(p.id); setForm({
+                              contract_value: c ? c.contract_value : "",
+                              retention_pct: c ? c.retention_pct : 5,
+                              payment_terms_days: c ? c.payment_terms_days : 30 }); }}>
+                          {c ? divMoney(c.contract_value, c.currency)
+                             : <span style={{ color: "#b45309" }}>set a value</span>}</td>
+                        <td style={{ textAlign: "right" }}>{divMoney(agg.claimed)}</td>
+                        <td style={{ textAlign: "right" }}>{divMoney(agg.certified)}</td>
+                        <td style={{ textAlign: "right", fontWeight: 700, color: DIV_GOOD }}>{divMoney(got)}</td>
+                        <td style={{ textAlign: "right", color: out > 0 ? DIV_WARN : undefined }}>{divMoney(out)}</td>
+                        <td style={{ textAlign: "right" }}>
+                          <button className="qp-btn" style={{ fontSize: 11, padding: "4px 9px" }}
+                            onClick={() => { setClaimFor(p.id); setForm({ amount_claimed: "", amount_certified: "", received: "" }); }}>
+                            + Claim</button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {contractFor && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}
+             onClick={() => !busy && setContractFor(null)}>
+          <form onClick={e => e.stopPropagation()} onSubmit={saveContract} className="qp-card"
+                style={{ maxWidth: 400, width: "100%", margin: 0 }}>
+            <h4 style={{ marginBottom: 4 }}>Contract</h4>
+            <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 14 }}>
+              What you were awarded — as distinct from what you estimated.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div><label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Contract value</label>
+                <input type="number" step="any" min="0" required className="w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.contract_value} onChange={e => setForm(f => ({ ...f, contract_value: e.target.value }))} /></div>
+              <div><label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Retention %</label>
+                <input type="number" step="any" min="0" max="100" className="w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.retention_pct} onChange={e => setForm(f => ({ ...f, retention_pct: e.target.value }))} /></div>
+              <div><label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Payment terms (days)</label>
+                <input type="number" min="0" className="w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.payment_terms_days} onChange={e => setForm(f => ({ ...f, payment_terms_days: e.target.value }))} /></div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="qp-btn" onClick={() => setContractFor(null)} disabled={busy}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {claimFor && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}
+             onClick={() => !busy && setClaimFor(null)}>
+          <form onClick={e => e.stopPropagation()} onSubmit={saveClaim} className="qp-card"
+                style={{ maxWidth: 420, width: "100%", margin: 0 }}>
+            <h4 style={{ marginBottom: 4 }}>New payment claim</h4>
+            <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 14 }}>
+              Certified and received are optional — fill them in when they happen.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div><label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Amount claimed</label>
+                <input type="number" step="any" min="0" required className="w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.amount_claimed} onChange={e => setForm(f => ({ ...f, amount_claimed: e.target.value }))} /></div>
+              <div><label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Amount certified (optional)</label>
+                <input type="number" step="any" min="0" className="w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.amount_certified} onChange={e => setForm(f => ({ ...f, amount_certified: e.target.value }))} /></div>
+              <div><label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Amount received (optional)</label>
+                <input type="number" step="any" min="0" className="w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.received} onChange={e => setForm(f => ({ ...f, received: e.target.value }))} /></div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Add claim"}</button>
+              <button type="button" className="qp-btn" onClick={() => setClaimFor(null)} disabled={busy}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HelpPage({ onNavigate }) {
   const STEPS = [
     ["Create a project", "Name it and set the country and city — the location is what decides which authority rules apply."],
@@ -19658,7 +20782,7 @@ function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) 
     switch (view.name) {
       case "home":
         return <HomePage onNavigate={go} onOpenProject={openProject}
-          onNewProject={()=>go("new")} onUpgrade={onOpenBilling} email={email} />;
+          onNewProject={()=>go("new")} onUpgrade={onOpenBilling} email={email} isPlatformAdmin={isPlatformAdmin} />;
       case "dashboard":
         return <Dashboard onOpenProject={openProject} onNewProject={()=>go("new")} onOpenBilling={onOpenBilling} />;
       case "new":
@@ -19677,15 +20801,20 @@ function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) 
       case "billing":    return <BillingPage onUpgrade={onOpenBilling} />;
       case "settings":   return <SettingsPage email={email} />;
       case "help":       return <HelpPage onNavigate={go} />;
+      // Reachable only from the rail, which hides these unless you are the
+      // platform owner. Routing them for everyone would let a shared link in.
+      case "sales":      return <SalesPage onNavigate={go} />;
+      case "operations": return <OperationsPage onNavigate={go} />;
+      case "revenue":    return <RevenuePage onNavigate={go} />;
       default:
         return <HomePage onNavigate={go} onOpenProject={openProject}
-          onNewProject={()=>go("new")} onUpgrade={onOpenBilling} email={email} />;
+          onNewProject={()=>go("new")} onUpgrade={onOpenBilling} email={email} isPlatformAdmin={isPlatformAdmin} />;
     }
   })();
 
   return (
     <PortalShell view={view} onNavigate={go} onUpgrade={onOpenBilling}
-      onRefresh={refreshPage} refreshing={refreshing}>
+      onRefresh={refreshPage} refreshing={refreshing} isPlatformAdmin={isPlatformAdmin}>
       <React.Fragment key={refreshKey}>{page}</React.Fragment>
     </PortalShell>
   );
