@@ -3219,15 +3219,23 @@ const QUANTORA_LANDING_HTML = `
 
     <div style="max-width:1000px;margin:0 auto 54px;">
       <div style="position:relative;border-radius:16px;overflow:hidden;border:1px solid rgba(148,163,184,0.18);box-shadow:0 24px 70px rgba(0,0,0,0.55);background:#070b14;">
-        <video autoplay muted loop playsinline preload="metadata" poster="quantoraintroposter.jpg" style="display:block;width:100%;height:auto;">
-          <!-- Single H.264 source (2026-08-13). The previous WebM source was removed
-               rather than re-encoded: every current browser plays H.264, and keeping a
-               second source meant a stale WebM would silently be served in Chrome and
-               Firefox whenever the two files fell out of step. -->
-          <source src="quantoraintroweb.mp4" type="video/mp4" />
+        <video id="qtour" muted loop playsinline preload="none" poster="quantoraintroposter.jpg" style="display:block;width:100%;height:auto;">
+          <!-- Single H.264 source, 1600x1000 native (2026-08-24). Encoded at the master
+               resolution instead of downscaled to 1280: the player box is 1000 CSS px
+               wide, so on a retina screen a 1280-wide file was being upscaled and every
+               label in the recording went soft. There is deliberately NO <source>
+               element and no preload here -- the source is attached at runtime by the
+               qtour effect in LandingPage(), so the 11 MB request never sits on the
+               critical path and the page paints before the video starts loading. -->
         </video>
+        <button id="qtour-play" type="button" aria-label="Play the Quantora platform tour" style="position:absolute;inset:0;width:100%;height:100%;display:flex;align-items:flex-end;justify-content:center;background:rgba(3,6,14,0.24);border:0;cursor:pointer;padding:0 0 7% 0;">
+          <span style="display:flex;align-items:center;gap:10px;padding:14px 26px 14px 22px;border-radius:999px;background:rgba(12,17,30,0.88);border:1px solid rgba(148,163,184,0.35);color:#e6ecf7;font-size:15px;font-weight:600;box-shadow:0 14px 40px rgba(0,0,0,0.55);">
+            <svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#60a5fa;"><path class="fill-solid" d="M8 5l11 7-11 7z"/></svg>
+            Play the platform tour
+          </span>
+        </button>
       </div>
-      <p style="text-align:center;font-size:13px;color:var(--text-dimmer);margin-top:14px;">Quantora Mall — Phase 1 · the whole platform, from the drawing package to the four division dashboards · 3 min 45 s · no sound · sample project data</p>
+      <p style="text-align:center;font-size:13px;color:var(--text-dimmer);margin-top:14px;">Quantora Mall — Phase 1 · the platform from the dashboard home to the four division dashboards · 1 min 58 s · no sound · sample project data</p>
     </div>
 
     <div class="steps">
@@ -3821,6 +3829,63 @@ function LandingPage({ onGetStarted }) {
         if (legendRoot) legendRoot.unmount();
         if (itemsRoot) itemsRoot.unmount();
       });
+    };
+  }, []);
+
+  // Platform-tour video. It starts as soon as the landing page mounts -- from
+  // the home screen, without waiting for the visitor to scroll down to it or
+  // click anything. The <video> in QUANTORA_LANDING_HTML still ships with no
+  // <source> element so the 25 MB file is requested from here rather than by
+  // the HTML parser, which keeps it off the critical path for the hero: the
+  // page paints first, then this effect attaches the source and plays. A
+  // <script> tag cannot live in that markup (innerHTML-injected scripts never
+  // execute), so the wiring is here.
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+    const v = root.querySelector("#qtour");
+    const btn = root.querySelector("#qtour-play");
+    if (!v || !btn) return;
+    let attached = false;
+    const attach = () => {
+      if (attached) return;
+      attached = true;
+      const src = document.createElement("source");
+      src.src = "quantoraintroweb.mp4";
+      src.type = "video/mp4";
+      v.appendChild(src);
+      v.load();
+    };
+    const hideBtn = () => { btn.style.display = "none"; };
+    const showBtn = () => { btn.style.display = "flex"; };
+    const onClick = () => {
+      attach();
+      hideBtn();
+      const p = v.play();
+      if (p && p.catch) p.catch(showBtn);
+    };
+    btn.addEventListener("click", onClick);
+    // The authoritative signal that the overlay should go: the play() promise
+    // can stay pending forever on a browser that cannot decode the file, and a
+    // button left sitting on top of a playing video is worse than one that
+    // lingers for a frame.
+    v.addEventListener("playing", hideBtn);
+    // If it cannot play at all, put the button back so there is still something
+    // to click rather than a dead poster.
+    v.addEventListener("error", showBtn);
+
+    // Start it straight away, on every device. The video is muted and carries
+    // playsinline, which is what browsers require before they will autoplay
+    // without a tap, so this works on phones as well as desktops. The button
+    // stays as the fallback: if a browser refuses the autoplay anyway, the
+    // play() promise rejects and it is put back so there is still a way in.
+    attach();
+    const started = v.play();
+    if (started && started.then) started.then(hideBtn).catch(showBtn);
+    return () => {
+      btn.removeEventListener("click", onClick);
+      v.removeEventListener("playing", hideBtn);
+      v.removeEventListener("error", showBtn);
     };
   }, []);
 
