@@ -2159,7 +2159,17 @@ async function callEngine(action, payload) {
     // Error (not just the message string) so analyze()/rework() below can offer a
     // real "retry anyway" confirmation instead of just showing a dead-end alert.
     // Existing callers that only read ex.message are completely unaffected.
-    if (json.requires_confirmation) { err.requiresConfirmation = true; err.recentFailures = json.recent_failures; }
+    // confirm_field (2026-09-03): the backend now has three separate
+    // cost-protection gates -- repeated timeouts, a previous run that found
+    // nothing, and a structural/civil sheet -- and each is cleared by its OWN
+    // flag. Carrying the field name through means the retry loops below set the
+    // right one. Setting the wrong flag would leave the gate closed, the
+    // confirmation would reappear, and the user would be stuck in a loop.
+    if (json.requires_confirmation) {
+      err.requiresConfirmation = true;
+      err.recentFailures = json.recent_failures;
+      err.confirmField = json.confirm_field || "confirm_retry_after_failures";
+    }
     throw err;
   }
   return json;
@@ -5282,6 +5292,10 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
   // than silently snapping it back to a residential building.
   const initialType = isEdit ? (existingProject.building_type || "") : "residential_building";
   const [typeOther, setTypeOther] = useState(!!initialType && !BUILDING_TYPES.some(b => b[0] === initialType));
+  // Whether the person has actually chosen a building type, as opposed to
+  // leaving the default sitting there. A school and a hospital group were both
+  // created as "residential building" simply because nobody touched the field.
+  const [buildingTypeTouched, setBuildingTypeTouched] = useState(false);
   const [typeText, setTypeText] = useState(
     BUILDING_TYPES.some(b => b[0] === initialType) ? "" : buildingTypeLabel(initialType)
   );
@@ -5331,6 +5345,34 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     }
     if (!String(form.city || "").trim()) {
       setErr("Choose the city this project is in, or pick \u201cOther\u201d and type it.");
+      return;
+    }
+    // Floors and area are required (2026-09-03). They were optional, and the
+    // result was that four of the first five real projects carried no floor
+    // count and none carried an area. Both are written into the prompt for
+    // every take-off, and the AI design path refuses outright without them --
+    // one customer's run was rejected for exactly this. Asking for two numbers
+    // at creation is cheaper than a wasted analysis.
+    const floorsNum = parseInt(String(form.number_of_floors ?? "").trim(), 10);
+    if (!Number.isFinite(floorsNum) || floorsNum < 1) {
+      setErr("How many floors above ground does this project have? Enter 1 for a single-storey building. The AI uses it to size quantities, and a take-off run without it comes back thin.");
+      return;
+    }
+    if (floorsNum > 200) {
+      setErr("That is more than 200 floors — check the number. If the figure is right, put the detail in the scope of works and enter the storey count here.");
+      return;
+    }
+    const areaNum = parseFloat(String(form.area_size ?? "").trim());
+    if (!Number.isFinite(areaNum) || areaNum <= 0) {
+      setErr("Enter the gross floor area. An approximate figure is fine — it is what stops the AI guessing quantities for a building whose size it does not know.");
+      return;
+    }
+    // The building type decides lux targets, occupancy, and which authority
+    // rules apply. It defaults to "residential building", and it stayed on that
+    // default for a school and for a hospital group, so both were measured
+    // against residential rules without anyone noticing.
+    if (!isEdit && !buildingTypeTouched && String(form.building_type || "") === "residential_building") {
+      setErr("Confirm the building type before continuing — it is still set to the default, Residential building. It decides the lighting levels, occupancy and authority rules applied to this project, so a school or a hospital measured as residential comes out wrong. Pick it again from the list (choose Residential building if that is genuinely right).");
       return;
     }
 
@@ -5403,7 +5445,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
           <label className="text-xs font-semibold text-slate-600">Building size</label>
           <div className="grid grid-cols-2 gap-3 mt-1">
             <div>
-              <input type="number" min="0" max="200" required
+              <input type="number" min="1" max="200" required
                 className="w-full border rounded-lg px-3 py-2 text-sm"
                 placeholder="Floors above ground"
                 value={form.number_of_floors}
@@ -5432,7 +5474,8 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
             </select>
           </div>
           <p className="text-[11px] text-slate-400 mt-1">
-            The floor count and area are what the AI sizes a design against — how many devices, how much cable, how much capacity.
+            Both required. The floor count and area are what the AI sizes a design against — how many devices, how much
+            cable, how much capacity — and a take-off run without them comes back thin. An approximate area is fine.
           </p>
         </div>
 
@@ -5454,10 +5497,10 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
                 className="w-full border rounded-lg px-3 py-2 text-sm"
                 placeholder="e.g. Desalination plant"
                 value={typeText}
-                onChange={e => { setTypeText(e.target.value); setForm(f => ({ ...f, building_type: slugBuildingType(e.target.value) })); }}
+                onChange={e => { setBuildingTypeTouched(true); setTypeText(e.target.value); setForm(f => ({ ...f, building_type: slugBuildingType(e.target.value) })); }}
               />
               <button type="button" className="text-xs font-semibold border px-3 rounded-lg hover:bg-slate-50 whitespace-nowrap"
-                onClick={() => { setTypeOther(false); setForm(f => ({ ...f, building_type: "residential_building" })); }}>
+                onClick={() => { setBuildingTypeTouched(true); setTypeOther(false); setForm(f => ({ ...f, building_type: "residential_building" })); }}>
                 Pick from list
               </button>
             </div>
@@ -5466,6 +5509,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
               className="w-full border rounded-lg px-3 py-2 text-sm mt-1 bg-white"
               value={form.building_type}
               onChange={e => {
+                setBuildingTypeTouched(true);
                 if (e.target.value === "__other__") { setTypeOther(true); setTypeText(""); setForm(f => ({ ...f, building_type: "" })); }
                 else setForm(f => ({ ...f, building_type: e.target.value }));
               }}
@@ -8331,7 +8375,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
           {tab === "approvals"     && <ApprovalsTab project={project} />}
           {tab === "drawings"      && <DrawingsTab project={project} />}
           {tab === "design"        && <DesignTab project={project} />}
-          {tab === "boq"           && <BoqTab project={project} />}
+          {tab === "boq"           && <BoqTab project={project} onGoToEstimation={() => setTab("estimation")} />}
           {tab === "estimation"    && <EstimationTab project={project} />}
           {tab === "cost"          && <CostBudgetTab project={project} />}
           {tab === "specification" && <SpecificationTab project={project} />}
@@ -8431,7 +8475,13 @@ function OverviewTab({ project, onViewFloors }) {
 // ---------------------------------------------------------------------------
 function DrawingsTab({ project }) {
   const [drawings, setDrawings] = useState([]);
-  const [discipline, setDiscipline] = useState("architectural");
+  // No default (2026-09-03). This used to open on "architectural", and because
+  // nobody changes a dropdown that already has an answer in it, that is what
+  // three tunnelling and geotechnical PDFs and one apartment lighting layout
+  // were all filed as. The label is passed to the AI and it is what the
+  // out-of-scope guard reads, so a default that is wrong is worse than no
+  // default at all.
+  const [discipline, setDiscipline] = useState("");
   const [pendingFiles, setPendingFiles] = useState([]); // [{file, floorLabel}] -- staged before actual upload, see selectFiles()
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState({});
@@ -8566,6 +8616,10 @@ function DrawingsTab({ project }) {
 
   async function upload() {
     if (pendingFiles.length === 0) return;
+    if (!discipline) {
+      setErr("Choose what these drawings show before uploading. The label is passed to the AI and tells it what to look for on the sheet.");
+      return;
+    }
     setUploading(true); setErr("");
     try {
       const { data: { user } } = await sb.auth.getUser();
@@ -8685,9 +8739,27 @@ function DrawingsTab({ project }) {
           if (blankSkipped) console.log(`Sheet ${pageNumber}: skipped ${blankSkipped} of ${plannedTiles} tiles as blank.`);
           totalBlankSkipped += blankSkipped;
           setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
-          const started = await callEngine("analyze_drawing_tiled", {
-            project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid,
-          });
+          // The high-resolution path had no confirmation loop at all: a
+          // cost-protection gate came back as a flat error and the sheet was
+          // abandoned. It now offers the same choice the single-sheet path
+          // does, keyed by the gate's own field so a second gate cannot loop.
+          const tileConfirms = {};
+          let started;
+          for (;;) {
+            try {
+              started = await callEngine("analyze_drawing_tiled", {
+                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, ...tileConfirms,
+              });
+              break;
+            } catch (ex) {
+              if (ex.requiresConfirmation && !tileConfirms[ex.confirmField] &&
+                  window.confirm(`${ex.message}\n\nClick OK to continue anyway, or Cancel to stop here.`)) {
+                tileConfirms[ex.confirmField] = true;
+                continue;
+              }
+              throw ex;
+            }
+          }
           const summary = await pollAnalysisRun(started.run_id);
           totalItems += summary.item_count || 0;
         }
@@ -8789,10 +8861,10 @@ function DrawingsTab({ project }) {
       // call flip the loading flag back off while the confirmed retry is still
       // in flight, since the recursive call's own promise isn't awaited before
       // the outer finally runs. A plain loop keeps everything in one call frame.
-      let confirmRetryAfterFailures = false;
+      const confirms = {};
       for (;;) {
         try {
-          const started = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawingId, confirm_retry_after_failures: confirmRetryAfterFailures });
+          const started = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawingId, ...confirms });
           const summary = await pollAnalysisRun(started.run_id);
           await load();
           // A run that produced nothing is not a completion, and saying so is the
@@ -8809,8 +8881,11 @@ function DrawingsTab({ project }) {
           // cost each time with nothing to show for it. Give the user a real
           // choice instead of silently repeating that cost on every click of
           // "Analyze"/"Re-analyze".
-          if (ex.requiresConfirmation && window.confirm(`${ex.message}\n\nClick OK to retry anyway, or Cancel to stop here.`)) {
-            confirmRetryAfterFailures = true;
+          if (ex.requiresConfirmation && !confirms[ex.confirmField] &&
+              window.confirm(`${ex.message}\n\nClick OK to continue anyway, or Cancel to stop here.`)) {
+            // Keyed by the gate's own field name, and never re-asked for a gate
+            // already cleared -- otherwise a second gate firing would loop.
+            confirms[ex.confirmField] = true;
             continue;
           }
           // Matched on the engine's own wording for stop_reason === "max_tokens".
@@ -8866,9 +8941,17 @@ function DrawingsTab({ project }) {
           <div>
             <label className="text-xs font-semibold text-slate-600">Discipline / Document Type</label>
             <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={discipline} onChange={e=>setDiscipline(e.target.value)}>
-              {["architectural","electrical","mechanical","plumbing","elv","fire_protection","structural","specification"].map(d=>
+              <option value="">Choose what this drawing shows…</option>
+              {["electrical","elv","mechanical","plumbing","fire_protection","specification"].map(d=>
                 <option key={d} value={d}>{d==="specification" ? "Specification / Requirement Document" : SYSTEM_LABEL(d)}</option>)}
             </select>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Quantora measures MEP and ELV. Architectural, civil and structural sheets are not offered here because
+              they are not measured yet — a concrete, steelwork or setting-out drawing has nothing on it this reads,
+              and counting symbols is not how those trades are taken off. If your architectural plan carries the
+              lighting or small-power layout, upload it as <strong>Electrical</strong>; that is what will be measured
+              from it.
+            </p>
           </div>
           <div className="flex items-end">
             <input ref={fileRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.dwg,.dxf,.rvt,.ifc" onChange={selectFiles} disabled={uploading} className="text-sm" />
@@ -11091,7 +11174,7 @@ function PricingBoqPanel({ project, consolidated, loading }) {
 // ---------------------------------------------------------------------------
 // BOQ Review tab
 // ---------------------------------------------------------------------------
-function BoqTab({ project }) {
+function BoqTab({ project, onGoToEstimation }) {
   const [rawItems, setRawItems] = useState([]);
   const [drawingRows, setDrawingRows] = useState([]);
   // engineering_rules -- 2026-08-09: pulled into the merged BOQ tab so the
@@ -11318,17 +11401,18 @@ function BoqTab({ project }) {
       // requiring explicit confirmation when this drawing has already timed out
       // repeatedly, and recursing into a fresh async call from inside this
       // try/catch would race with the outer finally{} that flips the spinner off.
-      let confirmRetryAfterFailures = false;
+      const confirms = {};
       for (;;) {
         try {
-          const started = await callEngine("rework", { project_id: project.id, drawing_id: drawingId, comments: allComments, confirm_retry_after_failures: confirmRetryAfterFailures });
+          const started = await callEngine("rework", { project_id: project.id, drawing_id: drawingId, comments: allComments, ...confirms });
           const summary = await pollAnalysisRun(started.run_id);
           alert(`Revision ${started.revision_number} generated: ${summary.item_count} items.\n${summary.notes}`);
           await load();
           return;
         } catch (ex) {
-          if (ex.requiresConfirmation && window.confirm(`${ex.message}\n\nClick OK to retry anyway, or Cancel to stop here.`)) {
-            confirmRetryAfterFailures = true;
+          if (ex.requiresConfirmation && !confirms[ex.confirmField] &&
+              window.confirm(`${ex.message}\n\nClick OK to continue anyway, or Cancel to stop here.`)) {
+            confirms[ex.confirmField] = true;
             continue;
           }
           alert("Rework failed: " + ex.message);
@@ -11419,6 +11503,12 @@ function BoqTab({ project }) {
       totalItems: consolidatedAll.length,
       totalSystems: systemsCount,
       totalDrawings: drawingRows.length,
+      // Priced lines (2026-09-03). Across every real project on the platform,
+      // 331 BOQ lines had been produced and not one carried a rate: every
+      // customer stopped at the measurement and never reached the estimate,
+      // which is the half of the job that is worth money to them. Counting it
+      // here is what lets the panel below say something true.
+      pricedItems: consolidatedAll.filter(r => (r.rawItems || []).some(x => x.unit_cost_cents != null)).length,
       reviewRequired: consolidatedAll.filter(r => r.reviewBucket === "review_required").length,
       engineerReview: consolidatedAll.filter(r => r.reviewBucket === "engineer_review").length,
       discrepancies: consolidatedAll.filter(r => r.discrepancy).length,
@@ -11922,6 +12012,36 @@ function BoqTab({ project }) {
           <div className="text-[11px] text-slate-500 mt-2">
             {summary.engineerReview > 0 && <span className="mr-3">Engineer Review: <strong>{summary.engineerReview}</strong></span>}
             {summary.discrepancies > 0 && <span>Discrepancies: <strong>{summary.discrepancies}</strong></span>}
+          </div>
+        )}
+
+        {/* The measurement is half the job (2026-09-03). Across every project
+            run on the platform, 331 BOQ lines had been produced and not one
+            carried a rate -- every customer stopped here, at the quantities,
+            and never reached the estimate, the margin or the export. Nothing
+            in the product ever said there was a next step. This does, and it
+            only appears once there are quantities worth pricing. */}
+        {summary.totalItems > 0 && summary.pricedItems < summary.totalItems && (
+          <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-indigo-900">
+                  {summary.pricedItems === 0
+                    ? "You have the quantities. Now put rates against them."
+                    : `${summary.totalItems - summary.pricedItems} of ${summary.totalItems} lines still have no rate.`}
+                </div>
+                <div className="text-[12px] text-indigo-800 mt-1">
+                  {summary.pricedItems === 0
+                    ? "Estimation turns this take-off into a priced estimate you can actually issue — material, labour, staff and your margin, then export the whole thing to Excel."
+                    : "Finish the rates on Estimation and the totals, margin and export all follow from them."}
+                </div>
+              </div>
+              <button
+                className="shrink-0 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-lg"
+                onClick={() => { if (onGoToEstimation) onGoToEstimation(); }}>
+                {summary.pricedItems === 0 ? "Price this BOQ" : "Continue pricing"} &rsaquo;
+              </button>
+            </div>
           </div>
         )}
       </div>
