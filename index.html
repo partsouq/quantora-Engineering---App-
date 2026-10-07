@@ -5193,7 +5193,8 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
         ) : (
         <div className="qdash-projs">
           {shownProjects.map(p => (
-            <div key={p.id} onClick={() => onOpenProject(p)} className="qdash-proj">
+            <div key={p.id} onClick={() => onOpenProject(p)} className="qdash-proj"
+              style={{ "--q-stage": (PROJECT_STAGES.find(x => x[0] === stageOf(metrics[p.id])) || PROJECT_STAGES[3])[2] }}>
               <div className="flex items-start justify-between gap-3">
                 <div className="pn">{p.project_name}</div>
                 <StagePill stage={stageOf(metrics[p.id])} />
@@ -5205,12 +5206,12 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
                 {p.number_of_floors ? ` · ${p.number_of_floors} floors` : ""}
                 {p.area_size ? ` · ${p.area_size} ${p.area_unit}` : ""}</div>
               <div className="qproj-stats">
-                <div><b>{metrics[p.id]?.drawings ?? "—"}</b>drawings</div>
+                <div><b>{metrics[p.id]?.drawings ?? "—"}</b>Drawings</div>
                 <div><b>{metrics[p.id]?.boq ?? "—"}</b>BOQ lines</div>
-                <div><b>{metrics[p.id]?.priced ? "Yes" : "No"}</b>priced</div>
+                <div><b>{metrics[p.id]?.priced ? "Yes" : "No"}</b>Priced</div>
                 <div>
                   <b style={{ color: approvalTone(metrics[p.id]?.approvals) }}>{approvalWord(metrics[p.id]?.approvals)}</b>
-                  approvals
+                  Approvals
                 </div>
               </div>
               <div className="pm">
@@ -8428,7 +8429,11 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
       // thing they see in the section they are already looking at.
       ["drawings", "Drawings & Upload"],
       ["design", "System Design (No Drawings)"],
-      ["mepdesign", "Full MEP Design & Riser"],
+      // "Full MEP Design & Riser" is gone from here on purpose. Designing a
+      // building from scratch and setting out its risers is drafting-office
+      // work, and having it sit between the drawing upload and the take-off
+      // made the estimating section read as two jobs at once. It lives in the
+      // Draftsman workspace, where the base plan and the specification are.
       ["boq", "Take-off & BOQ"],
       ["estimation", "Estimation"],
     ]],
@@ -8564,7 +8569,6 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
           {tab === "approvals"     && <ApprovalsTab project={project} />}
           {tab === "drawings"      && <DrawingsTab project={project} />}
           {tab === "design"        && <DesignTab project={project} />}
-          {tab === "mepdesign"     && <MepDesignTab project={project} onGoToBoq={() => setTab("boq")} />}
           {tab === "boq"           && <BoqTab project={project} onGoToEstimation={() => setTab("estimation")} />}
           {tab === "estimation"    && <EstimationTab project={project} />}
           {tab === "cost"          && <CostBudgetTab project={project} />}
@@ -9719,7 +9723,7 @@ function MarkupViewerModal({ drawing, onClose }) {
   // the two controls a draughtsman actually wants are here: push the sheet back,
   // and show one system at a time.
   const [isolate, setIsolate] = useState(null);     // a system_category, or null
-  const [dimSheet, setDimSheet] = useState(true);   // on by default: the markup is the point
+  const [dimSheet, setDimSheet] = useState(true);
   const [pageNum, setPageNum] = useState(1);
   const [pageCount, setPageCount] = useState(1);
   const [rendering, setRendering] = useState(false);
@@ -9909,7 +9913,7 @@ function MarkupViewerModal({ drawing, onClose }) {
       // The exported sheet is the sheet on screen, down to the fade and the
       // system that was isolated. A download that quietly shows more than the
       // viewer did is a different drawing, and somebody will build off it.
-      if (dimSheet) {
+      if (dimSheet && (symbolItems.length || aiMarkerItems.length || (useTags && matchedTags.length))) {
         ctx.fillStyle = "rgba(255,255,255,0.60)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
@@ -10174,6 +10178,11 @@ function MarkupViewerModal({ drawing, onClose }) {
   const presentSystems = Array.from(new Set(located.map(i => i.system_category).filter(Boolean))).sort();
   // How many marks each system puts on THIS page. A chip that says how much it
   // is hiding is worth far more than a plain colour swatch.
+  // Fading is only ever right when there is something to fade BEHIND. On a sheet
+  // with no markers at all it reads as a failed render, which is exactly the
+  // complaint it caused.
+  const anyMarkers = onPage.length > 0 || (useTags && matchedTags.length > 0) || symbolItems.length > 0;
+  const dimOn = dimSheet && anyMarkers;
   const markCountBySystem = onPage.reduce((acc, it) => {
     const k = it.system_category || "other";
     acc[k] = (acc[k] || 0) + positionsOf(it).length;
@@ -10219,7 +10228,7 @@ function MarkupViewerModal({ drawing, onClose }) {
               </div>
             )}
             {imgUrl && (
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <span className="text-[11px] text-slate-500 uppercase font-semibold">Zoom</span>
                 {[["width", "Fit width"], ["whole", "Whole sheet"], [2, "200%"], [4, "400%"]].map(([v, label]) => (
                   <button key={String(v)} onClick={()=>setZoom(v)}
@@ -10227,20 +10236,13 @@ function MarkupViewerModal({ drawing, onClose }) {
                     {label}
                   </button>
                 ))}
-                <span className="text-[11px] text-slate-400">
-                  {zoom === "width"
-                    ? "Full width, aligned with the BOQ below. Scroll down for the rest of the sheet."
-                    : zoom === "whole"
-                    ? "Whole sheet in view. A device symbol is only a few pixels at this size — use 200% or 400% to check a box sits on its symbol."
-                    : "Scroll inside the frame to pan."}
-                </span>
               </div>
             )}
             {imgUrl && (
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <span className="text-[11px] text-slate-500 uppercase font-semibold">Highlight</span>
-                <button onClick={() => setDimSheet(d => !d)}
-                  className={`text-[11px] font-semibold px-2.5 py-1 rounded border ${dimSheet ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                <button onClick={() => setDimSheet(d => !d)} disabled={!anyMarkers}
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded border disabled:opacity-40 ${dimOn ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}
                   title="Push the drawing back so the markup reads. The sheet is still there; it is only shown lighter.">
                   Fade the sheet
                 </button>
@@ -10262,12 +10264,18 @@ function MarkupViewerModal({ drawing, onClose }) {
                     ) : null}
                   </button>
                 ))}
-                <span className="text-[11px] text-slate-400">
-                  {isolate
-                    ? `Showing ${SYSTEM_LABEL(isolate)} only — every other system is faded, not removed.`
-                    : "Pick a system to read it on its own. Nine systems boxed at once on an A1 is not a drawing anybody can check."}
-                </span>
               </div>
+            )}
+            {imgUrl && (
+              <p className="text-[11px] text-slate-400 mb-2.5 leading-relaxed">
+                {!anyMarkers
+                  ? "Nothing has been marked on this page yet. Run the take-off on it, or press “Mark on drawing” beside a BOQ line below and click the device on the sheet."
+                  : isolate
+                  ? `Showing ${SYSTEM_LABEL(isolate)} only — every other system is faded, not removed.`
+                  : zoom === "whole"
+                  ? "Whole sheet in view. A device symbol is only a few pixels at this size — use 200% or 400% to check a box sits on its symbol."
+                  : "Pick a system above to read it on its own, and zoom in to check a box sits on its symbol."}
+              </p>
             )}
             {imgUrl && (
               <div className={`qtr-markup-frame border rounded-lg bg-slate-100 mb-4 ${typeof zoom === "number" ? "overflow-auto" : "overflow-hidden"}`}
@@ -10299,7 +10307,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                     // it is obvious the list is there.
                     ? { width: "100%", maxWidth: `min(820px, calc(52vh * ${imgAspect}))`, aspectRatio: String(imgAspect), margin: "0 auto" }
                     : { width: `${zoom * 100}%`, aspectRatio: String(imgAspect) }}>
-                <img src={imgUrl} className={`block${dimSheet ? " qtr-markup-dim" : ""}`} alt={drawing.file_name}
+                <img src={imgUrl} className={`block${dimOn ? " qtr-markup-dim" : ""}`} alt={drawing.file_name}
                   style={{ width: "100%", height: "100%" }} />
                 {symbolItems.map(({ item: it, group, source }) => {
                   const color = colourOf(it);
@@ -18915,7 +18923,7 @@ function ApprovalTrackingPage({ projects, onOpenProject, bare }) {
 // ---------------------------------------------------------------------------
 // DRAWINGS — every sheet, every project
 // ---------------------------------------------------------------------------
-function DrawingsPage({ projects, onOpenProject }) {
+function DrawingsPage({ projects, onOpenProject, markupFirst }) {
   const [rows, setRows] = useState([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
@@ -18945,8 +18953,10 @@ function DrawingsPage({ projects, onOpenProject }) {
   return (
     <div>
       <PageHead
-        title="Drawings"
-        sub="Every sheet uploaded across all of your projects. Open one to check the markup, or jump into the project it belongs to."
+        title={markupFirst ? "Markup" : "Drawings"}
+        sub={markupFirst
+          ? "Open any sheet and see every measured item boxed and numbered on it, each BOQ line in its own colour."
+          : "Every sheet uploaded across all of your projects. Open one to check the markup, or jump into the project it belongs to."}
       />
       <div className="qp-card">
         <div className="qsearch">
@@ -18977,8 +18987,9 @@ function DrawingsPage({ projects, onOpenProject }) {
                       <td>{String(d.file_type || "").toUpperCase() || "—"}</td>
                       <td>{d.created_at ? new Date(d.created_at).toLocaleDateString() : "—"}</td>
                       <td style={{ whiteSpace: "nowrap" }}>
-                        <button className="qp-btn" style={{ padding: "5px 12px", fontSize: 12, marginRight: 6 }}
-                          onClick={() => setMarking(d)}>Markup</button>
+                        <button className={`qp-btn${markupFirst ? " pri" : ""}`}
+                          style={{ padding: "5px 12px", fontSize: 12, marginRight: 6 }}
+                          onClick={() => setMarking(d)}>Open markup</button>
                         {p && <button className="qp-btn" style={{ padding: "5px 12px", fontSize: 12 }}
                           onClick={() => onOpenProject(p)}>Project</button>}
                       </td>
@@ -19080,15 +19091,10 @@ function BoqPage({ projects, onOpenProject }) {
 // MARKUP — pick a sheet and check it
 // ---------------------------------------------------------------------------
 function MarkupPage({ projects, onOpenProject }) {
-  return (
-    <div>
-      <PageHead
-        title="Markup"
-        sub="Open any sheet and see every measured item boxed and numbered on the drawing, each BOQ line in its own colour."
-      />
-      <DrawingsPage projects={projects} onOpenProject={onOpenProject} />
-    </div>
-  );
+  // One heading, not two. This page used to print its own PageHead and then
+  // render DrawingsPage, which prints another — so the screen opened with
+  // "Markup" immediately followed by "Drawings" and read as a mistake.
+  return <DrawingsPage projects={projects} onOpenProject={onOpenProject} markupFirst />;
 }
 
 // ---------------------------------------------------------------------------
@@ -21219,11 +21225,456 @@ function SalesPage({ onNavigate }) {
 }
 
 
+// ---------------------------------------------------------------------------
+// OPERATIONS — ONE PROJECT, END TO END (2026-10-08)
+//
+// Clicking a project in Operations used to open a two-field dialog for the
+// stage and the percentage. What a delivery manager actually needs on that
+// click is the whole picture in one screen: where the job is in the cycle, how
+// much of the contract has been invoiced and how much of that has been
+// certified and paid, how many inspection requests are open, what has slipped,
+// and what is blocking site.
+//
+// Everything on this screen is a number somebody entered or a sum of them.
+// Nothing is estimated, and a figure that has not been entered says so rather
+// than showing zero, because a zero that means "not recorded" is a lie that
+// looks like data.
+// ---------------------------------------------------------------------------
+const OPS_APP_STATUS = [["draft", "Draft"], ["submitted", "Submitted"],
+  ["certified", "Certified"], ["paid", "Paid"]];
+const OPS_APP_LABEL = Object.fromEntries(OPS_APP_STATUS);
+const OPS_WIR_STATUS = [["raised", "Raised"], ["approved", "Approved"],
+  ["approved_comments", "Approved with comments"], ["rejected", "Rejected"]];
+const OPS_WIR_LABEL = Object.fromEntries(OPS_WIR_STATUS);
+
+/** The delivery cycle, left to right, with everything behind the current stage ticked. */
+function OpsStageTrack({ stage, onPick }) {
+  const idx = DELIVERY_STAGES.findIndex(([k]) => k === stage);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${DELIVERY_STAGES.length}, minmax(0,1fr))`,
+                  gap: 8, margin: "4px 0 2px" }}>
+      {DELIVERY_STAGES.map(([k, label], i) => {
+        const done = idx >= 0 && i < idx;
+        const now = idx === i;
+        return (
+          <button key={k} onClick={() => onPick(k)} title={`Set the stage to ${label}`}
+            style={{
+              textAlign: "left", padding: "10px 12px", borderRadius: 11, cursor: "pointer",
+              border: `1px solid ${now ? DIV_SERIES[2] : "var(--q-border,#e2e8f0)"}`,
+              background: now ? DIV_SERIES[2] : done ? "rgba(148,163,184,.14)" : "var(--q-panel,#fff)",
+              color: now ? "#fff" : done ? "var(--q-text,#0f172a)" : "var(--q-text-dim,#64748b)",
+            }}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase",
+                          opacity: now ? .85 : .6 }}>
+              {done ? "Done" : now ? "Current" : `Step ${i + 1}`}
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3, lineHeight: 1.25 }}>{label}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function OperationsProject({ project, onBack, onReload }) {
+  const [state, setState] = useState({ loading: true });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [addApp, setAddApp] = useState(null);
+  const [addWir, setAddWir] = useState(null);
+  const [pc, setPc] = useState(project.percent_complete ?? "");
+
+  async function load() {
+    setErr("");
+    try {
+      const [c, a, w, m, i] = await Promise.all([
+        sb.from("project_contracts").select("*").eq("project_id", project.id).maybeSingle(),
+        sb.from("project_applications").select("*").eq("project_id", project.id).order("period_to", { ascending: true }),
+        sb.from("project_inspections").select("*").eq("project_id", project.id).order("raised_at", { ascending: false }),
+        sb.from("project_milestones").select("*").eq("project_id", project.id).order("sequence", { ascending: true }),
+        sb.from("project_issues").select("*").eq("project_id", project.id).eq("status", "open"),
+      ]);
+      setState({ loading: false, contract: c.data || null, apps: a.data || [],
+                 wirs: w.data || [], milestones: m.data || [], issues: i.data || [] });
+    } catch (e) { setErr(e.message); setState({ loading: false, apps: [], wirs: [], milestones: [], issues: [] }); }
+  }
+  useEffect(() => { load(); }, [project.id]);
+
+  const sums = useMemo(() => {
+    const apps = state.apps || [];
+    const live = apps.filter(a => a.status !== "draft");
+    const sum = (rows, f) => rows.reduce((t, r) => t + (Number(f(r)) || 0), 0);
+    const contract = state.contract ? Number(state.contract.contract_value) || 0 : 0;
+    const invoiced = sum(live, a => a.amount);
+    const certified = sum(apps.filter(a => a.status === "certified" || a.status === "paid"),
+                          a => a.certified_amount != null ? a.certified_amount : a.amount);
+    const paid = sum(apps.filter(a => a.status === "paid"),
+                     a => a.certified_amount != null ? a.certified_amount : a.amount);
+    const wirs = state.wirs || [];
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    return {
+      contract, invoiced, certified, paid,
+      bookedPct: contract > 0 ? Math.round(invoiced / contract * 100) : null,
+      outstanding: certified - paid,
+      currency: state.contract ? state.contract.currency || "AED" : "AED",
+      wirRaised: wirs.length,
+      wirOpen: wirs.filter(w => w.status === "raised").length,
+      wirApproved: wirs.filter(w => w.status === "approved" || w.status === "approved_comments").length,
+      wirRejected: wirs.filter(w => w.status === "rejected").length,
+      overdue: (state.milestones || []).filter(m => !m.actual_date && m.planned_date && new Date(m.planned_date) < today),
+    };
+  }, [state]);
+
+  async function setStage(k) {
+    setBusy(true);
+    try {
+      const { error } = await sb.from("projects").update({ delivery_stage: k }).eq("id", project.id);
+      if (error) throw error;
+      project.delivery_stage = k;
+      if (onReload) await onReload();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function savePercent() {
+    setBusy(true);
+    try {
+      const v = pc === "" ? null : Number(pc);
+      const { error } = await sb.from("projects").update({ percent_complete: v }).eq("id", project.id);
+      if (error) throw error;
+      project.percent_complete = v;
+      if (onReload) await onReload();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function saveApp(e) {
+    e.preventDefault(); setBusy(true); setErr("");
+    try {
+      const row = { project_id: project.id, ref: addApp.ref || null,
+        period_to: addApp.period_to || null, amount: Number(addApp.amount) || 0,
+        certified_amount: addApp.certified_amount === "" ? null : Number(addApp.certified_amount),
+        status: addApp.status, submitted_at: addApp.submitted_at || null,
+        certified_at: addApp.certified_at || null, paid_at: addApp.paid_at || null };
+      const { error } = addApp.id
+        ? await sb.from("project_applications").update(row).eq("id", addApp.id)
+        : await sb.from("project_applications").insert(row);
+      if (error) throw error;
+      setAddApp(null); await load();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+  async function saveWir(e) {
+    e.preventDefault(); setBusy(true); setErr("");
+    try {
+      const row = { project_id: project.id, ref: addWir.ref || null, kind: addWir.kind,
+        title: addWir.title || null, system_category: addWir.system_category || null,
+        location: addWir.location || null, status: addWir.status,
+        raised_at: addWir.raised_at || new Date().toISOString().slice(0, 10),
+        closed_at: addWir.closed_at || null };
+      const { error } = addWir.id
+        ? await sb.from("project_inspections").update(row).eq("id", addWir.id)
+        : await sb.from("project_inspections").insert(row);
+      if (error) throw error;
+      setAddWir(null); await load();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+  async function removeRow(table, id) {
+    try { await sb.from(table).delete().eq("id", id); await load(); }
+    catch (e) { setErr(e.message); }
+  }
+
+  if (state.loading) return <div className="qp-card">Loading the project…</div>;
+
+  const cur = sums.currency;
+  const notSet = <span style={{ fontSize: 13, fontWeight: 600, color: "var(--q-text-dimmer,#94a3b8)" }}>not recorded</span>;
+  const dash = v => v ? new Date(v).toLocaleDateString() : "—";
+  const wirTone = w => w.status === "approved" ? "good" : w.status === "rejected" ? "bad"
+    : w.status === "approved_comments" ? "warn" : "flat";
+  const appTone = a => a.status === "paid" ? "good" : a.status === "certified" ? "flat"
+    : a.status === "submitted" ? "warn" : "flat";
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+        <button className="qp-btn" onClick={onBack}>&larr; All projects</button>
+        <ProjectRef value={project.project_ref} />
+        <div>
+          <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: "-.02em" }}>{project.project_name}</div>
+          <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>
+            {[project.city, project.country].filter(Boolean).join(", ") || "Location not set"}
+          </div>
+        </div>
+      </div>
+      {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
+
+      <div className="qp-card">
+        <h4>Where the job is</h4>
+        <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+          Design through to handover. Click a step to move the project to it.
+        </p>
+        <OpsStageTrack stage={project.delivery_stage} onPick={setStage} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, fontWeight: 700 }}>Percent complete</span>
+          <input type="number" min="0" max="100" value={pc} onChange={e => setPc(e.target.value)}
+            placeholder="not set" style={{ width: 86 }} className="border rounded-lg px-3 py-1.5 text-sm" />
+          <button className="qp-btn" disabled={busy} onClick={savePercent}>Save</button>
+          <div style={{ flex: 1, minWidth: 180 }}>
+            {pc === "" ? null : <DivBullet actual={Number(pc) || 0} target={100}
+              colour={sums.overdue.length ? DIV_SERIES[5] : DIV_SERIES[2]} />}
+          </div>
+        </div>
+      </div>
+
+      <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))" }}>
+        <DivStat label="Contract value" value={sums.contract ? divMoney(sums.contract, cur) : notSet}
+          note={state.contract && state.contract.retention_pct != null
+            ? `${state.contract.retention_pct}% retention` : "set it in Commercial"} />
+        <DivStat label="Invoiced to date"
+          value={sums.contract ? `${sums.bookedPct}%` : divMoney(sums.invoiced, cur)}
+          note={sums.contract ? `${divMoney(sums.invoiced, cur)} of ${divMoney(sums.contract, cur)}` : "no contract value recorded"} />
+        <DivStat label="Certified" value={divMoney(sums.certified, cur)}
+          note={`${divMoney(sums.outstanding, cur)} certified but unpaid`} />
+        <DivStat label="Collected" value={divMoney(sums.paid, cur)}
+          note={`${(state.apps || []).filter(a => a.status === "submitted").length} application(s) awaiting certification`} />
+      </div>
+
+      <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))" }}>
+        <DivStat label="Inspection requests raised" value={sums.wirRaised} note="WIR, MIR and material approvals" />
+        <DivStat label="Awaiting the consultant" value={sums.wirOpen}
+          tone={sums.wirOpen ? DIV_WARN : undefined} note="raised, not yet answered" />
+        <DivStat label="Approved" value={sums.wirApproved}
+          note={sums.wirRejected ? `${sums.wirRejected} rejected` : "none rejected"} />
+        <DivStat label="Overdue milestones" value={sums.overdue.length}
+          tone={sums.overdue.length ? DIV_BAD : undefined}
+          note={state.issues.length ? `${state.issues.length} open issue(s)` : "no open issues"} />
+      </div>
+
+      <div className="qp-card">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <h4 style={{ margin: 0 }}>Payment applications and invoices</h4>
+          <button className="qp-btn pri" onClick={() => setAddApp({ ref: "", period_to: "", amount: "",
+            certified_amount: "", status: "submitted", submitted_at: "", certified_at: "", paid_at: "" })}>
+            + Application
+          </button>
+        </div>
+        <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "6px 0 12px" }}>
+          What has been submitted, what the consultant certified, and what has actually been collected.
+          A draft is not counted as invoiced.
+        </p>
+        {!state.apps.length ? <div className="qp-empty">Nothing raised yet.</div> : (
+          <div style={{ overflowX: "auto" }}>
+            <table className="qp-table">
+              <thead><tr><th>Ref</th><th>To</th><th style={{ textAlign: "right" }}>Applied</th>
+                <th style={{ textAlign: "right" }}>Certified</th><th>Status</th><th>Submitted</th><th>Paid</th><th></th></tr></thead>
+              <tbody>
+                {state.apps.map(a => (
+                  <tr key={a.id}>
+                    <td style={{ fontWeight: 600 }}>{a.ref || "—"}</td>
+                    <td>{dash(a.period_to)}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{divMoney(a.amount, cur)}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      {a.certified_amount == null ? "—" : divMoney(a.certified_amount, cur)}</td>
+                    <td><DivPill tone={appTone(a)}>{OPS_APP_LABEL[a.status] || a.status}</DivPill></td>
+                    <td>{dash(a.submitted_at)}</td>
+                    <td>{dash(a.paid_at)}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button className="qp-btn" style={{ fontSize: 11, padding: "4px 9px", marginRight: 5 }}
+                        onClick={() => setAddApp({ ...a, period_to: a.period_to || "", submitted_at: a.submitted_at || "",
+                          certified_at: a.certified_at || "", paid_at: a.paid_at || "",
+                          certified_amount: a.certified_amount == null ? "" : a.certified_amount })}>Edit</button>
+                      <button className="qp-btn" style={{ fontSize: 11, padding: "4px 9px" }}
+                        onClick={() => removeRow("project_applications", a.id)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="qp-card">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <h4 style={{ margin: 0 }}>Inspection requests</h4>
+          <button className="qp-btn pri" onClick={() => setAddWir({ ref: "", kind: "WIR", title: "",
+            system_category: "", location: "", status: "raised",
+            raised_at: new Date().toISOString().slice(0, 10), closed_at: "" })}>
+            + Raise
+          </button>
+        </div>
+        <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "6px 0 12px" }}>
+          Work inspection requests, material inspection requests and material approvals &mdash; what has been
+          raised to the consultant and what came back.
+        </p>
+        {!state.wirs.length ? <div className="qp-empty">Nothing raised yet.</div> : (
+          <div style={{ overflowX: "auto" }}>
+            <table className="qp-table">
+              <thead><tr><th>Ref</th><th>Type</th><th>What</th><th>System</th><th>Location</th>
+                <th>Raised</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                {state.wirs.map(w => (
+                  <tr key={w.id}>
+                    <td style={{ fontWeight: 600 }}>{w.ref || "—"}</td>
+                    <td>{w.kind}</td>
+                    <td>{w.title || "—"}</td>
+                    <td>{w.system_category ? SYSTEM_LABEL(w.system_category) : "—"}</td>
+                    <td>{w.location || "—"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{dash(w.raised_at)}</td>
+                    <td><DivPill tone={wirTone(w)}>{OPS_WIR_LABEL[w.status] || w.status}</DivPill></td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button className="qp-btn" style={{ fontSize: 11, padding: "4px 9px", marginRight: 5 }}
+                        onClick={() => setAddWir({ ...w, raised_at: w.raised_at || "", closed_at: w.closed_at || "",
+                          title: w.title || "", ref: w.ref || "", system_category: w.system_category || "",
+                          location: w.location || "" })}>Edit</button>
+                      <button className="qp-btn" style={{ fontSize: 11, padding: "4px 9px" }}
+                        onClick={() => removeRow("project_inspections", w.id)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="qp-cols">
+        <div className="qp-card">
+          <h4>Programme</h4>
+          <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+            Planned against actual. A milestone past its planned date with no actual is overdue.
+          </p>
+          {!state.milestones.length ? <div className="qp-empty">No milestones set for this project.</div> : (
+            <table className="qp-table">
+              <thead><tr><th>Milestone</th><th>Planned</th><th>Actual</th><th></th></tr></thead>
+              <tbody>
+                {state.milestones.map(m => {
+                  const late = !m.actual_date && m.planned_date && new Date(m.planned_date) < new Date();
+                  return (
+                    <tr key={m.id}>
+                      <td style={{ fontWeight: 600 }}>{m.name}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>{dash(m.planned_date)}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>{dash(m.actual_date)}</td>
+                      <td>{m.actual_date ? <DivPill tone="good">Done</DivPill>
+                        : late ? <DivPill tone="bad">Overdue</DivPill> : <DivPill tone="flat">Planned</DivPill>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="qp-card">
+          <h4>What is blocking site</h4>
+          <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+            Open issues on this project only.
+          </p>
+          {!state.issues.length ? <div className="qp-empty">Nothing open.</div> : (
+            <table className="qp-table">
+              <tbody>
+                {state.issues.map(i => (
+                  <tr key={i.id}>
+                    <td style={{ fontWeight: 600 }}>{i.title}</td>
+                    <td><DivPill tone={i.severity === "critical" ? "bad" : i.severity === "warning" ? "warn" : "flat"}>
+                      {i.severity}</DivPill></td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      {Math.max(0, Math.round((Date.now() - new Date(i.opened_at).getTime()) / 86400000))}d
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {addApp && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}
+             onClick={() => !busy && setAddApp(null)}>
+          <form onClick={e => e.stopPropagation()} onSubmit={saveApp} className="qp-card"
+                style={{ maxWidth: 460, width: "100%", margin: 0, maxHeight: "88vh", overflowY: "auto" }}>
+            <h4 style={{ marginBottom: 12 }}>{addApp.id ? "Edit application" : "New application"}</h4>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <OpsField label="Reference" value={addApp.ref} onChange={v => setAddApp(s => ({ ...s, ref: v }))} placeholder="IPA-07" />
+              <OpsField label="Period to" type="date" value={addApp.period_to} onChange={v => setAddApp(s => ({ ...s, period_to: v }))} />
+              <OpsField label={`Applied (${cur})`} type="number" value={addApp.amount} onChange={v => setAddApp(s => ({ ...s, amount: v }))} />
+              <OpsField label={`Certified (${cur})`} type="number" value={addApp.certified_amount}
+                onChange={v => setAddApp(s => ({ ...s, certified_amount: v }))} placeholder="leave blank until certified" />
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Status</label>
+                <select className="w-full border rounded-lg px-3 py-2 text-sm" value={addApp.status}
+                  onChange={e => setAddApp(s => ({ ...s, status: e.target.value }))}>
+                  {OPS_APP_STATUS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+              <OpsField label="Submitted" type="date" value={addApp.submitted_at} onChange={v => setAddApp(s => ({ ...s, submitted_at: v }))} />
+              <OpsField label="Certified on" type="date" value={addApp.certified_at} onChange={v => setAddApp(s => ({ ...s, certified_at: v }))} />
+              <OpsField label="Paid on" type="date" value={addApp.paid_at} onChange={v => setAddApp(s => ({ ...s, paid_at: v }))} />
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="qp-btn" onClick={() => setAddApp(null)} disabled={busy}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {addWir && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}
+             onClick={() => !busy && setAddWir(null)}>
+          <form onClick={e => e.stopPropagation()} onSubmit={saveWir} className="qp-card"
+                style={{ maxWidth: 460, width: "100%", margin: 0, maxHeight: "88vh", overflowY: "auto" }}>
+            <h4 style={{ marginBottom: 12 }}>{addWir.id ? "Edit inspection request" : "Raise an inspection request"}</h4>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <OpsField label="Reference" value={addWir.ref} onChange={v => setAddWir(s => ({ ...s, ref: v }))} placeholder="WIR-112" />
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Type</label>
+                <select className="w-full border rounded-lg px-3 py-2 text-sm" value={addWir.kind}
+                  onChange={e => setAddWir(s => ({ ...s, kind: e.target.value }))}>
+                  {["WIR", "MIR", "MAR"].map(k => <option key={k} value={k}>{k}</option>)}
+                </select>
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <OpsField label="What is being inspected" value={addWir.title}
+                  onChange={v => setAddWir(s => ({ ...s, title: v }))} placeholder="Containment, level 3 east" />
+              </div>
+              <OpsField label="Location" value={addWir.location} onChange={v => setAddWir(s => ({ ...s, location: v }))} placeholder="Level 03" />
+              <OpsField label="Raised" type="date" value={addWir.raised_at} onChange={v => setAddWir(s => ({ ...s, raised_at: v }))} />
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>Status</label>
+                <select className="w-full border rounded-lg px-3 py-2 text-sm" value={addWir.status}
+                  onChange={e => setAddWir(s => ({ ...s, status: e.target.value }))}>
+                  {OPS_WIR_STATUS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+              <OpsField label="Closed" type="date" value={addWir.closed_at} onChange={v => setAddWir(s => ({ ...s, closed_at: v }))} />
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="qp-btn" onClick={() => setAddWir(null)} disabled={busy}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OpsField({ label, value, onChange, type, placeholder }) {
+  return (
+    <div>
+      <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 5 }}>{label}</label>
+      <input type={type || "text"} value={value} placeholder={placeholder || ""}
+        onChange={e => onChange(e.target.value)}
+        className="w-full border rounded-lg px-3 py-2 text-sm" />
+    </div>
+  );
+}
+
+
 function OperationsPage({ onNavigate }) {
   const [projects, setProjects] = useState(null);
   const [milestones, setMilestones] = useState([]);
   const [issues, setIssues] = useState([]);
   const [err, setErr] = useState("");
+  const [open, setOpen] = useState(null);     // the project being looked at
   const [edit, setEdit] = useState(null);
   const [issueFor, setIssueFor] = useState(null);
   const [issueTitle, setIssueTitle] = useState("");
@@ -21234,7 +21685,7 @@ function OperationsPage({ onNavigate }) {
     setErr("");
     try {
       const { data: p, error: pErr } = await sb.from("projects")
-        .select("id, project_name, project_ref, city, country, delivery_stage, percent_complete, status")
+        .select("id, project_name, project_ref, city, country, delivery_stage, percent_complete, status, building_type")
         .order("created_at", { ascending: false });
       if (pErr) throw pErr;
       setProjects(p || []);
@@ -21296,6 +21747,13 @@ function OperationsPage({ onNavigate }) {
   }
 
   if (projects === null) return <div className="qp-card">Loading…</div>;
+
+  // One click, the whole job. The row used to open a two-field dialog, which
+  // answered "what stage is it at" and nothing else anyone asks next.
+  if (open) {
+    const live = projects.find(p => p.id === open.id) || open;
+    return <OperationsProject project={live} onBack={() => setOpen(null)} onReload={load} />;
+  }
 
   return (
     <div>
@@ -21365,7 +21823,8 @@ function OperationsPage({ onNavigate }) {
           <div className="qp-card">
             <h4>Delivery</h4>
             <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
-              Click a row to set its stage and progress. A project is “behind” when a milestone has passed its planned date.
+              Click a project to open it: the delivery cycle, how much of the contract has been invoiced
+              and collected, every inspection request, the programme and what is blocking site.
             </p>
             <div style={{ overflowX: "auto" }}>
               <table className="qp-table">
@@ -21377,13 +21836,9 @@ function OperationsPage({ onNavigate }) {
                     const pc = p.percent_complete == null ? null : Number(p.percent_complete);
                     return (
                       <tr key={p.id}>
-                        <td onClick={() => setEdit({ id: p.id, project_name: p.project_name,
-                              delivery_stage: p.delivery_stage || "", percent_complete: p.percent_complete ?? "" })}
-                            style={{ cursor: "pointer" }}>
+                        <td onClick={() => setOpen(p)} style={{ cursor: "pointer" }}>
                           <ProjectRef value={p.project_ref} /></td>
-                        <td style={{ fontWeight: 600, cursor: "pointer" }}
-                            onClick={() => setEdit({ id: p.id, project_name: p.project_name,
-                              delivery_stage: p.delivery_stage || "", percent_complete: p.percent_complete ?? "" })}>
+                        <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => setOpen(p)}>
                           {p.project_name}</td>
                         <td>{pc === null ? <span style={{ fontSize: 12, color: "var(--q-text-dimmer,#94a3b8)" }}>not set</span>
                           : <DivBullet actual={pc} target={100} colour={behind ? DIV_SERIES[5] : DIV_SERIES[2]} />}</td>
@@ -21391,7 +21846,9 @@ function OperationsPage({ onNavigate }) {
                         <td>{p.delivery_stage ? <DivPill tone="flat">{DELIVERY_LABEL[p.delivery_stage]}</DivPill>
                           : <span style={{ fontSize: 12, color: "#b45309" }}>set a stage</span>}</td>
                         <td>{behind ? <DivPill tone="warn">Behind</DivPill> : <DivPill tone="good">On track</DivPill>}</td>
-                        <td style={{ textAlign: "right" }}>
+                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                          <button className="qp-btn pri" style={{ fontSize: 11, padding: "4px 9px", marginRight: 5 }}
+                            onClick={() => setOpen(p)}>Open</button>
                           <button className="qp-btn" style={{ fontSize: 11, padding: "4px 9px" }}
                             onClick={() => setIssueFor(p.id)}>+ Issue</button></td>
                       </tr>
@@ -21869,11 +22326,11 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
           Four workspaces, kept apart. You can switch at any time from the rail on the left.
         </p>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 items-stretch">
         {WORKSPACES.map(([key, label, icon, colour, blurb], idx) => (
           <button key={key} onClick={() => onPick(key)}
-            className="bg-white border rounded-2xl p-6 text-left flex flex-col hover:shadow-lg transition-shadow"
-            style={idx === 0 ? { borderColor: colour } : undefined}>
+            className="bg-white border rounded-2xl p-6 text-left flex flex-col h-full hover:shadow-lg transition-shadow"
+            style={{ borderTop: `3px solid ${colour}`, ...(idx === 0 ? { borderColor: colour } : null) }}>
             <span style={{
               width: 42, height: 42, borderRadius: 12, display: "flex", alignItems: "center",
               justifyContent: "center", fontSize: 19, color: colour, background: `${colour}22`,
@@ -21890,11 +22347,13 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
                 ))}
               </div>
             )}
-            <div className="mt-5 text-sm font-semibold text-center py-2.5 rounded-lg"
-              style={idx === 0
-                ? { background: colour, color: "#fff" }
-                : { border: "1px solid var(--q-border-strong,#cbd5e1)" }}>
-              Open {label.toLowerCase()}
+            <div className="mt-auto pt-5">
+              <div className="text-sm font-semibold text-center py-2.5 rounded-lg"
+                style={idx === 0
+                  ? { background: colour, color: "#fff" }
+                  : { border: "1px solid var(--q-border-strong,#cbd5e1)" }}>
+                Open {label.toLowerCase()}
+              </div>
             </div>
           </button>
         ))}
@@ -22735,11 +23194,26 @@ function DraftsmanSizeFix({ project, onSaved }) {
 function DraftsmanPage({ projects, onOpenProject }) {
   const [chosen, setChosen] = useState(null);
   const [edited, setEdited] = useState({});
+  // Somebody whose first visit to the platform is the drafting office should not
+  // have to go and find the Projects workspace, make a project there, and come
+  // back. A shop drawing still belongs to a project, so one is created here.
+  const [creating, setCreating] = useState(false);
   const live = (projects || []).filter(p => p.status !== "archived").map(p => edited[p.id] || p);
 
   if (chosen) {
     const p = edited[chosen.id] || chosen;
     return <DraftsmanStudio project={p} onBack={() => setChosen(null)} onOpenProject={onOpenProject} />;
+  }
+  if (creating) {
+    return (
+      <div className="space-y-4">
+        <button onClick={() => setCreating(false)}
+          className="text-sm text-slate-500 hover:text-slate-900">&larr; Back to the project list</button>
+        <NewProjectForm
+          onCreated={np => { setCreating(false); setChosen(np); }}
+          onCancel={() => setCreating(false)} />
+      </div>
+    );
   }
   return (
     <div className="space-y-5">
@@ -22756,8 +23230,17 @@ function DraftsmanPage({ projects, onOpenProject }) {
         <p className="text-xs text-slate-500 mb-4">
           The design and its drawings are written into that project, beside anything taken off from drawings.
         </p>
+        <button onClick={() => setCreating(true)}
+          className="w-full border rounded-xl p-4 text-left mb-4 hover:shadow-md transition-shadow"
+          style={{ borderStyle: "dashed", background: "#f8fafc" }}>
+          <div className="text-sm font-bold">Start a new project</div>
+          <div className="text-[11px] text-slate-500 mt-1">
+            Name it, say where it is and what it is, and the studio opens on it. You can upload the
+            drawings and the specification from inside.
+          </div>
+        </button>
         {!live.length ? (
-          <Empty>No projects yet. Create one first and you can design it here.</Empty>
+          <Empty>No projects yet &mdash; start one above and the studio opens straight onto it.</Empty>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {live.map(p => {
@@ -22802,6 +23285,94 @@ function DraftsmanPage({ projects, onOpenProject }) {
 // is the worst kind of wrong: internally consistent and useless. One real
 // dimension fixes it for good.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// UPLOADING FROM INSIDE THE STUDIO (2026-10-08)
+//
+// The studio used to list whatever happened to be on the project already and
+// offer no way to add anything, which meant a customer who came straight here
+// found an empty list and no door. Both steps now carry their own uploader: the
+// base plan takes the architectural sheet, the specification step takes the
+// specification. Same bucket and same table as the project's own Drawings page,
+// so a file added here is the project's file, not a copy.
+// ---------------------------------------------------------------------------
+const QDRAFT_DISCIPLINES = [
+  ["architectural", "Architectural floor plan"],
+  ["structural", "Structural"],
+  ["electrical", "Electrical"],
+  ["elv", "ELV / ICT"],
+  ["mechanical", "Mechanical / HVAC"],
+  ["plumbing", "Plumbing / public health"],
+  ["fire_protection", "Fire protection"],
+];
+
+function DraftsmanUpload({ project, kind, onUploaded }) {
+  const isSpec = kind === "specification";
+  const [files, setFiles] = useState([]);
+  const [discipline, setDiscipline] = useState(isSpec ? "specification" : "architectural");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState("");
+  const ref = useRef(null);
+
+  async function send() {
+    if (!files.length) { setErr("Choose a file first."); return; }
+    setBusy(true); setErr(""); setDone("");
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      for (const file of files) {
+        const ext = (file.name.split(".").pop() || "").toLowerCase();
+        const fileType = ext === "pdf" ? "pdf" : ext === "dwg" ? "dwg" : ext === "dxf" ? "dxf"
+          : ext === "rvt" ? "revit" : ext === "ifc" ? "ifc"
+          : ["png", "jpg", "jpeg"].includes(ext) ? "image" : "scan";
+        const path = `${project.id}/${Date.now()}_${file.name}`;
+        const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
+        if (upErr) throw upErr;
+        const { error: insErr } = await sb.from("drawings").insert({
+          project_id: project.id, file_name: file.name, storage_path: path,
+          file_type: fileType, discipline, uploaded_by: user ? user.id : null,
+        });
+        if (insErr) throw insErr;
+      }
+      setDone(`${files.length} file${files.length === 1 ? "" : "s"} uploaded.`);
+      setFiles([]);
+      if (ref.current) ref.current.value = "";
+      if (onUploaded) await onUploaded();
+      setTimeout(() => setDone(""), 5000);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="border rounded-xl p-4" style={{ background: "#f8fafc", borderStyle: "dashed" }}>
+      <div className="font-semibold text-sm mb-1">
+        {isSpec ? "Upload the specification" : "Upload a drawing"}
+      </div>
+      <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+        {isSpec
+          ? "The project specification, as a PDF. It is read page by page in your browser — nothing is sent anywhere and nothing is charged."
+          : "The architectural or structural floor plan the shop drawing will be set out on. PDF reads best: the rooms and the scale are taken straight off the sheet. DWG, DXF, Revit and IFC upload and are kept, but only a PDF can be read for geometry today."}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        {!isSpec && (
+          <select value={discipline} onChange={e => setDiscipline(e.target.value)}
+            className="border rounded-lg px-3 py-2 text-sm bg-white">
+            {QDRAFT_DISCIPLINES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+        )}
+        <input ref={ref} type="file" multiple
+          accept={isSpec ? ".pdf" : ".pdf,.png,.jpg,.jpeg,.dwg,.dxf,.rvt,.ifc"}
+          onChange={e => { setFiles(Array.from(e.target.files || [])); setErr(""); }}
+          className="text-sm" />
+        <button onClick={send} disabled={busy || !files.length}
+          className="text-sm font-semibold bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-40">
+          {busy ? "Uploading…" : `Upload${files.length ? ` ${files.length}` : ""}`}
+        </button>
+      </div>
+      {err && <div className="text-sm text-rose-600 mt-2">{err}</div>}
+      {done && <div className="text-sm mt-2" style={{ color: "#1f5130" }}>{done}</div>}
+    </div>
+  );
+}
+
 function DraftsmanBasePlan({ project, plate, onPlate }) {
   const [drawings, setDrawings] = useState(null);
   const [err, setErr] = useState("");
@@ -22814,19 +23385,17 @@ function DraftsmanBasePlan({ project, plate, onPlate }) {
   const [widthM, setWidthM] = useState("");
   const [result, setResult] = useState(null);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const { data, error } = await sb.from("drawings")
-          .select("id, file_name, storage_path, discipline, page_count, created_at")
-          .eq("project_id", project.id).order("created_at", { ascending: false });
-        if (error) throw error;
-        if (alive) setDrawings(data || []);
-      } catch (e) { if (alive) { setErr(e.message); setDrawings([]); } }
-    })();
-    return () => { alive = false; };
-  }, [project.id]);
+  async function loadDrawings() {
+    try {
+      const { data, error } = await sb.from("drawings")
+        .select("id, file_name, storage_path, discipline, page_count, created_at")
+        .eq("project_id", project.id).neq("discipline", "specification")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setDrawings(data || []);
+    } catch (e) { setErr(e.message); setDrawings([]); }
+  }
+  useEffect(() => { loadDrawings(); }, [project.id]);
 
   async function open(d) {
     setErr(""); setBusy("open"); setPicked(d); setExtract(null); setResult(null); setScale(null);
@@ -22922,10 +23491,11 @@ function DraftsmanBasePlan({ project, plate, onPlate }) {
           or the plan printed to PDF first.
         </p>
         <ErrBar error={err} />
+        <div className="mb-4"><DraftsmanUpload project={project} kind="drawing" onUploaded={loadDrawings} /></div>
         {drawings === null ? <div className="text-sm text-slate-500">Looking for drawings…</div>
           : !drawings.length ? (
-            <Empty>No drawings uploaded to this project yet. Upload an architectural floor plan in the
-              project&rsquo;s Drawings page, or carry on without one and design from requirements.</Empty>
+            <Empty>Nothing uploaded yet. Add an architectural floor plan above, or carry on without one and
+              design from the building description instead.</Empty>
           ) : (
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
               {drawings.map(d => (
@@ -23419,19 +23989,20 @@ function DraftsmanSpec({ project, spec, onSpec }) {
   const systemKeys = useMemo(() => Object.keys(QSPEC_KEYWORDS)
     .sort((a, b) => SYSTEM_LABEL(a).localeCompare(SYSTEM_LABEL(b))), []);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const { data, error } = await sb.from("drawings")
-          .select("id, file_name, storage_path, discipline, page_count, created_at")
-          .eq("project_id", project.id).order("created_at", { ascending: false });
-        if (error) throw error;
-        if (alive) setDocs(data || []);
-      } catch (e) { if (alive) { setErr(e.message); setDocs([]); } }
-    })();
-    return () => { alive = false; };
-  }, [project.id]);
+  // Specifications first, because that is what this step is for, then anything
+  // else on the project in case one was filed under the wrong label.
+  async function loadDocs() {
+    try {
+      const { data, error } = await sb.from("drawings")
+        .select("id, file_name, storage_path, discipline, page_count, created_at")
+        .eq("project_id", project.id).order("created_at", { ascending: false });
+      if (error) throw error;
+      const rows = data || [];
+      rows.sort((a, b) => (a.discipline === "specification" ? 0 : 1) - (b.discipline === "specification" ? 0 : 1));
+      setDocs(rows);
+    } catch (e) { setErr(e.message); setDocs([]); }
+  }
+  useEffect(() => { loadDocs(); }, [project.id]);
 
   async function openDoc(d) {
     setErr(""); setBusy("read"); setPicked(d); setPages(null); setFound(null); setProgress("");
@@ -23559,13 +24130,14 @@ function DraftsmanSpec({ project, spec, onSpec }) {
       <div className="bg-white border rounded-xl p-5">
         <h4 className="font-bold mb-1">1. Which document is the specification?</h4>
         <p className="text-sm text-slate-500 mb-3">
-          Anything uploaded to this project. If the specification is not here yet, upload it on the
-          project page first.
+          Upload it here, or pick one already on the project. Documents filed as a specification are
+          listed first.
         </p>
+        <div className="mb-4"><DraftsmanUpload project={project} kind="specification" onUploaded={loadDocs} /></div>
         {docs === null && <div className="text-sm text-slate-500">Looking…</div>}
         {docs && !docs.length && (
           <div className="text-sm text-slate-500">
-            Nothing is uploaded to this project yet.
+            Nothing is uploaded to this project yet. Add the specification above.
           </div>
         )}
         <div className="space-y-2">
@@ -24548,6 +25120,31 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
   .qtr-topnav{padding-left:8px!important;padding-right:8px!important}
 }
 </style>
+<style id="quantora-missing-grids">
+/* Tailwind in this file is a static, pre-purged build: a class that nothing
+   referenced at build time simply does not exist at runtime. Five responsive
+   grid classes are used in the app and are NOT in that build, so every grid
+   that relied on them silently rendered as a single stacked column — which is
+   why the workspace chooser, the project cards and the draftsman list all read
+   as a long list instead of a laid-out page. Breakpoints match Tailwind's own
+   (sm 640, lg 1024, xl 1280) so these behave exactly as the build would have. */
+@media (min-width:640px){
+  .sm\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .sm\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .sm\:grid-cols-8{grid-template-columns:repeat(8,minmax(0,1fr))}
+}
+@media (min-width:1024px){
+  .lg\:grid-cols-5{grid-template-columns:repeat(5,minmax(0,1fr))}
+}
+@media (min-width:1280px){
+  .xl\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+/* Also missing from the purged build, and needed for cards of unequal content
+   to still line their footers up. */
+.mt-auto{margin-top:auto}
+.items-stretch{align-items:stretch}
+.min-h-0{min-height:0}
+</style>
 <style id="quantora-markup-viewer">
 /* Drawing markup/bounding-box overlay markers (see MarkupViewerModal). These
    use hand-written custom classes, not Tailwind utilities, for the same
@@ -25101,9 +25698,13 @@ select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102
 .qdash-projs{display:grid;grid-template-columns:1fr;gap:14px}
 @media (min-width:640px){.qdash-projs{grid-template-columns:repeat(2,1fr)}}
 @media (min-width:1800px){.qdash-projs{grid-template-columns:repeat(3,1fr)}}
+/* Every card the same height, every number in the same place. The four stats
+   used to wrap on a flex row, so the second card's "BOQ lines" sat under the
+   first card's "priced" and the grid read as a pile rather than a table. */
 .qdash-proj{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);
   border-radius:16px;padding:18px 18px 16px;cursor:pointer;transition:transform .12s,border-color .12s;
-  min-width:0;overflow:hidden}
+  min-width:0;overflow:hidden;display:flex;flex-direction:column;height:100%;
+  border-left:3px solid var(--q-stage,var(--q-border,#e2e8f0))}
 .qdash-proj:hover{transform:translateY(-2px);border-color:rgba(99,102,241,.55)}
 .qdash-proj .pn{font-size:15.5px;font-weight:700;letter-spacing:-.2px;line-height:1.3;
   overflow-wrap:anywhere;word-break:break-word}
@@ -25159,10 +25760,12 @@ select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102
 
 .qpill{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
   padding:3px 8px;border-radius:999px;border:1px solid}
-.qproj-stats{display:flex;flex-wrap:wrap;gap:10px 14px;margin-top:12px;padding-top:11px;
-  border-top:1px solid var(--q-border,#e2e8f0)}
-.qproj-stats div{font-size:11px;color:var(--q-text-dimmer,#94a3b8);
-  flex:0 1 auto;min-width:0;white-space:nowrap}
+.qdash-projs{align-items:stretch}
+.qdash-proj .pm{margin-top:auto}
+.qproj-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px;
+  padding-top:11px;border-top:1px solid var(--q-border,#e2e8f0)}
+.qproj-stats div{font-size:10.5px;color:var(--q-text-dimmer,#94a3b8);
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qproj-stats div b{display:block;font-size:15px;font-weight:800;color:var(--q-text,#0f172a);line-height:1.2}
 @media (min-width:768px){
   .qws-side{display:block}
