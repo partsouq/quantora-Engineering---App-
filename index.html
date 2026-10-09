@@ -7,7 +7,21 @@
      the upload did not replace index.html. The same string shows under the
      sign-in box and in the browser console on every page load. -->
 <meta name="quantora-build" content="2026-10-09.1" />
-<script>window.QUANTORA_BUILD = "2026-10-09.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>
+// Supabase Storage rejects keys with characters such as { } [ ] # % ^ ~ and
+// some unicode ("Invalid key"). Every upload path is built from this cleaned
+// name; the original file.name is still what gets saved and shown to users.
+window.safeStorageName = function (name) {
+  const raw = String(name || "file").normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  const dot = raw.lastIndexOf(".");
+  const ext = dot > 0 ? raw.slice(dot).replace(/[^A-Za-z0-9.]/g, "").slice(0, 10) : "";
+  const base = (dot > 0 ? raw.slice(0, dot) : raw)
+    .replace(/[^A-Za-z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^[_.]+|[_.]+$/g, "")
+    .slice(0, 120) || "file";
+  return base + ext.toLowerCase();
+};
+</script>
+<script>window.QUANTORA_BUILD = "2026-10-09.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -6904,7 +6918,7 @@ function TenderIntelligenceTab({ project }) {
         // is user_can_see_tender(split_part(name,'/',1)). Uploading to `drawings`
         // meant analyze_document could never find the file -- which is why no
         // tender document has ever been successfully extracted.
-        const path = `${tender.id}/docs/${Date.now()}-${f.name}`;
+        const path = `${tender.id}/docs/${Date.now()}-${safeStorageName(f.name)}`;
         const { error: upErr } = await sb.storage.from("tenders").upload(path, f, { upsert: false });
         if (upErr) throw upErr;
         const { data: { user } } = await sb.auth.getUser();
@@ -7687,7 +7701,7 @@ function ComparisonTab({ project }) {
     try {
       const { data: { user } } = await sb.auth.getUser();
       for (const f of files) {
-        const path = `${tender.id}/quotes/${Date.now()}-${f.name}`;
+        const path = `${tender.id}/quotes/${Date.now()}-${safeStorageName(f.name)}`;
         const { error: upErr } = await sb.storage.from("tenders").upload(path, f, { upsert: false });
         if (upErr) throw upErr;
         const { error: insErr } = await sb.from("quotations").insert({
@@ -8832,7 +8846,7 @@ function DrawingsTab({ project }) {
         const ext = file.name.split(".").pop().toLowerCase();
         const fileType = ["pdf"].includes(ext) ? "pdf" : ["dwg"].includes(ext) ? "dwg" : ["dxf"].includes(ext) ? "dxf"
           : ["rvt"].includes(ext) ? "revit" : ["ifc"].includes(ext) ? "ifc" : ["png","jpg","jpeg"].includes(ext) ? "image" : "scan";
-        const path = `${project.id}/${Date.now()}_${file.name}`;
+        const path = `${project.id}/${Date.now()}_${safeStorageName(file.name)}`;
         let fileHash = null;
         try { fileHash = await hashFile(file); } catch (hashErr) { console.error("file hash failed (non-fatal):", hashErr); }
         const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
@@ -9125,7 +9139,7 @@ function DrawingsTab({ project }) {
       const ext = file.name.split(".").pop().toLowerCase();
       const sourceType = ext === "pdf" ? "pdf" : ["png","jpg","jpeg"].includes(ext) ? "image" : null;
       if (!sourceType) { setErr("Please attach a PDF or image (PNG/JPG) export -- other file types can't be AI-analyzed."); return; }
-      const path = `${project.id}/${Date.now()}_export_${file.name}`;
+      const path = `${project.id}/${Date.now()}_export_${safeStorageName(file.name)}`;
       const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
       if (upErr) throw upErr;
       const { error: updErr } = await sb.from("drawings").update({ analysis_source_path: path, analysis_source_type: sourceType }).eq("id", drawingId);
@@ -13421,7 +13435,7 @@ function SpecificationTab({ project }) {
       for (const f of files) {
         // tenders bucket, tender id first -- see the note on the Tender
         // Intelligence upload. The engines read from `tenders`, nowhere else.
-        const path = `${tender.id}/docs/${Date.now()}-${f.name}`;
+        const path = `${tender.id}/docs/${Date.now()}-${safeStorageName(f.name)}`;
         const { error: upErr } = await sb.storage.from("tenders").upload(path, f, { upsert: false });
         if (upErr) throw upErr;
         const { data: row, error: insErr } = await sb.from("tender_documents").insert({
@@ -23426,7 +23440,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
       const fileType = ext === "pdf" ? "pdf" : ext === "dwg" ? "dwg" : ext === "dxf" ? "dxf"
         : ext === "rvt" ? "revit" : ext === "ifc" ? "ifc"
         : ["png", "jpg", "jpeg"].includes(ext) ? "image" : "scan";
-      const path = `${p.id}/${Date.now()}_${file.name}`;
+      const path = `${p.id}/${Date.now()}_${safeStorageName(file.name)}`;
       const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
       if (upErr) throw upErr;
       const { error: insErr } = await sb.from("drawings").insert({
@@ -23458,7 +23472,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
     setBusy("logo"); setErr("");
     try {
       const p = project || await ensureProject();
-      const path = `${p.id}/logo/${Date.now()}_${file.name}`;
+      const path = `${p.id}/logo/${Date.now()}_${safeStorageName(file.name)}`;
       const { error } = await sb.storage.from("drawings").upload(path, file, { upsert: true });
       if (error) throw error;
       const reader = new FileReader();
@@ -23951,7 +23965,7 @@ function DraftsmanUpload({ project, kind, onUploaded }) {
         const fileType = ext === "pdf" ? "pdf" : ext === "dwg" ? "dwg" : ext === "dxf" ? "dxf"
           : ext === "rvt" ? "revit" : ext === "ifc" ? "ifc"
           : ["png", "jpg", "jpeg"].includes(ext) ? "image" : "scan";
-        const path = `${project.id}/${Date.now()}_${file.name}`;
+        const path = `${project.id}/${Date.now()}_${safeStorageName(file.name)}`;
         const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
         if (upErr) throw upErr;
         const { error: insErr } = await sb.from("drawings").insert({
