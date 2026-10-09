@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-09.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-09.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -6797,7 +6797,51 @@ const callTender = (action, payload) => callEdge(TENDER_FN_URL, action, payload)
 // a separate function from ai-engine on purpose -- it makes no model call, so it
 // has no timeout risk, no cost and no quota to meter.
 const DESIGN_FN_URL = `${SUPABASE_URL}/functions/v1/design-engine`;
-const callDesign = (action, payload) => callEdge(DESIGN_FN_URL, action, payload);
+// Admin switches (platform_settings → draftsman_families, 2026-10-09). The
+// platform admin turns whole drawing families on or off from the Admin Portal
+// while their rule packs are still being built — ELV is live, MEP and
+// electrical are not yet. Every caller of the design engine goes through here,
+// so a switched-off family never appears in a picker and is never sent to the
+// engine. Read failures fail OPEN for ELV only: a network blip must not take
+// the live product down, and must not switch on what the admin switched off.
+const DRAFTSMAN_FAMILIES = ["ELV", "Fire", "Mechanical", "Electrical", "Plumbing"];
+const DRAFTSMAN_FAMILY_LABEL = { ELV: "ELV (CCTV, access control, ICT, intercom, PA…)", Fire: "Fire (alarm, sprinklers, fire fighting)",
+  Mechanical: "Mechanical (HVAC, ventilation, chilled water)", Electrical: "Electrical (lighting, power, LV, UPS, generator)",
+  Plumbing: "Plumbing (water supply, drainage, pumps)" };
+let _draftsmanFamilies = null, _draftsmanFamiliesAt = 0;
+async function getDraftsmanFamilies(force) {
+  if (!force && _draftsmanFamilies && Date.now() - _draftsmanFamiliesAt < 60000) return _draftsmanFamilies;
+  try {
+    const { data, error } = await sb.from("platform_settings").select("value").eq("key", "draftsman_families").maybeSingle();
+    if (error) throw error;
+    _draftsmanFamilies = Object.assign({ ELV: true }, (data && data.value) || {});
+  } catch (e) {
+    _draftsmanFamilies = _draftsmanFamilies || { ELV: true };
+  }
+  _draftsmanFamiliesAt = Date.now();
+  return _draftsmanFamilies;
+}
+const _callDesignRaw = (action, payload) => callEdge(DESIGN_FN_URL, action, payload);
+const callDesign = async (action, payload) => {
+  const fam = await getDraftsmanFamilies();
+  if (action === "capabilities") {
+    const caps = await _callDesignRaw(action, payload);
+    const all = caps.systems || [];
+    const on = all.filter(s => fam[s.family] === true);
+    const off = all.filter(s => fam[s.family] !== true);
+    return { ...caps, systems: on, disabled_systems: off,
+             disabled_families: [...new Set(off.map(s => s.family))] };
+  }
+  if (action === "generate_design" || action === "preview") {
+    const caps = await _callDesignRaw("capabilities", {});
+    const allowed = new Set((caps.systems || []).filter(s => fam[s.family] === true).map(s => s.key));
+    const asked = payload && Array.isArray(payload.systems) && payload.systems.length ? payload.systems : [...allowed];
+    const systems = asked.filter(k => allowed.has(k));
+    if (!systems.length) throw new Error("The selected disciplines are switched off by the administrator while they are in development.");
+    payload = { ...payload, systems };
+  }
+  return _callDesignRaw(action, payload);
+};
 
 // Finds the tender row that belongs to a project, creating it on first open.
 // This is a plain insert -- no AI, no cost -- so opening the page is free.
@@ -11335,6 +11379,7 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [result, setResult] = useState(null);
+  const [offFamilies, setOffFamilies] = useState([]);
 
   useEffect(() => {
     let alive = true;
@@ -11345,6 +11390,7 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq }) {
         if (!alive) return;
         setSystems(caps.systems || []);
         setChosen((caps.systems || []).map(s => s.key));
+        setOffFamilies(caps.disabled_families || []);
         // A base plan read off the customer's own drawing replaces the floor
         // mix the template would have guessed. Its rooms are real, so the
         // design runs against the building rather than against an average.
@@ -11466,6 +11512,11 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq }) {
     <div className="space-y-5">
       <div className="bg-white border rounded-xl p-5">
         <h3 className="font-bold text-lg">Full MEP &amp; ELV design</h3>
+        {offFamilies.length > 0 && (
+          <div className="mt-2 text-xs rounded-lg px-3 py-2" style={{ background: "#fef3c7", color: "#92400e" }}>
+            Coming soon: {offFamilies.join(", ")} drawings are in development and switched off for now. ELV design is available.
+          </div>
+        )}
         <p className="text-sm text-slate-600 mt-1 leading-relaxed">
           Designs every system you select, on every floor, from the building envelope and the
           rules of the authority having jurisdiction — device schedule, mounting heights,
@@ -15797,6 +15848,7 @@ const QADMIN_NAV = [
   { group: "Platform", key: "health", label: "System Health", sub: "Live status of core platform services" },
   { group: "Platform", key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
   { group: "Platform", key: "compliance", label: "Compliance Rules", sub: "The authority library, by country and city" },
+  { group: "Platform", key: "draftsman", label: "Draftsman Controls", sub: "Switch drawing generation on or off per discipline" },
   { group: "Platform", key: "settings", label: "Settings", sub: "Your account details and sign-in" },
 ];
 
@@ -16137,6 +16189,65 @@ function QSupportView({ companyNameById }) {
   );
 }
 
+// Draftsman Controls (2026-10-09): one switch per drawing family. Writes go to
+// platform_settings, which RLS lets only platform admins change; customers
+// read it so their pickers and the IFC service follow the switch.
+function AdminDraftsmanControls() {
+  const [fam, setFam] = useState(null);
+  const [saving, setSaving] = useState("");
+  const [msg, setMsg] = useState("");
+  const [byFamily, setByFamily] = useState({});
+  useEffect(() => {
+    (async () => {
+      setFam(await getDraftsmanFamilies(true));
+      try {
+        const caps = await _callDesignRaw("capabilities", {});
+        const g = {};
+        (caps.systems || []).forEach(s => { (g[s.family] = g[s.family] || []).push(s.label); });
+        setByFamily(g);
+      } catch (e) { /* the switches still work without the system names */ }
+    })();
+  }, []);
+  async function toggle(k) {
+    const next = { ...fam, [k]: !(fam[k] === true) };
+    setSaving(k); setMsg("");
+    const { error } = await sb.from("platform_settings").upsert({ key: "draftsman_families", value: next, updated_at: new Date().toISOString() });
+    setSaving("");
+    if (error) { setMsg("Could not save: " + error.message); return; }
+    setFam(next);
+    _draftsmanFamilies = next; _draftsmanFamiliesAt = Date.now();
+    setMsg(`${k} drawing generation is now ${next[k] ? "ON" : "OFF"} for every customer.`);
+  }
+  if (!fam) return <div className="text-sm text-slate-500">Loading…</div>;
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-5">
+        <div className="font-bold">Draftsman drawing generation</div>
+        <div className="text-sm text-slate-500 mt-1">
+          Switch a discipline off while its rules are still in development. Customers see it as "coming soon"; the design engine
+          and the IFC drawing service will not generate it. Changes apply to every customer within a minute.
+        </div>
+      </div>
+      {DRAFTSMAN_FAMILIES.map(k => {
+        const on = fam[k] === true;
+        return (
+          <div key={k} className="bg-white border rounded-xl p-4 flex items-center gap-4">
+            <div className="flex-1">
+              <div className="font-semibold text-sm">{DRAFTSMAN_FAMILY_LABEL[k]}</div>
+              {byFamily[k] && <div className="text-xs text-slate-500 mt-1">{byFamily[k].join(" · ")}</div>}
+            </div>
+            <span className="text-xs font-bold" style={{ color: on ? "#166534" : "#991b1b" }}>{on ? "ON" : "OFF"}</span>
+            <button disabled={saving === k} onClick={() => toggle(k)}
+              className={`text-sm font-semibold px-3 py-2 rounded-lg border ${on ? "hover:bg-red-50" : "bg-blue-600 text-white"}`}>
+              {saving === k ? "Saving…" : on ? "Turn off" : "Turn on"}</button>
+          </div>
+        );
+      })}
+      {msg && <div className="text-sm text-slate-700">{msg}</div>}
+    </div>
+  );
+}
+
 function AdminPortal({ onBack }) {
   const [activeView, setActiveView] = useState("exec");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -16436,6 +16547,9 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "settings" && (
               <QAdminSettings />
+            )}
+            {activeView === "draftsman" && (
+              <AdminDraftsmanControls />
             )}
             {activeView === "reports" && (
               <QReportsView reportsData={reportsData} exportBusy={exportBusy}
@@ -25085,6 +25199,8 @@ function DraftsmanIfcPackage({ project }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [jobs, setJobs] = useState([]);
+  const [elvOn, setElvOn] = useState(true);
+  useEffect(() => { getDraftsmanFamilies().then(f => setElvOn(f.ELV === true)); }, []);
 
   const load = async () => {
     const { data, error } = await sb.from("draftsman_jobs").select("*")
@@ -25101,6 +25217,7 @@ function DraftsmanIfcPackage({ project }) {
 
   const submit = async () => {
     setErr("");
+    if (!elvOn) { setErr("ELV drawing generation is switched off by the administrator."); return; }
     if (!file) { setErr("Choose the architectural IFC first."); return; }
     if (!/\.ifc$/i.test(file.name)) { setErr("That is not an .ifc file. Export the model from Revit / ArchiCAD as IFC with rooms (spaces) included."); return; }
     if (!systems.length) { setErr("Pick at least one system."); return; }
