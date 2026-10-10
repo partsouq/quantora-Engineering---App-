@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-10.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-10.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25314,7 +25314,8 @@ function DraftsmanIfcPackage({ project }) {
     "EL-EMERGENCY-LIGHTING-AND-EXIT-SIGNS.pdf": "Emergency lighting (PDF)", "FF-FIRE-FIGHTING.pdf": "Fire fighting (PDF)",
     "M-VENTILATION-AND-AIR-CONDITIONING.pdf": "Ventilation / AC (PDF)", "P-WATER-SUPPLY.pdf": "Water supply (PDF)",
     "D-DRAINAGE.pdf": "Drainage (PDF)", "E-LIGHTING-AND-POWER.pdf": "Lighting and power (PDF)",
-    "MEP-ELV-devices.ifc": "IFC with all devices" }[n] || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
+    "MEP-ELV-devices.ifc": "IFC with all devices", "QA-report.md": "QA report (DBC screen, clash, sheet check)",
+    "QA.json": "QA data (JSON)" }[n] || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
 
   return (
     <div className="space-y-4">
