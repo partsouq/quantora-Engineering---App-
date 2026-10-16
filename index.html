@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-09.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-10.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25121,7 +25121,7 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief }) {
           className="text-sm font-semibold border px-3 py-2 rounded-lg hover:bg-slate-50">Open the full project</button>
       </div>
       <div className="flex gap-2 border-b">
-        {[["design", "1. Design"], ["drawings", "2. Drawings"], ["ifc", "3. Full package from IFC"]].map(([k, l]) => (
+        {[["design", "1. Design"], ["drawings", "2. Drawings"], ["ifc", "3. Full package (IFC / plans)"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px ${
               tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-900"}`}>{l}</button>
@@ -25188,19 +25188,52 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief }) {
 // report. Its BOQ lines also land in boq_items (run_kind design_ifc), so
 // Estimation and Export work on them unchanged.
 // ---------------------------------------------------------------------------
-const IFC_SYSTEMS = [["cctv", "CCTV"], ["acs", "Access control"], ["ict", "ICT / FTTH"],
-                     ["intercom", "Intercom"], ["bgm", "BGM / PA"]];
+// [key, label, admin family] — families are switched on / off in Admin → Draftsman Controls
+const IFC_SYSTEMS = [["cctv", "CCTV", "ELV"], ["acs", "Access control", "ELV"], ["ict", "ICT / FTTH", "ELV"],
+                     ["intercom", "Intercom", "ELV"], ["bgm", "BGM / PA", "ELV"],
+                     ["ls", "Life safety", "Fire"], ["fa", "Fire alarm", "Fire"], ["el", "Emergency lighting", "Fire"],
+                     ["ff", "Fire fighting", "Fire"], ["hvac", "Ventilation / AC", "Mechanical"],
+                     ["water", "Water supply", "Plumbing"], ["drainage", "Drainage", "Plumbing"],
+                     ["electrical", "Lighting and power", "Electrical"]];
+const IFC_FAMILY_ORDER = ["ELV", "Fire", "Mechanical", "Plumbing", "Electrical"];
 
 function DraftsmanIfcPackage({ project }) {
-  const [file, setFile] = useState(null);
-  const [systems, setSystems] = useState(IFC_SYSTEMS.map(s => s[0]));
+  // Input: one architectural IFC (with rooms), or architectural plans — one PDF / DXF
+  // sheet per floor. Plans carry an optional floor name and floor type each.
+  const [files, setFiles] = useState([]);
+  const [planInfo, setPlanInfo] = useState({});
+  const [systems, setSystems] = useState(IFC_SYSTEMS.filter(s => s[2] === "ELV").map(s => s[0]));
   const [tower, setTower] = useState("");
   const [size, setSize] = useState("A0");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [jobs, setJobs] = useState([]);
-  const [elvOn, setElvOn] = useState(true);
-  useEffect(() => { getDraftsmanFamilies().then(f => setElvOn(f.ELV === true)); }, []);
+  const [fams, setFams] = useState({ ELV: true });
+  useEffect(() => { getDraftsmanFamilies().then(f => setFams(f || {})); }, []);
+  const famOn = (fam) => fams[fam] === true;
+  const elvOn = IFC_SYSTEMS.some(s => famOn(s[2]));
+
+  const guessFloor = (name) => {
+    const n = (name || "").toUpperCase();
+    let m = n.match(/BASEMENT\s*0?(\d+)|\bB0?(\d)\b|\bBA(\d)\b/);
+    if (m) return { storey: `BASEMENT ${String(m[1] || m[2] || m[3]).padStart(2, "0")}`, cat: "basement" };
+    if (/GROUND|\bGF\b/.test(n)) return { storey: "GROUND FLOOR", cat: "ground" };
+    m = n.match(/PODIUM\s*0?(\d+)|\bP0?(\d+)\b/);
+    if (m) return { storey: `PODIUM ${String(m[1] || m[2]).padStart(2, "0")}`, cat: "podium" };
+    m = n.match(/LEVEL\s*0?(\d+)|\bL0?(\d+)\b/);
+    if (m) return { storey: `LEVEL ${String(m[1] || m[2]).padStart(2, "0")}`, cat: "" };
+    if (/ROOF/.test(n)) return { storey: "ROOF", cat: "roof" };
+    return { storey: "", cat: "" };
+  };
+  const pick = (list) => {
+    const arr = Array.from(list || []);
+    setFiles(arr);
+    const info = {};
+    arr.forEach((f, i) => { info[i] = guessFloor(f.name); });
+    setPlanInfo(info);
+  };
+  const isIfc = files.length === 1 && /\.ifc$/i.test(files[0].name);
+  const isPlans = files.length > 0 && files.every(f => /\.(pdf|dxf)$/i.test(f.name));
 
   const load = async () => {
     const { data, error } = await sb.from("draftsman_jobs").select("*")
@@ -25217,21 +25250,45 @@ function DraftsmanIfcPackage({ project }) {
 
   const submit = async () => {
     setErr("");
-    if (!elvOn) { setErr("ELV drawing generation is switched off by the administrator."); return; }
-    if (!file) { setErr("Choose the architectural IFC first."); return; }
-    if (!/\.ifc$/i.test(file.name)) { setErr("That is not an .ifc file. Export the model from Revit / ArchiCAD as IFC with rooms (spaces) included."); return; }
+    if (!elvOn) { setErr("Drawing generation is switched off by the administrator."); return; }
+    const offSel = systems.filter(k => !famOn((IFC_SYSTEMS.find(s => s[0] === k) || [])[2]));
+    if (offSel.length) { setErr("These systems are switched off by the administrator: " + offSel.join(", ")); return; }
+    if (!files.length) { setErr("Choose the architectural IFC, or the floor plans (PDF / DXF, one sheet per floor)."); return; }
+    if (files.some(f => /\.dwg$/i.test(f.name))) { setErr("DWG can't be read directly — in AutoCAD use Save As → DXF, then upload the DXF."); return; }
+    if (!isIfc && !isPlans) { setErr("Upload either one .ifc file, or one or more .pdf / .dxf floor plans — not a mix."); return; }
     if (!systems.length) { setErr("Pick at least one system."); return; }
     setBusy(true);
     try {
-      const path = `${project.id}/draftsman/input/${Date.now()}_${safeStorageName(file.name)}`;
-      const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
-      if (upErr) throw upErr;
+      const up = async (f) => {
+        const path = `${project.id}/draftsman/input/${Date.now()}_${safeStorageName(f.name)}`;
+        const { error: upErr } = await sb.storage.from("drawings").upload(path, f);
+        if (upErr) throw upErr;
+        return path;
+      };
+      const options = { tower_code: tower.trim().toUpperCase(), sheet_size: size };
+      let first, firstName;
+      if (isIfc) {
+        first = await up(files[0]); firstName = files[0].name;
+      } else {
+        const plan_paths = [];
+        const cats = {};
+        for (let i = 0; i < files.length; i++) {
+          const p = await up(files[i]);
+          const inf = planInfo[i] || {};
+          const storey = (inf.storey || "").trim().toUpperCase();
+          plan_paths.push({ path: p, name: files[i].name, ...(storey ? { storey } : {}) });
+          if (storey && inf.cat) cats[storey] = inf.cat;
+        }
+        options.plan_paths = plan_paths;
+        if (Object.keys(cats).length) options.floor_categories = cats;
+        first = plan_paths[0].path;
+        firstName = files.length === 1 ? files[0].name : `${files.length} floor plans (${files.map(f => f.name).join(", ").slice(0, 80)})`;
+      }
       const { error } = await sb.from("draftsman_jobs").insert({
-        project_id: project.id, ifc_path: path, ifc_name: file.name, systems,
-        options: { tower_code: tower.trim().toUpperCase(), sheet_size: size },
+        project_id: project.id, ifc_path: first, ifc_name: firstName, systems, options,
       });
       if (error) throw error;
-      setFile(null);
+      setFiles([]); setPlanInfo({});
       await load();
     } catch (e) {
       setErr(e.message || String(e));
@@ -25252,20 +25309,30 @@ function DraftsmanIfcPackage({ project }) {
   const label = n => ({ "CCTV-layouts.pdf": "CCTV layouts (PDF)", "ACC-layouts.pdf": "Access control layouts (PDF)",
     "TEL-layouts.pdf": "ICT layouts (PDF)", "VIC-layouts.pdf": "Intercom layouts (PDF)", "BGM-layouts.pdf": "BGM / PA layouts (PDF)",
     "ELV-schematics.pdf": "Riser schematics (PDF)", "ELV-BOQ.xlsx": "BOQ workbook (Excel)", "ELV-devices.ifc": "IFC with ELV devices",
-    "ELV-compliance.md": "Compliance report" }[n] || n);
+    "ELV-compliance.md": "ELV compliance report", "MEP-BOQ.xlsx": "MEP BOQ (Excel)", "MEP-compliance.md": "MEP compliance report",
+    "LS-LIFE-SAFETY.pdf": "Life safety (PDF)", "FA-FIRE-ALARM.pdf": "Fire alarm (PDF)",
+    "EL-EMERGENCY-LIGHTING-AND-EXIT-SIGNS.pdf": "Emergency lighting (PDF)", "FF-FIRE-FIGHTING.pdf": "Fire fighting (PDF)",
+    "M-VENTILATION-AND-AIR-CONDITIONING.pdf": "Ventilation / AC (PDF)", "P-WATER-SUPPLY.pdf": "Water supply (PDF)",
+    "D-DRAINAGE.pdf": "Drainage (PDF)", "E-LIGHTING-AND-POWER.pdf": "Lighting and power (PDF)",
+    "MEP-ELV-devices.ifc": "IFC with all devices", "QA-report.md": "QA report (DBC screen, clash, sheet check)",
+    "QA.json": "QA data (JSON)" }[n] || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
 
   return (
     <div className="space-y-4">
       <div className="bg-white border rounded-xl p-5 space-y-3">
-        <div className="text-sm font-bold">Design every ELV system on your architectural IFC</div>
+        <div className="text-sm font-bold">Design ELV and MEP systems on your architectural drawings</div>
         <div className="text-[12px] text-slate-500 leading-relaxed">
-          Room-by-room design to the authority rules (UAE SIRA / TDRA / Civil Defence by default, chosen from the project country):
-          camera views with FOV cones, controlled doors and their hardware, apartment FTTH and outlets, IDFs, trays and cable lengths.
-          You get A0 layouts (PDF + DXF), riser schematics, the BOQ, an IFC with every device and a compliance report.
-          The IFC must include rooms (IfcSpace) with names. The result is a design draft for your engineer to review and stamp.
+          Room-by-room design to the authority rules (UAE Civil Defence / DBC / DEWA / SIRA / TDRA by default, chosen from the project country).
+          ELV: cameras with FOV cones, controlled doors, FTTH, IDFs and cable lengths. MEP: fire alarm, emergency lighting, hose reels and
+          sprinklers, life safety, ventilation / AC, water supply, drainage, lighting, power and boards — with sizing calculations.
+          You get layouts per discipline (PDF + DXF), risers and schematics, the Civil Defence submission files, the BOQ, an IFC with
+          every device and a compliance report.
+          Upload either the architectural IFC (with rooms / IfcSpace), or the architectural floor plans — one PDF or DXF
+          sheet per floor (vector PDF exported from CAD, not a scan; DWG: save as DXF). Plans should show room names; rooms
+          without names are flagged for review. The result is a design draft for your engineer to review and stamp.
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <input type="file" accept=".ifc" onChange={e => setFile(e.target.files && e.target.files[0])} className="text-sm" />
+          <input type="file" accept=".ifc,.pdf,.dxf,.dwg" multiple onChange={e => pick(e.target.files)} className="text-sm" />
           <label className="text-xs text-slate-600">Tower code
             <input value={tower} onChange={e => setTower(e.target.value)} placeholder="e.g. NT" maxLength={4}
               className="ml-2 border rounded px-2 py-1 w-20 text-sm" /></label>
@@ -25274,13 +25341,46 @@ function DraftsmanIfcPackage({ project }) {
               {["A0", "A1", "A2", "A3"].map(x => <option key={x}>{x}</option>)}
             </select></label>
         </div>
-        <div className="flex flex-wrap gap-3">
-          {IFC_SYSTEMS.map(([k, l]) => (
-            <label key={k} className="text-sm flex items-center gap-1">
-              <input type="checkbox" checked={systems.includes(k)}
-                onChange={e => setSystems(e.target.checked ? systems.concat(k) : systems.filter(x => x !== k))} /> {l}
-            </label>
-          ))}
+        {isPlans && (
+          <div className="border rounded-lg p-3 space-y-2 bg-slate-50">
+            <div className="text-xs font-semibold text-slate-600">Floor plans — check each sheet's floor name and type</div>
+            {files.map((f, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="w-56 truncate" title={f.name}>{f.name}</span>
+                <input value={(planInfo[i] || {}).storey || ""} placeholder="Floor name, e.g. LEVEL 03"
+                  onChange={e => setPlanInfo({ ...planInfo, [i]: { ...(planInfo[i] || {}), storey: e.target.value } })}
+                  className="border rounded px-2 py-1 w-40" />
+                <select value={(planInfo[i] || {}).cat || ""}
+                  onChange={e => setPlanInfo({ ...planInfo, [i]: { ...(planInfo[i] || {}), cat: e.target.value } })}
+                  className="border rounded px-2 py-1">
+                  <option value="">Type: automatic</option>
+                  <option value="basement">Basement</option>
+                  <option value="ground">Ground</option>
+                  <option value="podium">Podium / amenity</option>
+                  <option value="typical">Typical</option>
+                  <option value="roof">Roof</option>
+                </select>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="space-y-1.5">
+          {IFC_FAMILY_ORDER.map(fam => {
+            const items = IFC_SYSTEMS.filter(s => s[2] === fam);
+            const on = famOn(fam);
+            return (
+              <div key={fam} className="flex flex-wrap items-center gap-3">
+                <span className="text-xs font-semibold text-slate-500 w-24">{fam === "ELV" ? "ELV" : fam}</span>
+                {items.map(([k, l]) => (
+                  <label key={k} className={"text-sm flex items-center gap-1 " + (on ? "" : "text-slate-400")}>
+                    <input type="checkbox" disabled={!on} checked={on && systems.includes(k)}
+                      onChange={e => setSystems(e.target.checked ? systems.concat(k) : systems.filter(x => x !== k))} /> {l}
+                  </label>
+                ))}
+                {!on && <span className="text-[11px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">Coming soon</span>}
+              </div>
+            );
+          })}
         </div>
         {err && <div className="text-sm text-red-700">{err}</div>}
         <button disabled={busy} onClick={submit}
@@ -25311,6 +25411,9 @@ function DraftsmanIfcPackage({ project }) {
                   {sm.devices} devices · {sm.boq_rows} BOQ lines added to the project BOQ
                   {sm.issues && (sm.issues.FAIL || sm.issues.REVIEW) ? ` · ${sm.issues.FAIL || 0} fail / ${sm.issues.REVIEW || 0} review items — see the compliance report` : " · all checks passed"}
                 </div>
+                {(sm.input_warnings || []).length > 0 && (
+                  <div className="text-xs text-amber-700">Reading the plans: {sm.input_warnings.join(" ")}</div>
+                )}
                 <div className="flex flex-wrap gap-2">
                   {(j.outputs || []).filter(o => !/design\.json$/.test(o.name)).map(o => (
                     <button key={o.path} onClick={() => open(o.path)}
