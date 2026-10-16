@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -22565,7 +22565,7 @@ async function qplateExtract(pdf, pageNumber) {
   const ol = await page.getOperatorList();
   if (!ol || !ol.fnArray) throw new Error("That page has no drawable content.");
   if (ol.fnArray.length > QPLATE_MAX_OPS) {
-    throw new Error("That sheet is unusually dense — reading it would lock the browser. Try a single floor plan rather than a combined sheet.");
+    throw new Error("QPLATE_DENSE: This sheet is too heavy to read inside the browser. Send it to the cloud draftsman instead — it reads full sheets (PDF, DXF or IFC) on the server.");
   }
   let ctm = [1, 0, 0, 1, 0, 0];
   const stack = [];
@@ -24564,7 +24564,7 @@ function DraftsmanUpload({ project, kind, onUploaded }) {
   );
 }
 
-function DraftsmanBasePlan({ project, plate, onPlate }) {
+function DraftsmanBasePlan({ project, plate, onPlate, onUseCloud }) {
   const [drawings, setDrawings] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
@@ -24681,7 +24681,17 @@ function DraftsmanBasePlan({ project, plate, onPlate }) {
           Vector PDFs work; a scan or a photo has no geometry to read, and Revit should be exported to IFC
           or the plan printed to PDF first.
         </p>
-        <ErrBar error={err} />
+        {String(err).startsWith("QPLATE_DENSE:") ? (
+          <div className="rounded-xl px-4 py-3 text-sm flex items-center gap-3 flex-wrap"
+            style={{ background: "rgba(245,158,11,.12)", border: "1px solid rgba(251,191,36,.45)", color: "#fcd34d" }}>
+            <span className="flex-1" style={{ minWidth: 240 }}>{String(err).replace("QPLATE_DENSE: ", "")}</span>
+            {onUseCloud && (
+              <button onClick={onUseCloud} className="text-sm font-semibold text-white px-4 py-2 rounded-lg" style={{ background: "#3987e5" }}>
+                Send to the cloud draftsman &rarr;
+              </button>
+            )}
+          </div>
+        ) : <ErrBar error={err} />}
         <div className="mb-4"><DraftsmanUpload project={project} kind="drawing" onUploaded={loadDrawings} /></div>
         {drawings === null ? <div className="text-sm text-slate-500">Looking for drawings…</div>
           : !drawings.length ? (
@@ -25594,7 +25604,8 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief, initialT
           </div>
           {openPanel === "base" && (
             <DraftsmanBasePlan project={project} plate={plate}
-              onPlate={p => { setPlate(p); setOpenPanel(null); }} />
+              onPlate={p => { setPlate(p); setOpenPanel(null); }}
+              onUseCloud={() => { setOpenPanel(null); setTab("ifc"); }} />
           )}
           {openPanel === "spec" && (
             <DraftsmanSpec project={project} spec={spec} onSpec={setSpec} />
