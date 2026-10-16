@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-10.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -5472,6 +5472,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     number_of_floors: existingProject.number_of_floors ?? "", area_size: existingProject.area_size ?? "",
     area_unit: existingProject.area_unit || "sqm", project_scope: existingProject.project_scope || "",
     basement_levels: existingProject.basement_levels ?? "",
+    has_roof: existingProject.has_roof !== false,
     project_type: existingProject.project_type || "new_build",
     required_systems: existingProject.required_systems || [],
   } : {
@@ -5480,7 +5481,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     // validated and is silently wrong for every project outside it.
     country: "", city: "", building_type: "residential_building",
     number_of_floors: "", area_size: "", area_unit: "sqm", project_scope: "",
-    basement_levels: "", project_type: "new_build", required_systems: [],
+    basement_levels: "", has_roof: true, project_type: "new_build", required_systems: [],
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -5586,6 +5587,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
         number_of_floors: form.number_of_floors === "" ? null : parseInt(form.number_of_floors),
         area_size: form.area_size ? parseFloat(form.area_size) : null,
         basement_levels: form.basement_levels === "" ? null : parseInt(form.basement_levels),
+        has_roof: form.has_roof !== false,
         project_type: form.project_type || null,
         // "" is not a building type. The column is nullable and "not specified"
         // is a real answer, so send NULL instead of an empty string, which the
@@ -5647,33 +5649,17 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
             platform can read it off those drawings. The one path that cannot
             proceed without them asks at the point it needs them. */}
         <div>
-          <label className="text-xs font-semibold text-slate-600">Building size <span className="font-normal text-slate-400">— optional</span></label>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Leave these blank if you are going to upload drawings; the platform reads the size from them.
-            They are only needed to design a building that has no drawings at all.
-          </p>
-          <div className="grid grid-cols-2 gap-3 mt-1">
-            <div>
-              <input type="number" min="1" max="200"
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-                placeholder="Floors above ground"
-                value={form.number_of_floors}
-                onChange={e => setForm(f => ({ ...f, number_of_floors: e.target.value }))} />
-              <p className="text-[11px] text-slate-400 mt-1">Optional</p>
-            </div>
-            <div>
-              <input type="number" min="0" max="20"
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-                placeholder="Basement / parking levels"
-                value={form.basement_levels}
-                onChange={e => setForm(f => ({ ...f, basement_levels: e.target.value }))} />
-              <p className="text-[11px] text-slate-400 mt-1">Leave blank if none</p>
-            </div>
+          <label className="text-xs font-semibold text-slate-600">The building <span className="font-normal text-slate-400">— ground floor is always there; add the floors above it, the roof and any basements</span></label>
+          <div className="mt-2">
+            <FloorsPicker total={form.number_of_floors} basements={form.basement_levels} roof={form.has_roof}
+              onChange={v => setForm(f => ({ ...f, ...v }))} />
           </div>
-          <div className="flex gap-3 mt-3">
+          <div className="flex gap-3 mt-3 items-center flex-wrap">
+            <span className="text-xs font-semibold text-slate-600">Gross floor area</span>
+            <span className="text-[10px] font-bold rounded px-1.5 py-0.5" style={{ background: "#f1f5f9", color: "#64748b" }}>OPTIONAL</span>
             <input type="number" min="1" step="any"
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-              placeholder="Gross floor area (optional)"
+              className="border rounded-lg px-3 py-2 text-sm" style={{ width: 200 }}
+              placeholder="e.g. 2,500"
               value={form.area_size}
               onChange={e => setForm(f => ({ ...f, area_size: e.target.value }))} />
             <select className="border rounded-lg px-3 py-2 text-sm bg-white" style={{ minWidth: 96 }}
@@ -5681,11 +5667,8 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
               <option value="sqm">sqm</option>
               <option value="sqft">sqft</option>
             </select>
+            <span className="text-[11px] text-slate-400">Leave blank if you will upload drawings — it is read from them.</span>
           </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Both required. The floor count and area are what the AI sizes a design against — how many devices, how much
-            cable, how much capacity — and a take-off run without them comes back thin. An approximate area is fine.
-          </p>
         </div>
 
         <div>
@@ -10867,6 +10850,7 @@ function DesignTab({ project }) {
   const [size, setSize] = useState({
     number_of_floors: project.number_of_floors ?? "",
     basement_levels: project.basement_levels ?? "",
+    has_roof: project.has_roof !== false,
     area_size: project.area_size ?? "",
     area_unit: project.area_unit || "sqm",
   });
@@ -10911,11 +10895,11 @@ function DesignTab({ project }) {
     e.preventDefault();
     setSavingSize(true); setErr("");
     try {
-      const floors = size.number_of_floors === "" ? null : parseInt(size.number_of_floors);
+      const floors = size.number_of_floors === "" ? 1 : parseInt(size.number_of_floors);
       const area = size.area_size === "" ? null : parseFloat(size.area_size);
-      if (floors == null || !(area > 0)) { setErr("Enter the floor count and the gross floor area."); return; }
+      if (!(area > 0)) { setErr("Enter the gross floor area — with no drawings, the design is sized against it."); return; }
       const { error } = await sb.from("projects").update({
-        number_of_floors: floors,
+        number_of_floors: floors, has_roof: size.has_roof !== false,
         basement_levels: size.basement_levels === "" ? null : parseInt(size.basement_levels),
         area_size: area, area_unit: size.area_unit,
       }).eq("id", project.id);
@@ -11073,14 +11057,8 @@ function DesignTab({ project }) {
           </p>
           {err && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2 mb-3">{err}</div>}
           <form onSubmit={saveSize} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <input type="number" min="0" max="200" required className="w-full border rounded-lg px-3 py-2 text-sm"
-                placeholder="Floors above ground" value={size.number_of_floors}
-                onChange={e => setSize(s => ({ ...s, number_of_floors: e.target.value }))} />
-              <input type="number" min="0" max="20" className="w-full border rounded-lg px-3 py-2 text-sm"
-                placeholder="Basement levels (optional)" value={size.basement_levels}
-                onChange={e => setSize(s => ({ ...s, basement_levels: e.target.value }))} />
-            </div>
+            <FloorsPicker total={size.number_of_floors} basements={size.basement_levels} roof={size.has_roof}
+              onChange={v => setSize(s => ({ ...s, ...v }))} />
             <div className="flex gap-3">
               <input type="number" min="1" step="any" required className="w-full border rounded-lg px-3 py-2 text-sm"
                 placeholder="Gross floor area" value={size.area_size}
@@ -23364,19 +23342,25 @@ const QD_FORMAT_LABEL = Object.fromEntries(QD_FORMATS.map(f => [f[0], f[1]]));
 // The rooms a services design actually hangs off. Each one changes something
 // real: an IDF decides where every ELV home run terminates, a generator room
 // decides the essential-load riser, a pump room decides the water risers.
-const QD_KEY_ROOMS = [
-  ["idf", "IDF / floor communication room", "One per floor as a rule. Every ELV cable on that floor runs back to it."],
-  ["mdf", "MDF / main server room", "The head end. Where the risers land."],
-  ["lv_room", "LV / main electrical room", "Transformer, main panel and the power risers."],
-  ["generator_room", "Generator room", "Sets the essential-load riser and the fuel run."],
-  ["pump_room", "Pump room", "Domestic and fire pumps, and where the water risers start."],
-  ["fire_pump_room", "Fire pump room", "If it is separate from the main pump room."],
-  ["control_room", "Security control room", "Video wall, operator consoles, the CCTV head end."],
-  ["bms_room", "BMS room", "Head end for controls, if it is not in the MDF."],
-  ["plant_room", "Main plant room", "Chillers, AHUs, the mechanical head end."],
+// Service rooms (2026-10-17): one tap per room, shown only for the systems picked.
+// [key, label, why, design systems that need it, fixed choices (else the floors)]
+const QD_SERVICE_ROOMS = [
+  ["lv_room", "LV / main electrical room", "Main board and power risers",
+   ["lighting", "power_distribution", "lv_panel", "ups", "generator", "earthing", "solar_pv"]],
+  ["pump_room", "Fire pump / pump room", "Pumps, tank, water risers",
+   ["fire_fighting", "sprinkler", "water_supply", "pump_room", "hot_water"]],
+  ["fa_panel", "Fire alarm panel location", "Fire command / security / reception", ["fire_alarm", "smoke_management", "gas_suppression"]],
+  ["idf", "IDF / comms room", "ELV cables on each floor run back here",
+   ["cctv", "access_control", "structured_cabling", "wifi", "intercom", "iptv", "public_address", "pabx", "audio_visual", "bms"],
+   ["One per floor", "GF only", "None"]],
+  ["plant_room", "Plant room", "AHUs, chillers, roof plant", ["hvac", "chillers"]],
+  ["mdf", "MDF / main server room", "The head end. Where the risers land.", ["structured_cabling", "pabx"]],
+  ["control_room", "Security control room", "Video wall, CCTV head end", ["security_room"]],
+  ["generator_room", "Generator room", "Essential-load riser and fuel run", ["generator"]],
+  ["bms_room", "BMS room", "Head end for controls", ["bms", "grms"]],
 ];
 
-function qdFloorOptions(above, basements) {
+function qdFloorOptions(above, basements, roof) {
   const out = [];
   const b = Math.max(0, parseInt(basements, 10) || 0);
   for (let i = b; i >= 1; i--) out.push([`B${i}`, `Basement ${i}`, -i]);
@@ -23384,8 +23368,100 @@ function qdFloorOptions(above, basements) {
   for (let i = 0; i < a; i++) {
     out.push(i === 0 ? ["G", "Ground floor", 0] : [`L${i}`, `Level ${String(i).padStart(2, "0")}`, i]);
   }
-  out.push(["ROOF", "Roof", a]);
+  if (roof !== false) out.push(["ROOF", "Roof", a]);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// FLOORS (2026-10-17)
+//
+// "Floors above ground" confused people: does the ground floor count? Now the
+// ground floor is always there and is not asked; the user says how many floors
+// sit ABOVE it (0 = ground floor only), whether there is a roof to draw, and how
+// many basements. Stored the same way as before so nothing else changes:
+// number_of_floors = ground + floors above (1 = GF only), basement_levels,
+// plus has_roof (null = not stated, treated as yes).
+// ---------------------------------------------------------------------------
+function floorsAboveGF(total) {
+  const n = parseInt(total, 10);
+  return Number.isFinite(n) && n >= 1 ? n - 1 : 0;
+}
+function floorTags(total, basements, roof) {
+  const tags = [];
+  const b = Math.max(0, parseInt(basements, 10) || 0);
+  for (let i = b; i >= 1; i--) tags.push(["b", `B${i}`]);
+  tags.push(["g", "GF"]);
+  const up = floorsAboveGF(total);
+  for (let i = 1; i <= up; i++) tags.push(["l", `L${String(i).padStart(2, "0")}`]);
+  if (roof !== false) tags.push(["r", "ROOF"]);
+  return tags;
+}
+function FloorStep({ value, min, max, set }) {
+  return (
+    <div className="flex items-center rounded-lg overflow-hidden bg-white border">
+      <button type="button" onClick={() => set(Math.max(min, value - 1))}
+        className="px-3 py-1.5 font-bold" style={{ background: "var(--q-panel-hover,#f1f5f9)" }}>&minus;</button>
+      <input type="number" min={min} max={max} value={value}
+        onChange={e => { const v = parseInt(e.target.value, 10); set(Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : min); }}
+        className="w-full text-center font-bold text-sm py-1.5 outline-none" style={{ minWidth: 0 }} />
+      <button type="button" onClick={() => set(Math.min(max, value + 1))}
+        className="px-3 py-1.5 font-bold" style={{ background: "var(--q-panel-hover,#f1f5f9)" }}>+</button>
+    </div>
+    );
+}
+function FloorsPicker({ total, basements, roof, onChange }) {
+  const up = floorsAboveGF(total);
+  const bs = Math.max(0, parseInt(basements, 10) || 0);
+  const emit = (u, b, r) => onChange({ number_of_floors: String(1 + u), basement_levels: String(b), has_roof: r });
+  const box = { border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 10, padding: 10, background: "var(--q-panel-2,#f8fafc)" };
+  const lab = "block text-[11px] font-bold text-slate-600 mb-1.5";
+  const hint = "text-[11px] text-slate-400 mt-1";
+  const tagStyle = { b: { background: "rgba(148,163,184,.15)", color: "#cbd5e1", borderColor: "rgba(148,163,184,.4)" },
+                     g: { background: "rgba(34,197,94,.15)", color: "#4ade80", borderColor: "rgba(74,222,128,.5)" },
+                     l: { background: "var(--q-panel-2,#fff)", color: "var(--q-text,#0f172a)", borderColor: "var(--q-border-strong,#cbd5e1)" },
+                     r: { background: "rgba(56,189,248,.15)", color: "#7dd3fc", borderColor: "rgba(125,211,252,.5)" } };
+  const tags = floorTags(1 + up, bs, roof);
+  return (
+    <div>
+      <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+        <div style={box}>
+          <span className={lab}>Ground floor (GF)</span>
+          <div className="text-sm font-bold rounded-lg px-3 py-1.5" style={{ background: "#dcfce7", color: "#166534" }}>&#10003; Included</div>
+          <div className={hint}>Every building has one.</div>
+        </div>
+        <div style={box}>
+          <span className={lab}>Floors above GF</span>
+          <FloorStep value={up} min={0} max={199} set={u => emit(u, bs, roof)} />
+          <div className={hint}>0 = ground floor only.</div>
+        </div>
+        <div style={box}>
+          <span className={lab}>Roof</span>
+          <div className="flex rounded-lg overflow-hidden bg-white border">
+            {[[true, "Yes"], [false, "No"]].map(([v, l]) => {
+              const on = (roof !== false) === v;
+              return <button type="button" key={l} onClick={() => emit(up, bs, v)}
+                className="flex-1 py-1.5 text-sm font-bold"
+                style={on ? { background: "#3987e5", color: "#fff" } : { color: "#94a3b8" }}>{l}</button>;
+            })}
+          </div>
+          <div className={hint}>Roof fans, rainwater, roof plant.</div>
+        </div>
+        <div style={box}>
+          <span className={lab}>Basements</span>
+          <FloorStep value={bs} min={0} max={20} set={b => emit(up, b, roof)} />
+          <div className={hint}>0 = none.</div>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap mt-3">
+        <span className="text-[11px] font-bold text-slate-600 mr-1">Floors that will be drawn:</span>
+        {tags.map(([k, t]) => (
+          <span key={t} className="text-[11px] font-bold rounded-md px-2 py-0.5"
+            style={{ border: "1px solid", ...tagStyle[k] }}>{t}</span>
+        ))}
+        <span className="text-[11px] text-slate-400 ml-1">{tags.length} floor plan{tags.length === 1 ? "" : "s"}</span>
+      </div>
+    </div>
+  );
 }
 
 function QdSection({ n, title, sub, done, children, required }) {
@@ -23421,6 +23497,25 @@ function QdField({ label, hint, children }) {
   );
 }
 
+// Authority rule packs the draftsman engine carries (scripts/elv/rules/*.yaml).
+// Chosen from the project country unless the user picks one — the way to say
+// "design to these rules" when there is no specification. MEP (fire, HVAC,
+// plumbing, electrical) has a full pack for the UAE only today.
+const QD_AUTHORITIES = [
+  ["uae_default", "\u{1F1E6}\u{1F1EA}", "United Arab Emirates", "UAE Fire & Life Safety Code 2018 (Civil Defence) \u00b7 Dubai Building Code 2021 \u00b7 DEWA electrical regulations \u00b7 SIRA (CCTV) \u00b7 TDRA (ICT)", "FLSC \u00b7 DBC \u00b7 DEWA \u00b7 SIRA"],
+  ["ksa_sbc", "\u{1F1F8}\u{1F1E6}", "Saudi Arabia", "Saudi Building Code (SBC) \u00b7 Civil Defence requirements", "SBC \u00b7 Civil Defence"],
+  ["eu_en", "\u{1F1EA}\u{1F1FA}", "Europe (EU)", "EN 54 (fire detection) \u00b7 EN 1838 (emergency lighting) \u00b7 EN 62676 (CCTV) \u00b7 EN 50173 (cabling)", "EN 54 \u00b7 EN 1838 \u00b7 EN 62676"],
+  ["za_sans", "\u{1F1FF}\u{1F1E6}", "South Africa", "SANS 10139 (fire detection) \u00b7 SANS 10400 (building regulations)", "SANS 10139 \u00b7 SANS 10400"],
+];
+const QD_EU = ["germany","france","italy","spain","netherlands","belgium","ireland","portugal","austria","sweden","denmark","finland","poland","greece","czech republic","luxembourg"];
+function qdAuthorityFor(country) {
+  const c = String(country || "").trim().toLowerCase();
+  if (["ksa", "saudi arabia", "saudi"].includes(c)) return "ksa_sbc";
+  if (["south africa", "za", "rsa"].includes(c)) return "za_sans";
+  if (QD_EU.includes(c)) return "eu_en";
+  return "uae_default";
+}
+
 function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
   // A brand new job has no project row until the brief is saved, so everything
   // lives in local state until then. An existing project arrives filled in.
@@ -23432,6 +23527,8 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
     city: initialProject ? (initialProject.city || "") : "",
     floors_above: initialProject && initialProject.number_of_floors != null ? String(initialProject.number_of_floors) : "",
     basements: initialProject && initialProject.basement_levels != null ? String(initialProject.basement_levels) : "",
+    has_roof: initialProject ? initialProject.has_roof !== false : true,
+    authority_region: "",
     area_size: initialProject && initialProject.area_size != null ? String(initialProject.area_size) : "",
     area_unit: initialProject ? (initialProject.area_unit || "sqm") : "sqm",
     company_name: "", client_display: "", drawing_prefix: "QE", revision: "A",
@@ -23443,12 +23540,13 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
   const [specPages, setSpecPages] = useState({});   // systemKey -> "148, 150-153"
   const [systems, setSystems] = useState([]);
   const [chosen, setChosen] = useState([]);
-  const [rooms, setRooms] = useState({});           // key -> { count, floor }
+  const [rooms, setRooms] = useState({});           // key -> { floor: "auto" | "GF" | "L01" | "None" | "One per floor" … }
+  const [showAllRooms, setShowAllRooms] = useState(false);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
 
-  const floorOpts = useMemo(() => qdFloorOptions(f.floors_above, f.basements), [f.floors_above, f.basements]);
+  const floorOpts = useMemo(() => qdFloorOptions(f.floors_above, f.basements, f.has_roof), [f.floors_above, f.basements, f.has_roof]);
   const set = (k, v) => setF(s => ({ ...s, [k]: v }));
 
   useEffect(() => {
@@ -23488,6 +23586,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
     }));
     if (data.systems && data.systems.length) setChosen(data.systems);
     if (data.key_rooms) setRooms(data.key_rooms);
+    if (data.authority_region) setF(s => ({ ...s, authority_region: data.authority_region }));
     if (data.spec_pages) setSpecPages(data.spec_pages);
     if (data.logo_path) setLogo({ path: data.logo_path });
   }
@@ -23501,6 +23600,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
         country: f.country || null, city: f.city || null,
         number_of_floors: f.floors_above === "" ? null : parseInt(f.floors_above, 10),
         basement_levels: f.basements === "" ? null : parseInt(f.basements, 10),
+        has_roof: f.has_roof !== false,
         area_size: f.area_size === "" ? null : parseFloat(f.area_size),
         area_unit: f.area_unit,
       };
@@ -23517,6 +23617,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
       country: f.country || null, city: f.city || null,
       number_of_floors: f.floors_above === "" ? null : parseInt(f.floors_above, 10),
       basement_levels: f.basements === "" ? null : parseInt(f.basements, 10),
+      has_roof: f.has_roof !== false,
       area_size: f.area_size === "" ? null : parseFloat(f.area_size),
       area_unit: f.area_unit,
       project_scope: "Shop drawings — drafting service.",
@@ -23539,8 +23640,6 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
     if (!f.job_name.trim()) { setErr("Give the job a name — it prints in the title block."); return; }
     if (!f.country || !f.city) { setErr("The city decides which authority's code the design is built to, so it has to be set."); return; }
     if (!f.building_type) { setErr("The building type decides the lighting levels, the occupancy and the detector spacing."); return; }
-    const fl = parseInt(f.floors_above, 10);
-    if (!Number.isFinite(fl) || fl < 1) { setErr("How many floors above ground? One is the minimum."); return; }
     setBusy("job"); setErr("");
     try { await ensureProject(); setNote("Job saved. You can upload the drawings now."); setTimeout(() => setNote(""), 5000); }
     catch (e) { setErr(e.message); } finally { setBusy(""); }
@@ -23634,6 +23733,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
         floors_above: f.floors_above === "" ? null : parseInt(f.floors_above, 10),
         basements: f.basements === "" ? null : parseInt(f.basements, 10),
         floor_plan_map: floorMap, systems: chosen, key_rooms: rooms, spec_pages: specPages,
+        authority_region: f.authority_region || null,
         updated_at: new Date().toISOString(),
       }, { onConflict: "project_id" });
       if (error) throw error;
@@ -23690,23 +23790,20 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
           <LocationFields country={f.country} city={f.city}
             onChange={v => setF(s => ({ ...s, country: v.country, city: v.city }))} />
         </div>
-        <div className="grid sm:grid-cols-3 gap-3 mt-3">
-          <QdField label="Floors above ground" hint="Ground counts as one.">
-            <input type="number" min="1" className={inp} value={f.floors_above}
-              onChange={e => set("floors_above", e.target.value)} />
-          </QdField>
-          <QdField label="Basements" hint="Leave blank if none.">
-            <input type="number" min="0" className={inp} value={f.basements}
-              onChange={e => set("basements", e.target.value)} />
-          </QdField>
-          <QdField label="Gross floor area" hint="Optional — read off the plan if the drawing can be measured.">
-            <div className="flex gap-2">
-              <input type="number" className={inp} value={f.area_size} onChange={e => set("area_size", e.target.value)} />
-              <select className="border rounded-lg px-2 text-sm" value={f.area_unit} onChange={e => set("area_unit", e.target.value)}>
-                <option value="sqm">m²</option><option value="sqft">ft²</option>
-              </select>
-            </div>
-          </QdField>
+        <div className="mt-4">
+          <div className="text-xs font-semibold text-slate-600 mb-2">The building</div>
+          <FloorsPicker total={f.floors_above} basements={f.basements} roof={f.has_roof}
+            onChange={v => setF(s => ({ ...s, floors_above: v.number_of_floors, basements: v.basement_levels, has_roof: v.has_roof }))} />
+        </div>
+        <div className="flex gap-2 mt-3 items-center flex-wrap">
+          <span className="text-xs font-semibold text-slate-600">Gross floor area</span>
+          <span className="text-[10px] font-bold rounded px-1.5 py-0.5" style={{ background: "#f1f5f9", color: "#64748b" }}>OPTIONAL</span>
+          <input type="number" className="border rounded-lg px-3 py-2 text-sm" style={{ width: 160 }} placeholder="e.g. 2,500"
+            value={f.area_size} onChange={e => set("area_size", e.target.value)} />
+          <select className="border rounded-lg px-2 py-2 text-sm" value={f.area_unit} onChange={e => set("area_unit", e.target.value)}>
+            <option value="sqm">m²</option><option value="sqft">ft²</option>
+          </select>
+          <span className="text-[11px] text-slate-400">Leave blank — it is read from your drawings.</span>
         </div>
         {!project && (
           <button onClick={startJob} disabled={busy === "job"}
@@ -23755,16 +23852,14 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
             {formats.map(k => (QD_FORMATS.find(x => x[0] === k) || [])[2]).filter(Boolean).join(" ")}
           </p>
         </div>
-        <div className="border rounded-xl p-4" style={{ background: "#f8fafc", borderStyle: "dashed" }}>
+        <div className="border rounded-xl p-4" style={{ background: "var(--q-panel-2,#f8fafc)", borderStyle: "dashed" }}>
           <div className="flex items-center gap-2 flex-wrap">
             <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.dwg,.dxf,.rvt,.ifc"
               onChange={onDrawingFiles} className="text-sm" />
             {busy === "drawings" && <span className="text-xs text-slate-500">Uploading…</span>}
           </div>
           <p className="text-[11px] text-slate-500 mt-2">
-            Attach one sheet per floor, or a set. {f.floors_above
-              ? `You have said ${f.floors_above} floor(s) above ground${f.basements ? ` and ${f.basements} basement(s)` : ""}.`
-              : "Set the floor count in section 1 first."}
+            Attach one sheet per floor, or a set. Floors in this building: {floorTags(f.floors_above || 1, f.basements, f.has_roof).map(t => t[1]).join(" · ")}.
           </p>
         </div>
         {drawings.length > 0 && (
@@ -23800,8 +23895,8 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
       </QdSection>
 
       <QdSection n="4" title="The specification" done={specDocs.length > 0}
-        sub="Optional, but it is what makes the drawing match what was bought. Upload it and say which pages cover each system — the pages are read in your browser for nothing, and every value comes back with its clause.">
-        <div className="border rounded-xl p-4 mb-3" style={{ background: "#f8fafc", borderStyle: "dashed" }}>
+        sub="Upload the specification — or, if there is none, choose whose authority rules the drawings must comply with. With a specification, the drawing matches what was bought.">
+        <div className="border rounded-xl p-4 mb-3" style={{ background: "var(--q-panel-2,#f8fafc)", borderStyle: "dashed" }}>
           <input type="file" multiple accept=".pdf" onChange={onSpecFiles} className="text-sm" />
           {busy === "spec" && <span className="text-xs text-slate-500 ml-2">Uploading…</span>}
           {specDocs.length > 0 && (
@@ -23810,6 +23905,40 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
             </div>
           )}
         </div>
+        {(() => {
+          const auto = qdAuthorityFor(f.country);
+          const cur = f.authority_region || auto;
+          const pack = QD_AUTHORITIES.find(a => a[0] === cur) || QD_AUTHORITIES[0];
+          return (
+            <div className="rounded-xl p-4 mb-3" style={{ background: "rgba(59,130,246,.10)", border: "1px solid rgba(96,165,250,.45)" }}>
+              <div className="text-xs font-bold mb-1" style={{ color: "#93c5fd" }}>
+                {specDocs.length ? "Authority rules under the specification" : "No specification? Design to the rules of"}
+              </div>
+              <div className="grid sm:grid-cols-2 gap-1.5 mt-2">
+                {QD_AUTHORITIES.map(([k, flag, name, , short]) => {
+                  const on = k === cur;
+                  return (
+                    <button type="button" key={k} onClick={() => set("authority_region", k === auto ? "" : k)}
+                      className="flex items-center justify-between gap-2 text-left rounded-lg px-3 py-2 text-sm bg-white"
+                      style={on ? { border: "2px solid #3b82f6", fontWeight: 700 } : { border: "1px solid var(--q-border,#dbeafe)" }}>
+                      <span>{flag} {name}{k === auto ? <span className="text-[10px] text-slate-400 font-normal"> (project country)</span> : null}</span>
+                      <span className="text-[10px] text-slate-500 font-normal">{short}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-xs mt-2 leading-relaxed" style={{ color: "#bfdbfe" }}><b>Applies:</b> {pack[3]}</div>
+              {cur !== "uae_default" && (
+                <div className="text-[11px] mt-1" style={{ color: "#fbbf24" }}>
+                  Fire, HVAC, plumbing and electrical drawings follow the UAE rules for now; ELV systems follow {pack[2]}.
+                </div>
+              )}
+              {specDocs.length > 0 && (
+                <div className="text-[11px] text-slate-500 mt-1">Where the specification is stricter, the specification wins.</div>
+              )}
+            </div>
+          );
+        })()}
         {specDocs.length > 0 && (
           <div>
             <div className="text-xs font-semibold text-slate-600 mb-2">
@@ -23873,40 +24002,50 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
         )}
       </QdSection>
 
-      <QdSection n="6" title="The rooms the services hang off" done={Object.keys(rooms).length > 0}
-        sub="Say where these are and the risers, home runs and essential-load routes are drawn to them rather than to an assumption. Leave a row blank if the building has none.">
-        <div className="border rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead><tr className="text-[10px] uppercase tracking-wider text-slate-400 bg-slate-50">
-              <th className="text-left px-3 py-2">Room</th>
-              <th className="text-left px-3 py-2" style={{ width: 110 }}>How many</th>
-              <th className="text-left px-3 py-2" style={{ width: 200 }}>Which floor</th></tr></thead>
-            <tbody>
-              {QD_KEY_ROOMS.map(([k, label, why]) => (
-                <tr key={k} className="border-t align-top">
-                  <td className="px-3 py-2">
-                    <div className="font-semibold">{label}</div>
-                    <div className="text-[11px] text-slate-400">{why}</div>
-                  </td>
-                  <td className="px-3 py-2">
-                    <input type="number" min="0" className="border rounded-lg px-2 py-1 text-sm w-full"
-                      value={(rooms[k] && rooms[k].count) || ""} placeholder="0"
-                      onChange={e => setRooms(r => ({ ...r, [k]: { ...(r[k] || {}), count: e.target.value } }))} />
-                  </td>
-                  <td className="px-3 py-2">
-                    <select className="border rounded-lg px-2 py-1 text-sm w-full"
-                      value={(rooms[k] && rooms[k].floor) || ""}
-                      onChange={e => setRooms(r => ({ ...r, [k]: { ...(r[k] || {}), floor: e.target.value } }))}>
-                      <option value="">—</option>
-                      {k === "idf" && <option value="One per floor">One per floor</option>}
-                      {floorOpts.map(([fk, l]) => <option key={fk} value={l}>{l}</option>)}
-                    </select>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <QdSection n="6" title={<span>Service rooms <span className="text-[10px] font-bold rounded px-1.5 py-0.5 ml-1 align-middle" style={{ background: "#f1f5f9", color: "#64748b" }}>OPTIONAL</span></span>}
+        done={Object.values(rooms).some(r => r && r.floor && r.floor !== "auto")}
+        sub="Where the panels and risers start. Tap the floor — or leave it on Find on drawings.">
+        <div className="rounded-xl px-3 py-2 text-xs mb-2" style={{ background: "rgba(16,185,129,.12)", border: "1px solid rgba(52,211,153,.45)", color: "#6ee7b7" }}>
+          &#10003; The draftsman finds these rooms by name on your plans (LV ROOM, PUMP ROOM, IDF…). Only tap a floor if a room isn't named on the drawing.
         </div>
+        {(() => {
+          const shown = QD_SERVICE_ROOMS.filter(r => showAllRooms || r[3].some(k => chosen.indexOf(k) >= 0));
+          const hidden = QD_SERVICE_ROOMS.length - shown.length;
+          const floorsShort = floorTags(f.floors_above || 1, f.basements, f.has_roof).map(t => t[1]);
+          const chip = (on, extra) => ({ className: "text-xs font-bold px-2.5 py-1.5 rounded-lg border",
+            style: on ? { background: "#3987e5", color: "#fff", borderColor: "#3987e5" } : (extra || undefined) });
+          const pickRoom = (k, v) => setRooms(r => ({ ...r, [k]: { floor: v } }));
+          return (
+            <div>
+              {!shown.length && <div className="text-sm text-slate-500 py-2">Pick the systems in step 5 and the rooms they need appear here.</div>}
+              {shown.map(([k, label, why, sys, choices]) => {
+                const cur = (rooms[k] && rooms[k].floor) || "auto";
+                const opts = choices || floorsShort.concat(["None"]);
+                return (
+                  <div key={k} className="grid gap-2 py-2.5 border-b last:border-b-0 items-center" style={{ gridTemplateColumns: "minmax(180px, 230px) 1fr" }}>
+                    <div>
+                      <div className="font-semibold text-sm">{label}</div>
+                      <div className="text-[11px] text-slate-400">{why}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button type="button" onClick={() => pickRoom(k, "auto")}
+                        {...chip(cur === "auto", { color: "#6ee7b7", borderColor: "rgba(52,211,153,.5)" })}>&#10003; Find on drawings</button>
+                      {opts.map(o => (
+                        <button type="button" key={o} onClick={() => pickRoom(k, o)}
+                          {...chip(cur === o, o === "None" ? { color: "#94a3b8" } : undefined)}>{o}</button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              {(hidden > 0 || showAllRooms) && (
+                <button type="button" onClick={() => setShowAllRooms(v => !v)} className="text-xs font-semibold text-blue-700 hover:underline mt-2">
+                  {showAllRooms ? "Show only the rooms for the systems picked" : `+ Show all rooms (${hidden} more: generator, BMS, MDF, security control…)`}
+                </button>
+              )}
+            </div>
+          );
+        })()}
       </QdSection>
 
       <div className="bg-white border rounded-xl p-5 flex items-center gap-3 flex-wrap"
@@ -23934,14 +24073,349 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
 // Projects workspace can point the studio at it instead, and its drawings come
 // with it — but that is a shortcut, not the main road.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// DRAFTING OFFICE DASHBOARD (2026-10-17)
+//
+// Every project on the account appears here automatically — a project made in
+// the Projects workspace is a drafting job waiting to happen, not something the
+// user has to "bring over". The page is about drafts, not project management:
+// for each project, are the plans and the specification in, which systems need
+// drawing, which are being drawn, which are ready, and what went wrong. Drawings
+// are uploaded and deleted from here; a project can be archived or deleted.
+// ---------------------------------------------------------------------------
+// Design / BOQ system keys (brief, project.required_systems) -> draftsman worker systems.
+const QDD_MAP = {
+  cctv: ["cctv"], access_control: ["acs"], gate_barrier: ["acs"],
+  structured_cabling: ["ict"], wifi: ["ict"], pabx: ["ict"], iptv: ["ict"],
+  intercom: ["intercom"], public_address: ["bgm"], audio_visual: ["bgm"],
+  fire_alarm: ["fa", "el", "ls"], fire_fighting: ["ff"], sprinkler: ["ff"], fire_pump: ["ff"],
+  hvac: ["hvac"], ventilation: ["hvac"], ducting: ["hvac"], fcu: ["hvac"], ahu: ["hvac"], chillers: ["hvac"],
+  water_supply: ["water", "drainage"], hot_water: ["water"], pumps: ["water"], fixtures: ["water"], pump_room: ["water"],
+  drainage: ["drainage"],
+  lighting: ["electrical"], power_distribution: ["electrical"], db_panels: ["electrical"], cable_sizing: ["electrical"], lv_panel: ["electrical"],
+};
+const QDD_ORDER = ["ls", "fa", "el", "ff", "hvac", "water", "drainage", "electrical", "cctv", "acs", "ict", "intercom", "bgm"];
+const QDD_SHORT = { ls: "Life safety", fa: "Fire alarm", el: "Emerg. lighting", ff: "Fire fighting", hvac: "HVAC",
+  water: "Water", drainage: "Drainage", electrical: "Electrical", cctv: "CCTV", acs: "Access control", ict: "ICT",
+  intercom: "Intercom", bgm: "BGM / PA" };
+const QDD_STATE = {
+  req:  { bg: "#fef3c7", fg: "#92400e", mark: "●", word: "required" },
+  run:  { bg: "#dbeafe", fg: "#1e40af", mark: "⟳", word: "being drawn" },
+  rdy:  { bg: "#dcfce7", fg: "#166534", mark: "✓", word: "ready" },
+  fail: { bg: "#fee2e2", fg: "#991b1b", mark: "✕", word: "failed" },
+};
+function qddAgo(t) {
+  if (!t) return "";
+  const m = Math.round((Date.now() - new Date(t).getTime()) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? "yesterday" : `${d} days ago`;
+}
+// UAE shorthand: B1+G+2 (+R when there is a roof level to draw).
+function qddStoreys(p) {
+  const up = floorsAboveGF(p.number_of_floors);
+  const b = parseInt(p.basement_levels, 10) || 0;
+  return `${b ? `B${b > 1 ? b : ""}+` : ""}G${up ? `+${up}` : ""}${p.has_roof === false ? "" : "+R"}`;
+}
+function qddFileLabel(name) {
+  const base = String(name || "").split("/").pop();
+  if (/^DCD\//.test(name)) return "Civil Defence: " + base.replace(/^XXXXX_/, "").replace(/\.pdf$/i, "");
+  return base;
+}
+
+function DraftsmanDashboard({ initialProjects, onNewJob, onOpenStudio, onEditBrief }) {
+  const [projects, setProjects] = useState((initialProjects || []).filter(p => p.status !== "archived"));
+  const [drawings, setDrawings] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [briefs, setBriefs] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState(null);
+  const [filter, setFilter] = useState("all");
+  const [q, setQ] = useState("");
+  const [deleting, setDeleting] = useState(null);
+
+  async function load() {
+    try {
+      const { data: ps, error: e1 } = await sb.from("projects").select("*").neq("status", "archived")
+        .order("created_at", { ascending: false });
+      if (e1) throw e1;
+      const list = ps || [];
+      setProjects(list);
+      const ids = list.map(p => p.id);
+      if (!ids.length) { setDrawings([]); setJobs([]); setBriefs({}); return; }
+      const [dr, jb, br] = await Promise.all([
+        sb.from("drawings").select("id, project_id, file_name, storage_path, analysis_source_path, discipline, floor_label, created_at")
+          .in("project_id", ids).order("created_at", { ascending: false }),
+        sb.from("draftsman_jobs").select("id, project_id, status, systems, outputs, error, created_at, started_at, finished_at")
+          .in("project_id", ids).order("created_at", { ascending: false }).limit(500),
+        sb.from("draftsman_briefs").select("project_id, systems").in("project_id", ids),
+      ]);
+      setDrawings(dr.data || []);
+      setJobs(jb.data || []);
+      const b = {};
+      (br.data || []).forEach(x => { b[x.project_id] = x; });
+      setBriefs(b);
+    } catch (e) { setErr(e.message || String(e)); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!jobs.some(j => j.status === "queued" || j.status === "running")) return;
+    const t = setTimeout(load, 10000);
+    return () => clearTimeout(t);
+  }, [jobs]);
+
+  // ---- one row per project, everything the dashboard shows about it --------
+  const rows = useMemo(() => projects.map(p => {
+    const dws = drawings.filter(d => d.project_id === p.id);
+    const plans = dws.filter(d => d.discipline !== "specification");
+    const specs = dws.filter(d => d.discipline === "specification");
+    const pj = jobs.filter(j => j.project_id === p.id && j.status !== "cancelled");
+    const want = new Set();
+    const src = (briefs[p.id] && briefs[p.id].systems && briefs[p.id].systems.length)
+      ? briefs[p.id].systems : (p.required_systems || []);
+    src.forEach(k => (QDD_MAP[k] || []).forEach(x => want.add(x)));
+    pj.forEach(j => (j.systems || []).forEach(x => want.add(x)));
+    const sys = QDD_ORDER.filter(k => want.has(k)).map(k => {
+      const j = pj.find(x => (x.systems || []).indexOf(k) >= 0);       // newest job that drew it
+      let st = "req";
+      if (j) st = j.status === "done" ? "rdy" : j.status === "failed" ? "fail" : (j.status === "queued" || j.status === "running") ? "run" : "req";
+      return { k, st, job: j };
+    });
+    const last = pj[0];
+    const lastDone = pj.find(j => j.status === "done");
+    let activity = { t: "Not started", sub: qddAgo(p.created_at) ? `created ${qddAgo(p.created_at)}` : "" , tone: "" };
+    if (!plans.length) activity = { t: "Waiting for plans", sub: `created ${qddAgo(p.created_at)}`, tone: "warn" };
+    if (last) {
+      const names = (last.systems || []).map(k => QDD_SHORT[k] || k).join(", ");
+      if (last.status === "queued") activity = { t: `${names} — waiting`, sub: `sent ${qddAgo(last.created_at)}`, tone: "run" };
+      else if (last.status === "running") activity = { t: `${names} — being drawn…`, sub: `started ${qddAgo(last.started_at || last.created_at)}`, tone: "run" };
+      else if (last.status === "done") activity = { t: `${names} ready`, sub: qddAgo(last.finished_at || last.created_at), tone: "ok" };
+      else if (last.status === "failed") activity = { t: `${names} failed`, sub: `${String(last.error || "").slice(0, 70)} · ${qddAgo(last.finished_at || last.created_at)}`, tone: "bad" };
+    }
+    const attention = !plans.length || (last && last.status === "failed");
+    return { p, plans, specs, dws, sys, last, lastDone, activity, attention };
+  }), [projects, drawings, jobs, briefs]);
+
+  const count = (st) => rows.reduce((n, r) => n + r.sys.filter(x => x.st === st).length, 0);
+  const tabs = [
+    ["all", "All projects", rows.length],
+    ["req", "Drafts required", rows.filter(r => r.sys.some(x => x.st === "req") || !r.sys.length).length],
+    ["run", "Being drawn", rows.filter(r => r.sys.some(x => x.st === "run")).length],
+    ["rdy", "Ready", rows.filter(r => r.sys.some(x => x.st === "rdy")).length],
+    ["att", "Needs attention", rows.filter(r => r.attention).length],
+  ];
+  const shown = rows.filter(r => {
+    if (q.trim()) {
+      const t = q.trim().toLowerCase();
+      if (![r.p.project_name, r.p.project_ref, r.p.city, r.p.country].some(v => String(v || "").toLowerCase().includes(t))) return false;
+    }
+    if (filter === "req") return r.sys.some(x => x.st === "req") || !r.sys.length;
+    if (filter === "run") return r.sys.some(x => x.st === "run");
+    if (filter === "rdy") return r.sys.some(x => x.st === "rdy");
+    if (filter === "att") return r.attention;
+    return true;
+  });
+
+  async function removeDrawing(d) {
+    if (!window.confirm(`Delete ${d.file_name}? The file is removed from this project.`)) return;
+    try {
+      const paths = [d.storage_path, d.analysis_source_path].filter(Boolean);
+      if (paths.length) await sb.storage.from("drawings").remove(paths);
+      const { error } = await sb.from("drawings").delete().eq("id", d.id);
+      if (error) throw error;
+      await load();
+    } catch (e) { setErr(e.message || String(e)); }
+  }
+  async function archive(p) {
+    if (!window.confirm(`Archive "${p.project_name}"? It is hidden from the dashboards and can be restored later from Projects.`)) return;
+    try {
+      const { error } = await sb.from("projects").update({ status: "archived" }).eq("id", p.id);
+      if (error) throw error;
+      setOpen(null);
+      await load();
+    } catch (e) { setErr(e.message || String(e)); }
+  }
+  async function download(path) {
+    const { data, error } = await sb.storage.from("drawings").createSignedUrl(path, 3600);
+    if (!error && data) window.open(data.signedUrl, "_blank");
+    else setErr((error && error.message) || "Could not open the file.");
+  }
+
+  const Chip = ({ s }) => {
+    const c = QDD_STATE[s.st];
+    return <span className="text-[11px] font-bold rounded-md px-2 py-0.5 whitespace-nowrap"
+      style={{ background: c.bg, color: c.fg }} title={`${QDD_SHORT[s.k]} — ${c.word}`}>{c.mark} {QDD_SHORT[s.k]}{s.st === "fail" ? " — failed" : ""}</span>;
+  };
+  const btn = "text-xs font-semibold border rounded-lg px-3 py-1.5 bg-white hover:bg-slate-50 whitespace-nowrap";
+  const cols = "minmax(220px,2.1fr) minmax(110px,1fr) minmax(220px,2.6fr) minmax(150px,1.3fr) minmax(170px,1.4fr)";
+
+  return (
+    <div className="space-y-4" style={{ maxWidth: 1280 }}>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold">Drafting office</h1>
+          <p className="text-slate-500 text-sm mt-1">Every project that needs shop drawings. Upload plans, pick the systems, generate the drafts.</p>
+        </div>
+        <button onClick={onNewJob} className="text-sm font-semibold text-white px-4 py-2.5 rounded-lg" style={{ background: "#3987e5" }}>+ New drafting job</button>
+      </div>
+
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+        {[[count("req"), "Drafts required — not started", "#b45309"], [count("run"), "Being drawn now", "#1d4ed8"],
+          [count("rdy"), "Ready to download", "#15803d"], [rows.filter(r => r.attention).length, "Need attention (missing plans / failed)", "#b91c1c"]]
+          .map(([n, l, c]) => (
+            <div key={l} className="bg-white border rounded-xl px-4 py-3">
+              <div className="text-2xl font-extrabold" style={{ color: c }}>{loading ? "–" : n}</div>
+              <div className="text-xs text-slate-500 mt-0.5">{l}</div>
+            </div>
+          ))}
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        {tabs.map(([k, l, n]) => (
+          <button key={k} onClick={() => setFilter(k)}
+            className={`text-xs font-semibold rounded-full px-3 py-1.5 border ${filter === k ? "" : "bg-white text-slate-600"}`}
+            style={filter === k ? { background: "#3987e5", color: "#fff", borderColor: "#3987e5" } : undefined}>
+            {l} {n}
+          </button>
+        ))}
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search projects…"
+          className="ml-auto border rounded-lg px-3 py-1.5 text-sm bg-white" style={{ width: 240 }} />
+      </div>
+
+      <ErrBar error={err} />
+
+      {loading ? <div className="text-sm text-slate-500">Loading your projects…</div> : !rows.length ? (
+        <div className="bg-white border rounded-xl p-8 text-center">
+          <div className="font-bold">No projects yet</div>
+          <div className="text-sm text-slate-500 mt-1">Start a drafting job — or create a project in Projects; it appears here automatically.</div>
+          <button onClick={onNewJob} className="mt-4 text-sm font-semibold text-white px-4 py-2 rounded-lg" style={{ background: "#3987e5" }}>+ New drafting job</button>
+        </div>
+      ) : (
+        <div>
+          <div className="hidden lg:grid gap-3 px-4 pb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500" style={{ gridTemplateColumns: cols }}>
+            <div>Project</div><div>Inputs</div><div>Drafts required (by system)</div><div>Last activity</div><div className="text-right">Actions</div>
+          </div>
+          {!shown.length && <div className="text-sm text-slate-500 px-4 py-3">Nothing in this view.</div>}
+          {shown.map(r => {
+            const p = r.p;
+            const isOpen = open === p.id;
+            const tone = { warn: "#b45309", bad: "#b91c1c", run: "#1d4ed8", ok: "#166534" }[r.activity.tone] || "#0f172a";
+            const remaining = r.sys.filter(x => x.st === "req" || x.st === "fail").length;
+            return (
+              <div key={p.id} className="bg-white border rounded-xl mb-2.5">
+                <div className="grid gap-3 px-4 py-3.5 items-center cursor-pointer" style={{ gridTemplateColumns: cols }}
+                  onClick={() => setOpen(isOpen ? null : p.id)}>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <ProjectRef value={p.project_ref} />
+                      <span className="font-bold text-sm truncate">{p.project_name}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-1 truncate">
+                      {[p.city, p.country].filter(Boolean).join(", ")}
+                      {p.building_type ? ` · ${buildingTypeLabel(p.building_type)}` : ""}
+                      {p.number_of_floors != null ? ` · ${qddStoreys(p)}` : ""}
+                    </div>
+                  </div>
+                  <div className="text-xs leading-relaxed">
+                    <div>Plans {r.plans.length ? <b style={{ color: "#15803d" }}>{r.plans.length} &#10003;</b> : <b style={{ color: "#b45309" }}>0 — upload</b>}</div>
+                    <div>Spec {r.specs.length ? <b style={{ color: "#15803d" }}>&#10003;</b> : <b style={{ color: "#94a3b8" }}>none</b>}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {r.sys.length ? r.sys.map(x => <Chip key={x.k} s={x} />)
+                      : <span className="text-[11px] text-slate-400">No systems picked yet — open the studio to choose.</span>}
+                  </div>
+                  <div className="text-xs min-w-0">
+                    <div className="font-semibold truncate" style={{ color: tone }}>{r.activity.t}</div>
+                    <div className="text-[11px] text-slate-400 truncate">{r.activity.sub}</div>
+                  </div>
+                  <div className="flex gap-1.5 justify-end" onClick={e => e.stopPropagation()}>
+                    {!r.plans.length
+                      ? <button className={btn} onClick={() => setOpen(p.id)}>Upload plans</button>
+                      : r.last && r.last.status === "failed"
+                        ? <button className={btn} onClick={() => onOpenStudio(p, "ifc")}>Fix &amp; retry</button>
+                        : <button className={btn} onClick={() => onOpenStudio(p)}>Open studio</button>}
+                    <button className={btn} onClick={() => setOpen(isOpen ? null : p.id)} title={isOpen ? "Close" : "Open"}>{isOpen ? "▾" : "▸"}</button>
+                  </div>
+                </div>
+                {isOpen && (
+                  <div className="border-t px-4 py-4 grid gap-4 lg:grid-cols-2" style={{ background: "var(--q-bg,#f8fafc)", borderRadius: "0 0 12px 12px" }}>
+                    <div className="bg-white border rounded-xl p-3">
+                      <div className="font-bold text-sm mb-2">Drawings uploaded ({r.dws.length})</div>
+                      {r.dws.length ? (
+                        <table className="w-full text-xs">
+                          <thead><tr className="text-slate-500 text-[11px]"><th className="text-left py-1.5">File</th><th className="text-left">Type</th><th className="text-left">Floor</th><th className="text-left">Uploaded</th><th></th></tr></thead>
+                          <tbody>
+                            {r.dws.map(d => (
+                              <tr key={d.id} className="border-t">
+                                <td className="py-1.5 pr-2" style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  <button className="hover:underline text-left" onClick={() => download(d.storage_path)} title={d.file_name}>{d.file_name}</button>
+                                </td>
+                                <td className="pr-2">{(QDRAFT_DISCIPLINES.find(x => x[0] === d.discipline) || [, d.discipline === "specification" ? "Specification" : (d.discipline || "—")])[1]}</td>
+                                <td className="pr-2">{d.floor_label || "—"}</td>
+                                <td className="pr-2 whitespace-nowrap">{new Date(d.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</td>
+                                <td className="text-right"><button onClick={() => removeDrawing(d)}
+                                  className="text-[11px] font-bold rounded-md px-2 py-0.5 bg-white" style={{ color: "#b91c1c", border: "1px solid #fecaca" }}>Delete</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : <div className="text-xs text-slate-500">No drawings yet.</div>}
+                      <div className="mt-3"><DraftsmanUpload project={p} kind="drawing" onUploaded={load} /></div>
+                      <div className="mt-2"><DraftsmanUpload project={p} kind="specification" onUploaded={load} /></div>
+                    </div>
+                    <div className="bg-white border rounded-xl p-3 flex flex-col">
+                      <div className="font-bold text-sm mb-2">Drafts produced</div>
+                      {r.lastDone && (r.lastDone.outputs || []).length ? (
+                        <div className="text-xs">
+                          <div className="text-[11px] text-slate-400 mb-1">
+                            {(r.lastDone.systems || []).map(k => QDD_SHORT[k] || k).join(", ")} · {qddAgo(r.lastDone.finished_at || r.lastDone.created_at)}
+                          </div>
+                          <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                            {(r.lastDone.outputs || []).filter(o => !/\.json$/i.test(o.name)).map(o => (
+                              <div key={o.path} className="flex items-center justify-between border-t py-1.5 gap-2">
+                                <span className="truncate" title={o.name}>{qddFileLabel(o.name)}</span>
+                                <button onClick={() => download(o.path)} className="font-semibold whitespace-nowrap" style={{ color: "#2563eb" }}>Download</button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : <div className="text-xs text-slate-500">No drafts yet. Pick the systems and generate them in the studio.</div>}
+                      <div className="flex gap-1.5 flex-wrap mt-auto pt-3">
+                        <button onClick={() => onOpenStudio(p, "ifc")} className="text-xs font-semibold text-white px-3 py-1.5 rounded-lg" style={{ background: "#3987e5" }}>
+                          {remaining ? `Generate remaining drafts (${remaining})` : "Generate drafts"}
+                        </button>
+                        <button onClick={() => onEditBrief(p)} className={btn}>Edit brief</button>
+                        <button onClick={() => archive(p)} className={btn}>Archive</button>
+                        <button onClick={() => setDeleting(p)} className="text-xs font-semibold rounded-lg px-3 py-1.5 bg-white"
+                          style={{ color: "#b91c1c", border: "1px solid #fecaca" }}>Delete permanently</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {deleting && <DeleteProjectModal project={deleting} onClose={() => setDeleting(null)}
+        onDeleted={() => { setDeleting(null); setOpen(null); load(); }} />}
+    </div>
+  );
+}
+
 function DraftsmanPage({ projects, onOpenProject }) {
   const [mode, setMode] = useState(null);        // null | "new" | "pick"
   const [brief, setBrief] = useState(null);      // the project the brief is for
   const [studio, setStudio] = useState(null);    // the project being drawn
+  const [studioTab, setStudioTab] = useState("design");
   const live = (projects || []).filter(p => p.status !== "archived");
 
   if (studio) {
-    return <DraftsmanStudio project={studio} onBack={() => { setStudio(null); setMode(null); }}
+    return <DraftsmanStudio project={studio} initialTab={studioTab} onBack={() => { setStudio(null); setMode(null); }}
              onOpenProject={onOpenProject}
              onEditBrief={() => { setStudio(null); setBrief(studio); }} />;
   }
@@ -23986,48 +24460,10 @@ function DraftsmanPage({ projects, onOpenProject }) {
     );
   }
 
-  return (
-    <div className="space-y-5" style={{ maxWidth: 980 }}>
-      <div>
-        <h1 className="text-2xl font-bold">Drafting office</h1>
-        <p className="text-slate-500 text-sm mt-1 leading-relaxed">
-          Give it your floor plans and your specification, say which systems are in scope, and it
-          returns a coordinated shop drawing set &mdash; layouts per floor per discipline, schematics,
-          the riser, the design-basis sheet, and a DXF for AutoCAD. Designed to the code of the
-          authority for your city. No AI call is made, so none of it costs anything.
-        </p>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <button onClick={() => setBrief(false)}
-          className="bg-white border rounded-2xl p-6 text-left flex flex-col h-full hover:shadow-lg transition-shadow"
-          style={{ borderTop: "3px solid #3987e5" }}>
-          <div className="text-lg font-bold">Start a drafting job</div>
-          <div className="text-sm text-slate-500 mt-2 leading-relaxed flex-1">
-            One page. Name the job, upload the drawings and the specification, pick the systems and the
-            rooms the services hang off, and press generate. Nothing is asked that a drawing does not need.
-          </div>
-          <div className="mt-auto pt-5">
-            <div className="text-sm font-semibold text-center py-2.5 rounded-lg"
-              style={{ background: "#3987e5", color: "#fff" }}>Start</div>
-          </div>
-        </button>
-        <button onClick={() => setMode("pick")}
-          className="bg-white border rounded-2xl p-6 text-left flex flex-col h-full hover:shadow-lg transition-shadow">
-          <div className="text-lg font-bold">Use a project I already have</div>
-          <div className="text-sm text-slate-500 mt-2 leading-relaxed flex-1">
-            Point the studio at a project from the Projects workspace. Its drawings and specification
-            come with it, and the same one page opens, already filled in.
-          </div>
-          <div className="mt-auto pt-5">
-            <div className="text-sm font-semibold text-center py-2.5 rounded-lg"
-              style={{ border: "1px solid var(--q-border-strong,#cbd5e1)" }}>
-              Choose a project
-            </div>
-          </div>
-        </button>
-      </div>
-    </div>
-  );
+  return <DraftsmanDashboard initialProjects={live}
+    onNewJob={() => setBrief(false)}
+    onOpenStudio={(p, tab) => { setStudioTab(tab || "design"); setStudio(p); }}
+    onEditBrief={p => setBrief(p)} />;
 }
 
 
@@ -24097,7 +24533,7 @@ function DraftsmanUpload({ project, kind, onUploaded }) {
   }
 
   return (
-    <div className="border rounded-xl p-4" style={{ background: "#f8fafc", borderStyle: "dashed" }}>
+    <div className="border rounded-xl p-4" style={{ background: "var(--q-panel-2,#f8fafc)", borderStyle: "dashed" }}>
       <div className="font-semibold text-sm mb-1">
         {isSpec ? "Upload the specification" : "Upload a drawing"}
       </div>
@@ -25060,7 +25496,7 @@ function DraftsmanSpec({ project, spec, onSpec }) {
 }
 
 
-function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief }) {
+function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief, initialTab }) {
   // The base plan, when the customer has one. Held here so the design and the
   // drawings both work from the same plate.
   const [plate, setPlate] = useState(null);
@@ -25070,7 +25506,7 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief }) {
   // Two tabs, not four. The brief already asked for everything; the base plan
   // reader and the specification reader are jobs you RUN, not forms you fill,
   // so they sit inside Design as panels you open when you want them.
-  const [tab, setTab] = useState("design");
+  const [tab, setTab] = useState(initialTab || "design");
   const [brief, setBrief] = useState(null);
   const [openPanel, setOpenPanel] = useState(null);
 
@@ -25107,7 +25543,7 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-900">&larr; Choose a different project</button>
+        <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-900">&larr; Drafting office</button>
         <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
           <h1 className="text-xl font-bold">{project.project_name}</h1>
           <ProjectRef value={project.project_ref} />
@@ -25284,8 +25720,15 @@ function DraftsmanIfcPackage({ project }) {
         first = plan_paths[0].path;
         firstName = files.length === 1 ? files[0].name : `${files.length} floor plans (${files.map(f => f.name).join(", ").slice(0, 80)})`;
       }
+      // The authority chosen in the brief when there is no specification (null = from the country).
+      let region = null;
+      try {
+        const { data: br } = await sb.from("draftsman_briefs").select("authority_region").eq("project_id", project.id).maybeSingle();
+        region = (br && br.authority_region) || null;
+      } catch (e) { /* the worker falls back to the project country */ }
       const { error } = await sb.from("draftsman_jobs").insert({
         project_id: project.id, ifc_path: first, ifc_name: firstName, systems, options,
+        ...(region ? { region } : {}),
       });
       if (error) throw error;
       setFiles([]); setPlanInfo({});
@@ -26215,6 +26658,15 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 @media (min-width:1280px){
   .xl\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}
 }
+/* Drafting office dashboard and floors picker (2026-10-17). */
+@media (min-width:1024px){
+  .lg\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .lg\:grid{display:grid}
+}
+.font-extrabold{font-weight:800}
+.mr-1{margin-right:.25rem}
+.pr-2{padding-right:.5rem}
+.outline-none{outline:2px solid transparent;outline-offset:2px}
 /* Also missing from the purged build, and needed for cards of unequal content
    to still line their footers up. */
 .mt-auto{margin-top:auto}
