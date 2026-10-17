@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -11343,7 +11343,15 @@ const MEP_SPEC_APPLIED = {
   coverage_area: "Applied \u2014 the device count on every floor is recalculated at this coverage.",
 };
 
-function MepDesignTab({ project, basePlate, spec, onGoToBoq }) {
+function MepDesignTab({ project, basePlate, spec, onGoToBoq, onUseCloud }) {
+  // Size is optional (2026-10-17). The design engine sizes a building from the
+  // project's floor count and area; when the customer's plan has been read, the
+  // area comes from that drawing. Only with nothing to measure is the area asked.
+  const [needSize, setNeedSize] = useState(false);
+  const [sizeArea, setSizeArea] = useState("");
+  const [sizeUnit, setSizeUnit] = useState(project.area_unit || "sqm");
+  const [sizeBusy, setSizeBusy] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [systems, setSystems] = useState([]);
   const [chosen, setChosen] = useState([]);
   const [floors, setFloors] = useState(null);
@@ -11369,6 +11377,25 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq }) {
         setSystems(caps.systems || []);
         setChosen((caps.systems || []).map(s => s.key));
         setOffFamilies(caps.disabled_families || []);
+        setNeedSize(false);
+        if (!(Number(project.area_size) > 0) || !(Number(project.number_of_floors) >= 1)) {
+          const plateArea = basePlate && basePlate.floor && basePlate.floor.plate
+            ? (basePlate.floor.plate.rooms || []).reduce((t, r) => t + (Number(r.area) || 0), 0) : 0;
+          const patch = { number_of_floors: Number(project.number_of_floors) >= 1 ? project.number_of_floors : 1 };
+          if (!(Number(project.area_size) > 0) && plateArea > 0) {
+            const levels = patch.number_of_floors + (Number(project.basement_levels) || 0);
+            patch.area_size = Math.round(plateArea * levels);
+            patch.area_unit = "sqm";
+          }
+          if (Number(patch.area_size || project.area_size) > 0) {
+            const { error: pe } = await sb.from("projects").update(patch).eq("id", project.id);
+            if (pe) throw pe;
+            Object.assign(project, patch);
+          } else {
+            if (alive) { setNeedSize(true); setFloors([]); }
+            return;
+          }
+        }
         // A base plan read off the customer's own drawing replaces the floor
         // mix the template would have guessed. Its rooms are real, so the
         // design runs against the building rather than against an average.
@@ -11391,7 +11418,21 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq }) {
       } finally { if (alive) setLoading(false); }
     })();
     return () => { alive = false; };
-  }, [project.id]);
+  }, [project.id, reloadKey]);
+
+  async function saveSizeAndGo() {
+    const a = parseFloat(sizeArea);
+    if (!(a > 0)) { setErr("Enter the gross floor area — or use the cloud draftsman, which reads your drawings."); return; }
+    setSizeBusy(true); setErr("");
+    try {
+      const patch = { area_size: a, area_unit: sizeUnit,
+        number_of_floors: Number(project.number_of_floors) >= 1 ? project.number_of_floors : 1 };
+      const { error } = await sb.from("projects").update(patch).eq("id", project.id);
+      if (error) throw error;
+      Object.assign(project, patch);
+      setReloadKey(k => k + 1);
+    } catch (e) { setErr(e.message); } finally { setSizeBusy(false); }
+  }
 
   const columns = useMemo(() => {
     const present = new Set(extraCols);
@@ -11485,6 +11526,39 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq }) {
   const families = ["ELV", "Fire", "Mechanical", "Electrical", "Plumbing"];
 
   if (loading) return <div className="text-sm text-slate-500">Reading the project and the design rules…</div>;
+
+  if (needSize) {
+    return (
+      <div className="bg-white border rounded-xl p-5 space-y-3">
+        <h3 className="font-bold text-lg">Nothing to size the quick design against yet</h3>
+        <p className="text-sm text-slate-500 leading-relaxed">
+          This project has no floor area and no plan has been read, so the quick design has nothing to measure.
+          Pick one — the size is never required for the cloud draftsman.
+        </p>
+        <ErrBar error={err} />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="border rounded-xl p-4">
+            <div className="font-semibold text-sm">Send the drawings to the cloud draftsman</div>
+            <div className="text-xs text-slate-500 mt-1 leading-relaxed">Upload the IFC or the floor plans (PDF / DXF). It reads the rooms itself and draws every system — no size needed.</div>
+            {onUseCloud && <button onClick={onUseCloud} className="mt-3 text-sm font-semibold text-white px-4 py-2 rounded-lg" style={{ background: "#3987e5" }}>Open Full package &rarr;</button>}
+          </div>
+          <div className="border rounded-xl p-4">
+            <div className="font-semibold text-sm">Quick design from the floor area</div>
+            <div className="text-xs text-slate-500 mt-1 leading-relaxed">No drawings: enter the gross floor area and the design is laid out from it.</div>
+            <div className="flex gap-2 mt-3">
+              <input type="number" min="1" placeholder="Gross floor area" value={sizeArea}
+                onChange={e => setSizeArea(e.target.value)} className="border rounded-lg px-3 py-2 text-sm" style={{ width: 170 }} />
+              <select value={sizeUnit} onChange={e => setSizeUnit(e.target.value)} className="border rounded-lg px-2 py-2 text-sm">
+                <option value="sqm">m²</option><option value="sqft">ft²</option>
+              </select>
+              <button onClick={saveSizeAndGo} disabled={sizeBusy}
+                className="text-sm font-semibold border px-3 py-2 rounded-lg bg-white disabled:opacity-50">{sizeBusy ? "Saving…" : "Continue"}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -25611,7 +25685,7 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief, initialT
             <DraftsmanSpec project={project} spec={spec} onSpec={setSpec} />
           )}
           <MepDesignTab project={project} basePlate={plate} spec={spec}
-            onGoToBoq={() => onOpenProject(project)} />
+            onGoToBoq={() => onOpenProject(project)} onUseCloud={() => setTab("ifc")} />
         </div>
       )}
       {tab === "drawings" && (
@@ -25656,7 +25730,12 @@ function DraftsmanIfcPackage({ project }) {
   const [err, setErr] = useState("");
   const [jobs, setJobs] = useState([]);
   const [fams, setFams] = useState({ ELV: true });
-  useEffect(() => { getDraftsmanFamilies().then(f => setFams(f || {})); }, []);
+  useEffect(() => { getDraftsmanFamilies().then(f => {
+    const fm = f || {};
+    setFams(fm);
+    // untick systems whose family the administrator has switched off
+    setSystems(cur => cur.filter(k => fm[(IFC_SYSTEMS.find(x => x[0] === k) || [])[2]] === true));
+  }); }, []);
   const famOn = (fam) => fams[fam] === true;
   const elvOn = IFC_SYSTEMS.some(s => famOn(s[2]));
 
