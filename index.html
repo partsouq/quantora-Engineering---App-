@@ -25760,8 +25760,10 @@ function qd3dLoadThree() {
    architecture plus every designed device and run in 3D. Plain three.js r128, no add-ons. */
 (function () {
   const COL = { fa: 0xe5484d, ff: 0xc0262d, el: 0x16a34a, ls: 0x22c55e, hvac: 0x0ea5a5, water: 0x2563eb,
-                drainage: 0x8b5a2b, electrical: 0xe0a21b, cctv: 0x7c3aed, acs: 0xdb2777, ict: 0x0891b2 };
-  const DIA = { fa: 0.035, el: 0.035, electrical: 0.04, hvac: 0.03, ff: 0.11, water: 0.06, drainage: 0.12 };
+                drainage: 0x8b5a2b, electrical: 0xe0a21b, cctv: 0x7c3aed, acs: 0xdb2777, ict: 0x0891b2, containment: 0x64748b };
+  const DIA = { fa: 0.035, el: 0.035, electrical: 0.04, hvac: 0.03, ff: 0.11, water: 0.06, drainage: 0.12, cctv: 0.032, acs: 0.032, ict: 0.032 };
+  const TRAY = { containment: [0.30, 0.07] };   // width, depth of cable trays
+  const ELV_VIS = { acs: 2.6, ict: 2.2 };       // door hardware is tiny at building scale
   const BIG = new Set(["FP", "FT", "TANK", "BPS", "MDB", "FACP", "AC", "LDB", "ELC", "RACK"]);
 
   function mount(host, model, opts) {
@@ -25789,7 +25791,7 @@ function qd3dLoadThree() {
     const cx = (minX + maxX) / 2000, cy = (minY + maxY) / 2000, span = Math.max(maxX - minX, maxY - minY) / 1000;
     const P = (x, y, z) => new T.Vector3(x / 1000 - cx, z / 1000, -(y / 1000 - cy));
 
-    const state = { explode: opts.explode != null ? opts.explode : 6, floor: "all", hidden: new Set(), walls: true };
+    const state = { explode: opts.explode != null ? opts.explode : 6, floor: "all", hidden: new Set(), walls: true, noCones: opts.cones !== true };
     const storeyIdx = {}; model.storeys.forEach((s, i) => { storeyIdx[s.id] = i; });
     const groups = {};   // storey id -> Group
     const sysObjs = [];  // {s, obj}
@@ -25845,7 +25847,7 @@ function qd3dLoadThree() {
       const im = new T.InstancedMesh(gk === "c" ? unit.cyl : gk === "o" ? unit.sph : unit.box, mat, list.length);
       list.forEach((d, i) => {
         let [w, dd, h] = d.sz.map(v => Math.max(v, 1) / 1000);
-        const vis = 1.6;   // small devices drawn a little larger so they read at building scale
+        const vis = ELV_VIS[d.s] || 1.6;   // small devices drawn a little larger so they read at building scale
         if (!BIG.has(d.k) && d.k !== "HB") { w *= vis; dd *= vis; h *= vis; }
         let z = d.z / 1000 + (d.m === "ceiling" ? -h / 2 : h / 2);
         if (d.sh === "pipe") { h = st.h / 1000; z = h / 2; w = dd = 0.11; }
@@ -25853,8 +25855,8 @@ function qd3dLoadThree() {
         const p = P(d.x, d.y, 0);
         tmp.position.set(p.x, z, p.z); tmp.scale.set(w, h, dd);
         tmp.rotation.set(0, d.aim != null ? (90 - d.aim) * Math.PI / 180 : 0, 0);
-        if (d.sh === "camera") tmp.scale.set(0.42, 0.3, 0.42);
-        if (d.sh === "bullet") tmp.scale.set(0.5, 0.18, 0.18);
+        if (d.sh === "camera") { tmp.scale.set(0.55, 0.32, 0.55); tmp.position.y = d.z / 1000 - 0.1; }
+        if (d.sh === "bullet") { tmp.scale.set(0.7, 0.24, 0.24); tmp.position.y = d.z / 1000 - 0.15; }
         tmp.updateMatrix(); im.setMatrixAt(i, tmp.matrix); tmp.rotation.set(0, 0, 0);
         if (BIG.has(d.k)) big.push({ d, pos: new T.Vector3(p.x, z + h / 2 + 0.3, p.z), g: groups[f] });
       });
@@ -25918,13 +25920,18 @@ function qd3dLoadThree() {
           if (a.distanceTo(b) > 0.01) segs.push({ a, b, r });
         }
       });
-      const d = DIA[s] || 0.04;
+      const d = DIA[s] || 0.04, tray = TRAY[s];
       const im = new T.InstancedMesh(unit.box, new T.MeshLambertMaterial({ color: COL[s] || 0x64748b }), segs.length);
-      const up = new T.Vector3(0, 1, 0);
+      const upv = new T.Vector3(0, 1, 0), mx = new T.Matrix4();
       segs.forEach((sg, i) => {
         const len = sg.a.distanceTo(sg.b), mid = sg.a.clone().add(sg.b).multiplyScalar(0.5);
         const dir = sg.b.clone().sub(sg.a).normalize();
-        tmp.position.copy(mid); tmp.quaternion.setFromUnitVectors(up, dir); tmp.scale.set(d, len, d); tmp.updateMatrix();
+        // local Y along the run; local Z up when the run is level, so a tray lies flat
+        const side = Math.abs(dir.y) > 0.99 ? new T.Vector3(1, 0, 0) : new T.Vector3().crossVectors(dir, upv).normalize();
+        const top = new T.Vector3().crossVectors(side, dir).normalize();
+        mx.makeBasis(side, dir, top);
+        tmp.position.copy(mid); tmp.quaternion.setFromRotationMatrix(mx);
+        tmp.scale.set(tray ? tray[0] : d, len, tray ? tray[1] : d); tmp.updateMatrix();
         im.setMatrixAt(i, tmp.matrix);
       });
       im.userData = { segs, s, run: true }; groups[f].add(im); sysObjs.push({ s, obj: im }); pickables.push(im);
@@ -25975,15 +25982,39 @@ function qd3dLoadThree() {
     el.addEventListener("wheel", e => { e.preventDefault(); orb.r *= Math.exp(e.deltaY * 0.001); orb.r = Math.max(2, Math.min(span * 4, orb.r)); place(); }, { passive: false });
 
     const ray = new T.Raycaster(), mouse = new T.Vector2();
+    const halo = new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(1, 1, 1)), new T.LineBasicMaterial({ color: 0xf59e0b }));
+    halo.visible = false; scene.add(halo);
+    let focusCone = null;
+    function focus(item) {
+      halo.visible = false;
+      if (focusCone) { focusCone.parent && focusCone.parent.remove(focusCone); focusCone = null; }
+      if (!item || item.run || !groups[item.f]) return;
+      const g = groups[item.f], p = P(item.x, item.y, 0);
+      const sz = Math.max(0.6, ...(item.sz || [300]).map(v => v / 1000 * 2.2));
+      halo.scale.set(sz, sz, sz); halo.position.set(p.x, item.z / 1000 + g.position.y, p.z); halo.visible = true;
+      if (item.cone) {
+        const c = P(item.x, item.y, item.z), pts = item.cone.map(([x, y]) => P(x, y, 30)), pos = [], lp = [];
+        for (let k = 0; k < pts.length; k++) {
+          const a = pts[k], b = pts[(k + 1) % pts.length];
+          pos.push(c.x, c.y, c.z, a.x, a.y, a.z, b.x, b.y, b.z); lp.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, a.x, a.y, a.z);
+        }
+        const fg = new T.BufferGeometry(); fg.setAttribute("position", new T.Float32BufferAttribute(pos, 3));
+        const lg3 = new T.BufferGeometry(); lg3.setAttribute("position", new T.Float32BufferAttribute(lp, 3));
+        focusCone = new T.Group();
+        focusCone.add(new T.Mesh(fg, new T.MeshBasicMaterial({ color: COL.cctv, transparent: true, opacity: 0.22, side: T.DoubleSide, depthWrite: false })));
+        focusCone.add(new T.LineSegments(lg3, new T.LineBasicMaterial({ color: COL.cctv })));
+        g.add(focusCone);
+      }
+    }
     function pick(e) {
       const rc = el.getBoundingClientRect();
       mouse.set(((e.clientX - rc.left) / rc.width) * 2 - 1, -((e.clientY - rc.top) / rc.height) * 2 + 1);
       ray.setFromCamera(mouse, camera);
       const hit = ray.intersectObjects(pickables.filter(o => o.visible && o.parent.visible), false)[0];
-      if (!hit) { opts.onPick && opts.onPick(null); return; }
+      if (!hit) { focus(null); opts.onPick && opts.onPick(null); return; }
       const u = hit.object.userData;
       if (u.run) { const sg = u.segs[hit.instanceId]; opts.onPick && opts.onPick({ run: true, s: u.s, k: sg.r.k, t: sg.r.t, f: sg.r.f, dn: sg.r.dn }); }
-      else opts.onPick && opts.onPick(u.list[hit.instanceId]);
+      else { focus(u.list[hit.instanceId]); opts.onPick && opts.onPick(u.list[hit.instanceId]); }
     }
 
     function drawLabels() {
@@ -26008,12 +26039,13 @@ function qd3dLoadThree() {
     layout(); place(); loop();
 
     return {
-      setFloor(f) { state.floor = f; layout(); },
-      setExplode(v) { state.explode = v; layout(); },
+      setFloor(f) { state.floor = f; layout(); focus(null); },
+      setExplode(v) { state.explode = v; layout(); focus(null); },
       toggleSystem(s, on) { on ? state.hidden.delete(s) : state.hidden.add(s); layout(); },
       setWalls(on) { state.walls = on; layout(); },
       setLabels(on) { state.showLabels = on; },
       setCones(on) { state.noCones = !on; layout(); },
+      focus(item) { focus(item); },
       view(name) {
         if (name === "top") { orb.ph = 0.06; orb.th = 0; }
         else if (name === "front") { orb.ph = 1.35; orb.th = 0; }
@@ -26083,7 +26115,7 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
   const [off, setOff] = useState({});
   const [floor, setFloor] = useState("all");
   const [view, setView] = useState("iso");
-  const [opts, setOpts] = useState({ walls: true, labels: true, apart: true, cones: true });
+  const [opts, setOpts] = useState({ walls: true, labels: true, apart: true, cones: false });
 
   useEffect(() => {
     let alive = true;
@@ -26109,7 +26141,8 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
     if (!model || !host.current) return;
     const v = QD3D.mount(host.current, model, { onPick: setPicked });
     viewer.current = v;
-    setPicked(model.devices.find(d => ["FP", "FACP", "MDB", "RACK", "camera"].includes(d.k)) || model.devices[0] || null);
+    const first = model.devices.find(d => ["FP", "FACP", "MDB", "RACK", "camera"].includes(d.k)) || model.devices[0] || null;
+    setPicked(first); if (first) v.focus(first);
     return () => { v.dispose(); viewer.current = null; };
   }, [model]);
 
@@ -26193,7 +26226,7 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
                 <label><input type="checkbox" checked={opts.walls} onChange={e => setO("walls", e.target.checked)} /> Walls</label>
                 <label><input type="checkbox" checked={opts.labels} onChange={e => setO("labels", e.target.checked)} /> Equipment labels</label>
                 <label><input type="checkbox" checked={opts.apart} onChange={e => setO("apart", e.target.checked)} /> Floors apart</label>
-                {stats.cones && <label><input type="checkbox" checked={opts.cones} onChange={e => setO("cones", e.target.checked)} /> Camera views</label>}
+                {stats.cones && <label><input type="checkbox" checked={opts.cones} onChange={e => setO("cones", e.target.checked)} /> All camera views</label>}
               </div>
             </div>
             <div className="q3-info">
