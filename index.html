@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25741,6 +25741,496 @@ const IFC_SYSTEMS = [["cctv", "CCTV", "ELV"], ["acs", "Access control", "ELV"], 
                      ["electrical", "Lighting and power", "Electrical"]];
 const IFC_FAMILY_ORDER = ["ELV", "Fire", "Mechanical", "Plumbing", "Electrical"];
 
+// ---------------------------------------------------------------------------
+// 3D MODEL VIEWER (2026-10-17)
+// Every drafting job now also saves model3d.json (scripts/elv/model3d.py in the
+// worker): the rooms read from the plans plus every device and run the design
+// placed, each at its mounting height. This draws it with three.js r128, loaded
+// only when someone opens a model so nobody else pays for the download.
+// ---------------------------------------------------------------------------
+function qd3dLoadThree() {
+  if (typeof window.THREE !== "undefined") return Promise.resolve(true);
+  return __loadLib([
+    "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js",
+    "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js",
+  ], function () { return typeof window.THREE !== "undefined"; });
+}
+
+/* Quantora draftsman 3D viewer. Reads model3d.json (scripts/elv/model3d.py) and draws the
+   architecture plus every designed device and run in 3D. Plain three.js r128, no add-ons. */
+(function () {
+  const COL = { fa: 0xe5484d, ff: 0xc0262d, el: 0x16a34a, ls: 0x22c55e, hvac: 0x0ea5a5, water: 0x2563eb,
+                drainage: 0x8b5a2b, electrical: 0xe0a21b, cctv: 0x7c3aed, acs: 0xdb2777, ict: 0x0891b2 };
+  const DIA = { fa: 0.035, el: 0.035, electrical: 0.04, hvac: 0.03, ff: 0.11, water: 0.06, drainage: 0.12 };
+  const BIG = new Set(["FP", "FT", "TANK", "BPS", "MDB", "FACP", "AC", "LDB", "ELC", "RACK"]);
+
+  function mount(host, model, opts) {
+    opts = opts || {};
+    const T = window.THREE;
+    const W = () => host.clientWidth, H = () => host.clientHeight;
+    const renderer = new T.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setSize(W(), H());
+    renderer.setClearColor(0xeef3f9);
+    host.appendChild(renderer.domElement);
+    const labels = document.createElement("div");
+    labels.style.cssText = "position:absolute;inset:0;pointer-events:none;overflow:hidden";
+    host.appendChild(labels);
+
+    const scene = new T.Scene();
+    scene.add(new T.HemisphereLight(0xffffff, 0xb8c4d6, 0.95));
+    const sun = new T.DirectionalLight(0xffffff, 0.55); sun.position.set(-40, 80, 60); scene.add(sun);
+    const camera = new T.PerspectiveCamera(42, W() / H(), 0.1, 2000);
+
+    // bounds
+    let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+    model.storeys.forEach(s => s.spaces.forEach(sp => sp.p.forEach(([x, y]) => {
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); })));
+    const cx = (minX + maxX) / 2000, cy = (minY + maxY) / 2000, span = Math.max(maxX - minX, maxY - minY) / 1000;
+    const P = (x, y, z) => new T.Vector3(x / 1000 - cx, z / 1000, -(y / 1000 - cy));
+
+    const state = { explode: opts.explode != null ? opts.explode : 6, floor: "all", hidden: new Set(), walls: true };
+    const storeyIdx = {}; model.storeys.forEach((s, i) => { storeyIdx[s.id] = i; });
+    const groups = {};   // storey id -> Group
+    const sysObjs = [];  // {s, obj}
+    const pickables = [];
+    const big = [];
+
+    model.storeys.forEach((s, i) => {
+      const g = new T.Group(); g.userData.base = s.z / 1000; g.userData.i = i; groups[s.id] = g; scene.add(g);
+      // slab
+      const slabMat = new T.MeshLambertMaterial({ color: i === 0 ? 0xdfe6ef : 0xe8edf4, transparent: i > 0, opacity: i > 0 ? 0.55 : 1, side: T.DoubleSide, depthWrite: i === 0 });
+      s.spaces.forEach(sp => {
+        const shape = new T.Shape(sp.p.map(([x, y]) => new T.Vector2(x / 1000 - cx, y / 1000 - cy)));
+        const geo = new T.ShapeGeometry(shape); geo.rotateX(-Math.PI / 2);
+        const m = new T.Mesh(geo, slabMat); m.position.y = 0.001; m.userData.space = sp.n; g.add(m);
+      });
+      // walls: every space edge once
+      const seen = new Set(), wpos = [], lpos = [];
+      s.spaces.forEach(sp => {
+        const pts = sp.p;
+        for (let k = 0; k < pts.length; k++) {
+          const a = pts[k], b = pts[(k + 1) % pts.length];
+          const r = q => Math.round(q / 50);
+          const key = [r(a[0]), r(a[1]), r(b[0]), r(b[1])]; const k2 = key[0] < key[2] || (key[0] === key[2] && key[1] < key[3]) ? key.join() : [key[2], key[3], key[0], key[1]].join();
+          if (seen.has(k2)) continue; seen.add(k2);
+          const h = Math.min(sp.h || s.h, s.h) / 1000;
+          const A = P(a[0], a[1], 0), B = P(b[0], b[1], 0);
+          wpos.push(A.x, 0, A.z, B.x, 0, B.z, B.x, h, B.z, A.x, 0, A.z, B.x, h, B.z, A.x, h, A.z);
+          lpos.push(A.x, 0, A.z, B.x, 0, B.z, A.x, h, A.z, B.x, h, B.z);
+        }
+      });
+      const wg = new T.BufferGeometry(); wg.setAttribute("position", new T.Float32BufferAttribute(wpos, 3)); wg.computeVertexNormals();
+      const walls = new T.Mesh(wg, new T.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.30, side: T.DoubleSide, depthWrite: false }));
+      walls.userData.isWall = true; g.add(walls);
+      const lg = new T.BufferGeometry(); lg.setAttribute("position", new T.Float32BufferAttribute(lpos, 3));
+      const wl = new T.LineSegments(lg, new T.LineBasicMaterial({ color: 0x5a6b82, transparent: true, opacity: 0.7 }));
+      wl.userData.isWall = true; g.add(wl);
+    });
+
+    // devices, instanced per storey x system x shape
+    const unit = { box: new T.BoxGeometry(1, 1, 1), cyl: new T.CylinderGeometry(0.5, 0.5, 1, 18), sph: new T.SphereGeometry(0.5, 18, 12) };
+    const shapeGeo = sh => sh === "camera" ? unit.sph : (["disc", "cyl", "pipe", "highbay", "fan"].includes(sh) ? unit.cyl : unit.box);
+    const buckets = {};
+    model.devices.forEach(d => {
+      if (!groups[d.f]) return;
+      const g0 = shapeGeo(d.sh); const key = d.f + "|" + d.s + "|" + (g0 === unit.cyl ? "c" : g0 === unit.sph ? "o" : "b");
+      (buckets[key] = buckets[key] || []).push(d);
+    });
+    const tmp = new T.Object3D();
+    Object.entries(buckets).forEach(([key, list]) => {
+      const [f, s, gk] = key.split("|");
+      const st = model.storeys[storeyIdx[f]];
+      const mat = new T.MeshLambertMaterial({ color: COL[s] || 0x64748b });
+      const im = new T.InstancedMesh(gk === "c" ? unit.cyl : gk === "o" ? unit.sph : unit.box, mat, list.length);
+      list.forEach((d, i) => {
+        let [w, dd, h] = d.sz.map(v => Math.max(v, 1) / 1000);
+        const vis = 1.6;   // small devices drawn a little larger so they read at building scale
+        if (!BIG.has(d.k) && d.k !== "HB") { w *= vis; dd *= vis; h *= vis; }
+        let z = d.z / 1000 + (d.m === "ceiling" ? -h / 2 : h / 2);
+        if (d.sh === "pipe") { h = st.h / 1000; z = h / 2; w = dd = 0.11; }
+        if (d.m === "roof") z = st.h / 1000 + h / 2;
+        const p = P(d.x, d.y, 0);
+        tmp.position.set(p.x, z, p.z); tmp.scale.set(w, h, dd);
+        tmp.rotation.set(0, d.aim != null ? (90 - d.aim) * Math.PI / 180 : 0, 0);
+        if (d.sh === "camera") tmp.scale.set(0.42, 0.3, 0.42);
+        if (d.sh === "bullet") tmp.scale.set(0.5, 0.18, 0.18);
+        tmp.updateMatrix(); im.setMatrixAt(i, tmp.matrix); tmp.rotation.set(0, 0, 0);
+        if (BIG.has(d.k)) big.push({ d, pos: new T.Vector3(p.x, z + h / 2 + 0.3, p.z), g: groups[f] });
+      });
+      im.userData = { list, s }; groups[f].add(im); sysObjs.push({ s, obj: im }); pickables.push(im);
+    });
+
+    // camera views: a see-through fan from the lens down to the area it covers on the floor
+    const coneMat = new T.MeshBasicMaterial({ color: COL.cctv, transparent: true, opacity: 0.08, side: T.DoubleSide, depthWrite: false });
+    const coneLine = new T.LineBasicMaterial({ color: COL.cctv, transparent: true, opacity: 0.55 });
+    const cbuck = {};
+    model.devices.forEach(d => { if (d.cone && groups[d.f]) (cbuck[d.f] = cbuck[d.f] || []).push(d); });
+    Object.entries(cbuck).forEach(([f, list]) => {
+      const pos = [], lp = [];
+      list.forEach(d => {
+        const c = P(d.x, d.y, d.z);
+        const pts = d.cone.map(([x, y]) => P(x, y, 30));
+        for (let k = 0; k < pts.length; k++) {
+          const a = pts[k], b = pts[(k + 1) % pts.length];
+          pos.push(c.x, c.y, c.z, a.x, a.y, a.z, b.x, b.y, b.z);
+          lp.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        }
+      });
+      const g = new T.BufferGeometry(); g.setAttribute("position", new T.Float32BufferAttribute(pos, 3));
+      const m = new T.Mesh(g, coneMat); m.userData.cone = true; groups[f].add(m); sysObjs.push({ s: "cctv", obj: m, cone: true });
+      const lg2 = new T.BufferGeometry(); lg2.setAttribute("position", new T.Float32BufferAttribute(lp, 3));
+      const l = new T.LineSegments(lg2, coneLine); groups[f].add(l); sysObjs.push({ s: "cctv", obj: l, cone: true });
+    });
+
+    // doors: a leaf in every opening; access-controlled ones in the access-control colour
+    const acsDoors = {};
+    model.devices.forEach(d => { if (d.s === "acs" && d.door) (acsDoors[d.f] = acsDoors[d.f] || new Set()).add(d.door); });
+    model.storeys.forEach(s => {
+      const list = s.doors || []; if (!list.length) return;
+      const ctl = acsDoors[s.id] || new Set();
+      const plain = list.filter(d => !ctl.has(d.n)), sec = list.filter(d => ctl.has(d.n));
+      [[plain, 0xb9c4d4, 0.55], [sec, COL.acs, 0.85]].forEach(([arr, col, op]) => {
+        if (!arr.length) return;
+        const im = new T.InstancedMesh(unit.box, new T.MeshLambertMaterial({ color: col, transparent: true, opacity: op }), arr.length);
+        arr.forEach((d, i) => {
+          const p = P(d.x, d.y, 0);
+          tmp.position.set(p.x, 1.05, p.z); tmp.rotation.set(0, d.a * Math.PI / 180, 0); tmp.scale.set(Math.max(0.6, d.w / 1000), 2.1, 0.06);
+          tmp.updateMatrix(); im.setMatrixAt(i, tmp.matrix);
+        });
+        tmp.rotation.set(0, 0, 0);
+        im.userData.isWall = col !== COL.acs; groups[s.id].add(im);
+        if (col === COL.acs) sysObjs.push({ s: "acs", obj: im });
+      });
+    });
+
+    // runs: one instanced box per straight segment
+    const rb = {};
+    model.routes.forEach(r => { if (groups[r.f]) (rb[r.f + "|" + r.s] = rb[r.f + "|" + r.s] || []).push(r); });
+    Object.entries(rb).forEach(([key, list]) => {
+      const [f, s] = key.split("|");
+      const st = model.storeys[storeyIdx[f]];
+      const segs = [];
+      list.forEach(r => {
+        if (r.rk === "riser") { segs.push({ a: P(r.p[0][0], r.p[0][1], 0), b: P(r.p[0][0], r.p[0][1], st.h), r }); return; }
+        for (let k = 0; k + 1 < r.p.length; k++) {
+          const a = P(r.p[k][0], r.p[k][1], r.z), b = P(r.p[k + 1][0], r.p[k + 1][1], r.z);
+          if (a.distanceTo(b) > 0.01) segs.push({ a, b, r });
+        }
+      });
+      const d = DIA[s] || 0.04;
+      const im = new T.InstancedMesh(unit.box, new T.MeshLambertMaterial({ color: COL[s] || 0x64748b }), segs.length);
+      const up = new T.Vector3(0, 1, 0);
+      segs.forEach((sg, i) => {
+        const len = sg.a.distanceTo(sg.b), mid = sg.a.clone().add(sg.b).multiplyScalar(0.5);
+        const dir = sg.b.clone().sub(sg.a).normalize();
+        tmp.position.copy(mid); tmp.quaternion.setFromUnitVectors(up, dir); tmp.scale.set(d, len, d); tmp.updateMatrix();
+        im.setMatrixAt(i, tmp.matrix);
+      });
+      im.userData = { segs, s, run: true }; groups[f].add(im); sysObjs.push({ s, obj: im }); pickables.push(im);
+    });
+
+    // camera orbit
+    const orb = { th: -0.75, ph: 0.95, r: span * 1.3, t: new T.Vector3(0, 3, 0) };
+    function place() {
+      orb.ph = Math.max(0.05, Math.min(1.5, orb.ph));
+      camera.position.set(orb.t.x + orb.r * Math.sin(orb.ph) * Math.sin(orb.th), orb.t.y + orb.r * Math.cos(orb.ph),
+                          orb.t.z + orb.r * Math.sin(orb.ph) * Math.cos(orb.th));
+      camera.lookAt(orb.t);
+    }
+    function layout() {
+      Object.values(groups).forEach(g => {
+        const id = Object.keys(groups).find(k => groups[k] === g);
+        g.visible = state.floor === "all" || state.floor === id;
+        g.position.y = state.floor === "all" ? g.userData.base + g.userData.i * state.explode : 0;
+        g.children.forEach(c => { if (c.userData.isWall) c.visible = state.walls; });
+      });
+      sysObjs.forEach(o => { o.obj.visible = !state.hidden.has(o.s) && !(o.cone && state.noCones); });
+    }
+    let drag = null;
+    const el = renderer.domElement;
+    el.style.touchAction = "none";
+    const touches = new Map(); let pinch = 0;
+    el.addEventListener("pointerdown", e => { touches.set(e.pointerId, [e.clientX, e.clientY]); drag = { x: e.clientX, y: e.clientY, b: e.button, moved: false }; el.setPointerCapture(e.pointerId); });
+    el.addEventListener("pointercancel", e => { touches.delete(e.pointerId); drag = null; });
+    el.addEventListener("pointermove", e => {
+      if (touches.has(e.pointerId)) touches.set(e.pointerId, [e.clientX, e.clientY]);
+      if (touches.size === 2) {
+        const [a, b] = [...touches.values()]; const dist = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        if (pinch) { orb.r = Math.max(2, Math.min(span * 4, orb.r * pinch / dist)); place(); }
+        pinch = dist; if (drag) drag.moved = true; return;
+      }
+      if (!drag) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
+      if (drag.b === 2 || e.shiftKey) {
+        const f = orb.r / H();
+        const right = new T.Vector3().subVectors(camera.position, orb.t).cross(camera.up).normalize();
+        orb.t.add(right.multiplyScalar(dx * f)); orb.t.y += dy * f;
+      } else { orb.th -= dx * 0.006; orb.ph -= dy * 0.006; }
+      place();
+    });
+    el.addEventListener("pointerup", e => { touches.delete(e.pointerId); if (touches.size < 2) pinch = 0; if (drag && !drag.moved) pick(e); if (!touches.size) drag = null; });
+    el.addEventListener("contextmenu", e => e.preventDefault());
+    el.addEventListener("wheel", e => { e.preventDefault(); orb.r *= Math.exp(e.deltaY * 0.001); orb.r = Math.max(2, Math.min(span * 4, orb.r)); place(); }, { passive: false });
+
+    const ray = new T.Raycaster(), mouse = new T.Vector2();
+    function pick(e) {
+      const rc = el.getBoundingClientRect();
+      mouse.set(((e.clientX - rc.left) / rc.width) * 2 - 1, -((e.clientY - rc.top) / rc.height) * 2 + 1);
+      ray.setFromCamera(mouse, camera);
+      const hit = ray.intersectObjects(pickables.filter(o => o.visible && o.parent.visible), false)[0];
+      if (!hit) { opts.onPick && opts.onPick(null); return; }
+      const u = hit.object.userData;
+      if (u.run) { const sg = u.segs[hit.instanceId]; opts.onPick && opts.onPick({ run: true, s: u.s, k: sg.r.k, t: sg.r.t, f: sg.r.f, dn: sg.r.dn }); }
+      else opts.onPick && opts.onPick(u.list[hit.instanceId]);
+    }
+
+    function drawLabels() {
+      labels.innerHTML = "";
+      if (!state.showLabels) return;
+      big.forEach(b => {
+        if (!b.g.visible || state.hidden.has(b.d.s)) return;
+        const v = b.pos.clone(); v.y += b.g.position.y; v.project(camera);
+        if (v.z > 1) return;
+        const x = (v.x + 1) / 2 * W(), y = (1 - v.y) / 2 * H();
+        const t = document.createElement("div");
+        t.textContent = b.d.t || b.d.k;
+        t.style.cssText = `position:absolute;left:${x}px;top:${y}px;transform:translate(-50%,-100%);font:700 11px 'Plus Jakarta Sans',system-ui;color:#0f2140;background:#fff;border:1px solid #cdd7e4;border-left:3px solid #${(COL[b.d.s] || 0x64748b).toString(16).padStart(6, "0")};border-radius:6px;padding:2px 6px;white-space:nowrap;box-shadow:0 2px 6px rgba(15,42,82,.15)`;
+        labels.appendChild(t);
+      });
+    }
+    let raf;
+    function loop() { renderer.render(scene, camera); drawLabels(); raf = requestAnimationFrame(loop); }
+    function resize() { renderer.setSize(W(), H()); camera.aspect = W() / H(); camera.updateProjectionMatrix(); }
+    window.addEventListener("resize", resize);
+    state.showLabels = true;
+    layout(); place(); loop();
+
+    return {
+      setFloor(f) { state.floor = f; layout(); },
+      setExplode(v) { state.explode = v; layout(); },
+      toggleSystem(s, on) { on ? state.hidden.delete(s) : state.hidden.add(s); layout(); },
+      setWalls(on) { state.walls = on; layout(); },
+      setLabels(on) { state.showLabels = on; },
+      setCones(on) { state.noCones = !on; layout(); },
+      view(name) {
+        if (name === "top") { orb.ph = 0.06; orb.th = 0; }
+        else if (name === "front") { orb.ph = 1.35; orb.th = 0; }
+        else { orb.ph = 0.95; orb.th = -0.75; }
+        orb.r = span * 1.3; orb.t.set(0, 3, 0); place();
+      },
+      orbit(o) { Object.assign(orb, { th: o.th ?? orb.th, ph: o.ph ?? orb.ph, r: o.r ?? orb.r }); if (o.t) orb.t.set(...o.t); place(); },
+      zoom(f) { orb.r *= f; place(); },
+      dispose() { cancelAnimationFrame(raf); window.removeEventListener("resize", resize); renderer.dispose(); host.innerHTML = ""; },
+      colours: COL,
+    };
+  }
+  window.QD3D = { mount };
+})();
+
+
+const QD3D_CSS = `
+.q3{position:fixed;inset:0;z-index:70;background:#f5f8fc;color:#14233a;font-family:'Plus Jakarta Sans','Inter',system-ui,sans-serif;font-size:13.5px}
+.q3-top{height:64px;background:#fff;border-bottom:1px solid #e3e9f1;display:flex;align-items:center;gap:12px;padding:0 18px}
+.q3-back{border:1px solid #e3e9f1;background:#f7f9fc;border-radius:999px;padding:7px 13px;font-weight:700;color:#5a6b82;cursor:pointer;white-space:nowrap}
+.q3-tt{min-width:0}.q3-tt b{display:block;font-size:16px;font-weight:800;color:#0f2140;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q3-tt span{font-size:12px;color:#5a6b82;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.q3-sp{flex:1}
+.q3-seg{display:flex;background:#eef2f8;border-radius:10px;padding:3px;flex:none}
+.q3-seg button{border:0;background:none;padding:7px 12px;border-radius:8px;font:inherit;font-weight:700;color:#5a6b82;cursor:pointer;white-space:nowrap}
+.q3-seg button.on{background:#fff;color:#1c6ce6;box-shadow:0 1px 3px rgba(15,42,82,.15)}
+.q3-body{position:absolute;left:0;right:0;top:64px;bottom:0}
+.q3-cv{position:absolute;inset:0}
+.q3-panel{position:absolute;left:16px;top:16px;width:262px;max-height:calc(100% - 90px);overflow:auto;background:#fff;border:1px solid #e3e9f1;border-radius:16px;
+  box-shadow:0 12px 30px -18px rgba(15,42,82,.4);padding:14px 14px 10px}
+.q3-panel h4{margin:0 0 10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#5a6b82;font-weight:800}
+.q3-sys{display:flex;align-items:center;gap:10px;padding:7px 6px;border-radius:9px;cursor:pointer;width:100%;border:0;background:none;font:inherit;text-align:left;color:#14233a}
+.q3-sys:hover{background:#f5f8fc}
+.q3-sys i{width:12px;height:12px;border-radius:4px;flex:none}
+.q3-sys b{font-weight:600;flex:1}.q3-sys small{color:#8a99ad;font-size:11.5px;text-align:right;line-height:1.3}
+.q3-sys.off{opacity:.38}
+.q3-tog{display:flex;gap:8px 12px;margin-top:10px;border-top:1px solid #eef2f7;padding-top:10px;flex-wrap:wrap}
+.q3-tog label{display:flex;align-items:center;gap:6px;font-weight:600;font-size:12.5px;color:#334155;cursor:pointer}
+.q3-info{position:absolute;right:16px;top:16px;width:290px;background:#fff;border:1px solid #e3e9f1;border-radius:16px;
+  box-shadow:0 12px 30px -18px rgba(15,42,82,.4);padding:14px 16px}
+.q3-info .k{font-size:11px;color:#8a99ad;text-transform:uppercase;letter-spacing:.07em;margin-top:9px}
+.q3-info .v{font-weight:700;color:#0f2140;overflow-wrap:anywhere}
+.q3-chip{display:inline-block;font-size:11.5px;font-weight:700;border-radius:7px;padding:3px 9px;color:#fff}
+.q3-hint{position:absolute;left:16px;bottom:16px;background:rgba(255,255,255,.92);border:1px solid #e3e9f1;border-radius:10px;padding:7px 12px;color:#5a6b82;font-size:12px}
+.q3-stats{position:absolute;right:16px;bottom:16px;display:flex;gap:10px}
+.q3-stats div{background:#fff;border:1px solid #e3e9f1;border-radius:12px;padding:8px 14px;box-shadow:0 8px 20px -16px rgba(15,42,82,.4)}
+.q3-stats b{display:block;font-size:18px;font-weight:800;color:#0f2140}.q3-stats span{font-size:11px;color:#5a6b82}
+.q3-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#5a6b82;font-weight:600;padding:20px;text-align:center}
+@media (max-width:900px){
+  .q3-top{height:auto;flex-wrap:wrap;padding:10px 12px;gap:8px}
+  .q3-sp{display:none}.q3-tt{flex:1 1 60%}
+  .q3-body{top:118px}
+  .q3-panel{width:200px;padding:10px;top:10px;left:10px;max-height:45%}
+  .q3-sys small{display:none}
+  .q3-info{left:10px;right:10px;top:auto;bottom:10px;width:auto;padding:10px 12px}
+  .q3-info .k{margin-top:5px}
+  .q3-stats,.q3-hint{display:none}
+}
+`;
+
+function Draftsman3DViewer({ path, title, sub, onClose }) {
+  const host = useRef(null);
+  const viewer = useRef(null);
+  const [model, setModel] = useState(null);
+  const [err, setErr] = useState("");
+  const [picked, setPicked] = useState(null);
+  const [off, setOff] = useState({});
+  const [floor, setFloor] = useState("all");
+  const [view, setView] = useState("iso");
+  const [opts, setOpts] = useState({ walls: true, labels: true, apart: true, cones: true });
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const okLib = await qd3dLoadThree();
+        if (!okLib) throw new Error("The 3D library could not be loaded. Check the internet connection and try again.");
+        const { data, error } = await sb.storage.from("drawings").createSignedUrl(path, 600);
+        if (error) throw error;
+        const res = await fetch(data.signedUrl);
+        if (!res.ok) throw new Error("The 3D model file could not be read.");
+        const m = await res.json();
+        if (!m || !Array.isArray(m.storeys) || !Array.isArray(m.devices)) throw new Error("This 3D model file is not in the expected format.");
+        m.routes = m.routes || []; m.systems = m.systems || [];
+        if (!alive) return;
+        setModel(m);
+      } catch (e) { if (alive) setErr(e.message || String(e)); }
+    })();
+    return () => { alive = false; };
+  }, [path]);
+
+  useEffect(() => {
+    if (!model || !host.current) return;
+    const v = QD3D.mount(host.current, model, { onPick: setPicked });
+    viewer.current = v;
+    setPicked(model.devices.find(d => ["FP", "FACP", "MDB", "RACK", "camera"].includes(d.k)) || model.devices[0] || null);
+    return () => { v.dispose(); viewer.current = null; };
+  }, [model]);
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const v = viewer.current;
+  const hex = n => "#" + (n || 0x64748b).toString(16).padStart(6, "0");
+  const COLS = (v && v.colours) || {};
+  const short = id => ({ "GROUND FLOOR": "GF", "MEZZANINE FLOOR": "MZ", "ROOF": "RF" })[id]
+    || ((/(BASEMENT|LEVEL|FLOOR)\s*0*(\d+)/i.exec(id) || []).length
+      ? ({ BASEMENT: "B", LEVEL: "L", FLOOR: "L" })[/(BASEMENT|LEVEL|FLOOR)/i.exec(id)[1].toUpperCase()] + /(\d+)/.exec(id)[1].replace(/^0+(?=\d)/, "")
+      : id.replace(/[^A-Z0-9]/gi, "").slice(0, 3).toUpperCase());
+
+  const stats = useMemo(() => {
+    if (!model) return null;
+    const by = {};
+    model.systems.forEach(s => { by[s.k] = { n: 0, m: 0 }; });
+    model.devices.forEach(d => { if (by[d.s]) by[d.s].n++; });
+    model.routes.forEach(r => {
+      if (!by[r.s]) return;
+      for (let i = 0; i + 1 < r.p.length; i++) by[r.s].m += Math.hypot(r.p[i + 1][0] - r.p[i][0], r.p[i + 1][1] - r.p[i][1]) / 1000;
+    });
+    const cams = model.devices.filter(d => d.k === "camera").length;
+    const doors = new Set(model.devices.filter(d => d.s === "acs" && d.door).map(d => d.f + "|" + d.door)).size;
+    const plant = model.devices.filter(d => ["FP", "FT", "TANK", "BPS", "MDB", "FACP", "AC", "LDB", "DB", "RACK"].includes(d.k)).length;
+    return { by, cams, doors, plant, cones: model.devices.some(d => d.cone) };
+  }, [model]);
+
+  const setO = (k, val) => {
+    setOpts(o => ({ ...o, [k]: val }));
+    if (!v) return;
+    if (k === "walls") v.setWalls(val);
+    if (k === "labels") v.setLabels(val);
+    if (k === "apart") v.setExplode(val ? 6 : 0);
+    if (k === "cones") v.setCones(val);
+  };
+  const sysName = k => ((model && model.systems.find(s => s.k === k)) || {}).n || k;
+
+  return (
+    <div className="q3" role="dialog" aria-label="3D model">
+      <style>{QD3D_CSS}</style>
+      <div className="q3-top">
+        <button className="q3-back" onClick={onClose}>&#8249; Back</button>
+        <div className="q3-tt"><b>3D model — {title}</b><span>{sub}</span></div>
+        <div className="q3-sp" />
+        <div className="q3-seg">
+          {[["iso", "3D"], ["top", "Top"], ["front", "Front"]].map(([k, l]) => (
+            <button key={k} className={view === k ? "on" : ""} onClick={() => { setView(k); v && v.view(k); }}>{l}</button>
+          ))}
+        </div>
+        {model && (
+          <div className="q3-seg" style={{ overflowX: "auto", maxWidth: "100%" }}>
+            {[["all", "All floors"]].concat(model.storeys.map(s => [s.id, short(s.id)])).map(([k, l]) => (
+              <button key={k} className={floor === k ? "on" : ""} onClick={() => { setFloor(k); v && v.setFloor(k); }} title={k}>{l}</button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="q3-body">
+        <div className="q3-cv" ref={host} />
+        {!model && <div className="q3-msg">{err || "Loading the 3D model…"}</div>}
+        {model && stats && (
+          <>
+            <div className="q3-panel">
+              <h4>Systems</h4>
+              {model.systems.map(s => {
+                const st = stats.by[s.k] || { n: 0, m: 0 };
+                return (
+                  <button key={s.k} className={"q3-sys" + (off[s.k] ? " off" : "")}
+                    onClick={() => { const now = !off[s.k]; setOff({ ...off, [s.k]: now }); v && v.toggleSystem(s.k, !now); }}>
+                    <i style={{ background: hex(COLS[s.k]) }} /><b>{s.n}</b>
+                    <small>{st.n ? st.n + " items" : ""}{st.m ? <>{st.n ? <br /> : null}{Math.round(st.m)} m run</> : null}</small>
+                  </button>
+                );
+              })}
+              <div className="q3-tog">
+                <label><input type="checkbox" checked={opts.walls} onChange={e => setO("walls", e.target.checked)} /> Walls</label>
+                <label><input type="checkbox" checked={opts.labels} onChange={e => setO("labels", e.target.checked)} /> Equipment labels</label>
+                <label><input type="checkbox" checked={opts.apart} onChange={e => setO("apart", e.target.checked)} /> Floors apart</label>
+                {stats.cones && <label><input type="checkbox" checked={opts.cones} onChange={e => setO("cones", e.target.checked)} /> Camera views</label>}
+              </div>
+            </div>
+            <div className="q3-info">
+              {!picked ? <div style={{ color: "#5a6b82" }}>Tap any device or run to see what it is, where it is and how high.</div> : (
+                <>
+                  <span className="q3-chip" style={{ background: hex(COLS[picked.s]) }}>{sysName(picked.s)}</span>
+                  <div style={{ fontSize: 16, fontWeight: 800, marginTop: 8, color: "#0f2140", overflowWrap: "anywhere" }}>
+                    {picked.run ? (picked.t || picked.k + " run") : (picked.t || picked.k)}</div>
+                  {picked.run ? (<><div className="k">Run</div><div className="v">{picked.k}{picked.dn ? " · DN" + String(picked.dn).replace("DN", "") : ""}</div></>) : (<>
+                    <div className="k">Item</div><div className="v">{picked.l || picked.k}</div>
+                    <div className="k">Room</div><div className="v">{picked.sp || "—"}</div>
+                    <div className="k">Height</div><div className="v">{(picked.z / 1000).toFixed(2)} m above floor</div>
+                    {picked.door && (<><div className="k">Door</div><div className="v">{picked.door}{picked.pp && picked.pp.hardware ? " · " + picked.pp.hardware.replace(/_/g, " ") : ""}</div></>)}
+                    {picked.k === "camera" && picked.pp && (<>
+                      <div className="k">Camera</div><div className="v">{[picked.pp.type, picked.pp.resolution, picked.pp.lens].filter(Boolean).join(" · ")}</div>
+                      <div className="k">Looks</div><div className="v">{picked.pp.fov_label || ""}{picked.aim != null ? " · bearing " + Math.round(picked.aim) + "°" : ""}</div>
+                    </>)}
+                  </>)}
+                  <div className="k">Floor</div><div className="v">{picked.f}</div>
+                </>
+              )}
+            </div>
+            <div className="q3-hint">Drag to turn · right-drag to move · scroll to zoom · tap an item for details</div>
+            <div className="q3-stats">
+              <div><b>{model.devices.length}</b><span>devices placed</span></div>
+              {stats.cams > 0 && <div><b>{stats.cams}</b><span>cameras with view</span></div>}
+              {stats.doors > 0 && <div><b>{stats.doors}</b><span>controlled doors</span></div>}
+              <div><b>{model.routes.length}</b><span>cable and pipe runs</span></div>
+              {stats.plant > 0 && <div><b>{stats.plant}</b><span>racks, plant and panels</span></div>}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DraftsmanIfcPackage({ project }) {
   // Input: one architectural IFC (with rooms), or architectural plans — one PDF / DXF
   // sheet per floor. Plans carry an optional floor name and floor type each.
@@ -25753,6 +26243,7 @@ function DraftsmanIfcPackage({ project }) {
   const [err, setErr] = useState("");
   const [jobs, setJobs] = useState([]);
   const [fams, setFams] = useState({ ELV: true });
+  const [model3d, setModel3d] = useState(null);
   useEffect(() => { getDraftsmanFamilies().then(f => {
     const fm = f || {};
     setFams(fm);
@@ -25970,8 +26461,19 @@ function DraftsmanIfcPackage({ project }) {
                 {(sm.input_warnings || []).length > 0 && (
                   <div className="text-xs text-amber-700">Reading the plans: {sm.input_warnings.join(" ")}</div>
                 )}
+                {(() => {
+                  const m3 = (j.outputs || []).find(o => o.name === "model3d.json");
+                  return m3 ? (
+                    <button onClick={() => setModel3d({ path: m3.path, sub: [new Date(j.created_at).toLocaleString(), sm.devices != null ? `${sm.devices} devices` : null, (j.systems || []).join(", ")].filter(Boolean).join(" · ") })}
+                      className="text-sm font-semibold text-white px-4 py-2 rounded-lg"
+                      style={{ background: "linear-gradient(180deg,#2474ec,#1862d8)", boxShadow: "0 8px 18px -10px #1c6ce6" }}>
+                      &#9651; Open 3D model</button>
+                  ) : (
+                    <div className="text-[11px] text-slate-400">3D model: generate this package again to get one (jobs before 17 Oct did not save it).</div>
+                  );
+                })()}
                 <div className="flex flex-wrap gap-2">
-                  {(j.outputs || []).filter(o => !/design\.json$/.test(o.name)).map(o => (
+                  {(j.outputs || []).filter(o => !/(design|model3d)\.json$/.test(o.name)).map(o => (
                     <button key={o.path} onClick={() => open(o.path)}
                       className="text-xs border px-2 py-1 rounded hover:bg-slate-50">{label(o.name)}</button>
                   ))}
@@ -25981,6 +26483,7 @@ function DraftsmanIfcPackage({ project }) {
           </div>
         );
       })}
+      {model3d && <Draftsman3DViewer path={model3d.path} title={project.project_name || "Project"} sub={model3d.sub} onClose={() => setModel3d(null)} />}
     </div>
   );
 }
