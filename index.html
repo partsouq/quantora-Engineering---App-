@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.8"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.9"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25735,6 +25735,8 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief, initialT
 // [key, label, admin family] — families are switched on / off in Admin → Draftsman Controls
 const IFC_SYSTEMS = [["cctv", "CCTV", "ELV"], ["acs", "Access control", "ELV"], ["ict", "ICT / FTTH", "ELV"],
                      ["intercom", "Intercom", "ELV"], ["bgm", "BGM / PA", "ELV"],
+                     ["iptv", "IPTV / SMATV", "ELV"], ["av", "Audio-visual / signage", "ELV"],
+                     ["parking", "Car park guidance / ANPR", "ELV"], ["bms", "BMS", "ELV"], ["grms", "GRMS (hotel rooms)", "ELV"],
                      ["ls", "Life safety", "Fire"], ["fa", "Fire alarm", "Fire"], ["el", "Emergency lighting", "Fire"],
                      ["ff", "Fire fighting", "Fire"], ["hvac", "Ventilation / AC", "Mechanical"],
                      ["chw", "Chilled water", "Mechanical"], ["smoke", "Smoke control / stair pressurisation", "Mechanical"],
@@ -25763,10 +25765,11 @@ function qd3dLoadThree() {
 (function () {
   const COL = { fa: 0xe5484d, ff: 0xc0262d, el: 0x16a34a, ls: 0x22c55e, hvac: 0x0ea5a5, water: 0x2563eb,
                 drainage: 0x8b5a2b, electrical: 0xe0a21b, cctv: 0x7c3aed, acs: 0xdb2777, ict: 0x0891b2, containment: 0x64748b,
-                earthing: 0x15803d, lps: 0xb45309, chw: 0x1d4ed8, smoke: 0x9333ea };
-  const DIA = { fa: 0.035, el: 0.035, electrical: 0.04, hvac: 0.03, ff: 0.11, water: 0.06, drainage: 0.12, cctv: 0.032, acs: 0.032, ict: 0.032, earthing: 0.03, lps: 0.035, chw: 0.1 };
+                earthing: 0x15803d, lps: 0xb45309, chw: 0x1d4ed8, smoke: 0x9333ea,
+                iptv: 0x0284c7, av: 0x9d4edd, parking: 0x059669, bms: 0xd97706, grms: 0x0f766e };
+  const DIA = { fa: 0.035, el: 0.035, electrical: 0.04, hvac: 0.03, ff: 0.11, water: 0.06, drainage: 0.12, cctv: 0.032, acs: 0.032, ict: 0.032, earthing: 0.03, lps: 0.035, chw: 0.1, iptv: 0.03, av: 0.03, parking: 0.03, bms: 0.03, grms: 0.03 };
   const TRAY = { containment: [0.30, 0.07] };   // width, depth of cable trays
-  const ELV_VIS = { acs: 2.6, ict: 2.2 };       // door hardware is tiny at building scale
+  const ELV_VIS = { acs: 1.7, ict: 1.8 };       // door hardware is tiny at building scale
   // HVAC parts are drawn at their real size and in their own colours, so ducts read as a system
   const KIND_COL = { "SD-": 0xe0ecff, FCU: 0x475569, RG: 0x86efac, EG: 0xf2b880, FAG: 0x99f6e4, VCD: 0x94a3b8,
                      FD: 0xdc2626, MD: 0xdc2626, FAHU: 0x0f766e, TEF: 0xa16207,
@@ -26420,6 +26423,8 @@ function DraftsmanIfcPackage({ project }) {
     "D-DRAINAGE.pdf": "Drainage (PDF)", "E-LIGHTING-AND-POWER.pdf": "Lighting and power (PDF)",
     "EE-EARTHING-AND-BONDING.pdf": "Earthing and bonding (PDF)", "LP-LIGHTNING-PROTECTION.pdf": "Lightning protection (PDF)",
     "MC-CHILLED-WATER-PIPING.pdf": "Chilled water (PDF)", "MS-SMOKE-CONTROL-AND-STAIR-PRESSURISATION.pdf": "Smoke control (PDF)",
+    "TV-IPTV-SMATV.pdf": "IPTV / SMATV (PDF)", "AV-AUDIO-VISUAL.pdf": "Audio-visual (PDF)", "PK-CAR-PARK-MANAGEMENT.pdf": "Car park PGS / ANPR (PDF)",
+    "BMS-BUILDING-MANAGEMENT-SYSTEM.pdf": "BMS (PDF)", "GR-GUEST-ROOM-MANAGEMENT.pdf": "GRMS (PDF)",
     "MEP-ELV-devices.ifc": "IFC with all devices", "QA-report.md": "QA report (DBC screen, clash, sheet check)",
     "QA.json": "QA data (JSON)" }[n] || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
 
