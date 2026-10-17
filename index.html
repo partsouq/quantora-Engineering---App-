@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.9"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25761,21 +25761,170 @@ function qd3dLoadThree() {
 }
 
 /* Quantora draftsman 3D viewer. Reads model3d.json (scripts/elv/model3d.py) and draws the
-   architecture plus every designed device and run in 3D. Plain three.js r128, no add-ons. */
+   architecture plus every designed device and run in 3D, in a BIM coordination-model style:
+   equipment built from its real parts (pumps with motors, vessels on saddles, chillers with fans,
+   AHUs in sections, panels with doors), round pipes with flanges and hanger rods, ducts with
+   flange frames, trays with rails, solid walls cut away on the side facing the camera.
+   Plain three.js r128, no add-ons. */
 (function () {
-  const COL = { fa: 0xe5484d, ff: 0xc0262d, el: 0x16a34a, ls: 0x22c55e, hvac: 0x0ea5a5, water: 0x2563eb,
+  const COL = { fa: 0xe5484d, ff: 0xd62828, el: 0x16a34a, ls: 0x22c55e, hvac: 0x0ea5a5, water: 0x22c55e,
                 drainage: 0x8b5a2b, electrical: 0xe0a21b, cctv: 0x7c3aed, acs: 0xdb2777, ict: 0x0891b2, containment: 0x64748b,
                 earthing: 0x15803d, lps: 0xb45309, chw: 0x1d4ed8, smoke: 0x9333ea,
                 iptv: 0x0284c7, av: 0x9d4edd, parking: 0x059669, bms: 0xd97706, grms: 0x0f766e };
   const DIA = { fa: 0.035, el: 0.035, electrical: 0.04, hvac: 0.03, ff: 0.11, water: 0.06, drainage: 0.12, cctv: 0.032, acs: 0.032, ict: 0.032, earthing: 0.03, lps: 0.035, chw: 0.1, iptv: 0.03, av: 0.03, parking: 0.03, bms: 0.03, grms: 0.03 };
   const TRAY = { containment: [0.30, 0.07] };   // width, depth of cable trays
   const ELV_VIS = { acs: 1.7, ict: 1.8 };       // door hardware is tiny at building scale
-  // HVAC parts are drawn at their real size and in their own colours, so ducts read as a system
-  const KIND_COL = { "SD-": 0xe0ecff, FCU: 0x475569, RG: 0x86efac, EG: 0xf2b880, FAG: 0x99f6e4, VCD: 0x94a3b8,
+  const PIPED = new Set(["ff", "water", "drainage", "chw"]);
+  // parts drawn in their own colours, so a system reads like a coordination model
+  const KIND_COL = { "SD-": 0xe0ecff, FCU: 0x8a97a8, RG: 0x86efac, EG: 0xf2b880, FAG: 0x99f6e4, VCD: 0x94a3b8,
                      FD: 0xdc2626, MD: 0xdc2626, FAHU: 0x0f766e, TEF: 0xa16207,
                      GV: 0x7f1d1d, NRV: 0x7f1d1d, BV: 0x7f1d1d, ITV: 0x7f1d1d, AV: 0xb91c1c, FCV: 0xb91c1c, FM: 0x7f1d1d,
                      IV: 0x1e3a8a, TPV: 0xb91c1c, FV: 0x1e3a8a, PRV: 0x1e3a8a, CO: 0x78350f, SPK: 0xdc2626 };
-  const BIG = new Set(["FP", "FT", "TANK", "BPS", "MDB", "FACP", "LDB", "ELC", "RACK", "FAHU", "TEF", "CH", "AHU", "MCC", "SPF"]);
+  const BIG = new Set(["FP", "FT", "TANK", "BPS", "MDB", "FACP", "LDB", "ELC", "RACK", "FAHU", "TEF", "CH", "AHU", "MCC", "SPF", "HE", "PGC"]);
+  // neutral equipment colours
+  const LUM = new Set(["DL", "PN", "BT", "BH", "HB", "EL"]);
+  const STEEL = 0xb8c1cc, DARK = 0x3b4656, MOTOR = 0x5b6b80, BASE = 0x9aa3ad, PANEL = 0xd9dee5, TEAL = 0x2f8f9d;
+
+  // ------------------------------------------------------------------ equipment templates
+  // Each returns parts in the device's own box: origin at the bottom centre, x = width, y = depth (plan), z = up,
+  // all in metres. g: "b" box, "c" upright cylinder, "x" cylinder along x, "y" cylinder along y, "s" sphere.
+  function pump(x, y, s, col, motorUp) {          // vertical in-line pump: base, casing, motor
+    const r = s * 0.5;
+    return motorUp ? [
+      { g: "b", p: [x, y, 0.05], s: [s * 1.3, s * 1.3, 0.1], c: BASE },
+      { g: "c", p: [x, y, 0.1 + s * 0.35], s: [s, s, s * 0.7], c: col },
+      { g: "x", p: [x, y, 0.1 + s * 0.35], s: [s * 1.9, s * 0.38, s * 0.38], c: col },
+      { g: "c", p: [x, y, 0.1 + s * 0.7 + s * 0.06], s: [s * 0.62, s * 0.62, s * 0.12], c: DARK },
+      { g: "c", p: [x, y, 0.1 + s * 0.82 + s * 0.45], s: [s * 0.72, s * 0.72, s * 0.9], c: MOTOR },
+      { g: "c", p: [x, y, 0.1 + s * 1.72 + 0.04], s: [s * 0.5, s * 0.5, 0.08], c: DARK },
+    ] : [                                           // end-suction pump on an inertia base
+      { g: "b", p: [x, y, 0.08], s: [s * 2.6, s * 1.1, 0.16], c: BASE },
+      { g: "y", p: [x - s * 0.6, y, 0.16 + r], s: [s, s * 0.45, s], c: col },
+      { g: "x", p: [x + s * 0.45, y, 0.16 + r * 0.9], s: [s * 1.2, s * 0.7, s * 0.7], c: MOTOR },
+      { g: "c", p: [x - s * 0.6, y, 0.16 + s + 0.1], s: [s * 0.36, s * 0.36, 0.25], c: col },
+    ];
+  }
+  function cabinet(w, d, h, col, n) {             // switchboard / panel line-up with doors and plinth
+    const out = [{ g: "b", p: [0, 0, 0.05], s: [w, d, 0.1], c: DARK }, { g: "b", p: [0, 0, 0.1 + (h - 0.1) / 2], s: [w, d, h - 0.1], c: col }];
+    n = n || Math.max(1, Math.round(w / 0.6));
+    for (let i = 0; i < n; i++) {
+      const x = -w / 2 + w / n * (i + 0.5);
+      out.push({ g: "b", p: [x, -d / 2 - 0.005, 0.1 + (h - 0.1) / 2], s: [w / n - 0.03, 0.01, h - 0.18], c: 0xeef1f5 });
+      out.push({ g: "b", p: [x + w / n * 0.38, -d / 2 - 0.02, 0.1 + h * 0.5], s: [0.02, 0.03, 0.12], c: DARK });
+    }
+    return out;
+  }
+  function vessel(w, d, h, col, horizontal) {
+    if (horizontal) {
+      const r = Math.min(d, h * 0.8);
+      return [{ g: "b", p: [-w * 0.3, 0, 0.12], s: [0.12, d * 0.8, 0.24], c: BASE }, { g: "b", p: [w * 0.3, 0, 0.12], s: [0.12, d * 0.8, 0.24], c: BASE },
+              { g: "x", p: [0, 0, 0.2 + r / 2], s: [w * 0.92, r, r], c: col },
+              { g: "s", p: [-w * 0.46, 0, 0.2 + r / 2], s: [r * 0.35, r, r], c: col }, { g: "s", p: [w * 0.46, 0, 0.2 + r / 2], s: [r * 0.35, r, r], c: col }];
+    }
+    const r = Math.min(w, d);
+    return [{ g: "c", p: [0, 0, 0.1], s: [r * 0.8, r * 0.8, 0.2], c: BASE }, { g: "c", p: [0, 0, 0.2 + (h - 0.2 - r * 0.25) / 2], s: [r, r, h - 0.2 - r * 0.25], c: col },
+            { g: "s", p: [0, 0, h - r * 0.25], s: [r, r, r * 0.5], c: col }];
+  }
+  function fanUnit(w, d, h, col, roof) {
+    if (roof) return [{ g: "b", p: [0, 0, 0.2], s: [w * 0.9, d * 0.9, 0.4], c: BASE }, { g: "c", p: [0, 0, 0.4 + h * 0.3], s: [w * 0.7, w * 0.7, h * 0.6], c: col },
+                      { g: "c", p: [0, 0, 0.4 + h * 0.6 + 0.08], s: [w, w, 0.16], c: col }, { g: "c", p: [0, 0, 0.4 + h * 0.6 + 0.2], s: [w * 0.4, w * 0.4, 0.1], c: DARK }];
+    return [{ g: "y", p: [0, 0, h / 2], s: [w, d, h], c: col }, { g: "y", p: [0, -d / 2 - 0.01, h / 2], s: [w * 0.8, 0.03, h * 0.8], c: DARK },
+            { g: "c", p: [0, d * 0.1, h + 0.05], s: [w * 0.25, w * 0.25, 0.1], c: MOTOR }];
+  }
+  function valve(w, d, h, col) {                   // body, bonnet, hand wheel
+    const s = Math.max(w, h);
+    return [{ g: "s", p: [0, 0, h / 2], s: [s, s * 0.8, s], c: col }, { g: "x", p: [0, 0, h / 2], s: [s * 1.6, s * 0.55, s * 0.55], c: col },
+            { g: "c", p: [0, 0, h / 2 + s * 0.6], s: [s * 0.18, s * 0.18, s * 0.6], c: DARK },
+            { g: "c", p: [0, 0, h / 2 + s * 0.95], s: [s * 0.9, s * 0.9, s * 0.08], c: 0xd97706 }];
+  }
+  const TPL = {
+    FP: (w, d, h) => {                              // fire pump set: duty electric, standby, jockey, controllers, headers
+      const out = [{ g: "b", p: [0, 0, 0.04], s: [w, d, 0.08], c: BASE }];
+      out.push(...pump(-w * 0.3, 0, 0.62, 0xd62828, true), ...pump(w * 0.05, 0, 0.62, 0xd62828, true), ...pump(w * 0.36, 0, 0.32, 0xd62828, true));
+      out.push({ g: "x", p: [0, -d * 0.36, 0.42], s: [w * 0.95, 0.2, 0.2], c: 0xd62828 }, { g: "x", p: [0, d * 0.36, 1.25], s: [w * 0.95, 0.16, 0.16], c: 0xd62828 });
+      [-w * 0.3, w * 0.05, w * 0.36].forEach(x => out.push({ g: "c", p: [x, d * 0.18, 0.95], s: [0.1, 0.1, 0.6], c: 0xd62828 }));
+      out.push(...cabinet(0.8, 0.35, 1.6, 0xc81e1e, 1).map(q => ({ ...q, p: [q.p[0] - w * 0.3, q.p[1] + d * 0.46, q.p[2]] })),
+               ...cabinet(0.8, 0.35, 1.6, 0xc81e1e, 1).map(q => ({ ...q, p: [q.p[0] + w * 0.12, q.p[1] + d * 0.46, q.p[2]] })));
+      return out;
+    },
+    BPS: (w, d, h) => {
+      const out = [{ g: "b", p: [0, 0, 0.05], s: [w, d, 0.1], c: BASE }];
+      [-0.3, 0, 0.3].forEach(f => out.push(...pump(w * f, -d * 0.1, 0.32, 0x2563eb, true)));
+      out.push({ g: "x", p: [0, -d * 0.4, 0.3], s: [w * 0.95, 0.1, 0.1], c: 0x16a34a }, { g: "x", p: [0, d * 0.25, 0.75], s: [w * 0.95, 0.1, 0.1], c: 0x16a34a });
+      out.push(...vessel(0.4, 0.4, 0.7, 0x2563eb).map(q => ({ ...q, p: [q.p[0] + w * 0.45, q.p[1] + d * 0.35, q.p[2]] })));
+      out.push(...cabinet(0.6, 0.25, 0.9, PANEL, 1).map(q => ({ ...q, p: [q.p[0] - w * 0.38, q.p[1] + d * 0.38, q.p[2]] })));
+      return out;
+    },
+    CHWP: (w, d, h) => pump(0, 0, Math.min(w, d) * 0.75, 0x1d4ed8, false),
+    TANK: (w, d, h) => {                            // sectional GRP tank: panels and a ladder
+      const out = [{ g: "b", p: [0, 0, 0.1], s: [w + 0.2, d + 0.2, 0.2], c: BASE }, { g: "b", p: [0, 0, 0.2 + (h - 0.2) / 2], s: [w, d, h - 0.2], c: 0x9cc3d8 }];
+      for (let x = -w / 2 + 1; x < w / 2 - 0.01; x += 1) out.push({ g: "b", p: [x, -d / 2 - 0.01, 0.2 + (h - 0.2) / 2], s: [0.04, 0.03, h - 0.2], c: 0x6f9db5 });
+      for (let z = 1.2; z < h; z += 1) out.push({ g: "b", p: [0, -d / 2 - 0.01, z], s: [w, 0.03, 0.04], c: 0x6f9db5 });
+      out.push({ g: "b", p: [w / 2 + 0.05, 0, h / 2 + 0.2], s: [0.05, 0.5, h + 0.3], c: STEEL });
+      return out;
+    },
+    FT: (w, d, h) => TPL.TANK(w, d, h).map(q => q.c === 0x9cc3d8 ? { ...q, c: 0xe57373, o: 0.32 } : q.c === 0x6f9db5 ? { ...q, c: 0xc0392b } : q),
+    CH: (w, d, h) => {                              // air-cooled chiller: casing, V-coils, fans on top
+      const out = [{ g: "b", p: [0, 0, 0.1], s: [w, d, 0.2], c: DARK }, { g: "b", p: [0, 0, 0.2 + h * 0.3], s: [w, d, h * 0.6], c: 0xd6dbe2 },
+                   { g: "b", p: [0, -d / 2 + 0.03, 0.2 + h * 0.72], s: [w, 0.06, h * 0.45], c: 0x7f8c9b },
+                   { g: "b", p: [0, d / 2 - 0.03, 0.2 + h * 0.72], s: [w, 0.06, h * 0.45], c: 0x7f8c9b },
+                   { g: "b", p: [0, 0, 0.2 + h * 0.93], s: [w, d, 0.06], c: 0xd6dbe2 }];
+      const n = Math.max(2, Math.round(w / 1.2));
+      for (let i = 0; i < n; i++) for (const yy of [-d * 0.24, d * 0.24]) {
+        const x = -w / 2 + w / n * (i + 0.5);
+        out.push({ g: "c", p: [x, yy, 0.2 + h * 0.96 + 0.08], s: [d * 0.42, d * 0.42, 0.16], c: 0x2b3442 });
+        out.push({ g: "c", p: [x, yy, 0.2 + h * 0.96 + 0.17], s: [d * 0.1, d * 0.1, 0.04], c: 0x8a96a6 });
+      }
+      out.push({ g: "y", p: [-w / 2 + 0.4, -d / 2 - 0.25, 0.7], s: [0.2, 0.5, 0.2], c: 0x1d4ed8 }, { g: "y", p: [-w / 2 + 0.8, -d / 2 - 0.25, 0.7], s: [0.2, 0.5, 0.2], c: 0x60a5fa });
+      return out;
+    },
+    FAHU: (w, d, h) => ahu(w, d, h),
+    AHU: (w, d, h) => ahu(w, d, h),
+    FCU: (w, d, h) => [{ g: "b", p: [0, 0, h / 2], s: [w, d, h], c: 0x8a97a8 }, { g: "b", p: [w / 2 + 0.06, 0, h / 2], s: [0.12, d * 0.8, h * 0.8], c: 0x6b7787 },
+                       { g: "b", p: [-w / 2 - 0.08, 0, h / 2], s: [0.16, d * 0.85, h * 0.85], c: 0x9ca7b5 }],
+    PU: (w, d, h) => vessel(w, d, h, TEAL, true).concat([{ g: "b", p: [w * 0.35, d * 0.55, 0.45], s: [0.4, 0.2, 0.6], c: PANEL }]),
+    AS: (w, d, h) => vessel(w, d, h, 0x2563eb),
+    CDP: (w, d, h) => vessel(w, d, h, 0x7c8b9c),
+    EWH: (w, d, h) => [{ g: "c", p: [0, 0, h / 2], s: [w, d, h], c: 0xf1f5f9 }],
+    MDB: (w, d, h) => cabinet(w, d, h, PANEL),
+    LDB: (w, d, h) => cabinet(w, d, h, PANEL, 1), DB: (w, d, h) => cabinet(w, d, h, PANEL, 1),
+    MCC: (w, d, h) => cabinet(w, d, h, PANEL), FSS: (w, d, h) => cabinet(w, d, h, 0xd62828, 1),
+    FACP: (w, d, h) => cabinet(w, d, h, 0xd62828, 1), ELC: (w, d, h) => cabinet(w, d, h, 0x22c55e, 1),
+    FCV: (w, d, h) => cabinet(w, d, h, 0xc81e1e, 1), AV: (w, d, h) => cabinet(w, d, h, 0xc81e1e, 1),
+    FSCP: (w, d, h) => cabinet(w, d, h, 0xc81e1e, 1), DDC: (w, d, h) => cabinet(w, d, h, 0xe5e7eb, 1),
+    RACK: (w, d, h) => rack(w, d, h), HE: (w, d, h) => rack(w, d, h), PGC: (w, d, h) => rack(w, d, h), GRS: (w, d, h) => rack(w, d, h),
+    AVR: (w, d, h) => rack(w, d, h),
+    HR: (w, d, h) => [{ g: "b", p: [0, 0, h / 2], s: [w, d, h], c: 0xd62828 }, { g: "y", p: [0, -d / 2 - 0.01, h * 0.5], s: [h * 0.7, 0.04, h * 0.7], c: 0xf1f5f9 },
+                      { g: "y", p: [0, -d / 2 - 0.03, h * 0.5], s: [h * 0.2, 0.04, h * 0.2], c: 0xd62828 }],
+    EXT: (w, d, h) => [{ g: "c", p: [0, 0, h * 0.42], s: [w, d, h * 0.84], c: 0xd62828 }, { g: "c", p: [0, 0, h * 0.9], s: [w * 0.35, w * 0.35, h * 0.14], c: DARK }],
+    TEF: (w, d, h) => fanUnit(w, d, h, 0x9aa5b1, true), REF: (w, d, h) => fanUnit(w, d, h, 0x9aa5b1, true),
+    SPF: (w, d, h) => fanUnit(w, d, h, 0xa855f7, true), SEF: (w, d, h) => fanUnit(w, d, h, 0xa855f7, false),
+    EF: (w, d, h) => fanUnit(w, d, h, 0x9aa5b1, false), WEF: (w, d, h) => fanUnit(w, d, h, 0x9aa5b1, false),
+    JF: (w, d, h) => [{ g: "x", p: [0, 0, h / 2], s: [w, d * 0.9, h * 0.9], c: 0xa855f7 }, { g: "x", p: [w / 2 + 0.02, 0, h / 2], s: [0.05, d * 0.95, h * 0.95], c: DARK },
+                      { g: "x", p: [-w / 2 - 0.02, 0, h / 2], s: [0.05, d * 0.95, h * 0.95], c: DARK }],
+    GV: (w, d, h) => valve(w, d, h, 0xb91c1c), NRV: (w, d, h) => valve(w, d, h, 0xb91c1c), IV: (w, d, h) => valve(w, d, h, 0x1e3a8a),
+    DRV: (w, d, h) => valve(w, d, h, 0x1e3a8a), PICV: (w, d, h) => valve(w, d, h, 0x1e40af), FV: (w, d, h) => valve(w, d, h, 0x1e3a8a),
+    PRV: (w, d, h) => valve(w, d, h, 0x1e3a8a), BV: (w, d, h) => valve(w, d, h, 0xb91c1c), ITV: (w, d, h) => valve(w, d, h, 0xb91c1c),
+    SAT: (w, d, h) => [{ g: "c", p: [0, 0, 0.6], s: [0.12, 0.12, 1.2], c: STEEL }, { g: "c", p: [0, 0, 1.3], s: [w, w, 0.12], c: 0xf1f5f9 },
+                       { g: "c", p: [0, 0, 1.6], s: [0.05, 0.05, 0.5], c: STEEL }],
+    BAR: (w, d, h) => [{ g: "b", p: [-w / 2 + 0.15, 0, 0.5], s: [0.3, 0.3, 1.0], c: 0xf59e0b }, { g: "x", p: [0.15, 0, 0.9], s: [w - 0.3, 0.06, 0.06], c: 0xf1f5f9 }],
+    ANPR: (w, d, h) => [{ g: "c", p: [0, 0, h / 2], s: [0.1, 0.1, h], c: STEEL }, { g: "b", p: [0, -0.12, h], s: [0.14, 0.32, 0.12], c: 0x1f2937 }],
+    SPK: (w, d, h) => [{ g: "c", p: [0, 0, h * 0.6], s: [w * 0.4, w * 0.4, h * 0.8], c: 0xc0a062 }, { g: "c", p: [0, 0, 0.01], s: [w, w, 0.015], c: 0xd62828 }],
+  };
+  function ahu(w, d, h) {                          // air handling unit in sections: mixing, filter, coil, fan
+    const secs = [[0.18, 0xb8c1cc], [0.16, 0x94a3b8], [0.26, 0x2f8f9d], [0.4, 0xb8c1cc]];
+    const out = [{ g: "b", p: [0, 0, 0.08], s: [w, d, 0.16], c: DARK }];
+    let x = -w / 2;
+    secs.forEach(([f, c]) => { const sw = w * f; out.push({ g: "b", p: [x + sw / 2, 0, 0.16 + (h - 0.16) / 2], s: [sw - 0.02, d, h - 0.16], c }); x += sw; });
+    out.push({ g: "b", p: [w * 0.3, -d / 2 - 0.01, 0.16 + (h - 0.16) / 2], s: [w * 0.18, 0.02, (h - 0.16) * 0.7], c: 0xe5e7eb });
+    out.push({ g: "b", p: [w / 2 - 0.3, 0, h + 0.15], s: [0.5, d * 0.5, 0.3], c: 0xd1d5db });
+    return out;
+  }
+  function rack(w, d, h) {
+    const out = [{ g: "b", p: [0, 0, h / 2], s: [w, d, h], c: 0x1f2937 }, { g: "b", p: [0, -d / 2 - 0.006, h / 2], s: [w - 0.06, 0.012, h - 0.12], c: 0x374151 }];
+    for (let z = 0.25; z < h - 0.15; z += 0.18) out.push({ g: "b", p: [0, -d / 2 - 0.014, z], s: [w - 0.14, 0.01, 0.05], c: 0x4b5563 });
+    return out;
+  }
 
   function mount(host, model, opts) {
     opts = opts || {};
@@ -25784,16 +25933,17 @@ function qd3dLoadThree() {
     const renderer = new T.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     renderer.setSize(W(), H());
-    renderer.setClearColor(0xeef3f9);
+    renderer.setClearColor(0xf4f6f9);
     host.appendChild(renderer.domElement);
     const labels = document.createElement("div");
     labels.style.cssText = "position:absolute;inset:0;pointer-events:none;overflow:hidden";
     host.appendChild(labels);
 
     const scene = new T.Scene();
-    scene.add(new T.HemisphereLight(0xffffff, 0xb8c4d6, 0.95));
-    const sun = new T.DirectionalLight(0xffffff, 0.55); sun.position.set(-40, 80, 60); scene.add(sun);
-    const camera = new T.PerspectiveCamera(42, W() / H(), 0.1, 2000);
+    scene.add(new T.HemisphereLight(0xffffff, 0x9aa6b6, 0.72));
+    const sun = new T.DirectionalLight(0xffffff, 0.62); sun.position.set(-40, 90, 55); scene.add(sun);
+    const fill = new T.DirectionalLight(0xffffff, 0.22); fill.position.set(50, 30, -40); scene.add(fill);
+    const camera = new T.PerspectiveCamera(38, W() / H(), 0.1, 2000);
 
     // bounds
     let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
@@ -25808,70 +25958,144 @@ function qd3dLoadThree() {
     const sysObjs = [];  // {s, obj}
     const pickables = [];
     const big = [];
+    const matCache = {};
+    const mat = (c, kind) => {
+      const k = c + "|" + (kind || "");
+      if (!matCache[k]) matCache[k] = kind === "pipe" ? new T.MeshPhongMaterial({ color: c, shininess: 55, specular: 0x555555 })
+        : kind === "glass" ? new T.MeshLambertMaterial({ color: c, transparent: true, opacity: 0.85 })
+        : new T.MeshPhongMaterial({ color: c, shininess: 22, specular: 0x222222 });
+      return matCache[k];
+    };
 
+    // ------------------------------------------------------------------ architecture
     model.storeys.forEach((s, i) => {
       const g = new T.Group(); g.userData.base = s.z / 1000; g.userData.i = i; groups[s.id] = g; scene.add(g);
-      // slab
-      const slabMat = new T.MeshLambertMaterial({ color: i === 0 ? 0xdfe6ef : 0xe8edf4, transparent: i > 0, opacity: i > 0 ? 0.55 : 1, side: T.DoubleSide, depthWrite: i === 0 });
+      // slab with thickness
+      const slabMat = new T.MeshLambertMaterial({ color: 0xdfe3e8 });
+      const slabTop = new T.MeshLambertMaterial({ color: 0xeef0f3 });
       s.spaces.forEach(sp => {
         const shape = new T.Shape(sp.p.map(([x, y]) => new T.Vector2(x / 1000 - cx, y / 1000 - cy)));
-        const geo = new T.ShapeGeometry(shape); geo.rotateX(-Math.PI / 2);
-        const m = new T.Mesh(geo, slabMat); m.position.y = 0.001; m.userData.space = sp.n; g.add(m);
+        const geo = new T.ExtrudeGeometry(shape, { depth: 0.2, bevelEnabled: false }); geo.rotateX(-Math.PI / 2); geo.translate(0, -0.2, 0);
+        const m = new T.Mesh(geo, [slabTop, slabMat]); m.userData.space = sp.n; g.add(m);
       });
-      // walls: every space edge once
-      const seen = new Set(), wpos = [], lpos = [];
+      // walls: an edge seen once is the building envelope (full height, cut away on the camera side),
+      // an edge shared by two rooms is a partition (cut at 1.1 m, the way a plan is cut)
+      const count = {}, edges = [];
+      const r = q => Math.round(q / 50);
       s.spaces.forEach(sp => {
         const pts = sp.p;
+        let sx = 0, sy = 0; pts.forEach(([x, y]) => { sx += x; sy += y; });
+        const cen = [sx / pts.length, sy / pts.length];
         for (let k = 0; k < pts.length; k++) {
           const a = pts[k], b = pts[(k + 1) % pts.length];
-          const r = q => Math.round(q / 50);
-          const key = [r(a[0]), r(a[1]), r(b[0]), r(b[1])]; const k2 = key[0] < key[2] || (key[0] === key[2] && key[1] < key[3]) ? key.join() : [key[2], key[3], key[0], key[1]].join();
-          if (seen.has(k2)) continue; seen.add(k2);
-          const h = Math.min(sp.h || s.h, s.h) / 1000;
-          const A = P(a[0], a[1], 0), B = P(b[0], b[1], 0);
-          wpos.push(A.x, 0, A.z, B.x, 0, B.z, B.x, h, B.z, A.x, 0, A.z, B.x, h, B.z, A.x, h, A.z);
-          lpos.push(A.x, 0, A.z, B.x, 0, B.z, A.x, h, A.z, B.x, h, B.z);
+          const key = [r(a[0]), r(a[1]), r(b[0]), r(b[1])];
+          const k2 = key[0] < key[2] || (key[0] === key[2] && key[1] < key[3]) ? key.join() : [key[2], key[3], key[0], key[1]].join();
+          count[k2] = (count[k2] || 0) + 1;
+          edges.push({ a, b, k2, cen, h: Math.min(sp.h || s.h, s.h) / 1000 });
         }
       });
-      const wg = new T.BufferGeometry(); wg.setAttribute("position", new T.Float32BufferAttribute(wpos, 3)); wg.computeVertexNormals();
-      const walls = new T.Mesh(wg, new T.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.30, side: T.DoubleSide, depthWrite: false }));
-      walls.userData.isWall = true; g.add(walls);
-      const lg = new T.BufferGeometry(); lg.setAttribute("position", new T.Float32BufferAttribute(lpos, 3));
-      const wl = new T.LineSegments(lg, new T.LineBasicMaterial({ color: 0x5a6b82, transparent: true, opacity: 0.7 }));
+      const ext = [], part = [], lines = [], done = new Set();
+      edges.forEach(e => {
+        if (done.has(e.k2)) return; done.add(e.k2);
+        const A = P(e.a[0], e.a[1], 0), B = P(e.b[0], e.b[1], 0);
+        if (A.distanceTo(B) < 0.05) return;
+        if (count[e.k2] === 1) {
+          // inward normal: toward the room centre
+          const C = P(e.cen[0], e.cen[1], 0), h = e.h;
+          const nrm = new T.Vector3().subVectors(B, A).cross(new T.Vector3(0, 1, 0));
+          const inward = nrm.dot(new T.Vector3().subVectors(C, A)) > 0;
+          const [p, q] = inward ? [A, B] : [B, A];
+          ext.push(p.x, 0, p.z, p.x, h, p.z, q.x, 0, q.z, q.x, 0, q.z, p.x, h, p.z, q.x, h, q.z);
+          lines.push(A.x, h, A.z, B.x, h, B.z, A.x, 0, A.z, B.x, 0, B.z);
+        } else part.push([A, B]);
+      });
+      const eg = new T.BufferGeometry(); eg.setAttribute("position", new T.Float32BufferAttribute(ext, 3)); eg.computeVertexNormals();
+      const ew = new T.Mesh(eg, new T.MeshLambertMaterial({ color: 0xc9cfd7, side: T.BackSide }));
+      ew.userData.isWall = true; g.add(ew);
+      if (part.length) {
+        const pw = new T.InstancedMesh(new T.BoxGeometry(1, 1, 1), new T.MeshLambertMaterial({ color: 0xd3d8df }), part.length);
+        const tmp0 = new T.Object3D();
+        part.forEach(([A, B], k) => {
+          const L = A.distanceTo(B);
+          tmp0.position.set((A.x + B.x) / 2, 0.55, (A.z + B.z) / 2);
+          tmp0.rotation.set(0, -Math.atan2(B.z - A.z, B.x - A.x), 0);
+          tmp0.scale.set(L, 1.1, 0.12); tmp0.updateMatrix(); pw.setMatrixAt(k, tmp0.matrix);
+          lines.push(A.x, 1.1, A.z, B.x, 1.1, B.z);
+        });
+        pw.userData.isWall = true; g.add(pw);
+      }
+      const lg = new T.BufferGeometry(); lg.setAttribute("position", new T.Float32BufferAttribute(lines, 3));
+      const wl = new T.LineSegments(lg, new T.LineBasicMaterial({ color: 0x6b7a8f, transparent: true, opacity: 0.75 }));
       wl.userData.isWall = true; g.add(wl);
     });
 
-    // devices, instanced per storey x system x shape
-    const unit = { box: new T.BoxGeometry(1, 1, 1), cyl: new T.CylinderGeometry(0.5, 0.5, 1, 18), sph: new T.SphereGeometry(0.5, 18, 12) };
-    const shapeGeo = sh => sh === "camera" ? unit.sph : (["disc", "cyl", "pipe", "highbay", "fan", "rod"].includes(sh) ? unit.cyl : unit.box);
-    const buckets = {};
+    // ------------------------------------------------------------------ devices: real parts, instanced
+    const unit = { b: new T.BoxGeometry(1, 1, 1), c: new T.CylinderGeometry(0.5, 0.5, 1, 22), s: new T.SphereGeometry(0.5, 18, 12) };
+    const shapeGeo = sh => sh === "camera" ? "s" : (["disc", "cyl", "pipe", "highbay", "fan", "rod"].includes(sh) ? "c" : "b");
+    const buckets = {};             // floor|system|geom|colour -> [{m: Matrix4, d}]
+    const edgeBuckets = {};         // floor|system -> line positions (box outlines of equipment)
+    const M = new T.Matrix4(), R = new T.Matrix4(), S = new T.Matrix4(), Tr = new T.Matrix4(), Rot = new T.Matrix4();
+    const BOX_EDGES = [[0, 1], [1, 3], [3, 2], [2, 0], [4, 5], [5, 7], [7, 6], [6, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
+    function addPart(f, s, d, part, base, rotY) {
+      const g = part.g === "x" || part.g === "y" ? "c" : part.g;
+      const key = f + "|" + s + "|" + g + "|" + part.c + (part.o ? "|" + part.o : "");
+      // local (x right, y depth into plan, z up) -> three (x, y up, -z)
+      const [px, py, pz] = part.p, [sw, sd, sh] = part.s;
+      Rot.identity();
+      if (part.g === "x") Rot.makeRotationZ(Math.PI / 2);
+      if (part.g === "y") Rot.makeRotationX(Math.PI / 2);
+      const scale = part.g === "x" ? [sh, sw, sd] : part.g === "y" ? [sw, sd, sh] : [sw, sh, sd];
+      S.makeScale(scale[0], scale[1], scale[2]);
+      Tr.makeTranslation(px, pz, -py);
+      R.makeRotationY(rotY);
+      M.copy(base).multiply(R).multiply(Tr).multiply(Rot).multiply(S);
+      (buckets[key] = buckets[key] || []).push({ m: M.clone(), d });
+      if (part.g === "b" && Math.max(sw, sd, sh) > 0.25) {
+        const e = (edgeBuckets[f + "|" + s] = edgeBuckets[f + "|" + s] || []);
+        const mm = new T.Matrix4().copy(base).multiply(R).multiply(Tr).multiply(new T.Matrix4().makeScale(sw, sh, sd));
+        const c = [];
+        for (let i = 0; i < 8; i++) c.push(new T.Vector3(i & 1 ? 0.5 : -0.5, i & 2 ? 0.5 : -0.5, i & 4 ? 0.5 : -0.5).applyMatrix4(mm));
+        BOX_EDGES.forEach(([a, b]) => e.push(c[a].x, c[a].y, c[a].z, c[b].x, c[b].y, c[b].z));
+      }
+    }
     model.devices.forEach(d => {
       if (!groups[d.f]) return;
-      const g0 = shapeGeo(d.sh); const key = d.f + "|" + d.s + "|" + (g0 === unit.cyl ? "c" : g0 === unit.sph ? "o" : "b") + "|" + (KIND_COL[d.k] != null ? d.k : "");
-      (buckets[key] = buckets[key] || []).push(d);
+      const st = model.storeys[storeyIdx[d.f]];
+      let [w, dd, h] = d.sz.map(v => Math.max(v, 1) / 1000);
+      const tpl = TPL[d.k] && !(d.k === "FD" && d.s === "drainage") ? TPL[d.k] : null;
+      const vis = ELV_VIS[d.s] || 1.6;   // small devices drawn a little larger so they read at building scale
+      if (!tpl && !BIG.has(d.k) && !LUM.has(d.k) && KIND_COL[d.k] == null) { w *= vis; dd *= vis; h *= vis; }
+      // bottom of the device's box
+      let zb = d.z / 1000 - (d.m === "ceiling" ? h : d.m === "inline" ? h / 2 : 0);
+      if (d.m === "roof") zb = st.h / 1000;
+      if (d.sh === "pipe") { h = st.h / 1000; zb = 0; w = dd = 0.11; }
+      const p = P(d.x, d.y, 0);
+      const rotY = d.aim != null ? (90 - d.aim) * Math.PI / 180 : 0;
+      const base = new T.Matrix4().makeTranslation(p.x, zb, p.z);
+      if (tpl) tpl(w, dd, h).forEach(part => addPart(d.f, d.s, d, part, base, rotY));
+      else {
+        const g = shapeGeo(d.sh);
+        let part = { g, p: [0, 0, h / 2], s: [w, dd, h], c: KIND_COL[d.k] != null ? KIND_COL[d.k] : (COL[d.s] || 0x64748b) };
+        if (LUM.has(d.k)) part = { g: d.k === "DL" || d.k === "HB" ? "c" : "b", p: [0, 0, h / 2], s: [w, dd, Math.min(h, 0.08)], c: d.s === "el" ? 0x86efac : 0xfaf6e8 };
+        if (d.sh === "camera") part = { g: "s", p: [0, 0, -0.06], s: [0.5, 0.5, 0.3], c: COL.cctv };
+        if (d.sh === "bullet") part = { g: "x", p: [0, 0, -0.1], s: [0.7, 0.24, 0.24], c: COL.cctv };
+        if (d.sh === "camera" || d.sh === "bullet") { zb = d.z / 1000; base.makeTranslation(p.x, zb, p.z); }
+        addPart(d.f, d.s, d, part, base, rotY);
+      }
+      if (BIG.has(d.k)) big.push({ d, pos: new T.Vector3(p.x, zb + h + 0.35, p.z), g: groups[d.f] });
     });
-    const tmp = new T.Object3D();
     Object.entries(buckets).forEach(([key, list]) => {
-      const [f, s, gk, kk] = key.split("|");
-      const st = model.storeys[storeyIdx[f]];
-      const mat = new T.MeshLambertMaterial({ color: kk ? KIND_COL[kk] : (COL[s] || 0x64748b) });
-      const im = new T.InstancedMesh(gk === "c" ? unit.cyl : gk === "o" ? unit.sph : unit.box, mat, list.length);
-      list.forEach((d, i) => {
-        let [w, dd, h] = d.sz.map(v => Math.max(v, 1) / 1000);
-        const vis = ELV_VIS[d.s] || 1.6;   // small devices drawn a little larger so they read at building scale
-        if (!BIG.has(d.k) && d.k !== "HB" && KIND_COL[d.k] == null) { w *= vis; dd *= vis; h *= vis; }
-        let z = d.z / 1000 + (d.m === "ceiling" ? -h / 2 : d.m === "inline" ? 0 : h / 2);
-        if (d.sh === "pipe") { h = st.h / 1000; z = h / 2; w = dd = 0.11; }
-        if (d.m === "roof") z = st.h / 1000 + h / 2;
-        const p = P(d.x, d.y, 0);
-        tmp.position.set(p.x, z, p.z); tmp.scale.set(w, h, dd);
-        tmp.rotation.set(0, d.aim != null ? (90 - d.aim) * Math.PI / 180 : 0, 0);
-        if (d.sh === "camera") { tmp.scale.set(0.55, 0.32, 0.55); tmp.position.y = d.z / 1000 - 0.1; }
-        if (d.sh === "bullet") { tmp.scale.set(0.7, 0.24, 0.24); tmp.position.y = d.z / 1000 - 0.15; }
-        tmp.updateMatrix(); im.setMatrixAt(i, tmp.matrix); tmp.rotation.set(0, 0, 0);
-        if (BIG.has(d.k)) big.push({ d, pos: new T.Vector3(p.x, z + h / 2 + 0.3, p.z), g: groups[f] });
-      });
-      im.userData = { list, s }; groups[f].add(im); sysObjs.push({ s, obj: im }); pickables.push(im);
+      const [f, s, gk, c, op] = key.split("|");
+      const m0 = op ? new T.MeshPhongMaterial({ color: parseInt(c, 10), transparent: true, opacity: parseFloat(op), depthWrite: false, shininess: 30 }) : mat(parseInt(c, 10));
+      const im = new T.InstancedMesh(unit[gk], m0, list.length);
+      list.forEach((it, i) => im.setMatrixAt(i, it.m));
+      im.userData = { list: list.map(it => it.d), s }; groups[f].add(im); sysObjs.push({ s, obj: im }); pickables.push(im);
+    });
+    Object.entries(edgeBuckets).forEach(([key, pos]) => {
+      const [f, s] = key.split("|");
+      const lg = new T.BufferGeometry(); lg.setAttribute("position", new T.Float32BufferAttribute(pos, 3));
+      const l = new T.LineSegments(lg, new T.LineBasicMaterial({ color: 0x1f2937, transparent: true, opacity: 0.35 }));
+      groups[f].add(l); sysObjs.push({ s, obj: l });
     });
 
     // camera views: a see-through fan from the lens down to the area it covers on the floor
@@ -25896,19 +26120,20 @@ function qd3dLoadThree() {
       const l = new T.LineSegments(lg2, coneLine); groups[f].add(l); sysObjs.push({ s: "cctv", obj: l, cone: true });
     });
 
-    // doors: a leaf in every opening; access-controlled ones in the access-control colour
+    // doors: a leaf in every opening (cut with the partitions); access-controlled ones full height in their colour
     const acsDoors = {};
     model.devices.forEach(d => { if (d.s === "acs" && d.door) (acsDoors[d.f] = acsDoors[d.f] || new Set()).add(d.door); });
+    const tmp = new T.Object3D();
     model.storeys.forEach(s => {
       const list = s.doors || []; if (!list.length) return;
       const ctl = acsDoors[s.id] || new Set();
       const plain = list.filter(d => !ctl.has(d.n)), sec = list.filter(d => ctl.has(d.n));
-      [[plain, 0xb9c4d4, 0.55], [sec, COL.acs, 0.85]].forEach(([arr, col, op]) => {
+      [[plain, 0xa98b6d, 1.1], [sec, COL.acs, 2.1]].forEach(([arr, col, hh]) => {
         if (!arr.length) return;
-        const im = new T.InstancedMesh(unit.box, new T.MeshLambertMaterial({ color: col, transparent: true, opacity: op }), arr.length);
+        const im = new T.InstancedMesh(unit.b, new T.MeshLambertMaterial({ color: col }), arr.length);
         arr.forEach((d, i) => {
           const p = P(d.x, d.y, 0);
-          tmp.position.set(p.x, 1.05, p.z); tmp.rotation.set(0, d.a * Math.PI / 180, 0); tmp.scale.set(Math.max(0.6, d.w / 1000), 2.1, 0.06);
+          tmp.position.set(p.x, hh / 2, p.z); tmp.rotation.set(0, d.a * Math.PI / 180, 0); tmp.scale.set(Math.max(0.6, d.w / 1000), hh, 0.05);
           tmp.updateMatrix(); im.setMatrixAt(i, tmp.matrix);
         });
         tmp.rotation.set(0, 0, 0);
@@ -25917,16 +26142,32 @@ function qd3dLoadThree() {
       });
     });
 
-    // runs: one instanced box per straight segment
+    // ------------------------------------------------------------------ runs
     const rb = {};
-    const DUCT_COL = { SA: 0x3b82f6, RA: 0x22a06b, FA: 0x14b8a6, EA: 0xc2763a };
+    const DUCT_COL = { SA: 0x5b9bd5, RA: 0x6cc28a, FA: 0x4fc3c7, EA: 0xd99a5b, SP: 0xb07ae0 };
     model.routes.forEach(r => { if (groups[r.f]) { const k = r.f + "|" + r.s + "|" + (r.d || "") + "|" + (r.c || ""); (rb[k] = rb[k] || []).push(r); } });
+    const upv = new T.Vector3(0, 1, 0), mx = new T.Matrix4();
+    function orient(a, b) {
+      const dir = b.clone().sub(a).normalize();
+      const side = Math.abs(dir.y) > 0.99 ? new T.Vector3(1, 0, 0) : new T.Vector3().crossVectors(dir, upv).normalize();
+      const top = new T.Vector3().crossVectors(side, dir).normalize();
+      mx.makeBasis(side, dir, top);
+      return new T.Quaternion().setFromRotationMatrix(mx);
+    }
+    function inst(f, s, geo, material, items, pick) {
+      if (!items.length) return null;
+      const im = new T.InstancedMesh(geo, material, items.length);
+      items.forEach((it, i) => { tmp.position.copy(it.p); tmp.quaternion.copy(it.q || new T.Quaternion()); tmp.scale.set(...it.s); tmp.updateMatrix(); im.setMatrixAt(i, tmp.matrix); });
+      groups[f].add(im); sysObjs.push({ s, obj: im }); if (pick) { im.userData = pick; pickables.push(im); }
+      return im;
+    }
     Object.entries(rb).forEach(([key, list]) => {
       const [f, s, dk, rc] = key.split("|");
       const st = model.storeys[storeyIdx[f]];
+      const soffit = st.h / 1000;
       const segs = [];
       list.forEach(r => {
-        if (r.rk === "riser") { segs.push({ a: P(r.p[0][0], r.p[0][1], 0), b: P(r.p[0][0], r.p[0][1], st.h), r }); return; }
+        if (r.rk === "riser") { segs.push({ a: P(r.p[0][0], r.p[0][1], 0), b: P(r.p[0][0], r.p[0][1], st.h), r, riser: true }); return; }
         for (let k = 0; k + 1 < r.p.length; k++) {
           const a = P(r.p[k][0], r.p[k][1], r.z), b = P(r.p[k + 1][0], r.p[k + 1][1], r.z);
           if (a.distanceTo(b) > 0.01) segs.push({ a, b, r });
@@ -25934,33 +26175,44 @@ function qd3dLoadThree() {
       });
       const dnOf = r => { const n = parseInt(String(r.dn == null ? "" : r.dn).replace(/\D/g, ""), 10); return n > 0 ? Math.max(0.022, n * 1.15 / 1000) : 0; };
       const d = DIA[s] || 0.04, tray = TRAY[s];
-      const im = new T.InstancedMesh(unit.box, new T.MeshLambertMaterial(dk ? { color: DUCT_COL[dk] || COL[s], transparent: true, opacity: 0.92 } : { color: rc ? parseInt(rc, 16) : (COL[s] || 0x64748b) }), segs.length);
-      const upv = new T.Vector3(0, 1, 0), mx = new T.Matrix4();
-      segs.forEach((sg, i) => {
-        const len = sg.a.distanceTo(sg.b), mid = sg.a.clone().add(sg.b).multiplyScalar(0.5);
-        const dir = sg.b.clone().sub(sg.a).normalize();
-        // local Y along the run; local Z up when the run is level, so a tray lies flat
-        const side = Math.abs(dir.y) > 0.99 ? new T.Vector3(1, 0, 0) : new T.Vector3().crossVectors(dir, upv).normalize();
-        const top = new T.Vector3().crossVectors(side, dir).normalize();
-        mx.makeBasis(side, dir, top);
-        tmp.position.copy(mid); tmp.quaternion.setFromRotationMatrix(mx);
+      const colr = dk ? (DUCT_COL[dk] || COL[s]) : (rc ? parseInt(rc, 16) : (COL[s] || 0x64748b));
+      const round = !dk && !tray && !segs.some(sg => sg.r.wh);
+      const body = [], flanges = [], hangers = [], rails = [];
+      segs.forEach(sg => {
+        const len = sg.a.distanceTo(sg.b), mid = sg.a.clone().add(sg.b).multiplyScalar(0.5), q = orient(sg.a, sg.b);
         const wh = sg.r.wh, pd = dnOf(sg.r) || d;
-        if (wh) tmp.scale.set(wh[0] / 1000, len, wh[1] / 1000);
-        else tmp.scale.set(tray ? tray[0] : pd, len, tray ? tray[1] : pd);
-        tmp.updateMatrix();
-        im.setMatrixAt(i, tmp.matrix);
+        if (wh) body.push({ p: mid, q, s: [wh[0] / 1000, len, wh[1] / 1000], sg });
+        else if (tray) body.push({ p: mid, q, s: [tray[0], len, 0.012], sg });
+        else body.push({ p: mid, q, s: [pd, len, pd], sg });
+        const dir = sg.b.clone().sub(sg.a).normalize();
+        const level = Math.abs(dir.y) < 0.2;
+        // flanges / couplings at both ends of a pipe length, duct frames every 1.2 m
+        if (round && pd >= 0.06 && !sg.riser) [0, 1].forEach(t => flanges.push({ p: sg.a.clone().lerp(sg.b, t === 0 ? Math.min(0.5, 0.04 / len) : 1 - Math.min(0.5, 0.04 / len)), q, s: [pd * 1.45, 0.035, pd * 1.45] }));
+        if (wh) for (let t = 0.6; t < len; t += 1.2) flanges.push({ p: sg.a.clone().addScaledVector(dir, t), q, s: [wh[0] / 1000 + 0.05, 0.035, wh[1] / 1000 + 0.05] });
+        if (tray) [-1, 1].forEach(sd => { const side = new T.Vector3().crossVectors(dir, upv).normalize(); rails.push({ p: mid.clone().addScaledVector(side, sd * tray[0] / 2).add(new T.Vector3(0, tray[1] / 2, 0)), q, s: [0.012, len, tray[1]] }); });
+        // hanger rods to the slab every 2.4 m on level runs below the soffit
+        const top = mid.y + (wh ? wh[1] / 2000 : tray ? 0 : pd / 2);
+        if (level && !sg.riser && top < soffit - 0.05 && (round ? pd >= 0.05 : true))
+          for (let t = 0.5; t < len; t += 2.4) {
+            const at = sg.a.clone().addScaledVector(dir, t);
+            const L = soffit - top;
+            hangers.push({ p: new T.Vector3(at.x, top + L / 2, at.z), s: [0.012, L, 0.012] });
+            if (wh || tray) hangers.push({ p: new T.Vector3(at.x, top - (wh ? wh[1] / 1000 : tray[1]) - 0.02, at.z), q, s: [(wh ? wh[0] / 1000 : tray[0]) + 0.12, 0.04, 0.04] });
+          }
       });
-      // fittings: a fitting body at every bend and junction of round pipework
-      if (!dk && !tray) {
+      const im = inst(f, s, round ? unit.c : unit.b, dk ? mat(colr, "glass") : mat(colr, round ? "pipe" : undefined), body, { segs: body.map(b => b.sg), s, run: true });
+      inst(f, s, round ? unit.c : unit.b, mat(round ? colr : (dk ? 0x7f8b99 : 0x8b95a1)), flanges);
+      inst(f, s, unit.b, mat(0x8b95a1), rails);
+      inst(f, s, unit.c, mat(0x7b8592), hangers.filter(h => !h.q));
+      inst(f, s, unit.b, mat(0x7b8592), hangers.filter(h => h.q));
+      // fittings: an elbow / tee body at every bend and junction of round pipework
+      if (round) {
         const joints = [];
-        list.forEach(r => { if (r.rk !== "riser" && r.p.length > 2) for (let k = 1; k + 1 < r.p.length; k++) joints.push([P(r.p[k][0], r.p[k][1], r.z), dnOf(r) || d]); });
-        if (joints.length) {
-          const jm = new T.InstancedMesh(unit.sph, new T.MeshLambertMaterial({ color: rc ? parseInt(rc, 16) : (COL[s] || 0x64748b) }), joints.length);
-          joints.forEach(([p, dd], i) => { tmp.position.copy(p); tmp.quaternion.identity(); tmp.scale.set(dd * 1.45, dd * 1.45, dd * 1.45); tmp.updateMatrix(); jm.setMatrixAt(i, tmp.matrix); });
-          groups[f].add(jm); sysObjs.push({ s, obj: jm });
-        }
+        list.forEach(r => { if (r.rk !== "riser" && r.p.length > 2) for (let k = 1; k + 1 < r.p.length; k++) joints.push(P(r.p[k][0], r.p[k][1], r.z)); });
+        const pd = dnOf(list[0]) || d;
+        inst(f, s, unit.s, mat(colr, "pipe"), joints.map(p => ({ p, s: [pd * 1.3, pd * 1.3, pd * 1.3] })));
       }
-      im.userData = { segs, s, run: true }; groups[f].add(im); sysObjs.push({ s, obj: im }); pickables.push(im);
+      if (im) im.userData.segs = body.map(b => b.sg);
     });
 
     // camera orbit
@@ -26423,7 +26675,7 @@ function DraftsmanIfcPackage({ project }) {
     "D-DRAINAGE.pdf": "Drainage (PDF)", "E-LIGHTING-AND-POWER.pdf": "Lighting and power (PDF)",
     "EE-EARTHING-AND-BONDING.pdf": "Earthing and bonding (PDF)", "LP-LIGHTNING-PROTECTION.pdf": "Lightning protection (PDF)",
     "MC-CHILLED-WATER-PIPING.pdf": "Chilled water (PDF)", "MS-SMOKE-CONTROL-AND-STAIR-PRESSURISATION.pdf": "Smoke control (PDF)",
-    "TV-IPTV-SMATV.pdf": "IPTV / SMATV (PDF)", "AV-AUDIO-VISUAL.pdf": "Audio-visual (PDF)", "PK-CAR-PARK-MANAGEMENT.pdf": "Car park PGS / ANPR (PDF)",
+    "3D-COORDINATION-VIEWS.pdf": "3D coordination views, all systems (PDF)", "TV-IPTV-SMATV.pdf": "IPTV / SMATV (PDF)", "AV-AUDIO-VISUAL.pdf": "Audio-visual (PDF)", "PK-CAR-PARK-MANAGEMENT.pdf": "Car park PGS / ANPR (PDF)",
     "BMS-BUILDING-MANAGEMENT-SYSTEM.pdf": "BMS (PDF)", "GR-GUEST-ROOM-MANAGEMENT.pdf": "GRMS (PDF)",
     "MEP-ELV-devices.ifc": "IFC with all devices", "QA-report.md": "QA report (DBC screen, clash, sheet check)",
     "QA.json": "QA data (JSON)" }[n] || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
