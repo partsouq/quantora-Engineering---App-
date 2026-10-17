@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -34,6 +34,9 @@ window.safeStorageName = function (name) {
 <meta name="description" content="Upload a drawing or describe the project and get a complete bill of quantities in minutes — every item counted, specified and checked against local codes." />
 <meta name="robots" content="index, follow" />
 <link rel="canonical" href="https://quantoraengineering.com/" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
 <meta name="author" content="Quantora Engineering" />
 <meta name="keywords" content="AI quantity surveying, BOQ software, bill of quantities, construction take-off, MEP take-off, ELV take-off, CCTV BOQ, fire alarm BOQ, drawing analysis, compliance checking, UAE, Dubai, Abu Dhabi, Saudi Arabia, Qatar, Kuwait, Bahrain, Oman, India, Mumbai, Singapore, Malaysia, Indonesia, Philippines, Thailand, Vietnam, Hong Kong, Pakistan, Sri Lanka, Bangladesh" />
 
@@ -18257,7 +18260,7 @@ const PORTAL_LABEL = Object.fromEntries(
 // lists rather than the long ones a wireframe would promise.
 // ---------------------------------------------------------------------------
 const WORKSPACES = [
-  ["projects",   "Projects",   "▤", "#6366f1",
+  ["projects",   "Projects",   "▤", "#1c6ce6",
    "One job at a time — drawings, take-off, BOQ, tender and procurement."],
   ["commercial", "Commercial", "◎", "#22c55e",
    "The money across every project — contracts, claims, collection and the bid pipeline."],
@@ -18311,6 +18314,26 @@ WORKSPACE_OF.new = "projects";
 WORKSPACE_OF.edit = "projects";
 
 
+const QX_NAV_ICON = {
+  home: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" /></svg>,
+  dashboard: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M3 9h18M8.5 9v11" /></svg>,
+  drawings: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20 20 4M14.5 4H20v5.5M4 14.5V20h5.5" /></svg>,
+  boq: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="3" width="15" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></svg>,
+  markup: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="3.2" /></svg>,
+  compliance: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3 4.5 6v6c0 4.6 3.2 7.8 7.5 9 4.3-1.2 7.5-4.4 7.5-9V6z" /><path d="m8.8 12 2.3 2.3 4.2-4.6" /></svg>,
+  approvals: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3.5" width="16" height="17" rx="2.5" /><path d="m8.5 12.2 2.4 2.4 4.6-5" /></svg>,
+  reports: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20V11M10 20V5M16 20v-7M21.5 20h-19" /></svg>,
+  estima: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.5 2.5M15.2 15.2l2.5 2.5M6.3 17.7l2.5-2.5M15.2 8.8l2.5-2.5" /></svg>,
+  revenue: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="6" width="18" height="12" rx="2.5" /><circle cx="12" cy="12" r="3" /></svg>,
+  sales: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 18 10 12l3.5 3.5L20 9" /><path d="M14.5 9H20v5.5" /></svg>,
+  operations: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19h16M6 15l4-6 4 4 4-7" /></svg>,
+  draftsman: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18M5 17l9.2-9.2 3 3L8 20H5zM14.2 7.8l2-2 3 3-2 2" /></svg>,
+  team: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20c.8-3.5 3.3-5.5 6.5-5.5s5.7 2 6.5 5.5M16 4.6a3.5 3.5 0 0 1 0 6.8M18.2 14.6c1.9.8 3 2.6 3.3 5.4" /></svg>,
+  billing: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M3 10h18M7 15h4" /></svg>,
+  settings: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" /></svg>,
+  help: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8M12 17.2h.01" /></svg>,
+};
+
 function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, isPlatformAdmin,
                       workspace, onWorkspace, onChooser, children }) {
   const current = view.name === "new" || view.name === "edit" ? "dashboard" : view.name;
@@ -18320,7 +18343,7 @@ function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, isPla
   const groups = (WORKSPACE_NAV[ws] || WORKSPACE_NAV.projects).concat([ACCOUNT_NAV]);
   const Item = ([key, label, icon]) => (
     <button key={key} className={`qp-item ${current === key ? "on" : ""}`} onClick={() => onNavigate(key)}>
-      <span className="ic" aria-hidden="true">{icon}</span>
+      <span className="ic" aria-hidden="true">{QX_NAV_ICON[key] || icon}</span>
       <span className="lb">{label}</span>
     </button>
   );
@@ -18460,7 +18483,7 @@ function QDonut({ pct, colour }) {
   const p = Math.max(0, Math.min(100, Number(pct) || 0));
   return (
     <svg width="62" height="62" viewBox="0 0 62 62" aria-hidden="true">
-      <circle cx="31" cy="31" r={r} fill="none" stroke="rgba(255,255,255,.10)" strokeWidth="7" />
+      <circle cx="31" cy="31" r={r} fill="none" stroke="rgba(148,163,184,.25)" strokeWidth="7" />
       <circle cx="31" cy="31" r={r} fill="none" stroke={colour} strokeWidth="7" strokeLinecap="round"
         strokeDasharray={c} strokeDashoffset={c * (1 - p / 100)} transform="rotate(-90 31 31)" />
     </svg>
@@ -18608,7 +18631,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
             <linearGradient id="qhg1" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0" stopColor="#7c3aed" stopOpacity=".85" /><stop offset="1" stopColor="#22d3ee" stopOpacity=".5" /></linearGradient>
             <linearGradient id="qhg2" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="#a78bfa" stopOpacity=".95" /><stop offset="1" stopColor="#4c1d95" stopOpacity=".5" /></linearGradient>
+              <stop offset="0" stopColor="#7c3aed" stopOpacity=".95" /><stop offset="1" stopColor="#4c1d95" stopOpacity=".5" /></linearGradient>
           </defs>
           <path d="M150 118 40 90l110-28 110 28Z" fill="url(#qhg1)" opacity=".55" />
           <path d="M150 96 55 72l95-24 95 24Z" fill="url(#qhg1)" opacity=".75" />
@@ -18645,7 +18668,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
               <span title="In development — customers cannot see this"
                 style={{ marginLeft: "auto", fontSize: 9, fontWeight: 800, letterSpacing: ".04em",
                          padding: "1px 6px", borderRadius: 5, flex: "none", alignSelf: "center",
-                         background: "rgba(245,158,11,.18)", color: "#fcd34d" }}>DEV</span>
+                         background: "rgba(245,158,11,.18)", color: "#b45309" }}>DEV</span>
             )}
           </button>
         ))}
@@ -18681,26 +18704,26 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
 
       <div className="qh-grid4">
         <div className="qh-kpi">
-          <div className="hd"><span className="ic" style={{ background: "rgba(139,92,246,.16)", color: "#a78bfa" }}>▣</span><b>Projects</b></div>
+          <div className="hd"><span className="ic" style={{ background: "rgba(139,92,246,.16)", color: "#7c3aed" }}>▣</span><b>Projects</b></div>
           <div className="bd"><div><div className="n">{totals.projects}</div><div className="lb">Active projects</div></div>
-            <QSpark series={qSeries7(projects, "created_at")} colour="#a78bfa" /></div>
+            <QSpark series={qSeries7(projects, "created_at")} colour="#7c3aed" /></div>
         </div>
         <div className="qh-kpi">
-          <div className="hd"><span className="ic" style={{ background: "rgba(59,130,246,.16)", color: "#60a5fa" }}>▤</span><b>Drawings</b></div>
+          <div className="hd"><span className="ic" style={{ background: "rgba(59,130,246,.16)", color: "#1c6ce6" }}>▤</span><b>Drawings</b></div>
           <div className="bd"><div><div className="n">{totals.drawings}</div><div className="lb">Uploaded, all projects</div></div>
-            <QSpark series={qSeries7(extra.drawingRows, "created_at")} colour="#38bdf8" /></div>
+            <QSpark series={qSeries7(extra.drawingRows, "created_at")} colour="#0284c7" /></div>
         </div>
         <div className="qh-kpi">
-          <div className="hd"><span className="ic" style={{ background: "rgba(16,185,129,.16)", color: "#34d399" }}>≡</span><b>BOQ items</b></div>
+          <div className="hd"><span className="ic" style={{ background: "rgba(16,185,129,.16)", color: "#059669" }}>≡</span><b>BOQ items</b></div>
           <div className="bd"><div><div className="n">{totals.boq.toLocaleString()}</div><div className="lb">Lines measured</div></div>
-            <QSpark series={qSeries7(extra.boqRows, "created_at")} colour="#34d399" /></div>
+            <QSpark series={qSeries7(extra.boqRows, "created_at")} colour="#059669" /></div>
         </div>
         <div className="qh-kpi">
-          <div className="hd"><span className="ic" style={{ background: "rgba(245,158,11,.16)", color: "#fbbf24" }}>◔</span><b>AI pages</b></div>
+          <div className="hd"><span className="ic" style={{ background: "rgba(245,158,11,.16)", color: "#d97706" }}>◔</span><b>AI pages</b></div>
           <div className="bd">
             <div><div className="n">{pagesUsed == null ? "—" : pagesUsed}{pagesLimit ? <span className="of"> / {pagesLimit}</span> : null}</div>
               <div className="lb">{pagesLimit ? "Used this period" : "Loading your plan…"}</div></div>
-            <QDonut pct={pagesPct == null ? 0 : pagesPct} colour={pagesPct != null && pagesPct >= 85 ? "#f87171" : "#fbbf24"} />
+            <QDonut pct={pagesPct == null ? 0 : pagesPct} colour={pagesPct != null && pagesPct >= 85 ? "#dc2626" : "#d97706"} />
           </div>
         </div>
       </div>
@@ -18740,17 +18763,17 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
         <div className="qh-card">
           <div className="qh-ph">What the AI flagged<small>From your own analyses — nothing estimated</small></div>
           <button className="qh-ins" onClick={() => onNavigate("boq")}>
-            <span className="ic" style={{ background: "rgba(14,165,233,.16)", color: "#38bdf8" }}>◈</span>
+            <span className="ic" style={{ background: "rgba(14,165,233,.16)", color: "#0284c7" }}>◈</span>
             <span className="tx"><b>Cost findings</b><span className="v">{extra.findings}</span>
               <span>Cheaper alternatives proposed, never applied on their own</span></span><span className="arw">&rsaquo;</span>
           </button>
           <button className="qh-ins" onClick={() => onNavigate("boq")}>
-            <span className="ic" style={{ background: "rgba(245,158,11,.16)", color: "#fbbf24" }}>!</span>
+            <span className="ic" style={{ background: "rgba(245,158,11,.16)", color: "#d97706" }}>!</span>
             <span className="tx"><b>Needs engineer review</b><span className="v">{extra.review}</span>
               <span>Lines the AI would not guess a quantity for</span></span><span className="arw">&rsaquo;</span>
           </button>
           <button className="qh-ins" onClick={() => onNavigate("markup")}>
-            <span className="ic" style={{ background: "rgba(139,92,246,.16)", color: "#a78bfa" }}>◎</span>
+            <span className="ic" style={{ background: "rgba(139,92,246,.16)", color: "#7c3aed" }}>◎</span>
             <span className="tx"><b>Check the markup</b><span className="v">{totals.boq.toLocaleString()}</span>
               <span>Every measured line, boxed on the drawing</span></span><span className="arw">&rsaquo;</span>
           </button>
@@ -23490,10 +23513,10 @@ function FloorsPicker({ total, basements, roof, onChange }) {
   const box = { border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 10, padding: 10, background: "var(--q-panel-2,#f8fafc)" };
   const lab = "block text-[11px] font-bold text-slate-600 mb-1.5";
   const hint = "text-[11px] text-slate-400 mt-1";
-  const tagStyle = { b: { background: "rgba(148,163,184,.15)", color: "#cbd5e1", borderColor: "rgba(148,163,184,.4)" },
-                     g: { background: "rgba(34,197,94,.15)", color: "#4ade80", borderColor: "rgba(74,222,128,.5)" },
+  const tagStyle = { b: { background: "rgba(148,163,184,.15)", color: "var(--q-text-dim,#475569)", borderColor: "rgba(148,163,184,.4)" },
+                     g: { background: "rgba(34,197,94,.15)", color: "#15803d", borderColor: "rgba(74,222,128,.5)" },
                      l: { background: "var(--q-panel-2,#fff)", color: "var(--q-text,#0f172a)", borderColor: "var(--q-border-strong,#cbd5e1)" },
-                     r: { background: "rgba(56,189,248,.15)", color: "#7dd3fc", borderColor: "rgba(125,211,252,.5)" } };
+                     r: { background: "rgba(56,189,248,.15)", color: "#0369a1", borderColor: "rgba(125,211,252,.5)" } };
   const tags = floorTags(1 + up, bs, roof);
   return (
     <div>
@@ -23985,7 +24008,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
           const pack = QD_AUTHORITIES.find(a => a[0] === cur) || QD_AUTHORITIES[0];
           return (
             <div className="rounded-xl p-4 mb-3" style={{ background: "rgba(59,130,246,.10)", border: "1px solid rgba(96,165,250,.45)" }}>
-              <div className="text-xs font-bold mb-1" style={{ color: "#93c5fd" }}>
+              <div className="text-xs font-bold mb-1" style={{ color: "#1d4ed8" }}>
                 {specDocs.length ? "Authority rules under the specification" : "No specification? Design to the rules of"}
               </div>
               <div className="grid sm:grid-cols-2 gap-1.5 mt-2">
@@ -24001,9 +24024,9 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
                   );
                 })}
               </div>
-              <div className="text-xs mt-2 leading-relaxed" style={{ color: "#bfdbfe" }}><b>Applies:</b> {pack[3]}</div>
+              <div className="text-xs mt-2 leading-relaxed" style={{ color: "var(--q-text,#1e3a8a)" }}><b>Applies:</b> {pack[3]}</div>
               {cur !== "uae_default" && (
-                <div className="text-[11px] mt-1" style={{ color: "#fbbf24" }}>
+                <div className="text-[11px] mt-1" style={{ color: "#b45309" }}>
                   Fire, HVAC, plumbing and electrical drawings follow the UAE rules for now; ELV systems follow {pack[2]}.
                 </div>
               )}
@@ -24079,7 +24102,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
       <QdSection n="6" title={<span>Service rooms <span className="text-[10px] font-bold rounded px-1.5 py-0.5 ml-1 align-middle" style={{ background: "#f1f5f9", color: "#64748b" }}>OPTIONAL</span></span>}
         done={Object.values(rooms).some(r => r && r.floor && r.floor !== "auto")}
         sub="Where the panels and risers start. Tap the floor — or leave it on Find on drawings.">
-        <div className="rounded-xl px-3 py-2 text-xs mb-2" style={{ background: "rgba(16,185,129,.12)", border: "1px solid rgba(52,211,153,.45)", color: "#6ee7b7" }}>
+        <div className="rounded-xl px-3 py-2 text-xs mb-2" style={{ background: "rgba(16,185,129,.12)", border: "1px solid rgba(52,211,153,.45)", color: "#047857" }}>
           &#10003; The draftsman finds these rooms by name on your plans (LV ROOM, PUMP ROOM, IDF…). Only tap a floor if a room isn't named on the drawing.
         </div>
         {(() => {
@@ -24103,7 +24126,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       <button type="button" onClick={() => pickRoom(k, "auto")}
-                        {...chip(cur === "auto", { color: "#6ee7b7", borderColor: "rgba(52,211,153,.5)" })}>&#10003; Find on drawings</button>
+                        {...chip(cur === "auto", { color: "#047857", borderColor: "rgba(52,211,153,.5)" })}>&#10003; Find on drawings</button>
                       {opts.map(o => (
                         <button type="button" key={o} onClick={() => pickRoom(k, o)}
                           {...chip(cur === o, o === "None" ? { color: "#94a3b8" } : undefined)}>{o}</button>
@@ -24757,7 +24780,7 @@ function DraftsmanBasePlan({ project, plate, onPlate, onUseCloud }) {
         </p>
         {String(err).startsWith("QPLATE_DENSE:") ? (
           <div className="rounded-xl px-4 py-3 text-sm flex items-center gap-3 flex-wrap"
-            style={{ background: "rgba(245,158,11,.12)", border: "1px solid rgba(251,191,36,.45)", color: "#fcd34d" }}>
+            style={{ background: "rgba(245,158,11,.12)", border: "1px solid rgba(251,191,36,.45)", color: "#92400e" }}>
             <span className="flex-1" style={{ minWidth: 240 }}>{String(err).replace("QPLATE_DENSE: ", "")}</span>
             {onUseCloud && (
               <button onClick={onUseCloud} className="text-sm font-semibold text-white px-4 py-2 rounded-lg" style={{ background: "#3987e5" }}>
@@ -26507,7 +26530,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen">
+    <div className={`min-h-screen ${view && view.name === "admin" ? "" : "qx"}`}>
       <nav className="qtr-topnav bg-white border-b px-6 py-3 flex items-center justify-between sticky top-0 z-10">
         {/* The real brand mark. This was previously the building-construction
             emoji -- a base character plus a variation selector -- and where the
@@ -27481,6 +27504,178 @@ select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102
   .qws-strip{display:none}
   .qws-sections-btn{display:none}
 }
+</style>
+<style id="quantora-light-v3">
+/* Light platform theme (2026-10-17), approved from Irfan's reference picture.
+   Scoped to .qx, the class on the signed-in app root, so the public landing
+   page and the admin portal keep their own dark look untouched. Every rule is
+   ".qx <selector>", one class more specific than the dark-theme rule it
+   replaces, so it wins regardless of source order. */
+.qx{
+  --q-bg:#f5f8fc; --q-bg-alt:#eef3f9; --q-panel:#ffffff; --q-panel-2:#f7f9fc; --q-panel-hover:#eef3fa;
+  --q-border:#e3e9f1; --q-border-strong:#cdd7e4;
+  --q-text:#14233a; --q-text-dim:#5a6b82; --q-text-dimmer:#8a99ad;
+  --q-indigo:#1c6ce6; --q-indigo-dark:#145ac8;
+  --qx-blue:#1c6ce6; --qx-navy:#0f2a52; --qx-shadow:0 1px 2px rgba(15,42,82,.04),0 8px 24px -18px rgba(15,42,82,.28);
+  background:var(--q-bg); color:var(--q-text);
+  font-family:'Plus Jakarta Sans','Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;
+}
+html:has(.qx),html:has(.qx) body{background:#f5f8fc !important}
+.qx ::-webkit-scrollbar-thumb{background:#c5d0de !important}
+
+/* ---- surfaces ---- */
+.qx .bg-slate-50{background-color:var(--q-bg) !important}
+.qx .bg-white{background-color:#fff !important}
+.qx .bg-slate-100{background-color:#f1f5f9 !important}
+.qx .bg-slate-200{background-color:#e2e8f0 !important}
+.qx .bg-slate-400{background-color:#94a3b8 !important}
+.qx .bg-slate-50\/70{background-color:rgba(248,250,252,.7) !important}
+.qx .hover\:bg-white:hover{background-color:#fff !important}
+.qx .hover\:bg-slate-50\/60:hover{background-color:rgba(241,245,249,.8) !important}
+.qx .hover\:bg-slate-100:hover{background-color:#eef3fa !important}
+.qx .hover\:bg-slate-50:hover{background-color:#f5f8fc !important}
+.qx .bg-slate-900{background:linear-gradient(180deg,#2474ec,#1862d8) !important;color:#fff}
+.qx .hover\:bg-slate-800:hover{background:#145ac8 !important}
+.qx .from-slate-900{--tw-gradient-from:#0f2a52 var(--tw-gradient-from-position);--tw-gradient-to:rgba(15,42,82,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}
+.qx .to-slate-700{--tw-gradient-to:#1c4f9c var(--tw-gradient-to-position)}
+
+/* ---- borders ---- */
+.qx .border-slate-200{border-color:#e3e9f1 !important}
+.qx .border-slate-300{border-color:#cdd7e4 !important}
+.qx .border-slate-900{border-color:#0f2a52 !important}
+.qx .divide-slate-200>:not([hidden])~:not([hidden]){border-color:#e3e9f1 !important}
+.qx .border-amber-200{border-color:#fde68a !important}
+.qx .border-blue-200{border-color:#bfdbfe !important}
+.qx .border-emerald-200{border-color:#a7f3d0 !important}
+.qx .border-rose-200{border-color:#fecdd3 !important}
+.qx .border-teal-200{border-color:#99f6e4 !important}
+.qx .border-violet-200{border-color:#ddd6fe !important}
+
+/* ---- tints ---- */
+.qx .bg-amber-50{background-color:#fffbeb !important}.qx .bg-amber-100{background-color:#fef3c7 !important}
+.qx .bg-blue-50{background-color:#eff6ff !important}.qx .bg-blue-100{background-color:#dbeafe !important}
+.qx .bg-emerald-50{background-color:#ecfdf5 !important}.qx .bg-emerald-100{background-color:#d1fae5 !important}
+.qx .bg-rose-50{background-color:#fff1f2 !important}.qx .bg-rose-100{background-color:#ffe4e6 !important}
+.qx .bg-teal-50{background-color:#f0fdfa !important}.qx .bg-teal-100{background-color:#ccfbf1 !important}
+.qx .bg-violet-50{background-color:#f5f3ff !important}.qx .bg-violet-100{background-color:#ede9fe !important}
+.qx .bg-indigo-50{background-color:#eef2ff !important}.qx .bg-red-50{background-color:#fef2f2 !important}
+
+/* ---- text: back to dark-on-light ---- */
+.qx .text-slate-900,.qx .text-slate-800{color:#14233a !important}
+.qx .text-slate-700{color:#334155 !important}
+.qx .text-slate-600{color:#475569 !important}
+.qx .text-slate-500{color:#5a6b82 !important}
+.qx .text-slate-400{color:#8a99ad !important}
+.qx .text-slate-300{color:#a3b0c2 !important}
+.qx .text-amber-600{color:#d97706 !important}.qx .text-amber-700{color:#b45309 !important}.qx .text-amber-800{color:#92400e !important}
+.qx .text-blue-600{color:#1c6ce6 !important}.qx .text-blue-700{color:#1d4ed8 !important}.qx .text-blue-800{color:#1e40af !important}
+.qx .text-emerald-600{color:#059669 !important}.qx .text-emerald-700{color:#047857 !important}.qx .text-emerald-800{color:#065f46 !important}.qx .text-emerald-900{color:#064e3b !important}
+.qx .text-rose-500{color:#f43f5e !important}.qx .text-rose-600{color:#e11d48 !important}.qx .text-rose-700{color:#be123c !important}.qx .text-rose-800{color:#9f1239 !important}
+.qx .text-red-700{color:#b91c1c !important}
+.qx .text-teal-700{color:#0f766e !important}
+.qx .text-violet-600{color:#7c3aed !important}.qx .text-violet-700{color:#6d28d9 !important}.qx .text-violet-900{color:#4c1d95 !important}
+.qx .text-indigo-800{color:#3730a3 !important}.qx .text-indigo-900{color:#312e81 !important}
+.qx .hover\:text-slate-700:hover,.qx .hover\:text-slate-800:hover,.qx .hover\:text-slate-900:hover{color:#0f2140 !important}
+.qx .from-slate-900 .text-slate-300,.qx .from-slate-900 .text-slate-400{color:#c9d6ea !important}
+
+/* ---- cards: rounder, soft shadow ---- */
+.qx .bg-white.border,.qx .qh-card,.qx .qh-kpi,.qx .qh-act,.qx .qh-strip,.qx .qp-card,.qx .qp-tile,.qx .qp-flow,
+.qx .qdash-card,.qx .qdash-kpi,.qx .qdash-proj,.qx .qboq-tab,.qx .qp-hero{border-color:#e3e9f1;box-shadow:var(--qx-shadow)}
+.qx .rounded-xl{border-radius:14px}.qx .rounded-2xl{border-radius:18px}
+.qx h1{letter-spacing:-.02em}
+.qx .text-3xl,.qx .text-2xl{font-weight:800;color:#0f2140}
+
+/* ---- missing responsive utilities used by the workspace chooser ---- */
+@media (min-width:640px){.sm\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.sm\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (min-width:1280px){.xl\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.hover\:shadow-lg:hover{box-shadow:0 14px 32px -14px rgba(15,42,82,.30)}
+
+/* ---- top bar ---- */
+.qx .qtr-topnav{background:#fff !important;border-color:#e3e9f1;height:62px;box-shadow:0 1px 0 #e3e9f1}
+.qx .qtr-topnav .text-blue-700{color:#1c6ce6 !important}
+
+/* ---- left rail: navy ---- */
+@media (min-width:1024px){
+  .qx .qp-shell{gap:26px}
+  .qx .qp-side{margin-top:16px;padding:18px 12px 18px;border-radius:20px;color:#e6edf7;
+    min-height:calc(100vh - 96px);max-height:calc(100vh - 96px);top:78px;
+    background:linear-gradient(180deg,#0f2a52 0%,#0c2347 55%,#0a1d3c 100%);
+    box-shadow:0 18px 40px -24px rgba(15,42,82,.55);position:sticky;overflow-x:hidden}
+  .qx .qp-side::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18) !important}
+}
+.qx .qp-brand b{color:#fff;font-size:17px}
+.qx .qp-brand span{color:#9fb2cc}
+.qx .qp-brand img{border-radius:9px}
+.qx .qp-ws button{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.10);color:#c9d6ea}
+.qx .qp-ws button:hover{background:rgba(255,255,255,.12);color:#fff}
+.qx .qp-ws button.on{background:#fff;border-color:#fff;color:#0f2a52}
+.qx .qp-ws-all{border-color:rgba(255,255,255,.22);color:#9fb2cc}
+.qx .qp-ws-all:hover{color:#fff}
+.qx .qp-grp{color:#8ea3c0;letter-spacing:.06em;font-size:11px;font-weight:600;text-transform:none;padding:16px 12px 7px}
+.qx .qp-item{color:#e1e9f5;font-weight:600;font-size:14px;padding:10px 12px;border-radius:10px;gap:12px}
+.qx .qp-item:hover{background:rgba(255,255,255,.08);color:#fff}
+.qx .qp-item.on{background:linear-gradient(90deg,#2a73ea,#1c62d6);color:#fff;box-shadow:0 8px 18px -10px #1c6ce6}
+.qx .qp-item .ic{width:20px;display:flex;align-items:center;justify-content:center;opacity:.95}
+.qx .qp-item .ic svg{width:19px;height:19px}
+.qx .qp-side-foot{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.12)}
+.qx .qp-side-foot b{color:#fff}.qx .qp-side-foot p{color:#a9bbd3}
+.qx .qp-side-foot button{background:linear-gradient(90deg,#2a73ea,#1c62d6)}
+.qx .qp-strip button.on{background:#1c6ce6;border-color:#1c6ce6}
+.qx .qp-refresh:hover:not(:disabled){border-color:rgba(28,108,230,.6)}
+
+/* ---- buttons and accents that were indigo ---- */
+.qx .qp-btn,.qx .qh-btn{border-radius:11px;padding:11px 18px;border-color:#cdd7e4;box-shadow:0 1px 2px rgba(15,42,82,.06)}
+.qx .qp-btn.pri,.qx .qh-btn.pri{background:linear-gradient(180deg,#2474ec,#1862d8);border-color:#1862d8;color:#fff;box-shadow:0 8px 18px -10px #1c6ce6}
+.qx .qp-tile:hover,.qx .qdash-proj:hover,.qx .qboq-tab:hover{border-color:rgba(28,108,230,.5)}
+.qx .qp-quick:hover{color:#1c6ce6}
+.qx .qboq-tab.on{background:#1c6ce6;border-color:#1c6ce6}
+.qx .qprice-src{color:#1c6ce6}
+.qx .qws-strip .qws-chip.is-on{background:#1c6ce6;border-color:#1c6ce6}
+.qx .qp-table th,.qx .qprice-table th,.qx .qh-tbl th{color:#33465f;background:#f7f9fc;letter-spacing:.04em}
+.qx .qp-card h4,.qx .qdash-card h4{color:#5a6b82}
+
+/* ---- Home ---- */
+.qx .qh{gap:20px}
+.qx .qh-hi h1{font-size:30px;font-weight:800;color:#0f2140}
+.qx .qh-hi p{font-size:14.5px}
+.qx .qh-hero{border:0;color:#fff;
+  background:linear-gradient(115deg,#0f2a52 0%,#163c75 55%,#1c5cc4 100%);box-shadow:0 18px 40px -24px rgba(15,42,82,.6)}
+.qx .qh-hero:after{background:
+  linear-gradient(rgba(255,255,255,.06) 1px,transparent 1px) 0 0/26px 26px,
+  linear-gradient(90deg,rgba(255,255,255,.06) 1px,transparent 1px) 0 0/26px 26px}
+.qx .qh-hero h3{color:#fff;font-size:18px}
+.qx .qh-hero p{color:#c9d6ea;font-size:13.5px}
+.qx .qh-find{background:#fff;border-color:#fff;color:#14233a}
+.qx .qh-hero .qh-btn.pri{background:#fff;color:#0f2a52;border-color:#fff;box-shadow:none}
+.qx .qh-sec{font-size:16px;font-weight:800;color:#0f2140}
+.qx .qh-act .ic{border-radius:50%}
+.qx .qh-kpi{padding:18px 20px;border-radius:16px}
+.qx .qh-kpi .hd b{font-size:14px;font-weight:600;color:#24364f}
+.qx .qh-kpi .hd .ic{width:34px;height:34px;border-radius:10px;font-size:15px}
+.qx .qh-kpi .n{font-size:30px;color:#0f2140}
+.qx .qh-grid4 .qh-kpi:nth-child(1){background:linear-gradient(135deg,#fff 45%,#eef4fe)}
+.qx .qh-grid4 .qh-kpi:nth-child(2){background:linear-gradient(135deg,#fff 40%,#e8f2fd)}
+.qx .qh-grid4 .qh-kpi:nth-child(3){background:linear-gradient(135deg,#fff 40%,#e6f7ef)}
+.qx .qh-grid4 .qh-kpi:nth-child(4){background:linear-gradient(135deg,#fff 40%,#fdf4dc)}
+.qx .qh-pill{border-radius:7px;padding:4px 10px;font-weight:600;font-size:11.5px}
+.qx .qh-pill.c{background:#e3f6ec;color:#16855a}
+.qx .qh-pill.p{background:#e6effd;color:#1c6ce6}
+.qx .qh-pill.r{background:#fdf3d7;color:#a26a07}
+.qx .qh-pill.n{background:#eef2f7;color:#5a6b82}
+.qx .qh-empty .lnk,.qx .qh-viewall{color:#1c6ce6}
+.qx .qh-trial .ends{color:#1c6ce6}
+.qx .qh-trial .bar,.qx .qdash-bar{background:#e8edf4}
+.qx .qh-upg{background:linear-gradient(90deg,#2474ec,#1862d8);box-shadow:0 10px 22px -12px #1c6ce6}
+.qx .qh-ph{display:flex;flex-direction:column;font-size:15.5px;font-weight:800;color:#0f2140}
+
+/* ---- project workspace sections rail: same navy as the main rail ---- */
+.qx aside.qws-side{background:linear-gradient(180deg,#0f2a52 0%,#0c2347 60%,#0a1d3c 100%) !important;border:0;
+  padding:8px 10px 14px;box-shadow:0 18px 40px -24px rgba(15,42,82,.55);border-radius:20px}
+.qx .qws-side .text-slate-400{color:#8ea3c0 !important;letter-spacing:.08em}
+.qx .qws-side button{border-left-width:0 !important;border-radius:10px;color:#e1e9f5 !important;margin:1px 0;font-weight:600}
+.qx .qws-side button:hover{background:rgba(255,255,255,.08) !important;color:#fff !important}
+.qx .qws-side button.bg-blue-50{background:linear-gradient(90deg,#2a73ea,#1c62d6) !important;color:#fff !important;
+  box-shadow:0 8px 18px -10px #1c6ce6}
 </style>
 </body>
 </html>
