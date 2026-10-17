@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -26686,8 +26686,13 @@ function DraftsmanIfcPackage({ project }) {
         comment_paths.push({ path, name: f.name });
       }
       const comments = rwText.split(/\n+/).map(x => x.trim()).filter(Boolean);
-      const options = { ...o, rework_of: j.id, revision: (o.revision || 0) + 1, comments, comment_paths,
-                        revision_text: "REVISED AS PER CONSULTANT COMMENTS" };
+      const revision = (o.revision || 0) + 1;
+      const rv = String(revision).padStart(2, "0");
+      const d0 = new Date(j.created_at).toLocaleDateString("en-GB");
+      const revisions = [...(o.revisions || [["00", "ISSUED FOR APPROVAL", d0, ""]]), [rv, "REVISED AS PER CONSULTANT COMMENTS", new Date().toLocaleDateString("en-GB"), ""]];
+      const { edits, ...base } = o;
+      const options = { ...base, rework_of: j.id, rework_stage: "parse", revision, comments, comment_paths, revisions,
+                        edits_all: o.edits_all || [], revision_text: "REVISED AS PER CONSULTANT COMMENTS" };
       const { error } = await sb.from("draftsman_jobs").insert({
         project_id: project.id, ifc_path: j.ifc_path, ifc_name: j.ifc_name, systems: j.systems, options,
         ...(j.region ? { region: j.region } : {}),
@@ -26698,6 +26703,23 @@ function DraftsmanIfcPackage({ project }) {
     } catch (e) {
       setErr(e.message || String(e));
     } finally { setBusy(false); }
+  };
+  const [rwPick, setRwPick] = useState({});
+  const applyRework = async (pj) => {
+    setErr(""); setBusy(true);
+    try {
+      const o = pj.options || {};
+      const rv = String(o.revision || 1).padStart(2, "0");
+      const prop = ((pj.summary || {}).proposed || []);
+      const chosen = prop.filter((e, i) => e.op === "for_engineer" || rwPick[pj.id + ":" + i] !== false).map(e => ({ ...e, rev: rv }));
+      const options = { ...o, rework_stage: "apply", edits_all: [...(o.edits_all || []), ...chosen] };
+      const { error } = await sb.from("draftsman_jobs").insert({
+        project_id: project.id, ifc_path: pj.ifc_path, ifc_name: pj.ifc_name, systems: pj.systems, options,
+        ...(pj.region ? { region: pj.region } : {}),
+      });
+      if (error) throw error;
+      await load();
+    } catch (e) { setErr(e.message || String(e)); } finally { setBusy(false); }
   };
   const cancel = async (id) => {
     await sb.from("draftsman_jobs").update({ status: "cancelled" }).eq("id", id).eq("status", "queued");
@@ -26810,7 +26832,8 @@ function DraftsmanIfcPackage({ project }) {
         return (
           <div key={j.id} className="bg-white border rounded-xl p-4 space-y-2">
             <div className="flex items-center gap-3 flex-wrap">
-              <span style={{ background: c[0], color: c[1] }} className="text-[11px] font-bold px-2 py-1 rounded-full">{c[2]}</span>
+              <span style={{ background: c[0], color: c[1] }} className="text-[11px] font-bold px-2 py-1 rounded-full">{
+                (j.options || {}).rework_stage === "parse" ? ({ running: "Reading comments…", done: "Review changes" }[j.status] || c[2]) : c[2]}</span>
               <span className="text-sm font-semibold">{j.ifc_name || "IFC"}</span>
               <span className="text-xs text-slate-500">{new Date(j.created_at).toLocaleString()}
                 {(j.options || {}).revision ? ` · REV ${String(j.options.revision).padStart(2, "0")} (consultant comments)` : ""}</span>
@@ -26823,7 +26846,37 @@ function DraftsmanIfcPackage({ project }) {
               <div className="text-xs text-amber-700">Still waiting after {Math.round(waitMin)} minutes — the draftsman service may not be running. Ask your administrator to check it.</div>
             )}
             {j.status === "failed" && <div className="text-xs text-red-700 whitespace-pre-wrap">{(j.error || "").slice(0, 600)}</div>}
-            {j.status === "done" && (
+            {j.status === "done" && sm.rework_stage === "parse" && (() => {
+              const rv = String((j.options || {}).revision || 1).padStart(2, "0");
+              const applied = jobs.some(x => (x.options || {}).rework_stage === "apply" && (x.options || {}).revision === (j.options || {}).revision
+                                            && (x.options || {}).rework_of === (j.options || {}).rework_of && x.created_at > j.created_at);
+              const opName = { add: "Add", remove: "Remove", move: "Move", replace: "Replace", resize_pipe: "Pipe size", resize_duct: "Duct size", note: "Note", for_engineer: "For engineer" };
+              return (
+                <div className="border rounded-lg p-3 space-y-2" style={{ background: "#fffbeb", borderColor: "#fcd34d" }}>
+                  <div className="text-sm font-bold">Consultant comments read — changes proposed for REV {rv}</div>
+                  <div className="text-[11px] text-slate-600">Untick anything you don't want. Items marked "For engineer" can't be drawn automatically; they are listed on the comment response sheet for your engineer.</div>
+                  {(sm.comments || []).map((c, ci) => (
+                    <div key={ci} className="bg-white border rounded p-2 space-y-1">
+                      <div className="text-xs font-semibold text-slate-700">{ci + 1}. {c}</div>
+                      {(sm.proposed || []).map((e, i) => e.comment !== ci + 1 ? null : (
+                        <label key={i} className={"flex items-start gap-2 text-xs " + (e.op === "for_engineer" ? "text-slate-500" : "")}>
+                          <input type="checkbox" disabled={e.op === "for_engineer" || applied}
+                            checked={e.op === "for_engineer" ? false : rwPick[j.id + ":" + i] !== false}
+                            onChange={ev => setRwPick({ ...rwPick, [j.id + ":" + i]: ev.target.checked })} />
+                          <span><b className="mr-1">{opName[e.op] || e.op}:</b>{e.summary}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                  {applied ? <div className="text-xs text-green-700 font-semibold">{"\u2713"} Applied — see the REV {rv} package above.</div> : (
+                    <button disabled={busy} onClick={() => applyRework(j)}
+                      className="bg-amber-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50">
+                      {busy ? "Starting…" : `Apply the changes — make REV ${rv}`}</button>
+                  )}
+                </div>
+              );
+            })()}
+            {j.status === "done" && sm.rework_stage !== "parse" && (
               <div className="space-y-2">
                 <div className="text-xs text-slate-600">
                   {sm.devices} devices · {sm.boq_rows} BOQ lines added to the project BOQ
@@ -26863,8 +26916,8 @@ function DraftsmanIfcPackage({ project }) {
                   <div className="border rounded-lg p-3 space-y-2" style={{ background: "#fffbeb", borderColor: "#fcd34d" }}>
                     <div className="text-sm font-bold">Rework on consultant comments — REV {String(((j.options || {}).revision || 0) + 1).padStart(2, "0")}</div>
                     <div className="text-[11px] text-slate-600 leading-relaxed">Paste the consultant's comments, one per line, and attach their marked-up drawings or
-                      comment sheet if you have them. The package is generated again on the same plans as the next revision, with a
-                      comment response sheet; the consultant's files are kept with it.</div>
+                      comment sheet if you have them. The AI reads them against these drawings and proposes the changes; you tick them, and the
+                      same drawings are updated as the next revision with clouds and a comment response sheet.</div>
                     <textarea value={rwText} onChange={e => setRwText(e.target.value)} rows={5}
                       placeholder={"e.g.\n1. Provide smoke detector inside the electrical room.\n2. Show sprinkler pipe sizes on all branches."}
                       className="w-full border rounded px-2 py-1 text-sm" />
@@ -26875,7 +26928,7 @@ function DraftsmanIfcPackage({ project }) {
                     </div>
                     <div className="flex gap-2">
                       <button disabled={busy || (!rwText.trim() && !rwFiles.length)} onClick={() => submitRework(j)}
-                        className="bg-amber-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50">{busy ? "Starting…" : "Start the rework"}</button>
+                        className="bg-amber-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50">{busy ? "Starting…" : "Read the comments"}</button>
                       <button onClick={() => { setRework(null); setRwText(""); setRwFiles([]); }} className="text-sm border px-3 py-2 rounded-lg">Cancel</button>
                     </div>
                   </div>
