@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-18.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4665,7 +4665,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                 <div key={plan.id} className={`rounded-xl border p-4 flex flex-col ${isCurrent ? "border-slate-900 ring-1 ring-slate-900" : "border-slate-200"}`}>
                   <div className="font-bold">{plan.name}</div>
                   <div className="text-2xl font-bold mt-1">
-                    {plan.price_usd == null ? "Custom" : plan.price_usd === "0" || Number(plan.price_usd) === 0 ? "$0" : `$${plan.price_usd}`}
+                    {plan.price_usd == null ? (plan.id === "enterprise" ? "From $5,000" : "Custom") : plan.price_usd === "0" || Number(plan.price_usd) === 0 ? "$0" : `$${plan.price_usd}`}
                     {plan.price_usd != null && Number(plan.price_usd) > 0 && <span className="text-xs font-normal text-slate-400">/mo</span>}
                   </div>
                   <div className="text-xs text-slate-500 mt-2 space-y-1 flex-1">
@@ -4673,14 +4673,17 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                         no "unlimited" case left to fall back to. A missing number here
                         would mean a genuine data problem, and an em dash is the honest
                         way to show that rather than inventing a reassuring word. */}
-                    <div>{fmtLimit(plan.max_drawing_pages)} AI-processed drawing pages/month</div>
+                    {plan.max_draftsman_pages != null && plan.max_draftsman_pages > 0 && (
+                      <div className="font-semibold text-slate-700">{plan.max_draftsman_pages} draftsman drawing pages{plan.is_trial ? " (once)" : "/month"}</div>
+                    )}
+                    <div>{fmtLimit(plan.max_drawing_pages)} AI-processed drawing pages{plan.is_trial ? " (once)" : "/month"}</div>
                     <div>{fmtLimit(plan.max_projects)} projects &middot; {fmtLimit(plan.max_users)} user{plan.max_users === 1 ? "" : "s"}</div>
                     <div>{fmtLimit(plan.max_chat_requests)} AI chat messages/month</div>
                     <div>{fmtLimit(plan.max_rework_per_project)} reworks per project</div>
                     {plan.max_overage_cents > 0
                       ? <div className="text-slate-400">Pay-as-you-go credits beyond that, up to ${(plan.max_overage_cents / 100).toLocaleString()}/month.</div>
                       : <div className="text-slate-400">No pay-as-you-go on this plan.</div>}
-                    {plan.is_trial && <div>{plan.trial_duration_days ?? 2}-day trial window</div>}
+                    {plan.is_trial && <div>{(plan.trial_duration_days ?? 2) > 3650 ? "One-time free welcome pack \u2014 no expiry. When it is used, choose a plan." : `${plan.trial_duration_days ?? 2}-day trial window`}</div>}
                   </div>
                   {isCurrent ? (
                     <div className="mt-4 text-center text-xs font-semibold text-slate-500 bg-slate-100 rounded-lg py-2">Current plan</div>
@@ -5142,11 +5145,11 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
       {trialUsage && (
         <div className={`border rounded-xl p-4 ${trialUsage.trial_expired ? "bg-rose-50 border-rose-200" : "bg-violet-50 border-violet-200"}`}>
           <div className="flex items-center justify-between mb-3">
-            <div className="font-semibold text-sm text-slate-900">Quantora Trial Usage</div>
+            <div className="font-semibold text-sm text-slate-900">{trialUsage.trial_days_remaining > 3650 ? "Free welcome pack" : "Quantora Trial Usage"}</div>
             {trialUsage.trial_expired ? (
               <span className="text-xs font-bold text-rose-700">Trial ended {trialUsage.trial_end_date ? new Date(trialUsage.trial_end_date).toLocaleDateString() : ""}</span>
             ) : (
-              <span className="text-xs font-bold text-violet-700">Trial Ends: {trialUsage.trial_days_remaining} Day{trialUsage.trial_days_remaining === 1 ? "" : "s"} Remaining</span>
+              <span className="text-xs font-bold text-violet-700">{trialUsage.trial_days_remaining > 3650 ? "One-time pack \u00B7 no expiry" : `Trial Ends: ${trialUsage.trial_days_remaining} Day${trialUsage.trial_days_remaining === 1 ? "" : "s"} Remaining`}</span>
             )}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -18794,7 +18797,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
                   <div className="bar"><i style={{ width: limit ? `${Math.min(100, (used / limit) * 100)}%` : "6%", background: grad }} /></div>
                 </div>
               ))}
-              {usage?.trial_days_remaining != null && (
+              {usage?.trial_days_remaining != null && usage.trial_days_remaining <= 3650 && (
                 <div className="ends">Trial ends in {usage.trial_days_remaining} day{usage.trial_days_remaining === 1 ? "" : "s"}</div>
               )}
             </React.Fragment>
@@ -19387,7 +19390,12 @@ function BillingPage({ onUpgrade }) {
          : (
           <>
             <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{usage.plan?.name || "Free"}</div>
-            {usage.plan?.is_trial && usage.trial_days_remaining != null && (
+            {usage.plan?.is_trial && usage.trial_days_remaining != null && usage.trial_days_remaining > 3650 && (
+              <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
+                One-time free welcome pack {"\u2014"} no expiry. When it is used up, choose a plan to continue.
+              </p>
+            )}
+            {usage.plan?.is_trial && usage.trial_days_remaining != null && usage.trial_days_remaining <= 3650 && (
               <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
                 Trial ends in {usage.trial_days_remaining} day{usage.trial_days_remaining === 1 ? "" : "s"}.
               </p>
@@ -25750,6 +25758,13 @@ const SYS_ICON = { cctv: "\u{1F4F9}", acs: "\u{1F510}", ict: "\u{1F310}", interc
   ff: "\u{1F9EF}", hvac: "\u2744\uFE0F", chw: "\u{1F9CA}", smoke: "\u{1F4A8}", water: "\u{1F6B0}", drainage: "\u{1F6BF}",
   electrical: "\u26A1", earthing: "\u23DA", lps: "\u{1F329}\uFE0F" };
 const sysLabel = k => ((IFC_SYSTEMS.find(s => s[0] === k) || [])[1]) || k;
+// revisions are printed on the drawings as R0, R1, R2 ...
+const revLabel = n => "R" + (parseInt(n, 10) || 0);
+function qdLoadZip() {
+  if (typeof window.JSZip !== "undefined") return Promise.resolve(true);
+  return __loadLib(["https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+                    "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"], function () { return typeof window.JSZip !== "undefined"; });
+}
 
 // ---------------------------------------------------------------------------
 // 3D MODEL VIEWER (2026-10-17)
@@ -26565,6 +26580,9 @@ function DraftsmanIfcPackage({ project }) {
   const [rework, setRework] = useState(null);
   const [rwText, setRwText] = useState("");
   const [rwFiles, setRwFiles] = useState([]);
+  const [refQ, setRefQ] = useState("");
+  const [refMsg, setRefMsg] = useState("");
+  const [zipping, setZipping] = useState("");
   useEffect(() => { getDraftsmanFamilies().then(f => {
     const fm = f || {};
     setFams(fm);
@@ -26598,7 +26616,7 @@ function DraftsmanIfcPackage({ project }) {
 
   const load = async () => {
     const { data, error } = await sb.from("draftsman_jobs").select("*")
-      .eq("project_id", project.id).order("created_at", { ascending: false }).limit(10);
+      .eq("project_id", project.id).order("created_at", { ascending: false }).limit(40);
     if (!error) setJobs(data || []);
   };
   useEffect(() => { load(); }, [project.id]);
@@ -26674,7 +26692,7 @@ function DraftsmanIfcPackage({ project }) {
     a.href = data.signedUrl; a.download = name || ""; document.body.appendChild(a); a.click(); a.remove();
   };
   // Rework: the same plans and systems again as the next revision, with the consultant's comments logged
-  const submitRework = async (j) => {
+  const submitRework = async (j, d) => {
     setErr(""); setBusy(true);
     try {
       const o = j.options || {};
@@ -26686,15 +26704,17 @@ function DraftsmanIfcPackage({ project }) {
         comment_paths.push({ path, name: f.name });
       }
       const comments = rwText.split(/\n+/).map(x => x.trim()).filter(Boolean);
-      const revision = (o.revision || 0) + 1;
+      const revision = (d ? (d.rev || 0) : (o.revision || 0)) + 1;
       const rv = String(revision).padStart(2, "0");
       const d0 = new Date(j.created_at).toLocaleDateString("en-GB");
       const revisions = [...(o.revisions || [["00", "ISSUED FOR APPROVAL", d0, ""]]), [rv, "REVISED AS PER CONSULTANT COMMENTS", new Date().toLocaleDateString("en-GB"), ""]];
       const { edits, ...base } = o;
+      // reworking one drawing: only its system is redrawn, so nothing else is stored again
+      const edits_all = d ? (o.edits_all || []).filter(e => !e.system || e.system === d.system) : (o.edits_all || []);
       const options = { ...base, rework_of: j.id, rework_stage: "parse", revision, comments, comment_paths, revisions,
-                        edits_all: o.edits_all || [], revision_text: "REVISED AS PER CONSULTANT COMMENTS" };
+                        edits_all, revision_text: "REVISED AS PER CONSULTANT COMMENTS", ...(d ? { drawing_ref: d.ref } : {}) };
       const { error } = await sb.from("draftsman_jobs").insert({
-        project_id: project.id, ifc_path: j.ifc_path, ifc_name: j.ifc_name, systems: j.systems, options,
+        project_id: project.id, ifc_path: j.ifc_path, ifc_name: j.ifc_name, systems: d ? [d.system] : j.systems, options,
         ...(j.region ? { region: j.region } : {}),
       });
       if (error) throw error;
@@ -26725,6 +26745,85 @@ function DraftsmanIfcPackage({ project }) {
     await sb.from("draftsman_jobs").update({ status: "cancelled" }).eq("id", id).eq("status", "queued");
     load();
   };
+  // The drawing register: every drawing of the project once, at its latest revision, numbered 1, 2, 3 ...
+  const register = (() => {
+    const seen = {}, out = [];
+    const byNew = [...jobs].sort((x, y) => new Date(y.created_at) - new Date(x.created_at));
+    for (const j of byNew) {                      // newest first
+      const sm = j.summary || {};
+      if (j.status !== "done" || sm.rework_stage === "parse") continue;
+      for (const d of (sm.drawings || [])) {
+        if (seen[d.ref]) continue;
+        seen[d.ref] = true;
+        out.push({ ...d, job: j });
+      }
+    }
+    const order = k => { const i = IFC_SYSTEMS.findIndex(s => s[0] === k); return i < 0 ? 99 : i; };
+    return out.sort((a, b) => order(a.system) - order(b.system) || a.ref.localeCompare(b.ref));
+  })();
+  const findRef = async () => {
+    setRefMsg("");
+    let q = refQ.trim().toUpperCase().replace(/[\s-]+(REV\.?\s*\d+|R\d+)$/, "").replace(/\s+/g, "");
+    if (!q) return;
+    const hit = register.find(d => q === d.ref || q.startsWith(d.ref + "-") || (d.sheets || []).includes(q));
+    if (hit) {
+      setRework("d:" + hit.ref); setRwText(""); setRwFiles([]);
+      setRefMsg(`Found: ${hit.ref} \u2014 ${sysLabel(hit.system)}, ${revLabel(hit.rev)}. Add the consultant's comments below.`);
+      setTimeout(() => { const el = document.getElementById("qd-reg-" + hit.ref); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); }, 50);
+      return;
+    }
+    // not in this project: look through the user's other projects
+    const cands = []; let t = q;
+    for (let i = 0; i < 4 && t; i++) { cands.push(t); t = t.includes("-") ? t.slice(0, t.lastIndexOf("-")) : ""; }
+    for (const c of cands) {
+      const { data } = await sb.from("draftsman_jobs").select("project_id").eq("status", "done").contains("summary", { refs: [c] }).limit(1);
+      if (data && data.length && data[0].project_id !== project.id) {
+        const { data: pr } = await sb.from("projects").select("project_name").eq("id", data[0].project_id).maybeSingle();
+        setRefMsg(`${q} is a drawing of the project "${(pr && pr.project_name) || "another project"}". Open that project to rework it.`);
+        return;
+      }
+    }
+    setRefMsg(`No drawing found with the reference number ${q}. Check the number in the title block (DRAWING NO.).`);
+  };
+  // one ZIP of a package, built in the browser: nothing extra is stored
+  const downloadZip = async (j) => {
+    setZipping(j.id); setErr("");
+    try {
+      if (!(await qdLoadZip())) throw new Error("Could not load the ZIP tool \u2014 download the files one by one.");
+      const zip = new window.JSZip();
+      for (const o of (j.outputs || []).filter(o => !/\.json$/.test(o.name))) {
+        const { data, error } = await sb.storage.from("drawings").createSignedUrl(o.path, 600);
+        if (error || !data) continue;
+        const r = await fetch(data.signedUrl);
+        if (r.ok) zip.file(o.name, await r.blob());
+      }
+      const blob = await zip.generateAsync({ type: "blob" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${(project.project_name || "Project").replace(/[^\w-]+/g, "_")}-drawings.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    } catch (e) { setErr(e.message || String(e)); } finally { setZipping(""); }
+  };
+  const reworkForm = (title, onGo) => (
+    <div className="border rounded-lg p-3 space-y-2" style={{ background: "#fffbeb", borderColor: "#fcd34d" }}>
+      <div className="text-sm font-bold">{title}</div>
+      <div className="text-[11px] text-slate-600 leading-relaxed">Paste the consultant's comments, one per line, and attach their marked-up drawings or
+        comment sheet if you have them. The AI reads them against the drawing already on the platform and proposes the changes; you tick them,
+        and the same drawing is issued as the next revision with clouds and a comment response sheet. No need to upload the drawing again.</div>
+      <textarea value={rwText} onChange={e => setRwText(e.target.value)} rows={5}
+        placeholder={"e.g.\n1. Provide smoke detector inside the electrical room.\n2. Show sprinkler pipe sizes on all branches."}
+        className="w-full border rounded px-2 py-1 text-sm" />
+      <label className="text-xs text-slate-600">Marked-up drawings / comment sheet
+        <input type="file" multiple accept=".pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg" onChange={e => setRwFiles(Array.from(e.target.files || []))}
+          className="ml-2 text-xs" /></label>
+      <div className="flex gap-2">
+        <button disabled={busy || (!rwText.trim() && !rwFiles.length)} onClick={onGo}
+          className="bg-amber-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50">{busy ? "Starting\u2026" : "Read the comments"}</button>
+        <button onClick={() => { setRework(null); setRwText(""); setRwFiles([]); }} className="text-sm border px-3 py-2 rounded-lg">Cancel</button>
+      </div>
+    </div>
+  );
   const chip = { queued: ["#fef3c7", "#92400e", "Waiting"], running: ["#dbeafe", "#1e40af", "Designing…"],
                  done: ["#dcfce7", "#166534", "Ready"], failed: ["#fee2e2", "#991b1b", "Failed"],
                  cancelled: ["#f1f5f9", "#475569", "Cancelled"] };
@@ -26825,6 +26924,63 @@ function DraftsmanIfcPackage({ project }) {
           {busy ? "Uploading…" : "Generate the drawing package"}</button>
       </div>
 
+      {(register.length > 0 || jobs.some(j => j.status === "done")) && (
+        <div className="bg-white border rounded-xl p-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-sm font-bold">Drawing register</div>
+            <span className="text-[11px] text-slate-500">Every drawing of this project at its latest revision. The reference number is printed in each drawing's title block.</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 rounded-lg px-3 py-2" style={{ background: "#f5f8ff", border: "1px solid #dbe6ff" }}>
+            <span className="text-xs font-semibold text-slate-700">Rework by reference number</span>
+            <input id="qd-ref-input" value={refQ} onChange={e => setRefQ(e.target.value)} onKeyDown={e => { if (e.key === "Enter") findRef(); }}
+              placeholder={register[0] ? `e.g. ${register[0].ref} or ${(register[0].sheets || [])[1] || register[0].ref}` : "e.g. 26-0004-FA"}
+              className="border rounded px-2 py-1 text-sm w-64 font-mono" />
+            <button onClick={findRef} className="text-xs font-semibold border px-3 py-1.5 rounded-lg bg-white hover:bg-slate-50">Find drawing</button>
+            {refMsg && <span className="text-xs text-slate-700 w-full">{refMsg}</span>}
+          </div>
+          {register.length === 0 ? (
+            <div className="text-xs text-slate-500">Packages generated before 18 Oct 2026 have no reference numbers. Generate the package again to number its drawings.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="text-left text-slate-500 border-b">
+                  <th className="py-1.5 pr-2 w-8">No.</th><th className="pr-2">Reference number</th><th className="pr-2">Drawing</th>
+                  <th className="pr-2">Rev</th><th className="pr-2">Sheets</th><th className="pr-2">Issued</th><th className="text-right">Actions</th>
+                </tr></thead>
+                <tbody>
+                  {register.map((d, i) => {
+                    const nm = `${d.ref}-${revLabel(d.rev)} ${sysLabel(d.system)}`;
+                    return (
+                      <React.Fragment key={d.ref}>
+                        <tr id={"qd-reg-" + d.ref} className="border-b align-middle" style={rework === "d:" + d.ref ? { background: "#fffbeb" } : null}>
+                          <td className="py-2 pr-2 font-semibold text-slate-500">{i + 1}</td>
+                          <td className="pr-2 font-mono font-semibold">{d.ref}</td>
+                          <td className="pr-2"><span className="mr-1">{SYS_ICON[d.system] || ""}</span>{sysLabel(d.system)}</td>
+                          <td className="pr-2"><span className="font-bold px-1.5 py-0.5 rounded" style={{ background: d.rev ? "#fef3c7" : "#eef2f7", color: d.rev ? "#92400e" : "#334155" }}>{revLabel(d.rev)}</span></td>
+                          <td className="pr-2">{(d.sheets || []).length}</td>
+                          <td className="pr-2 text-slate-500">{new Date(d.job.finished_at || d.job.created_at).toLocaleDateString("en-GB")}</td>
+                          <td className="text-right whitespace-nowrap">
+                            {d.pdf_path && <button onClick={() => open(d.pdf_path)} className="border rounded px-2 py-1 hover:bg-slate-50">View</button>}
+                            {d.pdf_path && <button onClick={() => download(d.pdf_path, nm + ".pdf")} className="ml-1 border rounded px-2 py-1 hover:bg-slate-50" title="Download PDF">{"\u2B07"} PDF</button>}
+                            {d.dxf_path && <button onClick={() => download(d.dxf_path, nm + ".dxf")} className="ml-1 border rounded px-2 py-1 hover:bg-slate-50" title="Download DXF">{"\u2B07"} DXF</button>}
+                            {d.rev > 0 && d.response_path && <button onClick={() => open(d.response_path)} className="ml-1 border rounded px-2 py-1 hover:bg-slate-50" title="Comment response sheet">Response</button>}
+                            <button onClick={() => { setRework("d:" + d.ref); setRwText(""); setRwFiles([]); }}
+                              className="ml-1 font-semibold border rounded px-2 py-1 hover:bg-amber-50" style={{ borderColor: "#fcd34d", color: "#92400e" }}>{"\u21BB"} Rework with comments</button>
+                          </td>
+                        </tr>
+                        {rework === "d:" + d.ref && (
+                          <tr><td colSpan={7} className="py-2">{reworkForm(`Rework ${d.ref} \u2014 ${sysLabel(d.system)} \u2014 issue as ${revLabel((d.rev || 0) + 1)}`, () => submitRework(d.job, d))}</td></tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+      {jobs.length > 0 && <div className="text-xs font-semibold text-slate-500 pt-1">Generation history</div>}
       {jobs.map(j => {
         const c = chip[j.status] || chip.queued;
         const waitMin = (Date.now() - new Date(j.created_at).getTime()) / 60000;
@@ -26836,7 +26992,7 @@ function DraftsmanIfcPackage({ project }) {
                 (j.options || {}).rework_stage === "parse" ? ({ running: "Reading comments…", done: "Review changes" }[j.status] || c[2]) : c[2]}</span>
               <span className="text-sm font-semibold">{j.ifc_name || "IFC"}</span>
               <span className="text-xs text-slate-500">{new Date(j.created_at).toLocaleString()}
-                {(j.options || {}).revision ? ` · REV ${String(j.options.revision).padStart(2, "0")} (consultant comments)` : ""}</span>
+                {(j.options || {}).revision ? ` · ${revLabel(j.options.revision)} (consultant comments${(j.options || {}).drawing_ref ? ", " + j.options.drawing_ref : ""})` : ""}</span>
               <span className="flex flex-wrap gap-1">{(j.systems || []).map(k => (
                 <span key={k} title={sysLabel(k)} className="text-[11px] bg-slate-100 rounded-full px-2 py-0.5">{SYS_ICON[k] || ""} {sysLabel(k)}</span>))}</span>
               <div className="flex-1" />
@@ -26847,13 +27003,13 @@ function DraftsmanIfcPackage({ project }) {
             )}
             {j.status === "failed" && <div className="text-xs text-red-700 whitespace-pre-wrap">{(j.error || "").slice(0, 600)}</div>}
             {j.status === "done" && sm.rework_stage === "parse" && (() => {
-              const rv = String((j.options || {}).revision || 1).padStart(2, "0");
+              const rv = revLabel((j.options || {}).revision || 1);
               const applied = jobs.some(x => (x.options || {}).rework_stage === "apply" && (x.options || {}).revision === (j.options || {}).revision
                                             && (x.options || {}).rework_of === (j.options || {}).rework_of && x.created_at > j.created_at);
               const opName = { add: "Add", remove: "Remove", move: "Move", replace: "Replace", resize_pipe: "Pipe size", resize_duct: "Duct size", note: "Note", for_engineer: "For engineer" };
               return (
                 <div className="border rounded-lg p-3 space-y-2" style={{ background: "#fffbeb", borderColor: "#fcd34d" }}>
-                  <div className="text-sm font-bold">Consultant comments read — changes proposed for REV {rv}</div>
+                  <div className="text-sm font-bold">Consultant comments read — changes proposed for {(j.options || {}).drawing_ref ? j.options.drawing_ref + " " : ""}{rv}</div>
                   <div className="text-[11px] text-slate-600">Untick anything you don't want. Items marked "For engineer" can't be drawn automatically; they are listed on the comment response sheet for your engineer.</div>
                   {(sm.comments || []).map((c, ci) => (
                     <div key={ci} className="bg-white border rounded p-2 space-y-1">
@@ -26868,10 +27024,10 @@ function DraftsmanIfcPackage({ project }) {
                       ))}
                     </div>
                   ))}
-                  {applied ? <div className="text-xs text-green-700 font-semibold">{"\u2713"} Applied — see the REV {rv} package above.</div> : (
+                  {applied ? <div className="text-xs text-green-700 font-semibold">{"\u2713"} Applied — see {rv} in the drawing register.</div> : (
                     <button disabled={busy} onClick={() => applyRework(j)}
                       className="bg-amber-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50">
-                      {busy ? "Starting…" : `Apply the changes — make REV ${rv}`}</button>
+                      {busy ? "Starting…" : `Apply the changes — issue ${rv}`}</button>
                   )}
                 </div>
               );
@@ -26901,10 +27057,13 @@ function DraftsmanIfcPackage({ project }) {
                   return zip ? (
                     <button onClick={() => download(zip.path, `${(project.project_name || "Project").replace(/[^\w-]+/g, "_")}-drawings.zip`)}
                       className="ml-2 text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">{"\u2B07"} Download everything (ZIP)</button>
-                  ) : null;
+                  ) : (
+                    <button disabled={zipping === j.id} onClick={() => downloadZip(j)}
+                      className="ml-2 text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">{zipping === j.id ? "Preparing ZIP\u2026" : "\u2B07 Download everything (ZIP)"}</button>
+                  );
                 })()}
                 <div className="flex flex-wrap gap-2">
-                  {(j.outputs || []).filter(o => !/(design|model3d)\.json$/.test(o.name) && o.name !== "Drawing-package.zip").map(o => (
+                  {(j.outputs || []).filter(o => !/\.json$/.test(o.name) && o.name !== "Drawing-package.zip").map(o => (
                     <span key={o.path} className="inline-flex items-stretch border rounded overflow-hidden text-xs">
                       <button onClick={() => open(o.path)} className="px-2 py-1 hover:bg-slate-50" title="View">{label(o.name)}</button>
                       <button onClick={() => download(o.path, o.name.split("/").pop())} className="px-2 py-1 border-l hover:bg-slate-50"
@@ -26913,29 +27072,11 @@ function DraftsmanIfcPackage({ project }) {
                   ))}
                 </div>
                 {rework === j.id ? (
-                  <div className="border rounded-lg p-3 space-y-2" style={{ background: "#fffbeb", borderColor: "#fcd34d" }}>
-                    <div className="text-sm font-bold">Rework on consultant comments — REV {String(((j.options || {}).revision || 0) + 1).padStart(2, "0")}</div>
-                    <div className="text-[11px] text-slate-600 leading-relaxed">Paste the consultant's comments, one per line, and attach their marked-up drawings or
-                      comment sheet if you have them. The AI reads them against these drawings and proposes the changes; you tick them, and the
-                      same drawings are updated as the next revision with clouds and a comment response sheet.</div>
-                    <textarea value={rwText} onChange={e => setRwText(e.target.value)} rows={5}
-                      placeholder={"e.g.\n1. Provide smoke detector inside the electrical room.\n2. Show sprinkler pipe sizes on all branches."}
-                      className="w-full border rounded px-2 py-1 text-sm" />
-                    <div className="flex flex-wrap items-center gap-3">
-                      <label className="text-xs text-slate-600">Marked-up drawings / comment sheet
-                        <input type="file" multiple accept=".pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg" onChange={e => setRwFiles(Array.from(e.target.files || []))}
-                          className="ml-2 text-xs" /></label>
-                    </div>
-                    <div className="flex gap-2">
-                      <button disabled={busy || (!rwText.trim() && !rwFiles.length)} onClick={() => submitRework(j)}
-                        className="bg-amber-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50">{busy ? "Starting…" : "Read the comments"}</button>
-                      <button onClick={() => { setRework(null); setRwText(""); setRwFiles([]); }} className="text-sm border px-3 py-2 rounded-lg">Cancel</button>
-                    </div>
-                  </div>
+                  reworkForm(`Rework the whole package on consultant comments \u2014 issue ${revLabel(((j.options || {}).revision || 0) + 1)}`, () => submitRework(j))
                 ) : (
                   <button onClick={() => { setRework(j.id); setRwText(""); setRwFiles([]); }}
                     className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50" style={{ borderColor: "#fcd34d", color: "#92400e" }}>
-                    {"\u21BB"} Rework on consultant comments</button>
+                    {"\u21BB"} Rework the whole package</button>
                 )}
               </div>
             )}
