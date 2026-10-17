@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-18.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-18.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25798,6 +25798,10 @@ const SYS_ICON = { cctv: "\u{1F4F9}", acs: "\u{1F510}", ict: "\u{1F310}", interc
 const sysLabel = k => ((IFC_SYSTEMS.find(s => s[0] === k) || [])[1]) || k;
 // revisions are printed on the drawings as R0, R1, R2 ...
 const revLabel = n => "R" + (parseInt(n, 10) || 0);
+// file-name code -> system, for packages generated before drawing reference numbers were stored
+const LEGACY_CODE_SYS = { CCTV: "cctv", ACC: "acs", TEL: "ict", VIC: "intercom", BGM: "bgm", LS: "ls", FA: "fa", EL: "el", FF: "ff",
+  M: "hvac", P: "water", D: "drainage", E: "electrical", EE: "earthing", LP: "lps", MC: "chw", MS: "smoke", TV: "iptv", AV: "av",
+  PK: "parking", BMS: "bms", GR: "grms" };
 function qdLoadZip() {
   if (typeof window.JSZip !== "undefined") return Promise.resolve(true);
   return __loadLib(["https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
@@ -26790,7 +26794,18 @@ function DraftsmanIfcPackage({ project }) {
     for (const j of byNew) {                      // newest first
       const sm = j.summary || {};
       if (j.status !== "done" || sm.rework_stage === "parse") continue;
-      for (const d of (sm.drawings || [])) {
+      // packages made before 18 Oct 2026 have no stored register: read it from their file names
+      // (their sheets already carry the project number, e.g. 26-0004-FA-...)
+      const pre = String(project.project_ref || ("Q" + String(project.id || "").slice(0, 6))).toUpperCase().replace(/[^A-Z0-9-]+/g, "-");
+      const legacy = (sm.drawings && sm.drawings.length) ? null : (j.outputs || []).filter(o => /\.pdf$/.test(o.name) && !o.name.includes("/")).map(o => {
+        const code = o.name.split("-")[0];
+        const sys = LEGACY_CODE_SYS[code];
+        if (!sys || (code === "ELV" || code === "MEP" || code === "QA" || code === "CR" || code === "3D")) return null;
+        const dxf = (j.outputs || []).find(x => x.name === o.name.replace(/\.pdf$/, ".dxf"));
+        return { ref: `${pre}-${code}`, system: sys, code, pdf: o.name, pdf_path: o.path, dxf_path: dxf ? dxf.path : null,
+                 rev: (j.options || {}).revision || 0, sheets: [], legacy: true };
+      }).filter(Boolean);
+      for (const d of (legacy || sm.drawings || [])) {
         if (seen[d.ref]) continue;
         seen[d.ref] = true;
         out.push({ ...d, job: j });
@@ -26977,7 +26992,7 @@ function DraftsmanIfcPackage({ project }) {
             {refMsg && <span className="text-xs text-slate-700 w-full">{refMsg}</span>}
           </div>
           {register.length === 0 ? (
-            <div className="text-xs text-slate-500">Packages generated before 18 Oct 2026 have no reference numbers. Generate the package again to number its drawings.</div>
+            <div className="text-xs text-slate-500">No finished drawings yet. Generate a package and its drawings are listed here with their reference numbers.</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -26995,7 +27010,7 @@ function DraftsmanIfcPackage({ project }) {
                           <td className="pr-2 font-mono font-semibold">{d.ref}</td>
                           <td className="pr-2"><span className="mr-1">{SYS_ICON[d.system] || ""}</span>{sysLabel(d.system)}</td>
                           <td className="pr-2"><span className="font-bold px-1.5 py-0.5 rounded" style={{ background: d.rev ? "#fef3c7" : "#eef2f7", color: d.rev ? "#92400e" : "#334155" }}>{revLabel(d.rev)}</span></td>
-                          <td className="pr-2">{(d.sheets || []).length}</td>
+                          <td className="pr-2">{(d.sheets || []).length || "\u2014"}</td>
                           <td className="pr-2 text-slate-500">{new Date(d.job.finished_at || d.job.created_at).toLocaleDateString("en-GB")}</td>
                           <td className="text-right whitespace-nowrap">
                             {d.pdf_path && <button onClick={() => open(d.pdf_path)} className="border rounded px-2 py-1 hover:bg-slate-50">View</button>}
