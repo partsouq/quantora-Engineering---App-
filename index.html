@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.7"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25738,7 +25738,8 @@ const IFC_SYSTEMS = [["cctv", "CCTV", "ELV"], ["acs", "Access control", "ELV"], 
                      ["ls", "Life safety", "Fire"], ["fa", "Fire alarm", "Fire"], ["el", "Emergency lighting", "Fire"],
                      ["ff", "Fire fighting", "Fire"], ["hvac", "Ventilation / AC", "Mechanical"],
                      ["water", "Water supply", "Plumbing"], ["drainage", "Drainage", "Plumbing"],
-                     ["electrical", "Lighting and power", "Electrical"]];
+                     ["electrical", "Lighting and power", "Electrical"],
+                     ["earthing", "Earthing and bonding", "Electrical"], ["lps", "Lightning protection", "Electrical"]];
 const IFC_FAMILY_ORDER = ["ELV", "Fire", "Mechanical", "Plumbing", "Electrical"];
 
 // ---------------------------------------------------------------------------
@@ -25760,8 +25761,9 @@ function qd3dLoadThree() {
    architecture plus every designed device and run in 3D. Plain three.js r128, no add-ons. */
 (function () {
   const COL = { fa: 0xe5484d, ff: 0xc0262d, el: 0x16a34a, ls: 0x22c55e, hvac: 0x0ea5a5, water: 0x2563eb,
-                drainage: 0x8b5a2b, electrical: 0xe0a21b, cctv: 0x7c3aed, acs: 0xdb2777, ict: 0x0891b2, containment: 0x64748b };
-  const DIA = { fa: 0.035, el: 0.035, electrical: 0.04, hvac: 0.03, ff: 0.11, water: 0.06, drainage: 0.12, cctv: 0.032, acs: 0.032, ict: 0.032 };
+                drainage: 0x8b5a2b, electrical: 0xe0a21b, cctv: 0x7c3aed, acs: 0xdb2777, ict: 0x0891b2, containment: 0x64748b,
+                earthing: 0x15803d, lps: 0xb45309 };
+  const DIA = { fa: 0.035, el: 0.035, electrical: 0.04, hvac: 0.03, ff: 0.11, water: 0.06, drainage: 0.12, cctv: 0.032, acs: 0.032, ict: 0.032, earthing: 0.03, lps: 0.035 };
   const TRAY = { containment: [0.30, 0.07] };   // width, depth of cable trays
   const ELV_VIS = { acs: 2.6, ict: 2.2 };       // door hardware is tiny at building scale
   // HVAC parts are drawn at their real size and in their own colours, so ducts read as a system
@@ -25837,7 +25839,7 @@ function qd3dLoadThree() {
 
     // devices, instanced per storey x system x shape
     const unit = { box: new T.BoxGeometry(1, 1, 1), cyl: new T.CylinderGeometry(0.5, 0.5, 1, 18), sph: new T.SphereGeometry(0.5, 18, 12) };
-    const shapeGeo = sh => sh === "camera" ? unit.sph : (["disc", "cyl", "pipe", "highbay", "fan"].includes(sh) ? unit.cyl : unit.box);
+    const shapeGeo = sh => sh === "camera" ? unit.sph : (["disc", "cyl", "pipe", "highbay", "fan", "rod"].includes(sh) ? unit.cyl : unit.box);
     const buckets = {};
     model.devices.forEach(d => {
       if (!groups[d.f]) return;
@@ -26415,6 +26417,7 @@ function DraftsmanIfcPackage({ project }) {
     "EL-EMERGENCY-LIGHTING-AND-EXIT-SIGNS.pdf": "Emergency lighting (PDF)", "FF-FIRE-FIGHTING.pdf": "Fire fighting (PDF)",
     "M-VENTILATION-AND-AIR-CONDITIONING.pdf": "Ventilation / AC (PDF)", "P-WATER-SUPPLY.pdf": "Water supply (PDF)",
     "D-DRAINAGE.pdf": "Drainage (PDF)", "E-LIGHTING-AND-POWER.pdf": "Lighting and power (PDF)",
+    "EE-EARTHING-AND-BONDING.pdf": "Earthing and bonding (PDF)", "LP-LIGHTNING-PROTECTION.pdf": "Lightning protection (PDF)",
     "MEP-ELV-devices.ifc": "IFC with all devices", "QA-report.md": "QA report (DBC screen, clash, sheet check)",
     "QA.json": "QA data (JSON)" }[n] || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
 
