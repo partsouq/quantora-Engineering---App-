@@ -25766,7 +25766,9 @@ function qd3dLoadThree() {
   const ELV_VIS = { acs: 2.6, ict: 2.2 };       // door hardware is tiny at building scale
   // HVAC parts are drawn at their real size and in their own colours, so ducts read as a system
   const KIND_COL = { "SD-": 0xe0ecff, FCU: 0x475569, RG: 0x86efac, EG: 0xf2b880, FAG: 0x99f6e4, VCD: 0x94a3b8,
-                     FD: 0xdc2626, MD: 0xdc2626, FAHU: 0x0f766e, TEF: 0xa16207 };
+                     FD: 0xdc2626, MD: 0xdc2626, FAHU: 0x0f766e, TEF: 0xa16207,
+                     GV: 0x7f1d1d, NRV: 0x7f1d1d, BV: 0x7f1d1d, ITV: 0x7f1d1d, AV: 0xb91c1c, FCV: 0xb91c1c, FM: 0x7f1d1d,
+                     IV: 0x1e3a8a, TPV: 0xb91c1c, FV: 0x1e3a8a, PRV: 0x1e3a8a, CO: 0x78350f, SPK: 0xdc2626 };
   const BIG = new Set(["FP", "FT", "TANK", "BPS", "MDB", "FACP", "LDB", "ELC", "RACK", "FAHU", "TEF"]);
 
   function mount(host, model, opts) {
@@ -25912,9 +25914,9 @@ function qd3dLoadThree() {
     // runs: one instanced box per straight segment
     const rb = {};
     const DUCT_COL = { SA: 0x3b82f6, RA: 0x22a06b, FA: 0x14b8a6, EA: 0xc2763a };
-    model.routes.forEach(r => { if (groups[r.f]) { const k = r.f + "|" + r.s + "|" + (r.d || ""); (rb[k] = rb[k] || []).push(r); } });
+    model.routes.forEach(r => { if (groups[r.f]) { const k = r.f + "|" + r.s + "|" + (r.d || "") + "|" + (r.c || ""); (rb[k] = rb[k] || []).push(r); } });
     Object.entries(rb).forEach(([key, list]) => {
-      const [f, s, dk] = key.split("|");
+      const [f, s, dk, rc] = key.split("|");
       const st = model.storeys[storeyIdx[f]];
       const segs = [];
       list.forEach(r => {
@@ -25924,8 +25926,9 @@ function qd3dLoadThree() {
           if (a.distanceTo(b) > 0.01) segs.push({ a, b, r });
         }
       });
+      const dnOf = r => { const n = parseInt(String(r.dn == null ? "" : r.dn).replace(/\D/g, ""), 10); return n > 0 ? Math.max(0.022, n * 1.15 / 1000) : 0; };
       const d = DIA[s] || 0.04, tray = TRAY[s];
-      const im = new T.InstancedMesh(unit.box, new T.MeshLambertMaterial(dk ? { color: DUCT_COL[dk] || COL[s], transparent: true, opacity: 0.92 } : { color: COL[s] || 0x64748b }), segs.length);
+      const im = new T.InstancedMesh(unit.box, new T.MeshLambertMaterial(dk ? { color: DUCT_COL[dk] || COL[s], transparent: true, opacity: 0.92 } : { color: rc ? parseInt(rc, 16) : (COL[s] || 0x64748b) }), segs.length);
       const upv = new T.Vector3(0, 1, 0), mx = new T.Matrix4();
       segs.forEach((sg, i) => {
         const len = sg.a.distanceTo(sg.b), mid = sg.a.clone().add(sg.b).multiplyScalar(0.5);
@@ -25935,12 +25938,22 @@ function qd3dLoadThree() {
         const top = new T.Vector3().crossVectors(side, dir).normalize();
         mx.makeBasis(side, dir, top);
         tmp.position.copy(mid); tmp.quaternion.setFromRotationMatrix(mx);
-        const wh = sg.r.wh;
+        const wh = sg.r.wh, pd = dnOf(sg.r) || d;
         if (wh) tmp.scale.set(wh[0] / 1000, len, wh[1] / 1000);
-        else tmp.scale.set(tray ? tray[0] : d, len, tray ? tray[1] : d);
+        else tmp.scale.set(tray ? tray[0] : pd, len, tray ? tray[1] : pd);
         tmp.updateMatrix();
         im.setMatrixAt(i, tmp.matrix);
       });
+      // fittings: a fitting body at every bend and junction of round pipework
+      if (!dk && !tray) {
+        const joints = [];
+        list.forEach(r => { if (r.rk !== "riser" && r.p.length > 2) for (let k = 1; k + 1 < r.p.length; k++) joints.push([P(r.p[k][0], r.p[k][1], r.z), dnOf(r) || d]); });
+        if (joints.length) {
+          const jm = new T.InstancedMesh(unit.sph, new T.MeshLambertMaterial({ color: rc ? parseInt(rc, 16) : (COL[s] || 0x64748b) }), joints.length);
+          joints.forEach(([p, dd], i) => { tmp.position.copy(p); tmp.quaternion.identity(); tmp.scale.set(dd * 1.45, dd * 1.45, dd * 1.45); tmp.updateMatrix(); jm.setMatrixAt(i, tmp.matrix); });
+          groups[f].add(jm); sysObjs.push({ s, obj: jm });
+        }
+      }
       im.userData = { segs, s, run: true }; groups[f].add(im); sysObjs.push({ s, obj: im }); pickables.push(im);
     });
 
