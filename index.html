@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25764,7 +25764,12 @@ function qd3dLoadThree() {
   const DIA = { fa: 0.035, el: 0.035, electrical: 0.04, hvac: 0.03, ff: 0.11, water: 0.06, drainage: 0.12, cctv: 0.032, acs: 0.032, ict: 0.032 };
   const TRAY = { containment: [0.30, 0.07] };   // width, depth of cable trays
   const ELV_VIS = { acs: 2.6, ict: 2.2 };       // door hardware is tiny at building scale
-  const BIG = new Set(["FP", "FT", "TANK", "BPS", "MDB", "FACP", "AC", "LDB", "ELC", "RACK"]);
+  // HVAC parts are drawn at their real size and in their own colours, so ducts read as a system
+  const KIND_COL = { "SD-": 0xe0ecff, FCU: 0x475569, RG: 0x86efac, EG: 0xf2b880, FAG: 0x99f6e4, VCD: 0x94a3b8,
+                     FD: 0xdc2626, MD: 0xdc2626, FAHU: 0x0f766e, TEF: 0xa16207,
+                     GV: 0x7f1d1d, NRV: 0x7f1d1d, BV: 0x7f1d1d, ITV: 0x7f1d1d, AV: 0xb91c1c, FCV: 0xb91c1c, FM: 0x7f1d1d,
+                     IV: 0x1e3a8a, TPV: 0xb91c1c, FV: 0x1e3a8a, PRV: 0x1e3a8a, CO: 0x78350f, SPK: 0xdc2626 };
+  const BIG = new Set(["FP", "FT", "TANK", "BPS", "MDB", "FACP", "LDB", "ELC", "RACK", "FAHU", "TEF"]);
 
   function mount(host, model, opts) {
     opts = opts || {};
@@ -25836,20 +25841,20 @@ function qd3dLoadThree() {
     const buckets = {};
     model.devices.forEach(d => {
       if (!groups[d.f]) return;
-      const g0 = shapeGeo(d.sh); const key = d.f + "|" + d.s + "|" + (g0 === unit.cyl ? "c" : g0 === unit.sph ? "o" : "b");
+      const g0 = shapeGeo(d.sh); const key = d.f + "|" + d.s + "|" + (g0 === unit.cyl ? "c" : g0 === unit.sph ? "o" : "b") + "|" + (KIND_COL[d.k] != null ? d.k : "");
       (buckets[key] = buckets[key] || []).push(d);
     });
     const tmp = new T.Object3D();
     Object.entries(buckets).forEach(([key, list]) => {
-      const [f, s, gk] = key.split("|");
+      const [f, s, gk, kk] = key.split("|");
       const st = model.storeys[storeyIdx[f]];
-      const mat = new T.MeshLambertMaterial({ color: COL[s] || 0x64748b });
+      const mat = new T.MeshLambertMaterial({ color: kk ? KIND_COL[kk] : (COL[s] || 0x64748b) });
       const im = new T.InstancedMesh(gk === "c" ? unit.cyl : gk === "o" ? unit.sph : unit.box, mat, list.length);
       list.forEach((d, i) => {
         let [w, dd, h] = d.sz.map(v => Math.max(v, 1) / 1000);
         const vis = ELV_VIS[d.s] || 1.6;   // small devices drawn a little larger so they read at building scale
-        if (!BIG.has(d.k) && d.k !== "HB") { w *= vis; dd *= vis; h *= vis; }
-        let z = d.z / 1000 + (d.m === "ceiling" ? -h / 2 : h / 2);
+        if (!BIG.has(d.k) && d.k !== "HB" && KIND_COL[d.k] == null) { w *= vis; dd *= vis; h *= vis; }
+        let z = d.z / 1000 + (d.m === "ceiling" ? -h / 2 : d.m === "inline" ? 0 : h / 2);
         if (d.sh === "pipe") { h = st.h / 1000; z = h / 2; w = dd = 0.11; }
         if (d.m === "roof") z = st.h / 1000 + h / 2;
         const p = P(d.x, d.y, 0);
@@ -25908,9 +25913,10 @@ function qd3dLoadThree() {
 
     // runs: one instanced box per straight segment
     const rb = {};
-    model.routes.forEach(r => { if (groups[r.f]) (rb[r.f + "|" + r.s] = rb[r.f + "|" + r.s] || []).push(r); });
+    const DUCT_COL = { SA: 0x3b82f6, RA: 0x22a06b, FA: 0x14b8a6, EA: 0xc2763a };
+    model.routes.forEach(r => { if (groups[r.f]) { const k = r.f + "|" + r.s + "|" + (r.d || "") + "|" + (r.c || ""); (rb[k] = rb[k] || []).push(r); } });
     Object.entries(rb).forEach(([key, list]) => {
-      const [f, s] = key.split("|");
+      const [f, s, dk, rc] = key.split("|");
       const st = model.storeys[storeyIdx[f]];
       const segs = [];
       list.forEach(r => {
@@ -25920,8 +25926,9 @@ function qd3dLoadThree() {
           if (a.distanceTo(b) > 0.01) segs.push({ a, b, r });
         }
       });
+      const dnOf = r => { const n = parseInt(String(r.dn == null ? "" : r.dn).replace(/\D/g, ""), 10); return n > 0 ? Math.max(0.022, n * 1.15 / 1000) : 0; };
       const d = DIA[s] || 0.04, tray = TRAY[s];
-      const im = new T.InstancedMesh(unit.box, new T.MeshLambertMaterial({ color: COL[s] || 0x64748b }), segs.length);
+      const im = new T.InstancedMesh(unit.box, new T.MeshLambertMaterial(dk ? { color: DUCT_COL[dk] || COL[s], transparent: true, opacity: 0.92 } : { color: rc ? parseInt(rc, 16) : (COL[s] || 0x64748b) }), segs.length);
       const upv = new T.Vector3(0, 1, 0), mx = new T.Matrix4();
       segs.forEach((sg, i) => {
         const len = sg.a.distanceTo(sg.b), mid = sg.a.clone().add(sg.b).multiplyScalar(0.5);
@@ -25931,9 +25938,22 @@ function qd3dLoadThree() {
         const top = new T.Vector3().crossVectors(side, dir).normalize();
         mx.makeBasis(side, dir, top);
         tmp.position.copy(mid); tmp.quaternion.setFromRotationMatrix(mx);
-        tmp.scale.set(tray ? tray[0] : d, len, tray ? tray[1] : d); tmp.updateMatrix();
+        const wh = sg.r.wh, pd = dnOf(sg.r) || d;
+        if (wh) tmp.scale.set(wh[0] / 1000, len, wh[1] / 1000);
+        else tmp.scale.set(tray ? tray[0] : pd, len, tray ? tray[1] : pd);
+        tmp.updateMatrix();
         im.setMatrixAt(i, tmp.matrix);
       });
+      // fittings: a fitting body at every bend and junction of round pipework
+      if (!dk && !tray) {
+        const joints = [];
+        list.forEach(r => { if (r.rk !== "riser" && r.p.length > 2) for (let k = 1; k + 1 < r.p.length; k++) joints.push([P(r.p[k][0], r.p[k][1], r.z), dnOf(r) || d]); });
+        if (joints.length) {
+          const jm = new T.InstancedMesh(unit.sph, new T.MeshLambertMaterial({ color: rc ? parseInt(rc, 16) : (COL[s] || 0x64748b) }), joints.length);
+          joints.forEach(([p, dd], i) => { tmp.position.copy(p); tmp.quaternion.identity(); tmp.scale.set(dd * 1.45, dd * 1.45, dd * 1.45); tmp.updateMatrix(); jm.setMatrixAt(i, tmp.matrix); });
+          groups[f].add(jm); sysObjs.push({ s, obj: jm });
+        }
+      }
       im.userData = { segs, s, run: true }; groups[f].add(im); sysObjs.push({ s, obj: im }); pickables.push(im);
     });
 
@@ -26013,7 +26033,7 @@ function qd3dLoadThree() {
       const hit = ray.intersectObjects(pickables.filter(o => o.visible && o.parent.visible), false)[0];
       if (!hit) { focus(null); opts.onPick && opts.onPick(null); return; }
       const u = hit.object.userData;
-      if (u.run) { const sg = u.segs[hit.instanceId]; opts.onPick && opts.onPick({ run: true, s: u.s, k: sg.r.k, t: sg.r.t, f: sg.r.f, dn: sg.r.dn }); }
+      if (u.run) { const sg = u.segs[hit.instanceId]; focus(null); opts.onPick && opts.onPick({ run: true, s: u.s, k: sg.r.k, t: sg.r.t, f: sg.r.f, dn: sg.r.dn, wh: sg.r.wh, d: sg.r.d, q: sg.r.q }); }
       else { focus(u.list[hit.instanceId]); opts.onPick && opts.onPick(u.list[hit.instanceId]); }
     }
 
@@ -26235,7 +26255,8 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
                   <span className="q3-chip" style={{ background: hex(COLS[picked.s]) }}>{sysName(picked.s)}</span>
                   <div style={{ fontSize: 16, fontWeight: 800, marginTop: 8, color: "#0f2140", overflowWrap: "anywhere" }}>
                     {picked.run ? (picked.t || picked.k + " run") : (picked.t || picked.k)}</div>
-                  {picked.run ? (<><div className="k">Run</div><div className="v">{picked.k}{picked.dn ? " · DN" + String(picked.dn).replace("DN", "") : ""}</div></>) : (<>
+                  {picked.run ? (<><div className="k">Run</div><div className="v">{({ SA: "Supply air duct", RA: "Return air duct", FA: "Fresh air duct", EA: "Extract air duct" })[picked.d] || picked.k}{picked.dn ? " · DN" + String(picked.dn).replace("DN", "") : ""}</div>
+                    {picked.wh && (<><div className="k">Size</div><div className="v">{picked.wh[0]} x {picked.wh[1]} mm{picked.q ? " · " + picked.q + " L/s" : ""}</div></>)}</>) : (<>
                     <div className="k">Item</div><div className="v">{picked.l || picked.k}</div>
                     <div className="k">Room</div><div className="v">{picked.sp || "—"}</div>
                     <div className="k">Height</div><div className="v">{(picked.z / 1000).toFixed(2)} m above floor</div>
