@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-17.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-17.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -11543,7 +11543,7 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq, onUseCloud }) {
           <div className="border rounded-xl p-4">
             <div className="font-semibold text-sm">Send the drawings to the cloud draftsman</div>
             <div className="text-xs text-slate-500 mt-1 leading-relaxed">Upload the IFC or the floor plans (PDF / DXF). It reads the rooms itself and draws every system — no size needed.</div>
-            {onUseCloud && <button onClick={onUseCloud} className="mt-3 text-sm font-semibold text-white px-4 py-2 rounded-lg" style={{ background: "#3987e5" }}>Open Full package &rarr;</button>}
+            {onUseCloud && <button onClick={onUseCloud} className="mt-3 text-sm font-semibold text-white px-4 py-2 rounded-lg" style={{ background: "#3987e5" }}>Upload your plans &rarr;</button>}
           </div>
           <div className="border rounded-xl p-4">
             <div className="font-semibold text-sm">Quick design from the floor area</div>
@@ -25664,7 +25664,7 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief, initialT
           className="text-sm font-semibold border px-3 py-2 rounded-lg hover:bg-slate-50">Open the full project</button>
       </div>
       <div className="flex gap-2 border-b">
-        {[["design", "1. Design"], ["drawings", "2. Drawings"], ["ifc", "3. Full package (IFC / plans)"]].map(([k, l]) => (
+        {[["design", "1. Design"], ["drawings", "2. Drawings"], ["ifc", "3. Generate drawings from your plans"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px ${
               tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-900"}`}>{l}</button>
@@ -25744,6 +25744,12 @@ const IFC_SYSTEMS = [["cctv", "CCTV", "ELV"], ["acs", "Access control", "ELV"], 
                      ["electrical", "Lighting and power", "Electrical"],
                      ["earthing", "Earthing and bonding", "Electrical"], ["lps", "Lightning protection", "Electrical"]];
 const IFC_FAMILY_ORDER = ["ELV", "Fire", "Mechanical", "Plumbing", "Electrical"];
+// one icon per system, on the job form and on every job card
+const SYS_ICON = { cctv: "\u{1F4F9}", acs: "\u{1F510}", ict: "\u{1F310}", intercom: "\u{1F4DE}", bgm: "\u{1F50A}", iptv: "\u{1F4FA}",
+  av: "\u{1F3AC}", parking: "\u{1F17F}\uFE0F", bms: "\u{1F3E2}", grms: "\u{1F6CF}\uFE0F", ls: "\u{1F6AA}", fa: "\u{1F6A8}", el: "\u{1F4A1}",
+  ff: "\u{1F9EF}", hvac: "\u2744\uFE0F", chw: "\u{1F9CA}", smoke: "\u{1F4A8}", water: "\u{1F6B0}", drainage: "\u{1F6BF}",
+  electrical: "\u26A1", earthing: "\u23DA", lps: "\u{1F329}\uFE0F" };
+const sysLabel = k => ((IFC_SYSTEMS.find(s => s[0] === k) || [])[1]) || k;
 
 // ---------------------------------------------------------------------------
 // 3D MODEL VIEWER (2026-10-17)
@@ -26556,6 +26562,9 @@ function DraftsmanIfcPackage({ project }) {
   const [jobs, setJobs] = useState([]);
   const [fams, setFams] = useState({ ELV: true });
   const [model3d, setModel3d] = useState(null);
+  const [rework, setRework] = useState(null);
+  const [rwText, setRwText] = useState("");
+  const [rwFiles, setRwFiles] = useState([]);
   useEffect(() => { getDraftsmanFamilies().then(f => {
     const fm = f || {};
     setFams(fm);
@@ -26658,6 +26667,38 @@ function DraftsmanIfcPackage({ project }) {
     const { data, error } = await sb.storage.from("drawings").createSignedUrl(path, 3600);
     if (!error && data) window.open(data.signedUrl, "_blank");
   };
+  const download = async (path, name) => {
+    const { data, error } = await sb.storage.from("drawings").createSignedUrl(path, 3600, { download: name || true });
+    if (error || !data) return;
+    const a = document.createElement("a");
+    a.href = data.signedUrl; a.download = name || ""; document.body.appendChild(a); a.click(); a.remove();
+  };
+  // Rework: the same plans and systems again as the next revision, with the consultant's comments logged
+  const submitRework = async (j) => {
+    setErr(""); setBusy(true);
+    try {
+      const o = j.options || {};
+      const comment_paths = [];
+      for (const f of rwFiles) {
+        const path = `${project.id}/draftsman/comments/${Date.now()}_${safeStorageName(f.name)}`;
+        const { error: upErr } = await sb.storage.from("drawings").upload(path, f);
+        if (upErr) throw upErr;
+        comment_paths.push({ path, name: f.name });
+      }
+      const comments = rwText.split(/\n+/).map(x => x.trim()).filter(Boolean);
+      const options = { ...o, rework_of: j.id, revision: (o.revision || 0) + 1, comments, comment_paths,
+                        revision_text: "REVISED AS PER CONSULTANT COMMENTS" };
+      const { error } = await sb.from("draftsman_jobs").insert({
+        project_id: project.id, ifc_path: j.ifc_path, ifc_name: j.ifc_name, systems: j.systems, options,
+        ...(j.region ? { region: j.region } : {}),
+      });
+      if (error) throw error;
+      setRework(null); setRwText(""); setRwFiles([]);
+      await load();
+    } catch (e) {
+      setErr(e.message || String(e));
+    } finally { setBusy(false); }
+  };
   const cancel = async (id) => {
     await sb.from("draftsman_jobs").update({ status: "cancelled" }).eq("id", id).eq("status", "queued");
     load();
@@ -26678,12 +26719,15 @@ function DraftsmanIfcPackage({ project }) {
     "3D-COORDINATION-VIEWS.pdf": "3D coordination views, all systems (PDF)", "TV-IPTV-SMATV.pdf": "IPTV / SMATV (PDF)", "AV-AUDIO-VISUAL.pdf": "Audio-visual (PDF)", "PK-CAR-PARK-MANAGEMENT.pdf": "Car park PGS / ANPR (PDF)",
     "BMS-BUILDING-MANAGEMENT-SYSTEM.pdf": "BMS (PDF)", "GR-GUEST-ROOM-MANAGEMENT.pdf": "GRMS (PDF)",
     "MEP-ELV-devices.ifc": "IFC with all devices", "QA-report.md": "QA report (DBC screen, clash, sheet check)",
-    "QA.json": "QA data (JSON)" }[n] || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
+    "QA.json": "QA data (JSON)", "CR-CONSULTANT-COMMENTS-RESPONSE.pdf": "Consultant comments — response sheet (PDF)" }[n] || (n.startsWith("comments/") ? "Consultant file: " + n.slice(9) : null) || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
 
   return (
     <div className="space-y-4">
       <div className="bg-white border rounded-xl p-5 space-y-3">
-        <div className="text-sm font-bold">Design ELV and MEP systems on your architectural drawings</div>
+        <div className="text-sm font-bold">Generate drawings from your plans</div>
+        <div className="text-[12px] font-semibold rounded-lg px-3 py-2" style={{ background: "#eef5ff", color: "#1e4f9c" }}>
+          Use this when you have the architectural drawings — the IFC model or the floor plans (PDF / DXF). The draftsman reads
+          the rooms and draws every system you tick, ready to download.</div>
         <div className="text-[12px] text-slate-500 leading-relaxed">
           Room-by-room design to the authority rules (UAE Civil Defence / DBC / DEWA / SIRA / TDRA by default, chosen from the project country).
           ELV: cameras with FOV cones, controlled doors, FTTH, IDFs and cable lengths. MEP: fire alarm, emergency lighting, hose reels and
@@ -26734,12 +26778,20 @@ function DraftsmanIfcPackage({ project }) {
             return (
               <div key={fam} className="flex flex-wrap items-center gap-3">
                 <span className="text-xs font-semibold text-slate-500 w-24">{fam === "ELV" ? "ELV" : fam}</span>
-                {items.map(([k, l]) => (
-                  <label key={k} className={"text-sm flex items-center gap-1 " + (on ? "" : "text-slate-400")}>
-                    <input type="checkbox" disabled={!on} checked={on && systems.includes(k)}
-                      onChange={e => setSystems(e.target.checked ? systems.concat(k) : systems.filter(x => x !== k))} /> {l}
-                  </label>
-                ))}
+                {items.map(([k, l]) => {
+                  const sel = on && systems.includes(k);
+                  return (
+                    <label key={k} title={l}
+                      className={"text-sm flex items-center gap-1.5 border rounded-full pl-1.5 pr-3 py-1 cursor-pointer select-none " + (on ? "" : "opacity-50 cursor-not-allowed")}
+                      style={sel ? { background: "#eaf2ff", borderColor: "#7fb0ff", color: "#123a7a" } : { background: "#fff" }}>
+                      <input type="checkbox" className="hidden" disabled={!on} checked={sel}
+                        onChange={e => setSystems(e.target.checked ? systems.concat(k) : systems.filter(x => x !== k))} />
+                      <span className="w-6 h-6 rounded-full flex items-center justify-center text-[13px]"
+                        style={{ background: sel ? "#fff" : "#f1f5f9" }}>{SYS_ICON[k] || "\u25CF"}</span>
+                      {l}{sel && <span className="text-[11px] font-bold">{"\u2713"}</span>}
+                    </label>
+                  );
+                })}
                 {!on && <span className="text-[11px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">Coming soon</span>}
               </div>
             );
@@ -26760,7 +26812,10 @@ function DraftsmanIfcPackage({ project }) {
             <div className="flex items-center gap-3 flex-wrap">
               <span style={{ background: c[0], color: c[1] }} className="text-[11px] font-bold px-2 py-1 rounded-full">{c[2]}</span>
               <span className="text-sm font-semibold">{j.ifc_name || "IFC"}</span>
-              <span className="text-xs text-slate-500">{new Date(j.created_at).toLocaleString()} · {(j.systems || []).join(", ")}</span>
+              <span className="text-xs text-slate-500">{new Date(j.created_at).toLocaleString()}
+                {(j.options || {}).revision ? ` · REV ${String(j.options.revision).padStart(2, "0")} (consultant comments)` : ""}</span>
+              <span className="flex flex-wrap gap-1">{(j.systems || []).map(k => (
+                <span key={k} title={sysLabel(k)} className="text-[11px] bg-slate-100 rounded-full px-2 py-0.5">{SYS_ICON[k] || ""} {sysLabel(k)}</span>))}</span>
               <div className="flex-1" />
               {j.status === "queued" && <button onClick={() => cancel(j.id)} className="text-xs border px-2 py-1 rounded">Cancel</button>}
             </div>
@@ -26788,12 +26843,47 @@ function DraftsmanIfcPackage({ project }) {
                     <div className="text-[11px] text-slate-400">3D model: generate this package again to get one (jobs before 17 Oct did not save it).</div>
                   );
                 })()}
+                {(() => {
+                  const zip = (j.outputs || []).find(o => o.name === "Drawing-package.zip");
+                  return zip ? (
+                    <button onClick={() => download(zip.path, `${(project.project_name || "Project").replace(/[^\w-]+/g, "_")}-drawings.zip`)}
+                      className="ml-2 text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">{"\u2B07"} Download everything (ZIP)</button>
+                  ) : null;
+                })()}
                 <div className="flex flex-wrap gap-2">
-                  {(j.outputs || []).filter(o => !/(design|model3d)\.json$/.test(o.name)).map(o => (
-                    <button key={o.path} onClick={() => open(o.path)}
-                      className="text-xs border px-2 py-1 rounded hover:bg-slate-50">{label(o.name)}</button>
+                  {(j.outputs || []).filter(o => !/(design|model3d)\.json$/.test(o.name) && o.name !== "Drawing-package.zip").map(o => (
+                    <span key={o.path} className="inline-flex items-stretch border rounded overflow-hidden text-xs">
+                      <button onClick={() => open(o.path)} className="px-2 py-1 hover:bg-slate-50" title="View">{label(o.name)}</button>
+                      <button onClick={() => download(o.path, o.name.split("/").pop())} className="px-2 py-1 border-l hover:bg-slate-50"
+                        title="Download" aria-label={"Download " + label(o.name)}>{"\u2B07"}</button>
+                    </span>
                   ))}
                 </div>
+                {rework === j.id ? (
+                  <div className="border rounded-lg p-3 space-y-2" style={{ background: "#fffbeb", borderColor: "#fcd34d" }}>
+                    <div className="text-sm font-bold">Rework on consultant comments — REV {String(((j.options || {}).revision || 0) + 1).padStart(2, "0")}</div>
+                    <div className="text-[11px] text-slate-600 leading-relaxed">Paste the consultant's comments, one per line, and attach their marked-up drawings or
+                      comment sheet if you have them. The package is generated again on the same plans as the next revision, with a
+                      comment response sheet; the consultant's files are kept with it.</div>
+                    <textarea value={rwText} onChange={e => setRwText(e.target.value)} rows={5}
+                      placeholder={"e.g.\n1. Provide smoke detector inside the electrical room.\n2. Show sprinkler pipe sizes on all branches."}
+                      className="w-full border rounded px-2 py-1 text-sm" />
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="text-xs text-slate-600">Marked-up drawings / comment sheet
+                        <input type="file" multiple accept=".pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg" onChange={e => setRwFiles(Array.from(e.target.files || []))}
+                          className="ml-2 text-xs" /></label>
+                    </div>
+                    <div className="flex gap-2">
+                      <button disabled={busy || (!rwText.trim() && !rwFiles.length)} onClick={() => submitRework(j)}
+                        className="bg-amber-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50">{busy ? "Starting…" : "Start the rework"}</button>
+                      <button onClick={() => { setRework(null); setRwText(""); setRwFiles([]); }} className="text-sm border px-3 py-2 rounded-lg">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => { setRework(j.id); setRwText(""); setRwFiles([]); }}
+                    className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50" style={{ borderColor: "#fcd34d", color: "#92400e" }}>
+                    {"\u21BB"} Rework on consultant comments</button>
+                )}
               </div>
             )}
           </div>
