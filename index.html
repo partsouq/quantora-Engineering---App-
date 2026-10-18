@@ -27688,7 +27688,7 @@ function QFeedbackView({ companyNameById }) {
                   <td>{FEEDBACK_STEPS[r.step] || r.step}</td>
                   <td style={{ textAlign: "center", whiteSpace: "nowrap", color: r.rating <= 2 ? "#fca5a5" : r.rating === 3 ? "#fcd34d" : "#fbbf24", letterSpacing: 1 }}>{"★".repeat(r.rating)}<span style={{ color: "var(--text-dimmer)" }}>{"★".repeat(5 - r.rating)}</span></td>
                   <td style={{ maxWidth: 380, color: r.comment ? "var(--text)" : "var(--text-dimmer)" }}>{r.comment || "—"}</td>
-                  <td>{r.plan_id === "trial" ? "Welcome pack" : (r.plan_id || "—")}</td>
+                  <td>{({ trial: "Welcome pack", starter: "Individual", professional: "Professional", business: "Team", enterprise: "Enterprise", free: "Free" })[r.plan_id] || r.plan_id || "—"}</td>
                 </tr>
               ))}
             </tbody>
