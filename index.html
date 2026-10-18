@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-18.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-18.7"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -1849,6 +1849,80 @@ function tileLooksBlank(canvas) {
   }
 }
 
+// Same standard for every uploaded PDF sheet (2026-10-18). Before a sheet is
+// read, Quantora checks what kind of PDF it is:
+//   vector  -- a CAD export (lines and text). Already the standard; read as is.
+//   scan    -- a scanned or photographed sheet (one big picture, few lines).
+//              It is cleaned up first -- grey paper turned white, faint lines
+//              made dark and sharp -- so the AI sees it like a CAD print, and it
+//              is always read at high resolution.
+//   empty   -- a blank page. Skipped, so it is never read or charged.
+// pdf.js already turns rotated sheets upright when it renders them.
+async function inspectPdfPage(page) {
+  let paths = 0, images = 0, words = 0;
+  try {
+    const O = window.pdfjsLib.OPS;
+    const ops = await page.getOperatorList();
+    for (const fn of ops.fnArray) {
+      if (fn === O.constructPath) paths++;
+      else if (fn === O.paintImageXObject || fn === O.paintInlineImageXObject || fn === O.paintImageMaskXObject) images++;
+    }
+  } catch (e) { return { kind: "vector", paths, images, words }; }   // cannot tell: read it the normal way
+  try {
+    const tc = await page.getTextContent();
+    words = tc.items.filter(i => (i.str || "").trim()).length;
+  } catch (e) {}
+  const kind = paths === 0 && images === 0 && words === 0 ? "empty"
+    : images > 0 && paths < 300 ? "scan" : "vector";
+  return { kind, paths, images, words };
+}
+
+// Scan clean-up, in two parts. scanLevels() looks at a small preview of the
+// whole sheet once and works out its paper and ink tones; cleanScanCanvas()
+// then applies the same correction to every strip, so neighbouring tiles look
+// identical. Grey or yellowed paper becomes white, faint lines become dark,
+// colour is dropped. Works in strips so a large sheet never needs one giant
+// pixel buffer.
+function scanLevels(canvas) {
+  try {
+    const ctx = canvas.getContext("2d");
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const hist = new Uint32Array(256);
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { hist[(d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8]++; n++; }
+    if (!n) return null;
+    const pct = (q) => { let acc = 0; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= q * n) return v; } return 255; };
+    const ink = pct(0.003), paper = pct(0.6);
+    if (paper - ink < 8) return null;                         // no lines to tell apart: leave it
+    const top = paper - Math.max(2, Math.round((paper - ink) * 0.25));   // near-paper tones count as paper
+    const lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) {
+      const t = Math.min(1, Math.max(0, (v - ink) / (top - ink)));
+      lut[v] = Math.round(255 * Math.pow(t, 1.6));            // darken the mid tones so thin lines survive
+    }
+    return lut;
+  } catch (e) { return null; }
+}
+
+function cleanScanCanvas(canvas, lut) {
+  if (!lut) return;
+  try {
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height, STRIP = 256;
+    for (let y0 = 0; y0 < h; y0 += STRIP) {
+      const sh = Math.min(STRIP, h - y0);
+      const img = ctx.getImageData(0, y0, w, sh), d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const v = lut[(d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8];
+        d[i] = d[i + 1] = d[i + 2] = v;
+      }
+      ctx.putImageData(img, 0, y0);
+    }
+  } catch (e) {
+    console.warn("Scan clean-up unavailable, reading the sheet as it is:", e);
+  }
+}
+
 // Renders one page of an already-parsed pdf.js document into overlapping tile
 // images and uploads them to storage. Returns the geometry ai-engine needs to
 // put every counted symbol back onto the full page.
@@ -1858,7 +1932,7 @@ function tileLooksBlank(canvas) {
 // walks the entire page operator list every call -- so per-tile rendering meant
 // twelve full-page renders of a dense A0 sheet. One render per row, then
 // drawImage crops out of that band, cuts it to three.
-async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onProgress) {
+async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onProgress, opts = {}) {
   const page = await pdf.getPage(pageNumber);
   const base = page.getViewport({ scale: 1 });
   const { scale, cols, rows } = planTileGrid(base.width, base.height);
@@ -1866,6 +1940,21 @@ async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onPro
   const fullW = vp.width, fullH = vp.height;
   const coreW = fullW / cols, coreH = fullH / rows;
   const marginX = coreW * TILE_OVERLAP, marginY = coreH * TILE_OVERLAP;
+
+  // Scanned sheet: measure its paper and ink tones once, from a small preview.
+  let scanLut = null;
+  if (opts.cleanScan) {
+    try {
+      const pv = page.getViewport({ scale: 1500 / Math.max(base.width, base.height) });
+      const pc = document.createElement("canvas");
+      pc.width = Math.round(pv.width); pc.height = Math.round(pv.height);
+      const pctx = pc.getContext("2d");
+      pctx.fillStyle = "#ffffff"; pctx.fillRect(0, 0, pc.width, pc.height);
+      await page.render({ canvasContext: pctx, viewport: pv }).promise;
+      scanLut = scanLevels(pc);
+      pc.width = 0; pc.height = 0;
+    } catch (e) { console.warn("Could not measure scan tones:", e); }
+  }
 
   const stamp = Date.now();
   const tiles = [];
@@ -1890,6 +1979,7 @@ async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onPro
       viewport: vp,
       transform: [1, 0, 0, 1, 0, -bandY0],
     }).promise;
+    if (scanLut) cleanScanCanvas(band, scanLut);   // scanned sheet: bring it to the CAD-print standard first
 
     for (let c = 0; c < cols; c++) {
       const x0 = Math.max(0, c * coreW - marginX);
@@ -8973,7 +9063,24 @@ function DrawingsTab({ project }) {
   async function analyzeAllPending() {
     const pending = drawings.filter(d => canAnalyze(d) && !runs[d.id]);
     if (pending.length === 0) { alert("No un-analyzed drawings to run. Upload drawings first, or use Re-analyze on individual items below."); return; }
-    for (const d of pending) { await analyze(d.id); }
+    for (const d of pending) {
+      // Same standard as a single run: a scanned PDF is cleaned up and read at
+      // high resolution instead of being read whole as a grey picture.
+      if (await isScannedPdf(d)) { await analyzeAuto(d); } else { await analyze(d.id); }
+    }
+  }
+
+  async function isScannedPdf(d) {
+    const isPdf = d.file_type === "pdf" || d.analysis_source_type === "pdf";
+    if (!isPdf || !window.__PDFJS_OK__ || !window.pdfjsLib) return false;
+    try {
+      const pdf = await openStoredPdf(d.analysis_source_path || d.storage_path);
+      for (let i = 1; i <= Math.min(pdf.numPages || 1, 10); i++) {
+        const k = (await inspectPdfPage(await pdf.getPage(i))).kind;
+        if (k !== "empty") return k === "scan";
+      }
+    } catch (e) { console.warn("Could not check drawing, reading it the normal way:", e); }
+    return false;
   }
 
   // One entry point. It measures the sheet and picks the method, because the
@@ -8995,11 +9102,17 @@ function DrawingsTab({ project }) {
       return;
     }
 
-    let pdf, assessment;
+    let pdf, assessment, sheetKind = "vector";
     try {
-      setTiling(t => ({ ...t, [d.id]: "Measuring sheet…" }));
+      setTiling(t => ({ ...t, [d.id]: "Checking drawing…" }));
       pdf = await openStoredPdf(d.analysis_source_path || d.storage_path);
-      const page = await pdf.getPage(1);
+      // First sheet that is not blank decides how the file is read.
+      let page = await pdf.getPage(1);
+      for (let i = 1; i <= Math.min(pdf.numPages || 1, 10); i++) {
+        const pg = i === 1 ? page : await pdf.getPage(i);
+        const k = (await inspectPdfPage(pg)).kind;
+        if (k !== "empty") { page = pg; sheetKind = k; break; }
+      }
       assessment = assessPageForAnalysis(page.getViewport({ scale: 1 }));
     } catch (ex) {
       // Could not measure it -- do not strand the customer, just use the
@@ -9015,21 +9128,27 @@ function DrawingsTab({ project }) {
     async function runTiled(pages) {
       let totalItems = 0;
       let totalBlankSkipped = 0;
+      let blankPages = 0, scannedPages = 0;
       try {
         // Sequential, not parallel: ai-engine's findInFlightRun would hand back
         // the first run rather than starting a second for the same drawing.
         for (let i = 0; i < pages.length; i++) {
           const pageNumber = pages[i];
           const label = pages.length > 1 ? ` (sheet ${i + 1} of ${pages.length})` : "";
+          // Same standard for every sheet: blank pages skipped, scans cleaned up first.
+          const kind = (await inspectPdfPage(await pdf.getPage(pageNumber))).kind;
+          if (kind === "empty") { blankPages++; continue; }
           const { tiles, grid, blankSkipped, plannedTiles } = await renderAndUploadTiles(
             pdf, pageNumber, project.id, d.id,
             (p) => setTiling(t => ({
               ...t,
               [d.id]: p.phase === "render"
-                ? `Rendering row ${p.row}/${p.rows}${label}…`
+                ? `${kind === "scan" ? "Cleaning up scan" : "Rendering"} row ${p.row}/${p.rows}${label}…`
                 : `Uploading ${p.done}/${p.total}${label}…`,
-            }))
+            })),
+            { cleanScan: kind === "scan" }
           );
+          if (kind === "scan") scannedPages++;
           if (blankSkipped) console.log(`Sheet ${pageNumber}: skipped ${blankSkipped} of ${plannedTiles} tiles as blank.`);
           totalBlankSkipped += blankSkipped;
           setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
@@ -9057,6 +9176,7 @@ function DrawingsTab({ project }) {
           const summary = await pollAnalysisRun(started.run_id);
           totalItems += summary.item_count || 0;
         }
+        if (blankPages === pages.length) throw new Error("Every page chosen is blank, so there was nothing to read. Check the page numbers, or upload the drawing again.");
         await load();
         alert(
           totalItems === 0
@@ -9068,7 +9188,8 @@ function DrawingsTab({ project }) {
             : `High-resolution take-off complete.\n\n${totalItems} BOQ items from ${pages.length} sheet${pages.length === 1 ? "" : "s"}, ` +
               `read at ${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre.` +
               (totalBlankSkipped ? `\n\n${totalBlankSkipped} blank tile${totalBlankSkipped === 1 ? "" : "s"} were skipped — empty areas of the sheet, so nothing was counted there and no AI charge was incurred for them.` : "")
-        );
+        ) + (scannedPages ? `\n\n${scannedPages} scanned sheet${scannedPages === 1 ? " was" : "s were"} cleaned up first (white background, dark lines) so they read like a CAD print. A CAD PDF export still gives the most exact count.` : "")
+          + (blankPages ? `\n\n${blankPages} blank page${blankPages === 1 ? " was" : "s were"} skipped.` : "");
       } catch (ex) {
         setErr(ex.message);
       } finally {
@@ -9076,7 +9197,9 @@ function DrawingsTab({ project }) {
       }
     }
 
-    if (!assessment.needsTiling) {
+    // A scanned sheet is never read whole: it is cleaned up and read at high
+    // resolution, the same as a large CAD sheet, so it meets the same standard.
+    if (!assessment.needsTiling && sheetKind !== "scan") {
       // Small enough to read whole. This is the cheap path and it is correct
       // here, so take it without comment -- unless the sheet turns out to be so
       // dense that the BOQ will not fit in one response, which no measurement of
@@ -9111,7 +9234,7 @@ function DrawingsTab({ project }) {
     if (totalPages > 1) {
       const suggested = Math.min(totalPages, MAX_AUTO_TILED_PAGES);
       const answer = window.prompt(
-        `This file has ${totalPages} pages, and each is a large ${assessment.sheetName} sheet that has to be read at high resolution.\n\n` +
+        `This file has ${totalPages} pages, and each ${sheetKind === "scan" ? "scanned" : "large"} ${assessment.sheetName} sheet has to be read at high resolution.\n\n` +
         `Which pages should be read? Enter numbers or a range, e.g. "1-3" or "2,5".\n` +
         `Up to ${MAX_AUTO_TILED_PAGES} pages per run.`,
         totalPages === 1 ? "1" : `1-${suggested}`
@@ -9132,10 +9255,15 @@ function DrawingsTab({ project }) {
 
     const totalCalls = assessment.calls * pages.length;
     const ok = window.confirm(
-      `This is a ${assessment.sheetName} sheet.\n\n` +
-      `Read whole, it would come through at about ${assessment.wholeSheetPxPerMm.toFixed(1)} pixels per millimetre — ` +
-      `too coarse for device symbols like cameras and readers to be counted. Quantora will instead read it at ` +
-      `${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles.\n\n` +
+      (sheetKind === "scan"
+        ? `This is a scanned ${assessment.sheetName} sheet, not a CAD export.\n\n` +
+          `Quantora will first clean it up to the same standard as a CAD drawing — white background, dark sharp lines — ` +
+          `then read it at ${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles. ` +
+          `For the most exact count, upload the PDF exported from CAD instead.\n\n`
+        : `This is a ${assessment.sheetName} sheet.\n\n` +
+          `Read whole, it would come through at about ${assessment.wholeSheetPxPerMm.toFixed(1)} pixels per millimetre — ` +
+          `too coarse for device symbols like cameras and readers to be counted. Quantora will instead read it at ` +
+          `${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles.\n\n`) +
       `${pages.length === 1 ? "This takes a few minutes" : `${pages.length} sheets, a few minutes each`} and uses ${totalCalls} AI passes. ` +
       `It still counts as ${pages.length} page${pages.length === 1 ? "" : "s"} against your plan.\n\nStart?`
     );
@@ -9273,6 +9401,7 @@ function DrawingsTab({ project }) {
             </button>
           </div>
         )}
+        <div className="text-xs text-slate-600 mb-1"><b>Every PDF is checked before it is read:</b> blank pages are skipped, rotated sheets are turned upright, and scanned sheets are cleaned up (white background, dark lines) and read at high resolution. Best results: the PDF exported straight from CAD, one floor per sheet.</div>
         <div className="text-xs text-slate-400">You can select multiple files at once — e.g. every floor plan for one discipline, or a full drawing set. Specifications and requirement documents belong on the Specification page, not here. Accepted: PDF, PNG/JPG (scanned or photographed drawings), DWG, DXF, Revit (.rvt), IFC. AI analysis runs directly on PDF, image, <strong>DXF</strong>, and <strong>IFC</strong> files — for DXF and IFC, the AI reads the actual underlying CAD/BIM exchange-format data (entities, layers, blocks for DXF; building elements for IFC), not a rendered picture, so it works from your real design data rather than a visual guess. It's still an AI-based read of that data (not a hard deterministic parser), and on-drawing markup positions aren't available for DXF/IFC since there's no page image to place a marker on — markup is only shown for PDF/image-based analyses. DWG and Revit (.rvt) itself are closed, proprietary formats with no free/reliable parser — they upload and store now, and you can unlock AI analysis for them by attaching a PDF or image export of the same drawing (one click "Export"/"Print to PDF" in any CAD/BIM tool, or export to IFC instead if your tool supports it) using the "Attach export" control shown next to each one below.</div>
         <div className="mt-3">
           <button onClick={analyzeAllPending} disabled={anyAiCallInFlight} className="text-xs bg-slate-900 text-white px-3 py-2 rounded-lg font-semibold hover:bg-slate-800 disabled:opacity-50">Analyze All Un-analyzed Drawings</button>
