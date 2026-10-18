@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-18.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-18.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -3187,7 +3187,7 @@ const QUANTORA_LANDING_HTML = `
       <div class="step qtr-accent" style="--qtr-a:#7c4bb8;">
         <div class="step-num" style="background:#7c4bb8;">02</div>
         <h3>Specification Review</h3>
-        <ul><li>Every page searched in your browser &mdash; no AI charge</li><li>Tells you which pages specify each system</li><li>Or type the page numbers straight from the contents list</li><li>Each value returned with its page and its clause</li></ul>
+        <ul><li>Every page searched in your browser</li><li>Tells you which pages specify each system</li><li>Or type the page numbers straight from the contents list</li><li>Each value returned with its page and its clause</li></ul>
         <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg> Mounting height &middot; coverage &middot; IP &middot; cable</div>
       </div>
       <div class="step qtr-accent" style="--qtr-a:#1f8a5b;">
@@ -11617,7 +11617,7 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq, onUseCloud }) {
           Designs every system you select, on every floor, from the building envelope and the
           rules of the authority having jurisdiction — device schedule, mounting heights,
           containment and cable, pipework and ductwork, plant sizing, a riser drawing, and a
-          priced-ready BOQ. No drawings needed, and no AI charge: every quantity is arithmetic
+          priced-ready BOQ. No drawings needed: every quantity is arithmetic
           over a published code clause or a number you have stated, and each BOQ line carries
           the rule it came from.
         </p>
@@ -22575,7 +22575,7 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
     projects:   [[loading ? "—" : String(active.length), "Active"]],
     commercial: counts.contracts != null ? [[String(counts.contracts), "Contracts tracked"]] : [],
     operations: counts.issues != null ? [[String(counts.issues), "Open issues"]] : [],
-    draftsman:  [["33", "Systems"], ["Free", "No AI charge"]],
+    draftsman:  [["33", "Systems"], ["3D", "Model with every package"]],
   };
 
   return (
@@ -24819,7 +24819,7 @@ function DraftsmanBasePlan({ project, plate, onPlate, onUseCloud }) {
         <div className="font-bold">Start from an uploaded drawing</div>
         <p className="text-xs text-slate-500 mt-1 mb-4 leading-relaxed">
           Pick an architectural floor plan already uploaded to this project. The walls, rooms and room names
-          are read from the sheet itself — no AI call, nothing to pay for. The systems are then drawn on
+          are read from the sheet itself. The systems are then drawn on
           <b> your</b> plan rather than on a plate worked out from floor areas.
           Vector PDFs work; a scan or a photo has no geometry to read, and Revit should be exported to IFC
           or the plan printed to PDF first.
@@ -25498,7 +25498,7 @@ function DraftsmanSpec({ project, spec, onSpec }) {
         {progress && <div className="text-sm text-slate-500 mt-3">{progress}</div>}
         {pages && !progress && (
           <div className="text-sm mt-3" style={{ color: "#1f5130" }}>
-            {pages.length} pages read in your browser. No AI was called and nothing was charged.
+            {pages.length} pages read in your browser.
           </div>
         )}
       </div>
@@ -25560,7 +25560,7 @@ function DraftsmanSpec({ project, spec, onSpec }) {
               Read these pages
             </button>
             <span className="text-xs text-slate-500">
-              Separate with commas; a dash gives a range. Free — these pages are read in your browser.
+              Separate with commas; a dash gives a range. These pages are read in your browser.
             </span>
           </div>
         </div>
@@ -25728,7 +25728,7 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief, initialT
               <div className="text-[11px] text-slate-500 mt-1 leading-relaxed">
                 {plate
                   ? `${plate.source} — ${plate.floor.plate.rooms.length} rooms, ${Math.round(plate.floor.plate.w)} × ${Math.round(plate.floor.plate.h)} m.`
-                  : "Opens the uploaded plan, finds the walls and rooms, and uses them as the plate the systems are drawn on. Free — read in your browser."}
+                  : "Opens the uploaded plan, finds the walls and rooms, and uses them as the plate the systems are drawn on. Read in your browser."}
               </div>
             </button>
             <button onClick={() => setOpenPanel(openPanel === "spec" ? null : "spec")}
@@ -25741,7 +25741,7 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief, initialT
               </div>
               <div className="text-[11px] text-slate-500 mt-1 leading-relaxed">
                 Finds the pages that bind each system, pulls out what they require, and shows the clause
-                beside every value. Free — read in your browser.
+                beside every value. Read in your browser.
               </div>
             </button>
           </div>
