@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-18.7"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-18.8"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -2505,6 +2505,120 @@ async function callBilling(action, payload) {
 // does. The older Stripe-backed `billing` actions are left in place untouched
 // so switching back later is a configuration change, not a rewrite.
 const PADDLE_FN_URL = `${SUPABASE_URL}/functions/v1/paddle-billing`;
+// Page packs: pay per page (2026-10-18). Separate function so the working
+// subscription / wallet checkout is untouched.
+const PAGE_PACKS_FN_URL = `${SUPABASE_URL}/functions/v1/page-packs`;
+async function callPagePacks(action, payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(PAGE_PACKS_FN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action, ...(payload || {}) }),
+  });
+  let json = {};
+  try { json = await res.json(); } catch (e) { /* function not deployed yet */ }
+  if (!res.ok) throw new Error(json.error || "Pages are not available for purchase yet.");
+  return json;
+}
+
+// Fallback prices, used only if the list call fails, so the card still explains itself.
+const PAGE_PACK_DEFAULTS = {
+  products: [
+    { id: "boq_page", name: "Take-off BOQ page", price_usd: 1.0, spec_pages_per_unit: 4, available: false },
+    { id: "draftsman_page", name: "Draftsman page", price_usd: 1.9, spec_pages_per_unit: 4, available: false },
+    { id: "spec_page", name: "Specification page", price_usd: 0.1, spec_pages_per_unit: 0, available: false },
+  ],
+  min_order_usd: 10,
+  balances: { boq: 0, draftsman: 0, spec: 0 },
+};
+
+// "Buy pages": the customer picks how many of each, sees the total live, and
+// pays once. Pages never expire and are used only after a plan's own pages
+// run out (or straight away with no plan).
+function PagePacksCard({ compact }) {
+  const [info, setInfo] = useState(null);
+  const [qty, setQty] = useState({ boq_page: 10, draftsman_page: 0, spec_page: 0 });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await callPagePacks("list", {});
+        setInfo(r && Array.isArray(r.products) && r.products.length
+          ? { ...PAGE_PACK_DEFAULTS, ...r, balances: { ...PAGE_PACK_DEFAULTS.balances, ...(r.balances || {}) } }
+          : { ...PAGE_PACK_DEFAULTS, offline: true });
+      }
+      catch (e) { console.warn("page-packs list unavailable:", e.message); setInfo({ ...PAGE_PACK_DEFAULTS, offline: true }); }
+    })();
+  }, []);
+  const data = info || PAGE_PACK_DEFAULTS;
+  const price = (id) => Number((data.products.find(p => p.id === id) || {}).price_usd || 0);
+  const total = Math.round((qty.boq_page * price("boq_page") + qty.draftsman_page * price("draftsman_page") + qty.spec_page * price("spec_page")) * 100) / 100;
+  const specIncluded = (qty.boq_page + qty.draftsman_page) * 4;
+  const minOrder = Number(data.min_order_usd || 10);
+  const set = (id, v) => setQty(q => ({ ...q, [id]: Math.max(0, Math.min(10000, Math.floor(Number(v) || 0))) }));
+  const allAvailable = data.products.filter(p => qty[p.id] > 0).every(p => p.available);
+
+  async function buy() {
+    setBusy(true); setMsg(null);
+    try {
+      const res = await callPagePacks("create_checkout", { boq: qty.boq_page, draftsman: qty.draftsman_page, spec: qty.spec_page });
+      if (res?.url) window.location.href = res.url;
+      else setMsg({ ok: false, text: "Checkout did not return a payment link." });
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
+    finally { setBusy(false); }
+  }
+
+  const row = (id, label, hint) => (
+    <div key={id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--q-line,#e2e8f0)" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>{label} <span style={{ fontWeight: 600, color: "var(--q-text-dim,#64748b)" }}>${price(id).toFixed(2)} / page</span></div>
+        <div style={{ fontSize: 11.5, color: "var(--q-text-dim,#64748b)", lineHeight: 1.45 }}>{hint}</div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <button type="button" className="qp-btn" aria-label={`Fewer ${label}`} onClick={() => set(id, qty[id] - (id === "spec_page" ? 10 : 5))} style={{ padding: "4px 10px" }}>−</button>
+        <input aria-label={`${label} quantity`} inputMode="numeric" value={qty[id]} onChange={e => set(id, e.target.value)}
+          style={{ width: 64, textAlign: "center", padding: "5px 6px", border: "1px solid var(--q-line,#cbd5e1)", borderRadius: 8, background: "transparent", color: "inherit" }} />
+        <button type="button" className="qp-btn" aria-label={`More ${label}`} onClick={() => set(id, qty[id] + (id === "spec_page" ? 10 : 5))} style={{ padding: "4px 10px" }}>+</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="qp-card" data-page-packs>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <h4 style={{ margin: 0 }}>Buy pages — pay per page</h4>
+        <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>
+          In your packs: <b>{data.balances.boq}</b> BOQ · <b>{data.balances.draftsman}</b> draftsman · <b>{data.balances.spec}</b> spec pages
+        </div>
+      </div>
+      {!compact && (
+        <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", lineHeight: 1.6, margin: "6px 0 4px" }}>
+          No subscription needed. Pages never expire and are used only after your plan's own pages run out.
+          Every page includes UAE rule compliance (Civil Defence, DEWA, DBC), a check against your project specification,
+          AI chat and one rework.
+        </p>
+      )}
+      {row("boq_page", "Take-off BOQ pages", "AI take-off and BOQ with market pricing, Excel / PDF export. Includes 4 specification pages.")}
+      {row("draftsman_page", "Draftsman pages", "Shop drawing (PDF + DXF), 3D model, reference number and revisions. Includes 4 specification pages.")}
+      {row("spec_page", "Extra specification pages", "Only if your specification is longer than the pages included.")}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
+        <div style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>
+          {specIncluded > 0 && <>Includes <b>{specIncluded}</b> specification pages. </>}
+          Minimum order ${minOrder}.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>${total.toFixed(2)}</div>
+          <button className="qp-btn pri" disabled={busy || total < minOrder || !allAvailable || data.offline}
+            onClick={buy}>{busy ? "Opening checkout…" : "Buy pages"}</button>
+        </div>
+      </div>
+      {total > 0 && total < minOrder && <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>Add ${(minOrder - total).toFixed(2)} more to reach the ${minOrder} minimum.</div>}
+      {(data.offline || !allAvailable) && <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 6 }}>Online purchase of pages opens soon. Contact us and we will add pages for you.</div>}
+      {msg && <div style={{ fontSize: 12.5, marginTop: 8, color: msg.ok ? "#059669" : "#e11d48" }}>{msg.text}</div>}
+    </div>
+  );
+}
 // Every plan limit is NOT NULL in the database now, so a null reaching here is a
 // data fault, not an "unlimited" plan. Show an em dash and let it be noticed.
 function fmtLimit(n) {
@@ -4949,6 +5063,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
             })}
           </div>
         )}
+        {!loading && <div className="mt-6"><PagePacksCard compact /></div>}
         {!loading && packs.length > 0 && (
           <div className="mt-6 border-t pt-5" ref={walletRef}>
             <div className="flex items-baseline justify-between mb-1">
@@ -19704,6 +19819,7 @@ function BillingPage({ onUpgrade }) {
           </>
          )}
       </div>
+      <PagePacksCard />
     </div>
   );
 }
