@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-18.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-18.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -2251,9 +2251,13 @@ function pollDelay(activeMs) {
 async function pollAnalysisRun(runId, { intervalMs = 4000, maxWaitMs = 7 * 60 * 1000 } = {}) {
   const startedAt = Date.now();
   for (;;) {
-    const { data: row, error } = await sb.from("analysis_runs").select("status, summary, error_message").eq("id", runId).single();
+    const { data: row, error } = await sb.from("analysis_runs").select("status, summary, error_message, run_kind, change_reason, project_id").eq("id", runId).single();
     if (error) throw new Error("Could not check analysis status: " + error.message);
-    if (row.status === "completed") return row.summary || {};
+    if (row.status === "completed") {
+      const k = row.run_kind || "";
+      qStepDone(row.change_reason ? "rework" : /^design_(drawing|system)$/.test(k) ? "design" : k === "design_ifc" ? "draftsman" : "takeoff", row.project_id);
+      return row.summary || {};
+    }
     if (row.status === "failed") throw new Error(row.error_message || "AI analysis failed.");
     if (Date.now() - startedAt > maxWaitMs) {
       const err = new Error(`This is taking longer than ${Math.round(maxWaitMs / 1000 / 60)} minutes -- it may still be processing in the background. Check back in a few minutes, or refresh the page to see if it finished.`);
@@ -12007,6 +12011,7 @@ function PricingBoqPanel({ project, consolidated, loading }) {
       });
       await load();
       await refreshCredits();
+      if (res.lines_priced) qStepDone("pricing", project.id);
       setMsg(
         `Priced ${res.lines_priced} of ${res.lines_requested} lines using ${res.searches_used ?? "?"} web searches` +
         (res.truncated ? `. ${res.truncated} further lines were not priced in this run.` : ".") +
@@ -15055,6 +15060,7 @@ function ExportTab({ project }) {
       ], "Product Recommendations");
 
       const fileName = `${project.project_name.replace(/[^a-z0-9]/gi,"_")}_BOQ_${kind}.xlsx`;
+      qStepDone("boq_export", project.id);
       const styled = await xlDownloadStyled(sheetDefs, fileName, {
         projectName: project.project_name,
         location: [project.city, project.country].filter(Boolean).join(", "),
@@ -15941,6 +15947,7 @@ const QADMIN_NAV = [
   { group: "Business", key: "payments", label: "Payments", sub: "Whether Paddle will take money yet, and what is missing" },
   { group: "Business", key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
   { group: "Platform", key: "support", label: "Support & Feedback", sub: "What customers report, and what they want next" },
+  { group: "Platform", key: "ratings", label: "User Ratings", sub: "1-5 star ratings after each step, per customer" },
   { group: "Platform", key: "health", label: "System Health", sub: "Live status of core platform services" },
   { group: "Platform", key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
   { group: "Platform", key: "compliance", label: "Compliance Rules", sub: "The authority library, by country and city" },
@@ -16624,6 +16631,9 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "support" && (
               <QSupportView companyNameById={companyNameById} />
+            )}
+            {activeView === "ratings" && (
+              <QFeedbackView companyNameById={companyNameById} />
             )}
             {activeView === "health" && (
               <QHealthView systemStatus={systemStatus} />
@@ -26659,7 +26669,16 @@ function DraftsmanIfcPackage({ project }) {
   const load = async () => {
     const { data, error } = await sb.from("draftsman_jobs").select("*")
       .eq("project_id", project.id).order("created_at", { ascending: false }).limit(40);
-    if (!error) setJobs(data || []);
+    if (!error) {
+      setJobs(prev => {
+        (data || []).forEach(j => {
+          const was = prev.find(x => x.id === j.id);
+          if (was && was.status !== "done" && j.status === "done" && (j.summary || {}).rework_stage !== "parse")
+            qStepDone((j.options || {}).rework_of ? "draftsman_rework" : "draftsman", project.id);
+        });
+        return data || [];
+      });
+    }
   };
   useEffect(() => { load(); }, [project.id]);
   // poll while anything is waiting or running
@@ -27480,6 +27499,206 @@ function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) 
   );
 }
 
+// ---------------------------------------------------------------------------
+// STEP FEEDBACK (2026-10-18). When a user finishes a step (take-off & BOQ, a
+// rework, a design, shop drawings, live pricing, a BOQ export) the step is
+// queued; the next time they leave the page, a 1-5 star rating appears.
+// Welcome-pack (trial) users must answer before they continue; nobody else is
+// asked. Each step is asked once per project. Ratings go to platform_feedback,
+// which only platform admins can read (Admin -> User Ratings).
+// ---------------------------------------------------------------------------
+const FEEDBACK_STEPS = {
+  takeoff: "AI take-off & BOQ",
+  rework: "BOQ rework",
+  design: "System design",
+  draftsman: "Shop drawings (draftsman)",
+  draftsman_rework: "Drawing rework on consultant comments",
+  pricing: "Live market pricing",
+  boq_export: "BOQ export",
+};
+const FEEDBACK_WORDS = ["", "Poor", "Needs work", "Okay", "Good", "Excellent"];
+function qStepDone(step, projectId) {
+  try { window.dispatchEvent(new CustomEvent("quantora:step-done", { detail: { step, project_id: projectId || null } })); } catch (_) {}
+}
+function qFbKey(it) { return "qfb:" + it.step + ":" + (it.project_id || "-"); }
+
+function StepFeedbackModal({ item, mandatory, onDone }) {
+  const [rating, setRating] = useState(0);
+  const [hover, setHover] = useState(0);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => { setRating(0); setHover(0); setComment(""); setErr(""); }, [item && qFbKey(item)]);
+  if (!item) return null;
+  const label = FEEDBACK_STEPS[item.step] || item.step;
+  const shown = hover || rating;
+  const submit = async () => {
+    if (!rating) { setErr("Choose 1 to 5 stars."); return; }
+    setBusy(true); setErr("");
+    try {
+      const { data: u } = await sb.auth.getUser();
+      const { error } = await sb.from("platform_feedback").insert({
+        user_id: u && u.user ? u.user.id : null, project_id: item.project_id || null,
+        step: item.step, rating, comment: comment.trim().slice(0, 2000) || null, page: item.page || null,
+      });
+      if (error) throw error;
+    } catch (e) {
+      // Never trap someone behind a form that cannot be saved.
+      console.warn("feedback not saved:", e && e.message);
+    }
+    try { localStorage.setItem(qFbKey(item), String(Date.now())); } catch (_) {}
+    setBusy(false);
+    onDone();
+  };
+  return (
+    <div role="dialog" aria-modal="true" aria-labelledby="qfb-title"
+      style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(15,23,42,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ width: "100%", maxWidth: 440, background: "#fff", borderRadius: 18, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.45)", padding: "26px 24px 22px" }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: "#6366f1" }}>Quick feedback</div>
+        <h2 id="qfb-title" style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: "6px 0 4px" }}>How was {label}?</h2>
+        <p style={{ fontSize: 13, color: "#64748b", margin: 0 }}>Rate this step from 1 to 5 stars. It helps us improve the platform.</p>
+        <div style={{ display: "flex", justifyContent: "center", gap: 6, margin: "20px 0 4px" }} onMouseLeave={() => setHover(0)}>
+          {[1, 2, 3, 4, 5].map(n => (
+            <button key={n} type="button" aria-label={`${n} star${n > 1 ? "s" : ""}`} onMouseEnter={() => setHover(n)} onClick={() => setRating(n)}
+              style={{ background: "none", border: 0, cursor: "pointer", padding: 2, fontSize: 40, lineHeight: 1, color: n <= shown ? "#f59e0b" : "#cbd5e1", transition: "transform .1s", transform: n === hover ? "scale(1.12)" : "none" }}>
+              {"★"}
+            </button>
+          ))}
+        </div>
+        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: shown ? "#0f172a" : "#94a3b8", minHeight: 18 }}>
+          {shown ? FEEDBACK_WORDS[shown] : "Tap a star"}
+        </div>
+        <textarea id="qfb-comment" value={comment} onChange={e => setComment(e.target.value)} rows={3}
+          placeholder={rating && rating <= 3 ? "What went wrong, or what should we improve?" : "Anything to add? (optional)"}
+          style={{ width: "100%", marginTop: 14, border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", fontSize: 13, resize: "vertical" }} />
+        {err && <div style={{ color: "#dc2626", fontSize: 12.5, marginTop: 6 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button type="button" disabled={busy || !rating} onClick={submit}
+            style={{ flex: 1, background: rating ? "linear-gradient(90deg,#6366f1,#8b5cf6)" : "#cbd5e1", color: "#fff", border: 0, borderRadius: 10, padding: "11px 14px", fontSize: 14, fontWeight: 700, cursor: rating ? "pointer" : "not-allowed" }}>
+            {busy ? "Sending…" : "Send rating"}</button>
+          {!mandatory && <button type="button" onClick={onDone} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 14px", fontSize: 14 }}>Skip</button>}
+        </div>
+        {mandatory && <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 10, textAlign: "center" }}>A rating is needed to continue with your free welcome pack.</div>}
+      </div>
+    </div>
+  );
+}
+
+// Admin -> User Ratings: every rating, per step and per customer.
+function QFeedbackView({ companyNameById }) {
+  const [rows, setRows] = useState([]);
+  const [users, setUsers] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [step, setStep] = useState("all");
+  const [stars, setStars] = useState("all");
+  useEffect(() => { load(); }, []);
+  async function load() {
+    setLoading(true); setErr("");
+    try {
+      const { data, error } = await sb.from("platform_feedback").select("*").order("created_at", { ascending: false }).limit(2000);
+      if (error) throw error;
+      setRows(data || []);
+      const ids = Array.from(new Set((data || []).map(r => r.user_id).filter(Boolean)));
+      if (ids.length) {
+        const { data: pr } = await sb.from("profiles").select("id, full_name").in("id", ids);
+        const m = {}; (pr || []).forEach(p => { m[p.id] = p.full_name; }); setUsers(m);
+      }
+    } catch (e) {
+      setErr(/platform_feedback/.test(e.message || "") ? "The ratings table is not set up yet. Run the feedback SQL in Supabase." : (e.message || "Could not load ratings."));
+    } finally { setLoading(false); }
+  }
+  const avg = list => list.length ? list.reduce((s, r) => s + r.rating, 0) / list.length : null;
+  const starsTxt = v => v == null ? "—" : v.toFixed(1);
+  const col = v => v == null ? "var(--text-dimmer)" : v >= 4 ? "#86efac" : v >= 3 ? "#fcd34d" : "#fca5a5";
+  const steps = Object.keys(FEEDBACK_STEPS).concat(Array.from(new Set(rows.map(r => r.step))).filter(s => !FEEDBACK_STEPS[s]));
+  const shown = rows.filter(r => (step === "all" || r.step === step) && (stars === "all" || (stars === "low" ? r.rating <= 2 : r.rating === Number(stars))));
+  const kpi = { borderRadius: 12, border: "1px solid var(--border-soft)", padding: "12px 14px", background: "rgba(255,255,255,0.02)" };
+  const cap = { fontSize: 11, color: "var(--text-dimmer)", textTransform: "uppercase", letterSpacing: "0.06em" };
+  const last30 = rows.filter(r => Date.now() - new Date(r.created_at).getTime() < 30 * 864e5);
+  return (
+    <div>
+      <div className="card panel" style={{ marginBottom: 16 }}>
+        <div className="panel-head">
+          <h3>User ratings by step</h3>
+          <button className="btn btn-sm" disabled={loading} onClick={load}>{loading ? "Loading…" : "Refresh"}</button>
+        </div>
+        <div style={{ padding: "16px 18px" }}>
+          {err && <p style={{ color: "#fca5a5", fontSize: 13, marginBottom: 12 }}>{err}</p>}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 18 }}>
+            <div style={kpi}><div style={{ fontSize: 24, fontWeight: 800, color: col(avg(rows)) }}>{starsTxt(avg(rows))} {"★"}</div><div style={cap}>Average rating</div><div style={{ fontSize: 11, color: "var(--text-dimmer)", marginTop: 4 }}>{rows.length} rating{rows.length === 1 ? "" : "s"} in total</div></div>
+            <div style={kpi}><div style={{ fontSize: 24, fontWeight: 800, color: col(avg(last30)) }}>{starsTxt(avg(last30))} {"★"}</div><div style={cap}>Last 30 days</div><div style={{ fontSize: 11, color: "var(--text-dimmer)", marginTop: 4 }}>{last30.length} rating{last30.length === 1 ? "" : "s"}</div></div>
+            <div style={kpi}><div style={{ fontSize: 24, fontWeight: 800, color: rows.filter(r => r.rating <= 2).length ? "#fca5a5" : "var(--text)" }}>{rows.filter(r => r.rating <= 2).length}</div><div style={cap}>Low ratings (1-2 stars)</div><div style={{ fontSize: 11, color: "var(--text-dimmer)", marginTop: 4 }}>read these first</div></div>
+            <div style={kpi}><div style={{ fontSize: 24, fontWeight: 800 }}>{new Set(rows.map(r => r.company_id).filter(Boolean)).size}</div><div style={cap}>Companies rating</div></div>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="qtable" style={{ width: "100%", fontSize: 13 }}>
+              <thead><tr><th style={{ textAlign: "left" }}>Step</th><th>Average</th><th>Ratings</th><th style={{ textAlign: "left", minWidth: 220 }}>1 to 5 stars</th></tr></thead>
+              <tbody>
+                {steps.map(s => {
+                  const list = rows.filter(r => r.step === s);
+                  const a = avg(list);
+                  return (
+                    <tr key={s} style={{ cursor: "pointer" }} onClick={() => setStep(s)}>
+                      <td>{FEEDBACK_STEPS[s] || s}</td>
+                      <td style={{ textAlign: "center", fontWeight: 800, color: col(a) }}>{starsTxt(a)}</td>
+                      <td style={{ textAlign: "center" }}>{list.length}</td>
+                      <td>
+                        <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 22 }}>
+                          {[1, 2, 3, 4, 5].map(n => {
+                            const c = list.filter(r => r.rating === n).length;
+                            return <div key={n} title={`${n} star: ${c}`} style={{ width: 28, height: Math.max(3, list.length ? (c / list.length) * 22 : 3), background: n <= 2 ? "#f87171" : n === 3 ? "#fbbf24" : "#4ade80", opacity: c ? 1 : 0.25, borderRadius: 3 }} />;
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div className="card panel">
+        <div className="panel-head">
+          <h3>Every rating</h3>
+          <div style={{ display: "flex", gap: 8 }}>
+            <select id="qfb-step" value={step} onChange={e => setStep(e.target.value)} className="qselect">
+              <option value="all">All steps</option>
+              {steps.map(s => <option key={s} value={s}>{FEEDBACK_STEPS[s] || s}</option>)}
+            </select>
+            <select id="qfb-stars" value={stars} onChange={e => setStars(e.target.value)} className="qselect">
+              <option value="all">All ratings</option>
+              <option value="low">1-2 stars</option>
+              {[5, 4, 3, 2, 1].map(n => <option key={n} value={n}>{n} star{n > 1 ? "s" : ""}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="qtable" style={{ width: "100%", fontSize: 13 }}>
+            <thead><tr><th style={{ textAlign: "left" }}>Date</th><th style={{ textAlign: "left" }}>Company</th><th style={{ textAlign: "left" }}>User</th><th style={{ textAlign: "left" }}>Step</th><th>Rating</th><th style={{ textAlign: "left" }}>Comment</th><th style={{ textAlign: "left" }}>Plan</th></tr></thead>
+            <tbody>
+              {shown.length === 0 ? (
+                <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-dimmer)", padding: 18 }}>{loading ? "Loading…" : "No ratings yet."}</td></tr>
+              ) : shown.map(r => (
+                <tr key={r.id}>
+                  <td style={{ whiteSpace: "nowrap" }}>{new Date(r.created_at).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                  <td>{companyNameById[r.company_id] || "—"}</td>
+                  <td>{users[r.user_id] || "—"}</td>
+                  <td>{FEEDBACK_STEPS[r.step] || r.step}</td>
+                  <td style={{ textAlign: "center", whiteSpace: "nowrap", color: r.rating <= 2 ? "#fca5a5" : r.rating === 3 ? "#fcd34d" : "#fbbf24", letterSpacing: 1 }}>{"★".repeat(r.rating)}<span style={{ color: "var(--text-dimmer)" }}>{"★".repeat(5 - r.rating)}</span></td>
+                  <td style={{ maxWidth: 380, color: r.comment ? "var(--text)" : "var(--text-dimmer)" }}>{r.comment || "—"}</td>
+                  <td>{r.plan_id === "trial" ? "Welcome pack" : (r.plan_id || "—")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(undefined);
   // Home, not the project list. Signing in should answer "what should I do
@@ -27527,6 +27746,10 @@ function App() {
   // window event, so any page at any depth can ask for it with the project and
   // drawing already filled in -- the same pattern plan-limit-reached uses.
   const [supportCtx, setSupportCtx] = useState(null);
+  // Step feedback: steps finished in this visit wait here until the user leaves the page.
+  const [fbQueue, setFbQueue] = useState([]);
+  const [fbOpen, setFbOpen] = useState(null);
+  const [fbTrial, setFbTrial] = useState(null);       // null = not known yet
 
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
@@ -27552,6 +27775,39 @@ function App() {
     if (!session) { setIsPlatformAdmin(false); return; }
     callAdminAnalytics("is_admin", {}).then(() => setIsPlatformAdmin(true)).catch(() => setIsPlatformAdmin(false));
   }, [session]);
+
+  // Step feedback: is this account on the free welcome pack? Only those users are asked.
+  useEffect(() => {
+    if (!session) { setFbTrial(null); return; }
+    callBilling("usage_summary", {}).then(u => setFbTrial(!!(u && u.plan && u.plan.is_trial))).catch(() => setFbTrial(false));
+  }, [session]);
+  useEffect(() => {
+    const onDone = async (e) => {
+      const it = { ...(e.detail || {}), page: (viewStack[viewStack.length - 1] || {}).name };
+      if (!it.step) return;
+      try { if (localStorage.getItem(qFbKey(it))) return; } catch (_) {}
+      // asked before on another device? (users can read their own ratings)
+      try {
+        let q = sb.from("platform_feedback").select("id").eq("step", it.step).limit(1);
+        q = it.project_id ? q.eq("project_id", it.project_id) : q.is("project_id", null);
+        const { data } = await q;
+        if (data && data.length) return;
+      } catch (_) {}
+      setFbQueue(qs => qs.some(x => qFbKey(x) === qFbKey(it)) ? qs : qs.concat([it]));
+    };
+    window.addEventListener("quantora:step-done", onDone);
+    return () => window.removeEventListener("quantora:step-done", onDone);
+  }, [viewStack]);
+  // Leaving the page where the step finished (back to the dashboard, home, another page) opens the rating.
+  const fbViewKey = view ? view.name + ":" + ((view.project && view.project.id) || "") : "";
+  const fbLastView = useRef(fbViewKey);
+  useEffect(() => {
+    const moved = fbLastView.current !== fbViewKey;
+    fbLastView.current = fbViewKey;
+    if (!moved || fbOpen || !fbQueue.length || !fbTrial || isPlatformAdmin) return;
+    setFbOpen(fbQueue[0]);
+    setFbQueue(qs => qs.slice(1));
+  }, [fbViewKey, fbQueue, fbTrial, isPlatformAdmin]);
 
   // Safety net: ensures every signed-in session has a company (and, for a
   // brand-new one, a stamped 2-day trial) even if AuthScreen's own
@@ -27762,6 +28018,7 @@ function App() {
         }}>Help</button>
       <PulseBar />
       <SupportModal open={!!supportCtx} initial={supportCtx} onClose={()=>setSupportCtx(null)} />
+      <StepFeedbackModal item={fbOpen} mandatory={!!fbTrial} onDone={()=>setFbOpen(null)} />
     </div>
   );
 }
