@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-20.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-20.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -17557,9 +17557,9 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
       <div className="panel-head"><h3>All Customers</h3><span className="tag">{companies.length} companies</span></div>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Company</th><th>Location</th><th>Plan</th><th className="num">Projects</th><th className="num">Drawings</th><th className="num">Pages</th><th className="num">Actual AI Cost</th><th className="num">Revenue (mo.)</th><th>Status</th></tr></thead>
+          <thead><tr><th>Company</th><th>Onboarded</th><th>Location</th><th>Plan</th><th className="num">Projects</th><th className="num">Drawings</th><th className="num">Pages</th><th className="num">Actual AI Cost</th><th className="num">Revenue (mo.)</th><th>Status</th></tr></thead>
           <tbody>
-            {companies.length === 0 ? <tr><td colSpan="9" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No companies yet.</td></tr> : companies.map(c => {
+            {companies.length === 0 ? <tr><td colSpan="10" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No companies yet.</td></tr> : companies.map(c => {
               const fin = perCompanyById[c.id];
               const daysLeft = c.plan === "trial" ? qDaysLeft(c.trial_end_date) : null;
               const paidStatus = c.subscription_status ?? fin?.subscription_status;
@@ -17572,13 +17572,18 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
               const statusClass = c.plan === "trial" ? (daysLeft != null && daysLeft <= 0 ? "pill st-churned" : "pill st-trial") : (isPaidActive ? "pill st-active" : "pill st-churned");
               return (
                 <tr key={c.id} onClick={() => onSelect(selectedId === c.id ? null : c.id)}>
-                  <td className="name">
-                    {c.name}
-                    {c.created_at && (
-                      <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text-dimmer)", marginTop: 2 }}>
-                        joined {new Date(c.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}
-                      </div>
-                    )}
+                  <td className="name">{c.name}</td>
+                  <td style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>
+                    {c.created_at ? (<>
+                      <div>{new Date(c.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</div>
+                      <div style={{ fontSize: 11, color: "var(--text-dimmer)" }}>{(() => {
+                        const d = Math.floor((Date.now() - new Date(c.created_at).getTime()) / 86400000);
+                        if (!(d >= 1)) return qAgo(c.created_at);
+                        if (d < 60) return `${d} day${d === 1 ? "" : "s"} ago`;
+                        const m = Math.floor(d / 30.4);
+                        return m < 24 ? `${m} months ago` : `${Math.floor(d / 365)} years ago`;
+                      })()}</div>
+                    </>) : <span style={{ color: "var(--text-dimmer)" }}>—</span>}
                   </td>
                   <td style={{ fontSize: 12.5, lineHeight: 1.45, minWidth: 150 }}>
                     {(() => {
