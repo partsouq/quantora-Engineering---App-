@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-20.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-20.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -7336,6 +7336,7 @@ function TenderIntelligenceTab({ project }) {
     setBusy(docId); setError(null);
     try {
       await callTender("analyze_document", { tender_id: tender.id, document_id: docId });
+      qStepDone("tender", project && project.id);
       await load();
     } catch (e) {
       console.error("analyze_document failed:", e);
@@ -7349,6 +7350,7 @@ function TenderIntelligenceTab({ project }) {
     setBusy("summary"); setError(null);
     try {
       const res = await callTender("executive_summary", { tender_id: tender.id });
+      qStepDone("tender_summary", project && project.id);
       setTender(t => ({ ...t, executive_summary: res.summary, summary_generated_at: new Date().toISOString() }));
       setSub("summary");
     } catch (e) { setError(e.message || "Could not write the summary."); }
@@ -7359,6 +7361,7 @@ function TenderIntelligenceTab({ project }) {
     setBusy("rfi"); setError(null);
     try {
       const res = await callTender("draft_clarifications", { tender_id: tender.id });
+      if (res && res.drafted) qStepDone("tender_rfi", project && project.id);
       await load();
       setSub("clarifications");
       if (!res.drafted) setError(res.message || "Nothing to draft.");
@@ -8124,6 +8127,7 @@ function ComparisonTab({ project }) {
     setBusyQ(quoteId + action); setError(null);
     try {
       await callProcurement(action, { quotation_id: quoteId });
+      qStepDone(action === "extract_quotation" ? "quotation" : "quotation_compare", project && project.id);
       await loadQuotes(pkgId);
     } catch (e) {
       console.error(`${action} failed:`, e);
@@ -11928,6 +11932,7 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq, onUseCloud }) {
     try {
       const out = await callDesign("generate_design", { ...body(), include_svg: true });
       setResult(out);
+      qStepDone("design", project && project.id);
     } catch (ex) { setErr(ex.message); } finally { setBusy(""); }
   }
 
@@ -13979,6 +13984,7 @@ function SpecificationTab({ project }) {
     setBusySpec(docId); setError(null);
     try {
       await callTender("analyze_document", { tender_id: tender.id, document_id: docId });
+      qStepDone("specification", project && project.id);
       await load();
       setView("requirement");
     } catch (e) {
@@ -15589,6 +15595,7 @@ function ChatTab({ project }) {
     try {
       const r = await callEngine("chat", { project_id: project.id, message: userMsg });
       setMessages(m => [...m, { role: "assistant", text: r.reply }]);
+      qStepDone("chat", project.id);
     } catch (ex) {
       setMessages(m => [...m, { role: "assistant", text: `Error: ${ex.message}` }]);
     } finally { setBusy(false); }
@@ -28175,8 +28182,8 @@ function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) 
 // STEP FEEDBACK (2026-10-18). When a user finishes a step (take-off & BOQ, a
 // rework, a design, shop drawings, live pricing, a BOQ export) the step is
 // queued; the next time they leave the page, a 1-5 star rating appears.
-// Welcome-pack (trial) users must answer before they continue; nobody else is
-// asked. Each step is asked once per project. Ratings go to platform_feedback,
+// Every user (free and paid) must answer before they continue; platform admins
+// are not asked. Each step is asked once per project. Ratings go to platform_feedback,
 // which only platform admins can read (Admin -> User Ratings).
 // ---------------------------------------------------------------------------
 const FEEDBACK_STEPS = {
@@ -28187,6 +28194,14 @@ const FEEDBACK_STEPS = {
   draftsman_rework: "Drawing rework on consultant comments",
   pricing: "Live market pricing",
   boq_export: "BOQ export",
+  specification: "Specification reading",
+  tender: "Tender document reading",
+  tender_summary: "Tender executive summary",
+  tender_rfi: "Tender clarifications (RFIs)",
+  quotation: "Supplier quotation reading",
+  quotation_compare: "Quotation matching & compliance",
+  chat: "Estima AI assistant",
+  platform: "Quantora overall",
 };
 const FEEDBACK_WORDS = ["", "Poor", "Needs work", "Okay", "Good", "Excellent"];
 function qStepDone(step, projectId) {
@@ -28447,6 +28462,28 @@ function App() {
     if (!session) { setIsPlatformAdmin(false); return; }
     callAdminAnalytics("is_admin", {}).then(() => setIsPlatformAdmin(true)).catch(() => setIsPlatformAdmin(false));
   }, [session]);
+
+  // Existing customers (2026-10-20): anyone who has used the platform (their company
+  // has a project) and has never given an overall rating is asked once, on their
+  // next move between pages. New users are asked as they finish each step.
+  useEffect(() => {
+    if (!session || isPlatformAdmin) return;
+    let alive = true;
+    (async () => {
+      try {
+        const it = { step: "platform", project_id: null };
+        try { if (localStorage.getItem(qFbKey(it))) return; } catch (_) {}
+        const { data: rated } = await sb.from("platform_feedback").select("id").eq("step", "platform").eq("user_id", session.user.id).limit(1);
+        if (rated && rated.length) return;
+        const { data: prof } = await sb.from("profiles").select("company_id").eq("id", session.user.id).maybeSingle();
+        if (!prof || !prof.company_id) return;
+        const { data: proj } = await sb.from("projects").select("id").eq("company_id", prof.company_id).limit(1);
+        if (!proj || !proj.length || !alive) return;
+        setFbQueue(qs => qs.some(x => qFbKey(x) === qFbKey(it)) ? qs : [it].concat(qs));
+      } catch (e) { console.error("overall rating check failed (non-fatal):", e); }
+    })();
+    return () => { alive = false; };
+  }, [session && session.user && session.user.id, isPlatformAdmin]);
 
   // Step feedback: plan type is kept with each rating (all users are asked since 2026-10-20).
   useEffect(() => {
