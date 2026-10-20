@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-20.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-20.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -28250,7 +28250,7 @@ function StepFeedbackModal({ item, mandatory, onDone }) {
             {busy ? "Sending…" : "Send rating"}</button>
           {!mandatory && <button type="button" onClick={onDone} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 14px", fontSize: 14 }}>Skip</button>}
         </div>
-        {mandatory && <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 10, textAlign: "center" }}>A rating is needed to continue with your free welcome pack.</div>}
+        {mandatory && <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 10, textAlign: "center" }}>A quick rating is needed to continue — it helps us improve Quantora for you.</div>}
       </div>
     </div>
   );
@@ -28448,7 +28448,7 @@ function App() {
     callAdminAnalytics("is_admin", {}).then(() => setIsPlatformAdmin(true)).catch(() => setIsPlatformAdmin(false));
   }, [session]);
 
-  // Step feedback: is this account on the free welcome pack? Only those users are asked.
+  // Step feedback: plan type is kept with each rating (all users are asked since 2026-10-20).
   useEffect(() => {
     if (!session) { setFbTrial(null); return; }
     callBilling("usage_summary", {}).then(u => setFbTrial(!!(u && u.plan && u.plan.is_trial))).catch(() => setFbTrial(false));
@@ -28476,10 +28476,11 @@ function App() {
   useEffect(() => {
     const moved = fbLastView.current !== fbViewKey;
     fbLastView.current = fbViewKey;
-    if (!moved || fbOpen || !fbQueue.length || !fbTrial || isPlatformAdmin) return;
+    // Every user (free and paid) rates each finished step; platform admins are not asked.
+    if (!moved || fbOpen || !fbQueue.length || !session || isPlatformAdmin) return;
     setFbOpen(fbQueue[0]);
     setFbQueue(qs => qs.slice(1));
-  }, [fbViewKey, fbQueue, fbTrial, isPlatformAdmin]);
+  }, [fbViewKey, fbQueue, session, isPlatformAdmin]);
 
   // Safety net: ensures every signed-in session has a company (and, for a
   // brand-new one, a stamped 2-day trial) even if AuthScreen's own
@@ -28691,7 +28692,7 @@ function App() {
         }}>Help</button>
       <PulseBar />
       <SupportModal open={!!supportCtx} initial={supportCtx} onClose={()=>setSupportCtx(null)} />
-      <StepFeedbackModal item={fbOpen} mandatory={!!fbTrial} onDone={()=>setFbOpen(null)} />
+      <StepFeedbackModal item={fbOpen} mandatory={true} onDone={()=>setFbOpen(null)} />
     </div>
   );
 }
