@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-20.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-20.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -17517,6 +17517,37 @@ function AdminQuotaControls({ company, onChanged }) {
 
 function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedId, onSelect, payments, onQuotaChanged }) {
   const selected = companies.find(c => c.id === selectedId);
+  // Where each customer is: what their people told us (profile country / city)
+  // and where the latest sign-in came from (browser time zone).
+  const [locByCompany, setLocByCompany] = useState({});
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        let { data: profs, error } = await sb.from("profiles").select("id, company_id, country, city");
+        if (error && /city/.test(error.message || "")) ({ data: profs } = await sb.from("profiles").select("id, company_id, country"));
+        const { data: acts } = await sb.from("user_activity")
+          .select("user_id, company_id, time_zone, last_seen_at").order("last_seen_at", { ascending: false }).limit(2000);
+        const companyOfUser = {};
+        (profs || []).forEach(p => { if (p.company_id) companyOfUser[p.id] = p.company_id; });
+        const out = {};
+        (profs || []).forEach(p => {
+          if (!p.company_id || !p.country) return;
+          const o = (out[p.company_id] = out[p.company_id] || { works: [], last: null });
+          const label = [p.city, p.country].filter(Boolean).join(", ");
+          if (!o.works.includes(label)) o.works.push(label);
+        });
+        (acts || []).forEach(a => {
+          const cid = a.company_id || companyOfUser[a.user_id];
+          if (!cid) return;
+          const o = (out[cid] = out[cid] || { works: [], last: null });
+          if (!o.last) o.last = a;                  // rows arrive newest first
+        });
+        if (alive) setLocByCompany(out);
+      } catch (e) { console.error("customer locations failed (non-fatal):", e); }
+    })();
+    return () => { alive = false; };
+  }, [companies.length]);
   const selectedFin = selected ? perCompanyById[selected.id] : null;
   const selectedTrial = selected ? trialByCompanyId[selected.id] : null;
   const selectedPayments = selected ? payments.filter(p => p.company_id === selected.id) : [];
@@ -17526,9 +17557,9 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
       <div className="panel-head"><h3>All Customers</h3><span className="tag">{companies.length} companies</span></div>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Company</th><th>Plan</th><th className="num">Projects</th><th className="num">Drawings</th><th className="num">Pages</th><th className="num">Actual AI Cost</th><th className="num">Revenue (mo.)</th><th>Status</th></tr></thead>
+          <thead><tr><th>Company</th><th>Onboarded</th><th>Location</th><th>Plan</th><th className="num">Projects</th><th className="num">Drawings</th><th className="num">Pages</th><th className="num">Actual AI Cost</th><th className="num">Revenue (mo.)</th><th>Status</th></tr></thead>
           <tbody>
-            {companies.length === 0 ? <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No companies yet.</td></tr> : companies.map(c => {
+            {companies.length === 0 ? <tr><td colSpan="10" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No companies yet.</td></tr> : companies.map(c => {
               const fin = perCompanyById[c.id];
               const daysLeft = c.plan === "trial" ? qDaysLeft(c.trial_end_date) : null;
               const paidStatus = c.subscription_status ?? fin?.subscription_status;
@@ -17541,13 +17572,32 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
               const statusClass = c.plan === "trial" ? (daysLeft != null && daysLeft <= 0 ? "pill st-churned" : "pill st-trial") : (isPaidActive ? "pill st-active" : "pill st-churned");
               return (
                 <tr key={c.id} onClick={() => onSelect(selectedId === c.id ? null : c.id)}>
-                  <td className="name">
-                    {c.name}
-                    {c.created_at && (
-                      <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text-dimmer)", marginTop: 2 }}>
-                        joined {new Date(c.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}
-                      </div>
-                    )}
+                  <td className="name">{c.name}</td>
+                  <td style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>
+                    {c.created_at ? (<>
+                      <div>{new Date(c.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</div>
+                      <div style={{ fontSize: 11, color: "var(--text-dimmer)" }}>{(() => {
+                        const d = Math.floor((Date.now() - new Date(c.created_at).getTime()) / 86400000);
+                        if (!(d >= 1)) return qAgo(c.created_at);
+                        if (d < 60) return `${d} day${d === 1 ? "" : "s"} ago`;
+                        const m = Math.floor(d / 30.4);
+                        return m < 24 ? `${m} months ago` : `${Math.floor(d / 365)} years ago`;
+                      })()}</div>
+                    </>) : <span style={{ color: "var(--text-dimmer)" }}>—</span>}
+                  </td>
+                  <td style={{ fontSize: 12.5, lineHeight: 1.45, minWidth: 150 }}>
+                    {(() => {
+                      const L = locByCompany[c.id];
+                      if (!L) return <span style={{ color: "var(--text-dimmer)" }}>—</span>;
+                      return (<>
+                        <div>{L.works.length ? L.works.slice(0, 2).join(" · ") : <span style={{ color: "#fbbf24" }}>not selected</span>}</div>
+                        {L.last && L.last.time_zone && (
+                          <div style={{ fontSize: 11, color: "var(--text-dimmer)" }}>
+                            last sign-in: {qTzPlace(L.last.time_zone)} · {qAgo(L.last.last_seen_at)}
+                          </div>
+                        )}
+                      </>);
+                    })()}
                   </td>
                   <td><span className={qPlanPillClass(c.plan)} style={{ textTransform: "capitalize" }}>{c.plan}</span></td>
                   <td className="num">{fin?.projects_count ?? 0}</td>
@@ -19024,7 +19074,6 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
         </div>
       </div>
 
-      <CountryPrompt />
       <FeedbackNudge />
 
       {/* Hero. The search is real -- it filters the projects already loaded. */}
@@ -19977,6 +20026,89 @@ function SearchCreditsCard() {
   );
 }
 
+
+// Settings card: change the country and city chosen in LocationGate.
+function LocationSettingsCard() {
+  const [locs, setLocs] = useState([]);
+  const [hasCity, setHasCity] = useState(true);
+  const [country, setCountry] = useState("");
+  const [city, setCity] = useState("");
+  const [other, setOther] = useState({ country: "", city: "" });
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) return;
+        let cityCol = true;
+        let { data: prof, error } = await sb.from("profiles").select("country, city").eq("id", user.id).maybeSingle();
+        if (error && /city/.test(error.message || "")) { cityCol = false; ({ data: prof } = await sb.from("profiles").select("country").eq("id", user.id).maybeSingle()); }
+        const { data: l } = await sb.from("supported_locations").select("country, city, sort_order").eq("is_active", true).order("sort_order", { ascending: true });
+        setLocs(l || []); setHasCity(cityCol);
+        const known = (l || []).some(r => r.country === (prof && prof.country));
+        if (prof && prof.country) {
+          setCountry(known ? prof.country : "Other");
+          const knownCity = known && (l || []).some(r => r.country === prof.country && r.city === prof.city);
+          setCity(prof.city ? (knownCity ? prof.city : "Other") : "");
+          setOther({ country: known ? "" : prof.country, city: prof.city && !knownCity ? prof.city : "" });
+        }
+      } catch (e) { console.error("LocationSettingsCard load failed:", e); }
+    })();
+  }, []);
+  const countries = []; locs.forEach(r => { if (r.country && !countries.includes(r.country)) countries.push(r.country); });
+  const cities = locs.filter(r => r.country === country && r.city).map(r => r.city).filter((c, i, a) => a.indexOf(c) === i);
+  const fc = country === "Other" ? other.country.trim() : country;
+  const fcity = (country === "Other" || city === "Other") ? other.city.trim() : city;
+  async function save() {
+    setBusy(true); setMsg(null);
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { error } = await sb.from("profiles").update(hasCity ? { country: fc, city: fcity } : { country: fc }).eq("id", user.id);
+      if (error) throw error;
+      setMsg({ ok: true, text: "Location saved." });
+    } catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(false); }
+  }
+  return (
+    <div className="qp-card">
+      <h4>Company location</h4>
+      <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", margin: "0 0 10px" }}>
+        Where your company works from. It sets the authority rules, codes and market prices you see; each project keeps its own site location.
+      </p>
+      <div className="grid md:grid-cols-2 gap-4">
+        <div>
+          <label className="text-xs font-semibold text-slate-600">Country</label>
+          <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={country} onChange={e => { setCountry(e.target.value); setCity(""); }}>
+            <option value="">Select country…</option>
+            {countries.map(c => <option key={c} value={c}>{c}</option>)}
+            <option value="Other">Other country</option>
+          </select>
+          {country === "Other" && <input className="w-full border rounded-lg px-3 py-2 text-sm mt-2" placeholder="Type your country"
+            value={other.country} onChange={e => setOther(o => ({ ...o, country: e.target.value }))} />}
+        </div>
+        {hasCity && (
+          <div>
+            <label className="text-xs font-semibold text-slate-600">City</label>
+            {country !== "Other" && (
+              <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={city} onChange={e => setCity(e.target.value)} disabled={!country}>
+                <option value="">Select city…</option>
+                {cities.map(c => <option key={c} value={c}>{c}</option>)}
+                <option value="Other">Other city</option>
+              </select>
+            )}
+            {(country === "Other" || city === "Other") && <input className="w-full border rounded-lg px-3 py-2 text-sm mt-2" placeholder="Type your city"
+              value={other.city} onChange={e => setOther(o => ({ ...o, city: e.target.value }))} />}
+          </div>
+        )}
+      </div>
+      {msg && <div style={{ fontSize: 12.5, marginTop: 8, color: msg.ok ? "#10b981" : "#f43f5e" }}>{msg.text}</div>}
+      <button className="qp-btn pri" style={{ marginTop: 12 }} disabled={busy || !fc || (hasCity && !fcity)} onClick={save}>
+        {busy ? "Saving…" : "Save location"}
+      </button>
+    </div>
+  );
+}
+
 function SettingsPage({ email, bare }) {
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
@@ -20060,6 +20192,8 @@ function SettingsPage({ email, bare }) {
           {busy === "name" ? "Saving…" : "Save name"}
         </button>
       </div>
+
+      <LocationSettingsCard />
 
       <div className="qp-card">
         <h4>Change password</h4>
@@ -21082,6 +21216,33 @@ function MessagesBell({ isPlatformAdmin, sessionKey }) {
 // accurate enough to know a customer is in Dubai or Mumbai, needs no third
 // party, and is not a covert trace of where somebody physically is.
 // ---------------------------------------------------------------------------
+// Time zone -> a place a person can read. The zone names a city, not the
+// customer's address: "Asia/Dubai" covers the whole UAE.
+const Q_TZ_COUNTRY = {
+  "Asia/Dubai": "UAE", "Asia/Muscat": "Oman", "Asia/Riyadh": "Saudi Arabia", "Asia/Kuwait": "Kuwait",
+  "Asia/Qatar": "Qatar", "Asia/Bahrain": "Bahrain", "Asia/Calcutta": "India", "Asia/Kolkata": "India",
+  "Asia/Karachi": "Pakistan", "Asia/Dhaka": "Bangladesh", "Asia/Colombo": "Sri Lanka", "Asia/Kathmandu": "Nepal",
+  "Asia/Manila": "Philippines", "Asia/Singapore": "Singapore", "Asia/Kuala_Lumpur": "Malaysia", "Asia/Jakarta": "Indonesia",
+  "Asia/Hong_Kong": "Hong Kong", "Asia/Baku": "Azerbaijan", "Asia/Yerevan": "Armenia", "Asia/Tbilisi": "Georgia",
+  "Asia/Amman": "Jordan", "Asia/Beirut": "Lebanon", "Asia/Baghdad": "Iraq", "Asia/Tehran": "Iran",
+  "Africa/Cairo": "Egypt", "Africa/Addis_Ababa": "Ethiopia", "Africa/Mogadishu": "Somalia", "Africa/Nairobi": "Kenya",
+  "Africa/Lagos": "Nigeria", "Africa/Johannesburg": "South Africa", "Europe/London": "UK", "Europe/Dublin": "Ireland",
+  "Europe/Paris": "France", "Europe/Berlin": "Germany", "Europe/Istanbul": "Turkey", "Australia/Sydney": "Australia",
+  "America/New_York": "USA", "America/Chicago": "USA", "America/Los_Angeles": "USA", "America/Toronto": "Canada",
+};
+function qTzPlace(tz) {
+  if (!tz) return null;
+  if (/^Etc\/GMT/.test(tz)) {           // Etc/GMT-3 means three hours AHEAD of GMT
+    const m = tz.match(/GMT([+-])(\d+)/);
+    return m ? `GMT${m[1] === "-" ? "+" : "-"}${m[2]} time zone` : tz;
+  }
+  const city = tz.split("/").pop().replace(/_/g, " ");
+  const country = Q_TZ_COUNTRY[tz];
+  if (!country) return city;
+  if (tz === "Asia/Calcutta" || tz === "Asia/Kolkata") return "India";
+  return city === country ? country : `${city}, ${country}`;
+}
+
 const ACTIVITY_BEAT_MS = 2 * 60 * 1000;
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;   // two missed beats
 
@@ -21261,8 +21422,12 @@ function QCustomerPeople({ company }) {
   async function load() {
     setLoading(true); setErr("");
     try {
-      const { data: profs, error: pErr } = await sb.from("profiles")
-        .select("id, full_name, role, country, created_at").eq("company_id", company.id);
+      let { data: profs, error: pErr } = await sb.from("profiles")
+        .select("id, full_name, role, country, city, created_at").eq("company_id", company.id);
+      if (pErr && /city/.test(pErr.message || "")) {        // city column not installed yet
+        ({ data: profs, error: pErr } = await sb.from("profiles")
+          .select("id, full_name, role, country, created_at").eq("company_id", company.id));
+      }
       if (pErr) throw pErr;
       const ids = (profs || []).map(p => p.id);
       let rows = [];
@@ -21321,12 +21486,16 @@ function QCustomerPeople({ company }) {
                 </span>
               </div>
               <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 4 }}>
-                {email || "email not recorded yet"}
-                {/* Their answer first, the browser's time zone second. One is
-                    what they told us, the other is where the laptop is. */}
-                {p.country ? ` · ${p.country}` : ""}
-                {tz ? ` · ${tz}` : ""}
-                {p.role ? ` · ${p.role}` : ""}
+                {email || "email not recorded yet"}{p.role ? ` · ${p.role}` : ""}
+              </div>
+              {/* Their answer first, the browser's time zone second. One is
+                  what they told us, the other is where the laptop is. */}
+              <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 3 }}>
+                <b style={{ color: "var(--text-dimmer)", fontWeight: 700 }}>Works from:</b>{" "}
+                {p.country ? [p.city, p.country].filter(Boolean).join(", ") : <span style={{ color: "#fbbf24" }}>not selected yet</span>}
+                {"  ·  "}
+                <b style={{ color: "var(--text-dimmer)", fontWeight: 700 }}>Last sign-in from:</b>{" "}
+                {tz ? qTzPlace((latest && latest.time_zone) || tz) : "not recorded"}
               </div>
               <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 3 }}>
                 {sessions.length
@@ -21346,7 +21515,7 @@ function QCustomerPeople({ company }) {
                     <div key={s.id} style={{ fontSize: 11.5, color: "var(--text-dim)", padding: "3px 0" }}>
                       {new Date(s.started_at).toLocaleString()}
                       {" — active until "}{new Date(s.last_seen_at).toLocaleTimeString()}
-                      {s.time_zone ? ` · ${s.time_zone}` : ""}
+                      {s.time_zone ? ` · from ${qTzPlace(s.time_zone)}` : ""}
                       {s.language ? ` · ${s.language}` : ""}
                     </div>
                   ))}
@@ -21453,6 +21622,127 @@ function CountryPrompt() {
         <button className="qp-btn pri" disabled={!choice || busy} onClick={save}
           style={{ opacity: !choice || busy ? 0.5 : 1 }}>{busy ? "Saving…" : "Save"}</button>
         <button className="qp-btn" onClick={skip}>Skip</button>
+      </div>
+    </div>
+  );
+}
+
+
+// Required location (2026-10-20). Every signed-in customer chooses the country
+// and city their company works from before using the platform. It drives the
+// authority rules, codes and market prices they are shown, and tells the admin
+// team where each customer is. Platform admins are not asked.
+function LocationGate({ isPlatformAdmin, userId }) {
+  const [need, setNeed] = useState(false);
+  const [hasCity, setHasCity] = useState(true);
+  const [locs, setLocs] = useState([]);
+  const [country, setCountry] = useState("");
+  const [otherCountry, setOtherCountry] = useState("");
+  const [city, setCity] = useState("");
+  const [otherCity, setOtherCity] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!userId || isPlatformAdmin) { setNeed(false); return; }
+    let alive = true;
+    (async () => {
+      try {
+        let cityCol = true;
+        let { data: prof, error } = await sb.from("profiles").select("country, city").eq("id", userId).maybeSingle();
+        if (error && /city/.test(error.message || "")) {
+          cityCol = false;                                   // database column not installed yet: country only
+          ({ data: prof, error } = await sb.from("profiles").select("country").eq("id", userId).maybeSingle());
+        }
+        if (error) throw error;
+        const missing = !prof || !prof.country || (cityCol && !prof.city);
+        if (!missing) { if (alive) setNeed(false); return; }
+        const { data: l } = await sb.from("supported_locations")
+          .select("country, city, sort_order").eq("is_active", true).order("sort_order", { ascending: true });
+        if (!alive) return;
+        setLocs(l || []);
+        setHasCity(cityCol);
+        if (prof && prof.country) {
+          const known = (l || []).some(r => r.country === prof.country);
+          setCountry(known ? prof.country : "Other");
+          if (!known && prof.country !== "Other") setOtherCountry(prof.country);
+        }
+        setNeed(true);
+      } catch (e) {
+        // Never lock someone out of their work because this check failed.
+        console.error("LocationGate failed (non-fatal):", e);
+      }
+    })();
+    return () => { alive = false; };
+  }, [userId, isPlatformAdmin]);
+
+  if (!need || isPlatformAdmin) return null;
+
+  const countries = [];
+  locs.forEach(r => { if (r.country && !countries.includes(r.country)) countries.push(r.country); });
+  const cities = locs.filter(r => r.country === country && r.city).map(r => r.city)
+    .filter((c, i, a) => a.indexOf(c) === i);
+  const finalCountry = country === "Other" ? otherCountry.trim() : country;
+  const finalCity = (country === "Other" || city === "Other") ? otherCity.trim() : city;
+  const ready = !!finalCountry && (!hasCity || !!finalCity);
+
+  async function save() {
+    if (!ready) return;
+    setBusy(true); setErr("");
+    try {
+      let { error } = await sb.from("profiles").update(hasCity ? { country: finalCountry, city: finalCity } : { country: finalCountry }).eq("id", userId);
+      if (error && /city/.test(error.message || "")) ({ error } = await sb.from("profiles").update({ country: finalCountry }).eq("id", userId));
+      if (error) throw error;
+      setNeed(false);
+    } catch (e) {
+      console.error("LocationGate save failed:", e);
+      setErr("Could not save your location. Please try again.");
+    } finally { setBusy(false); }
+  }
+
+  const field = { width: "100%", border: "1px solid #cbd5e1", borderRadius: 10, padding: "10px 12px", fontSize: 14, background: "#fff", color: "#0f172a" };
+  const label = { display: "block", fontSize: 12.5, fontWeight: 700, color: "#334155", margin: "14px 0 6px" };
+  return (
+    <div role="dialog" aria-modal="true" aria-labelledby="qloc-title"
+      style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(15,23,42,0.62)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: "#fff", color: "#0f172a", borderRadius: 18, width: "100%", maxWidth: 460, padding: "26px 24px 22px", boxShadow: "0 30px 80px rgba(0,0,0,0.35)" }}>
+        <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: "#4f46e5" }}>One quick step</div>
+        <h2 id="qloc-title" style={{ fontSize: 21, fontWeight: 800, margin: "6px 0 6px" }}>Where does your company work from?</h2>
+        <p style={{ fontSize: 13.5, color: "#475569", lineHeight: 1.6, margin: 0 }}>
+          Quantora uses your country and city to apply the right authority rules, codes and market prices.
+          This is where your company is based, not one project's site &mdash; each project keeps its own location.
+        </p>
+        <label style={label} htmlFor="qloc-country">Country</label>
+        <select id="qloc-country" style={field} value={country} onChange={e => { setCountry(e.target.value); setCity(""); setOtherCity(""); }}>
+          <option value="">Select country…</option>
+          {countries.map(c => <option key={c} value={c}>{c}</option>)}
+          <option value="Other">Other country</option>
+        </select>
+        {country === "Other" && (
+          <input style={{ ...field, marginTop: 8 }} placeholder="Type your country" value={otherCountry} onChange={e => setOtherCountry(e.target.value)} />
+        )}
+        {hasCity && country && (
+          <>
+            <label style={label} htmlFor="qloc-city">City</label>
+            {country !== "Other" && (
+              <select id="qloc-city" style={field} value={city} onChange={e => setCity(e.target.value)}>
+                <option value="">Select city…</option>
+                {cities.map(c => <option key={c} value={c}>{c}</option>)}
+                <option value="Other">Other city</option>
+              </select>
+            )}
+            {(country === "Other" || city === "Other") && (
+              <input style={{ ...field, marginTop: country === "Other" ? 0 : 8 }} placeholder="Type your city" value={otherCity} onChange={e => setOtherCity(e.target.value)} />
+            )}
+          </>
+        )}
+        {err && <div style={{ fontSize: 12.5, color: "#be123c", marginTop: 10 }}>{err}</div>}
+        <button onClick={save} disabled={!ready || busy}
+          style={{ width: "100%", marginTop: 18, padding: "12px 16px", borderRadius: 12, border: "none", fontSize: 15, fontWeight: 800, color: "#fff",
+                   background: !ready || busy ? "#a5b4fc" : "linear-gradient(90deg,#4f46e5,#7c3aed)", cursor: !ready || busy ? "not-allowed" : "pointer" }}>
+          {busy ? "Saving…" : "Continue"}
+        </button>
+        <div style={{ fontSize: 11.5, color: "#94a3b8", textAlign: "center", marginTop: 10 }}>You can change this later in Settings.</div>
       </div>
     </div>
   );
@@ -28325,6 +28615,7 @@ function App() {
 
   return (
     <div className={`min-h-screen ${view && view.name === "admin" ? "" : "qx"}`}>
+      <LocationGate isPlatformAdmin={isPlatformAdmin} userId={session.user.id} />
       <nav className="qtr-topnav bg-white border-b px-6 py-3 flex items-center justify-between sticky top-0 z-10">
         {/* The real brand mark. This was previously the building-construction
             emoji -- a base character plus a variation selector -- and where the
