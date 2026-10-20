@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-20.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-20.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -3339,15 +3339,20 @@ const QUANTORA_LANDING_HTML = `
 
   <div class="wrap hero-grid">
     <div>
-      <span class="pill"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg> AI CONSTRUCTION INTELLIGENCE PLATFORM</span>
-      <h1>Turn Construction Drawings into <span class="grad-text">Complete, Priced BOQs</span></h1>
+      <span class="pill"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg> One AI Platform. From Engineering Design to Project Delivery.</span>
+      <h1>From Drawings to <span class="grad-text">Design, BOQ, Pricing &amp; 3D</span> &mdash; All in One AI Platform.</h1>
       <div class="hero-poweredby">Powered by Quantora AI</div>
-      <p class="sub">Upload your MEP, fire and ELV drawings. Quantora&rsquo;s AI takes off every item across 33 systems, builds the BOQ and prices it against real supplier listings &mdash; with the source shown for every quantity and rate.</p>
+      <p class="sub">Transform architectural plans, MEP/ELV drawings and project specifications into traceable quantity take-offs, Design BOQs, priced estimates, detailed shop drawings and 3D coordination models. Then connect your engineering work with tender estimation, commercial management and project operations.</p>
       <div class="hero-ctas">
         <a class="btn btn-lg btn-grad" href="?auth=signup">Start Free Trial →</a>
         <a class="btn btn-lg btn-outline-lg" href="#works"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z" fill="currentColor" stroke="none"/></svg> Watch How It Works</a>
       </div>
-      <p class="qx-also">Shop drawings, a 3D model, procurement and compliance come from the same upload. <a href="#platform">See the full platform &darr;</a></p>
+      <div class="qtr-divrow">
+        <a class="qtr-div" style="--qtr-a:#3987e5;" href="#output"><b>Take-off BOQ</b><span>AI counts every item from your drawings</span></a>
+        <a class="qtr-div" style="--qtr-a:#22c55e;" href="#design-boq"><b>Design BOQ</b><span>No drawings? AI designs the systems</span></a>
+        <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#pricing-boq"><b>Pricing BOQ</b><span>Live supplier prices, source shown</span></a>
+        <a class="qtr-div" style="--qtr-a:#818cf8;" href="#model3d"><b>Shop drawings + 3D</b><span>AI draftsman, issued drawings</span></a>
+      </div>
       <div class="stat-row">
         <div class="stat-item"><div class="stat-ic" style="background:rgba(99,102,241,0.15);color:#a5b4fc;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg></div><div><div class="stat-num">5</div><div class="stat-label">Free AI Pages</div></div></div>
         <div class="stat-item"><div class="stat-ic" style="background:rgba(168,85,247,0.15);color:#d8b4fe;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg></div><div><div class="stat-num">33</div><div class="stat-label">Systems Analyzed</div></div></div>
@@ -3445,6 +3450,50 @@ const QUANTORA_LANDING_HTML = `
     </div>
   </div>
 </header>
+
+<section id="model3d">
+  <div class="wrap">
+    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>AI Draftsman &middot; Shop Drawings &amp; 3D</div>
+    <h2 class="sectitle">Your Plans In. Shop Drawings And A 3D Model Out.</h2>
+    <p class="secsub">Upload the architectural plans and the draftsman designs every system you choose &mdash; fire, mechanical, plumbing, electrical and ELV &mdash; then delivers the shop drawings with a 3D coordination model of all systems on every floor.</p>
+    <div class="m3d-grid">
+      <figure class="m3d-card"><img src="3d-building.jpg" alt="3D coordination model of a five-storey building with all MEP and ELV systems" width="1240" height="1290" fetchpriority="high"/>
+        <figcaption>Whole building &mdash; every floor, every system</figcaption></figure>
+      <figure class="m3d-card"><img src="3d-floor-detail.jpg" alt="3D detail of one floor with chillers, air handling unit, ducts, pipes and cable trays" width="1600" height="947" loading="lazy"/>
+        <figcaption>Floor detail &mdash; chillers, AHU, ducts, pipes and cable trays at their real heights</figcaption></figure>
+    </div>
+    <div class="m3d-points"><span><b>33</b> systems</span><span>Drawing reference numbers with <b>R0 / R1</b> revisions</span><span>Rework on <b>consultant comments</b></span><span>PDF &middot; DXF &middot; IFC &middot; BOQ</span></div>
+    <details class="qx-more qx-center"><summary>How the shop drawing studio works</summary>
+      <div class="steps">
+      <div class="step qtr-accent" style="--qtr-a:#3987e5;">
+        <div class="step-num" style="background:#3987e5;">01</div>
+        <h3>Base Plan &amp; Scale</h3>
+        <ul><li>Reads the room enclosures off your architectural PDF</li><li>Takes the scale from the sheet, or calibrates it from one known dimension</li><li>Types every room &mdash; office, corridor, plant, car park</li><li>Kept against the project, so it is read once</li></ul>
+        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 10h18M9 10v10"/></svg> Architectural &middot; structural &middot; floor plans</div>
+      </div>
+      <div class="step qtr-accent" style="--qtr-a:#7c4bb8;">
+        <div class="step-num" style="background:#7c4bb8;">02</div>
+        <h3>Specification Review</h3>
+        <ul><li>Every page searched in your browser</li><li>Tells you which pages specify each system</li><li>Or type the page numbers straight from the contents list</li><li>Each value returned with its page and its clause</li></ul>
+        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg> Mounting height &middot; coverage &middot; IP &middot; cable</div>
+      </div>
+      <div class="step qtr-accent" style="--qtr-a:#1f8a5b;">
+        <div class="step-num" style="background:#1f8a5b;">03</div>
+        <h3>Design &amp; Calculation</h3>
+        <ul><li>33 MEP, ELV, fire and public health systems</li><li>Device schedule, mounting heights, containment and cable</li><li>Plant sizing, riser and single-line schematics</li><li>Every quantity carries the code clause it came from</li></ul>
+        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg> NFPA &middot; ASHRAE &middot; SIRA &middot; SBC &middot; local AHJ</div>
+      </div>
+      <div class="step qtr-accent" style="--qtr-a:#b4761c;">
+        <div class="step-num" style="background:#b4761c;">04</div>
+        <h3>Shop Drawing Production</h3>
+        <ul><li>General notes and design basis on sheet QE-000</li><li>Layouts per level, per discipline, with legend and north point</li><li>Containment routed from the floor IDF along the corridor spine</li><li>Title block, revision, scale bar &mdash; SVG, DXF or print</li></ul>
+        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 15h18"/></svg> Issued for review &middot; DXF to AutoCAD</div>
+      </div>
+    </div>
+    </details>
+    <div class="hero-ctas" style="justify-content:center;margin-top:26px;"><a class="btn btn-lg btn-grad" href="?auth=signup">Try It Free &rarr;</a></div>
+  </div>
+</section>
 
 <section id="works">
   <div class="wrap">
@@ -3591,59 +3640,15 @@ const QUANTORA_LANDING_HTML = `
   </div>
 </section>
 
-<section id="model3d">
-  <div class="wrap">
-    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>Beyond the BOQ &middot; AI Draftsman</div>
-    <h2 class="sectitle">Your Plans In. Shop Drawings And A 3D Model Out.</h2>
-    <p class="secsub">Upload the architectural plans and the draftsman designs every system you choose &mdash; fire, mechanical, plumbing, electrical and ELV &mdash; then delivers the shop drawings with a 3D coordination model of all systems on every floor.</p>
-    <div class="m3d-grid">
-      <figure class="m3d-card"><img src="3d-building.jpg" alt="3D coordination model of a five-storey building with all MEP and ELV systems" width="1240" height="1290" fetchpriority="high"/>
-        <figcaption>Whole building &mdash; every floor, every system</figcaption></figure>
-      <figure class="m3d-card"><img src="3d-floor-detail.jpg" alt="3D detail of one floor with chillers, air handling unit, ducts, pipes and cable trays" width="1600" height="947" loading="lazy"/>
-        <figcaption>Floor detail &mdash; chillers, AHU, ducts, pipes and cable trays at their real heights</figcaption></figure>
-    </div>
-    <div class="m3d-points"><span><b>33</b> systems</span><span>Drawing reference numbers with <b>R0 / R1</b> revisions</span><span>Rework on <b>consultant comments</b></span><span>PDF &middot; DXF &middot; IFC &middot; BOQ</span></div>
-    <details class="qx-more qx-center"><summary>How the shop drawing studio works</summary>
-      <div class="steps">
-      <div class="step qtr-accent" style="--qtr-a:#3987e5;">
-        <div class="step-num" style="background:#3987e5;">01</div>
-        <h3>Base Plan &amp; Scale</h3>
-        <ul><li>Reads the room enclosures off your architectural PDF</li><li>Takes the scale from the sheet, or calibrates it from one known dimension</li><li>Types every room &mdash; office, corridor, plant, car park</li><li>Kept against the project, so it is read once</li></ul>
-        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 10h18M9 10v10"/></svg> Architectural &middot; structural &middot; floor plans</div>
-      </div>
-      <div class="step qtr-accent" style="--qtr-a:#7c4bb8;">
-        <div class="step-num" style="background:#7c4bb8;">02</div>
-        <h3>Specification Review</h3>
-        <ul><li>Every page searched in your browser</li><li>Tells you which pages specify each system</li><li>Or type the page numbers straight from the contents list</li><li>Each value returned with its page and its clause</li></ul>
-        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg> Mounting height &middot; coverage &middot; IP &middot; cable</div>
-      </div>
-      <div class="step qtr-accent" style="--qtr-a:#1f8a5b;">
-        <div class="step-num" style="background:#1f8a5b;">03</div>
-        <h3>Design &amp; Calculation</h3>
-        <ul><li>33 MEP, ELV, fire and public health systems</li><li>Device schedule, mounting heights, containment and cable</li><li>Plant sizing, riser and single-line schematics</li><li>Every quantity carries the code clause it came from</li></ul>
-        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg> NFPA &middot; ASHRAE &middot; SIRA &middot; SBC &middot; local AHJ</div>
-      </div>
-      <div class="step qtr-accent" style="--qtr-a:#b4761c;">
-        <div class="step-num" style="background:#b4761c;">04</div>
-        <h3>Shop Drawing Production</h3>
-        <ul><li>General notes and design basis on sheet QE-000</li><li>Layouts per level, per discipline, with legend and north point</li><li>Containment routed from the floor IDF along the corridor spine</li><li>Title block, revision, scale bar &mdash; SVG, DXF or print</li></ul>
-        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 15h18"/></svg> Issued for review &middot; DXF to AutoCAD</div>
-      </div>
-    </div>
-    </details>
-    <div class="hero-ctas" style="justify-content:center;margin-top:26px;"><a class="btn btn-lg btn-grad" href="?auth=signup">Try It Free &rarr;</a></div>
-  </div>
-</section>
-
 <section id="platform">
   <div class="wrap">
     <div class="kicker"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>One Platform</div>
-    <h2 class="sectitle">After the BOQ, the Rest of the Job</h2>
-    <p class="secsub">The take-off is where it starts. The same project then flows into pricing, procurement, drawings and delivery &mdash; no re-typing between tools.</p>
+    <h2 class="sectitle">One Platform, From Design to Delivery</h2>
+    <p class="secsub">Start from drawings or from a brief. The same project then flows into pricing, procurement, compliance and delivery &mdash; no re-typing between tools.</p>
     <div class="qx-grid3">
-      <div class="team-card qx-card" style="--qx-c:#34d399;"><div class="qx-dot"></div><h3>Estimation &amp; live pricing</h3><p class="qx-line">Cost, margin and selling price for every BOQ line, priced from real supplier listings with their source.</p><details class="qx-more qx-small"><summary>Details</summary><ul class="qx-list"><li>Material, labour and margin per line</li><li>Market price lookup (pay as you go)</li><li>USD, EUR, GBP, AED, SAR, INR and more</li><li>Excel and PDF export</li></ul></details></div>
+      <div class="team-card qx-card" style="--qx-c:#22c55e;" id="design-boq"><div class="qx-dot"></div><h3>Design BOQ &mdash; no drawings needed</h3><p class="qx-line">No drawings yet? Enter the building details and the AI designs each system to the applicable code and builds the BOQ.</p><details class="qx-more qx-small"><summary>Details</summary><ul class="qx-list"><li>Building type, floors and areas from the project brief</li><li>Systems sized to the code for the project&rsquo;s location</li><li>BOQ with the design basis for every line</li><li>Ideal for early estimates and tenders</li></ul></details></div>
+      <div class="team-card qx-card" style="--qx-c:#f59e0b;" id="pricing-boq"><div class="qx-dot"></div><h3>Pricing BOQ &amp; estimation</h3><p class="qx-line">Price any BOQ with live supplier listings &mdash; the source is shown against every rate &mdash; then set cost, margin and selling price.</p><details class="qx-more qx-small"><summary>Details</summary><ul class="qx-list"><li>Live market price lookup (pay as you go)</li><li>Material, labour and margin per line</li><li>USD, EUR, GBP, AED, SAR, INR and more</li><li>Excel and PDF export</li></ul></details></div>
       <div class="team-card qx-card" style="--qx-c:#fb923c;"><div class="qx-dot"></div><h3>Tender &amp; procurement</h3><p class="qx-line">Read the tender, build RFQ packages and compare supplier quotations line by line.</p><details class="qx-more qx-small"><summary>Details</summary><ul class="qx-list"><li>Tender document and specification review</li><li>RFQ packages by system</li><li>Quotation reading and compliance check</li><li>Budget vs committed, approval tracking</li></ul></details></div>
-      <div class="team-card qx-card" style="--qx-c:#a78bfa;"><div class="qx-dot"></div><h3>Shop drawings &amp; 3D model</h3><p class="qx-line">Issued shop drawings for 33 systems with a 3D coordination model, reference numbers and R0 / R1 revisions.</p><a class="qx-link" href="#model3d">See it above &rarr;</a></div>
       <div class="team-card qx-card" style="--qx-c:#f87171;"><div class="qx-dot"></div><h3>Compliance &amp; specifications</h3><p class="qx-line">International codes plus the local authority for your project&rsquo;s city, with the clause behind every value.</p><details class="qx-more qx-small"><summary>Details</summary><ul class="qx-list"><li>NFPA, BS EN, ASHRAE and TIA</li><li>532 authority rules across 20 countries</li><li>Specification clauses with page references</li><li>Compliance report with the drawings</li></ul></details></div>
       <div class="team-card qx-card" style="--qx-c:#60a5fa;"><div class="qx-dot"></div><h3>Commercial &amp; operations</h3><p class="qx-line">Dashboards for tender pipeline, contract value, claims and cash flow, and for programme and delivery.</p><details class="qx-more qx-small"><summary>Details</summary><ul class="qx-list"><li>Tender pipeline and bid results</li><li>Contract value, claims and certification</li><li>Programme, milestones and progress</li><li>Site issues and delivery status</li></ul></details></div>
       <div class="team-card qx-card" style="--qx-c:#f472b6;"><div class="qx-dot"></div><h3>Estima AI assistant</h3><p class="qx-line">Ask anything about your project &mdash; it answers from your own drawings, BOQ and specification.</p><details class="qx-more qx-small"><summary>Details</summary><ul class="qx-list"><li>Explains where every figure came from</li><li>Project Q&amp;A in plain language</li><li>Works across all your projects</li></ul></details></div>
