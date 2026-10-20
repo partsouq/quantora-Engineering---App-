@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-20.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-20.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -5848,7 +5848,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     project_name: "", client_name: "", consultant_name: "", contractor_name: "",
     // Blank, not UAE/Dubai. See LocationFields: a pre-filled location is never
     // validated and is silently wrong for every project outside it.
-    country: "", city: "", building_type: "residential_building",
+    country: "", city: "", building_type: "",
     number_of_floors: "", area_size: "", area_unit: "sqm", project_scope: "",
     basement_levels: "", has_roof: true, project_type: "new_build", required_systems: [],
   });
@@ -5857,8 +5857,17 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
   // An existing project may hold a type that predates the list -- including one
   // typed in here earlier -- so the form opens in free-text mode for it rather
   // than silently snapping it back to a residential building.
-  const initialType = isEdit ? (existingProject.building_type || "") : "residential_building";
+  const initialType = isEdit ? (existingProject.building_type || "") : "";
   const [typeOther, setTypeOther] = useState(!!initialType && !BUILDING_TYPES.some(b => b[0] === initialType));
+  // Bottom-of-form copy of the error, next to the Create button. The form is long,
+  // and a message shown only at the top was off screen when the button was pressed:
+  // customers saw nothing happen and gave up (2026-10-20).
+  const errBottomRef = useRef(null);
+  useEffect(() => {
+    if (err && errBottomRef.current) {
+      try { errBottomRef.current.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (_) {}
+    }
+  }, [err]);
   // Whether the person has actually chosen a building type, as opposed to
   // leaving the default sitting there. A school and a hospital group were both
   // created as "residential building" simply because nobody touched the field.
@@ -5944,8 +5953,8 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
       setErr("Gross floor area should be a number greater than zero — or leave it empty and fill it in later.");
       return;
     }
-    if (!isEdit && !buildingTypeTouched && String(form.building_type || "") === "residential_building") {
-      setErr("Confirm the building type before continuing — it is still set to the default, Residential building. It decides the lighting levels, occupancy and authority rules applied to this project, so a school or a hospital measured as residential comes out wrong. Pick it again from the list (choose Residential building if that is genuinely right).");
+    if (!isEdit && !typeOther && !String(form.building_type || "").trim()) {
+      setErr("Choose the type of project (for example Villa, Office building or Warehouse) — it decides the lighting levels, occupancy and authority rules applied.");
       return;
     }
 
@@ -6061,7 +6070,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
                 onChange={e => { setBuildingTypeTouched(true); setTypeText(e.target.value); setForm(f => ({ ...f, building_type: slugBuildingType(e.target.value) })); }}
               />
               <button type="button" className="text-xs font-semibold border px-3 rounded-lg hover:bg-slate-50 whitespace-nowrap"
-                onClick={() => { setBuildingTypeTouched(true); setTypeOther(false); setForm(f => ({ ...f, building_type: "residential_building" })); }}>
+                onClick={() => { setBuildingTypeTouched(true); setTypeOther(false); setForm(f => ({ ...f, building_type: isEdit ? "residential_building" : "" })); }}>
                 Pick from list
               </button>
             </div>
@@ -6075,6 +6084,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
                 else setForm(f => ({ ...f, building_type: e.target.value }));
               }}
             >
+              {!form.building_type && <option value="">Choose the type of project…</option>}
               {BUILDING_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               <option value="__other__">Something else — type it…</option>
             </select>
@@ -6153,6 +6163,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
             </button>
           )}
         </div>
+        {err && <div ref={errBottomRef} role="alert" className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{err}</div>}
         <div className="flex gap-3 pt-2">
           <button disabled={busy} className="bg-slate-900 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">{busy ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save Changes" : "Create Project")}</button>
           <button type="button" onClick={onCancel} className="px-5 py-2.5 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-100">Cancel</button>
