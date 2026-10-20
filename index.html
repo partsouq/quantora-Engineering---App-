@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-18.8"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-20.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -2991,6 +2991,7 @@ const QUANTORA_LANDING_CSS = `
      card to the division it belongs to. */
   /* The four divisions, said once in the hero. Someone who reads only the
      first screen should still know what they are being sold. */
+  .qx-row-label{font-size:11.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#6b7490;margin:-14px 0 10px;}
   .qtr-divrow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 30px;}
   .qtr-div{display:block;text-decoration:none;padding:11px 13px;border-radius:12px;
     background:var(--panel-solid);border:1px solid var(--border);border-top:2px solid var(--qtr-a,#6366f1);
@@ -3300,14 +3301,21 @@ const QUANTORA_LANDING_HTML = `
 
   <div class="wrap hero-grid">
     <div>
-      <span class="pill"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg> AI CONSTRUCTION INTELLIGENCE PLATFORM</span>
-      <h1>Transform Construction Drawings into <span class="grad-text">Engineering Intelligence, Complete BOQs and Live Market Pricing</span></h1>
+      <span class="pill"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg> One AI Platform. From Engineering Design to Project Delivery.</span>
+      <h1>From Drawings to <span class="grad-text">Design, BOQ, Pricing &amp; 3D</span> &mdash; All in One AI Platform.</h1>
       <div class="hero-poweredby">Powered by Quantora AI</div>
-      <p class="sub">Upload your project drawings and let Quantora Engineering analyse, design, take off, validate and generate a complete BOQ &mdash; then price it against real supplier listings, with the source shown against every rate.</p>
+      <p class="sub">Transform architectural plans, MEP/ELV drawings and project specifications into traceable quantity take-offs, Design BOQs, priced estimates, detailed shop drawings and 3D coordination models. Then connect your engineering work with tender estimation, commercial management and project operations.</p>
       <div class="hero-ctas">
         <a class="btn btn-lg btn-grad" href="?auth=signup">Start Free Trial →</a>
         <a class="btn btn-lg btn-outline-lg" href="#works"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z" fill="currentColor" stroke="none"/></svg> Watch How It Works</a>
       </div>
+      <div class="qtr-divrow">
+        <a class="qtr-div" style="--qtr-a:#3987e5;" href="#works"><b>Take-off BOQ</b><span>AI counts every item from your drawings</span></a>
+        <a class="qtr-div" style="--qtr-a:#22c55e;" href="#capabilities"><b>Design BOQ</b><span>No drawings? AI designs the systems</span></a>
+        <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#capabilities"><b>Pricing BOQ</b><span>Live supplier prices, source shown</span></a>
+        <a class="qtr-div" style="--qtr-a:#818cf8;" href="#model3d"><b>Shop drawings + 3D</b><span>AI draftsman, issued drawings</span></a>
+      </div>
+      <div class="qx-row-label">Four dashboards, one project</div>
       <div class="qtr-divrow">
         <a class="qtr-div" style="--qtr-a:#3987e5;" href="#workspaces"><b>Projects</b><span>Take-off &amp; BOQ</span></a>
         <a class="qtr-div" style="--qtr-a:#22c55e;" href="#workspaces"><b>Commercial</b><span>Tender &amp; revenue</span></a>
@@ -3414,7 +3422,7 @@ const QUANTORA_LANDING_HTML = `
 
 <section id="model3d">
   <div class="wrap">
-    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>New &middot; AI Draftsman</div>
+    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>AI Draftsman &middot; Shop Drawings &amp; 3D</div>
     <h2 class="sectitle">Your Plans In. Shop Drawings And A 3D Model Out.</h2>
     <p class="secsub">Upload the architectural plans and the draftsman designs every system you choose &mdash; fire, mechanical, plumbing, electrical and ELV &mdash; then delivers the shop drawings with a 3D coordination model of all systems on every floor.</p>
     <div class="m3d-grid">
