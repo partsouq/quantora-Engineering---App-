@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-20.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-20.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -3213,6 +3213,7 @@ const QUANTORA_LANDING_CSS = `
   }
 
   /* Homepage v2 (2026-10-20): one overview, details on demand. */
+  .qx-row-label{font-size:11.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dimmer);margin:-14px 0 10px;}
   .qx-also{color:var(--text-dim);font-size:14.5px;margin:-6px 0 22px;}
   .qx-also a{color:#a5b4fc;text-decoration:none;font-weight:700;white-space:nowrap;}
   .qx-subhead{text-align:center;font-size:20px;font-weight:800;margin:46px 0 18px;}
@@ -3352,6 +3353,13 @@ const QUANTORA_LANDING_HTML = `
         <a class="qtr-div" style="--qtr-a:#22c55e;" href="#design-boq"><b>Design BOQ</b><span>No drawings? AI designs the systems</span></a>
         <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#pricing-boq"><b>Pricing BOQ</b><span>Live supplier prices, source shown</span></a>
         <a class="qtr-div" style="--qtr-a:#818cf8;" href="#model3d"><b>Shop drawings + 3D</b><span>AI draftsman, issued drawings</span></a>
+      </div>
+      <div class="qx-row-label">Four dashboards, one project</div>
+      <div class="qtr-divrow">
+        <a class="qtr-div" style="--qtr-a:#3987e5;" href="#platform"><b>Projects</b><span>Take-off &amp; BOQ</span></a>
+        <a class="qtr-div" style="--qtr-a:#22c55e;" href="#platform"><b>Commercial</b><span>Tender &amp; revenue</span></a>
+        <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#platform"><b>Operations</b><span>Programme</span></a>
+        <a class="qtr-div" style="--qtr-a:#818cf8;" href="#model3d"><b>Draftsman</b><span>Shop drawings</span></a>
       </div>
       <div class="stat-row">
         <div class="stat-item"><div class="stat-ic" style="background:rgba(99,102,241,0.15);color:#a5b4fc;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg></div><div><div class="stat-num">5</div><div class="stat-label">Free AI Pages</div></div></div>
