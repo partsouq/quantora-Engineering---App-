@@ -1565,17 +1565,6 @@ async function ensureCompanyForUser(admin: any, userId: string, userEmail: strin
 }
 
 
-// Page packs (pay per page, 2026-10-18): BOQ pages bought one-off, used only
-// after the plan's own pages run out. Read defensively so the engine keeps
-// working if the database columns are not installed yet.
-async function boqPackPages(admin: any, companyId: string): Promise<number> {
-  try {
-    const { data, error } = await admin.from("companies").select("boq_pack_pages").eq("id", companyId).maybeSingle();
-    if (error) return 0;
-    return Math.max(0, Number(data?.boq_pack_pages ?? 0));
-  } catch { return 0; }
-}
-
 async function checkUsageLimit(admin: any, companyId: string, plan: any, kind: "analysis" | "request") {
   const limit = kind === "analysis" ? plan?.monthly_drawing_analyses : plan?.monthly_ai_requests;
   if (limit == null) return { ok: true as const, billing: "free_quota" as const };
@@ -1594,7 +1583,6 @@ async function checkUsageLimit(admin: any, companyId: string, plan: any, kind: "
   const { count } = await query;
 
   if ((count ?? 0) < limit) return { ok: true as const, billing: "free_quota" as const };
-  if (kind === "analysis" && await boqPackPages(admin, companyId) > 0) return { ok: true as const, billing: "free_quota" as const };
 
   const { data: co } = await admin.from("companies").select("credit_balance_cents").eq("id", companyId).maybeSingle();
   const creditBalanceCents = co?.credit_balance_cents ?? 0;
@@ -1636,7 +1624,7 @@ async function checkPlanLimit(
   dimension: "drawing_page" | "rework" | "chat",
   requestedUnits: number,
   projectId: string | null = null
-): Promise<{ ok: boolean; current: number; limit: number | null; remaining: number; billing?: "wallet" | "pack"; packUnits?: number; packPages?: number; creditBalanceCents?: number }> {
+): Promise<{ ok: boolean; current: number; limit: number | null; remaining: number; billing?: "wallet"; creditBalanceCents?: number }> {
   if (dimension === "rework") {
     const maxRework = plan?.max_rework_per_project;
     if (maxRework == null) return { ok: true, current: 0, limit: null, remaining: Infinity };
@@ -1679,31 +1667,20 @@ async function checkPlanLimit(
   const trueRemaining = Math.max(0, maxValue - current);
   if (withinIncluded) return { ok: true, current, limit: maxValue, remaining: trueRemaining };
 
-  // Page packs: the pages above the plan come out of the pack, for every
-  // plan including the free welcome pack and no plan at all.
-  let packPages = 0;
-  if (dimension === "drawing_page") {
-    const overflow = Math.min(requestedUnits, current + requestedUnits - maxValue);
-    packPages = await boqPackPages(admin, companyId);
-    if (overflow > 0 && packPages >= overflow) {
-      return { ok: true, current, limit: maxValue, remaining: trueRemaining, billing: "pack", packUnits: overflow, packPages };
-    }
-  }
-
   if (plan?.quota_period === "trial_window") {
-    return { ok: false, current, limit: maxValue, remaining: trueRemaining, packPages };
+    return { ok: false, current, limit: maxValue, remaining: trueRemaining };
   }
   const { data: co } = await admin.from("companies").select("credit_balance_cents").eq("id", companyId).maybeSingle();
   const creditBalanceCents = co?.credit_balance_cents ?? 0;
   if (creditBalanceCents > 0) {
     return { ok: true, current, limit: maxValue, remaining: trueRemaining, billing: "wallet", creditBalanceCents };
   }
-  return { ok: false, current, limit: maxValue, remaining: trueRemaining, creditBalanceCents, packPages };
+  return { ok: false, current, limit: maxValue, remaining: trueRemaining, creditBalanceCents };
 }
 
 async function recordUsageAndBill(
   admin: any,
-  usage: { companyId: string; billing?: "free_quota" | "wallet" | "admin_comp" | "pack"; packUnits?: number },
+  usage: { companyId: string; billing?: "free_quota" | "wallet" | "admin_comp" },
   userId: string,
   projectId: string,
   action: string,
@@ -1733,21 +1710,6 @@ async function recordUsageAndBill(
     })
     .select()
     .single();
-
-  if (usage.billing === "pack" && usage.companyId && (usage.packUnits ?? 0) > 0) {
-    const { data: took, error: packErr } = await admin.rpc("consume_page_pack", {
-      p_company_id: usage.companyId,
-      p_kind: "boq",
-      p_units: usage.packUnits,
-      p_ref: row?.id ? `ai_usage:${row.id}` : null,
-      p_reason: `${action}: ${pageCount ?? usage.packUnits} page(s)`,
-    });
-    if (packErr || took === false) {
-      // Two runs raced for the last pack pages. The work is already done and
-      // saved; log it for the admin rather than failing the customer's result.
-      console.error(`Page pack: could not take ${usage.packUnits} BOQ page(s) from company ${usage.companyId} -- ${packErr ? describeError(packErr) : "not enough pages left"}`);
-    }
-  }
 
   if (usage.billing === "wallet" && usage.companyId) {
     await admin.rpc("debit_company_credits", {
@@ -1896,6 +1858,7 @@ async function checkEmptyRerun(
   admin: any,
   drawingId: string,
   confirmRerun: boolean,
+  civilNow = false,
 ): Promise<{ ok: true } | { ok: false; error: string; emptyRuns: number }> {
   if (confirmRerun) return { ok: true };
   const { data: priors } = await admin
@@ -1918,11 +1881,14 @@ async function checkEmptyRerun(
   const latest = rows[0]?.summary ?? {};
   const latestWasEmpty = latest.found_nothing === true || Number(latest.item_count ?? -1) === 0;
   if (!latestWasEmpty) return { ok: true };
+  // The type was changed to a civil one since that empty run, so this run is
+  // read a different way and is not a repeat (the skirting plan read as Plumbing).
+  if (civilNow && latest.civil !== true) return { ok: true };
 
   return {
     ok: false,
     emptyRuns,
-    error: `This drawing has already been analysed ${emptyRuns === 1 ? "once" : `${emptyRuns} times`} and produced no BOQ lines. Running it again on the same file will produce the same empty result and will still cost a page from your allowance.\n\nThe usual reasons are: the sheet is a civil, structural or architectural drawing -- Quantora reads MEP and ELV systems (electrical, lighting, HVAC, plumbing, fire, CCTV, access control and the rest), not steelwork, concrete or setting-out; or the file is a specification, schedule or material list rather than a drawing, in which case upload it on the Specification page where it is read as text; or the drawing is a title sheet, key plan or index with no devices on it.\n\nTry a different sheet from the package, or open the previous run's notes to see exactly what was looked for. If you are sure and want to spend another page anyway, confirm to proceed.`,
+    error: `This drawing has already been analysed ${emptyRuns === 1 ? "once" : `${emptyRuns} times`} and produced no BOQ lines. Running it again on the same file will produce the same empty result and will still cost a page from your allowance.\n\nThe usual reasons are: the drawing type does not match the sheet -- change it to Architectural, Structural or Civil for a sheet of civil works, or to the right MEP/ELV type for services; or the file is a specification, schedule or material list rather than a drawing, in which case upload it on the Specification page where it is read as text; or the drawing is a title sheet, key plan or index with no devices on it.\n\nTry a different sheet from the package, or open the previous run's notes to see exactly what was looked for. If you are sure and want to spend another page anyway, confirm to proceed.`,
   };
 }
 
@@ -2235,19 +2201,18 @@ function planLimitMessage(usage: any, kind: "analysis" | "request") {
 function pageLimitMessage(check: { current: number; limit: number | null; remaining: number; creditBalanceCents?: number }, requestedPages: number, plan?: any) {
   if (check.limit == null) return "";
   const isTrial = plan?.quota_period === "trial_window";
-  const pack = Number((check as any).packPages ?? 0);
-  const packLine = pack > 0 ? ` You have ${pack} BOQ page(s) in your page packs, which is not enough for this request.` : "";
   if (isTrial) {
+    const days = plan?.trial_duration_days ?? 2;
     if (check.current >= check.limit) {
-      return `You've used all ${check.limit} AI-processed pages in your free welcome pack.${packLine} Buy BOQ pages ($1.00 each) or choose a plan to keep processing pages.`;
+      return `You've used all ${check.limit} AI-processed pages included in your ${days}-day free trial (${check.current}/${check.limit} used). Upgrade to a paid plan to keep processing pages.`;
     }
-    return `Your free welcome pack has ${check.remaining} of ${check.limit} AI-processed pages left. This request needs ${requestedPages} pages — select fewer pages, buy BOQ pages ($1.00 each), or choose a plan.${packLine}`;
+    return `Your ${days}-day free trial includes ${check.limit} AI-processed pages total (${check.current}/${check.limit} used, ${check.remaining} remaining). This request needs ${requestedPages} pages — please select fewer pages, or upgrade to a paid plan to continue.`;
   }
   if (check.current >= check.limit) {
     const balance = ((check.creditBalanceCents ?? 0) / 100).toFixed(2);
-    return `You've used your plan's included AI page allowance (${check.current}/${check.limit} pages) and your pay-as-you-go credit balance is $${balance}.${packLine} Buy BOQ pages ($1.00 each), add credits, or upgrade your plan.`;
+    return `You've used your plan's included AI page allowance (${check.current}/${check.limit} pages) and your pay-as-you-go credit balance is $${balance}. Add credits to keep processing pages, or upgrade your plan.`;
   }
-  return `Your plan includes ${check.limit} AI-processed pages/month (${check.current}/${check.limit} used, ${check.remaining} remaining). This request needs ${requestedPages} pages — select fewer pages, buy BOQ pages ($1.00 each), add pay-as-you-go credits, or upgrade your plan.${packLine}`;
+  return `Your plan includes ${check.limit} AI-processed pages/month (${check.current}/${check.limit} used, ${check.remaining} remaining). This request needs ${requestedPages} pages — please select fewer pages, add pay-as-you-go credits, or upgrade your plan.`;
 }
 
 function reworkLimitMessage(check: { current: number; limit: number | null }) {
@@ -2453,7 +2418,7 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: failureHistoryCheck.error, requires_confirmation: true, recent_failures: failureHistoryCheck.recentFailures }, 429);
       }
 
-      const emptyRerunCheck = isAdminOverride ? { ok: true as const } : await checkEmptyRerun(admin, drawing_id, !!confirm_rerun);
+      const emptyRerunCheck = isAdminOverride ? { ok: true as const } : await checkEmptyRerun(admin, drawing_id, !!confirm_rerun, isCivilDrawing(drawing));
       if (!emptyRerunCheck.ok) {
         return jsonResponse({ error: emptyRerunCheck.error, requires_confirmation: true, confirm_field: "confirm_rerun", empty_runs: emptyRerunCheck.emptyRuns }, 429);
       }
@@ -2518,7 +2483,7 @@ Deno.serve(async (req: Request) => {
           : MARKUP_COORDS_INSTRUCTION;
         let civil = isCivilDrawing(drawing);
         let autoTypedNote = "";
-        if (!civil && (fileContent.kind === "pdf" || fileContent.kind === "image")) {
+        if (!civil && requestedPages <= 2 && (fileContent.kind === "pdf" || fileContent.kind === "image")) {
           const sheet = await detectSheetKind(anthropicKey, fileContent.block);
           if (sheet && ["architectural", "structural", "civil"].includes(sheet.kind)) {
             civil = true;
@@ -2621,6 +2586,7 @@ Deno.serve(async (req: Request) => {
             item_count: safeRows.length, derived_item_count: derived.length,
             typical_detail_rows: typicalFixed,
             found_nothing: safeRows.length === 0,
+            civil,
             notes: autoTypedNote + (safeRows.length === 0 && civil
               ? `No BOQ items were produced. No measurable civil, structural or architectural work (concrete, blockwork, finishes, skirting, doors, external works) with readable dimensions was found on this sheet. ${result.analysis_notes ?? ""}`.trim()
               : safeRows.length === 0
@@ -2630,7 +2596,7 @@ Deno.serve(async (req: Request) => {
                   : result.analysis_notes)),
           },
         }).eq("id", run.id);
-        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" || pageCheck.billing === "pack" ? pageCheck.billing : legacyUsage.billing, packUnits: pageCheck.packUnits }, userId, project.id, "analyze_drawing", parsed.usage, requestedPages, elapsedMs, isAdminOverride);
+        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "analyze_drawing", parsed.usage, requestedPages, elapsedMs, isAdminOverride);
         await admin.from("drawings").update({ pages_ai_processed: (drawing.pages_ai_processed ?? 0) + requestedPages }).eq("id", drawing_id);
         if (usingSelection) {
           await admin.from("drawing_pages").update({ selected: true, ai_processed: true }).eq("drawing_id", drawing_id).in("page_number", page_selection!);
@@ -2688,7 +2654,7 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: failureHistoryCheck.error, requires_confirmation: true, recent_failures: failureHistoryCheck.recentFailures }, 429);
       }
 
-      const emptyRerunCheck = isAdminOverride ? { ok: true as const } : await checkEmptyRerun(admin, drawing_id, !!confirm_rerun);
+      const emptyRerunCheck = isAdminOverride ? { ok: true as const } : await checkEmptyRerun(admin, drawing_id, !!confirm_rerun, isCivilDrawing(drawing));
       if (!emptyRerunCheck.ok) {
         return jsonResponse({ error: emptyRerunCheck.error, requires_confirmation: true, confirm_field: "confirm_rerun", empty_runs: emptyRerunCheck.emptyRuns }, 429);
       }
@@ -2942,7 +2908,7 @@ Deno.serve(async (req: Request) => {
 
         await recordUsageAndBill(
           admin,
-          { companyId, billing: pageCheck.billing === "wallet" || pageCheck.billing === "pack" ? pageCheck.billing : legacyUsage.billing, packUnits: pageCheck.packUnits },
+          { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing },
           userId, project.id, "analyze_drawing_tiled", totalUsage, requestedPages, Date.now() - startTime, isAdminOverride
         );
         await admin.from("drawings").update({ pages_ai_processed: (drawing.pages_ai_processed ?? 0) + requestedPages }).eq("id", drawing_id);
@@ -3314,7 +3280,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
             revised_from: latestRevision,
           },
         }).eq("id", run.id);
-        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" || pageCheck.billing === "pack" ? pageCheck.billing : legacyUsage.billing, packUnits: pageCheck.packUnits }, userId, project.id, "rework", parsed.usage, requestedPages, elapsedMs, isAdminOverride);
+        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "rework", parsed.usage, requestedPages, elapsedMs, isAdminOverride);
         await admin.from("drawings").update({ pages_ai_processed: (drawing.pages_ai_processed ?? 0) + requestedPages }).eq("id", drawing_id);
         if (usingSelection) {
           await admin.from("drawing_pages").update({ selected: true, ai_processed: true }).eq("drawing_id", drawing_id).in("page_number", page_selection!);
@@ -3471,7 +3437,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
             combined_file_names: fetched.map(f => f.drawing.file_name),
           },
         }).eq("id", run.id);
-        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" || pageCheck.billing === "pack" ? pageCheck.billing : legacyUsage.billing, packUnits: pageCheck.packUnits }, userId, project.id, "analyze_drawings_combined", parsed.usage, totalPages, elapsedMs, isAdminOverride);
+        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "analyze_drawings_combined", parsed.usage, totalPages, elapsedMs, isAdminOverride);
         for (const f of fetched) {
           await admin.from("drawings").update({ pages_ai_processed: (f.drawing.pages_ai_processed ?? 0) + f.pages }).eq("id", f.drawing.id);
         }
