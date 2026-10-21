@@ -792,6 +792,314 @@ EQUIPMENT SPECIFICITY -- the description must identify WHAT TO BUY, not merely w
 
 LOCATION FIELDS: fill "building" only for multi-building/multi-villa/multi-tower projects (e.g. "Villa 12", "Tower B") -- omit it for single-building projects, where floor/zone/room already fully locate the item. Fill "subsystem" for a meaningful sub-classification within system_category where it adds real detail. Fill "from_location"/"to_location" only for run-type items (cable, conduit, containment, pipework) describing origin and destination -- omit both for point items (a single device/fixture has one location, not a run).`;
 
+// ---------------------------------------------------------------------------
+// CIVIL TAKE-OFF (2026-10-21, phase 1)
+//
+// Customers asked for civil BOQs: earthworks, concrete, formwork, steel,
+// blockwork, plaster, finishes, skirting, doors and windows, external works.
+// Those trades are MEASURED (m, m2, m3, kg), not counted, so they get their
+// own prompt and their own category list. They are read from the whole sheet,
+// never from tiles: a tile cuts dimension strings and room outlines in half.
+//
+// A drawing goes down this path when its discipline is civil, structural or
+// architectural. An architectural plan that carries lighting or small power is
+// uploaded as Electrical, as it always has been.
+// ---------------------------------------------------------------------------
+const CIVIL_DISCIPLINES = ["civil", "structural", "architectural"];
+
+function isCivilDrawing(drawing: any): boolean {
+  const d = String(drawing?.discipline ?? "").toLowerCase().trim();
+  return CIVIL_DISCIPLINES.includes(d);
+}
+
+const CIVIL_CATEGORIES = [
+  "site_works", "earthworks", "concrete", "formwork", "reinforcement", "structural_steel",
+  "masonry", "waterproofing", "insulation", "plaster_render", "screed",
+  "floor_finishes", "wall_finishes", "ceiling_finishes", "skirting", "painting",
+  "doors", "windows", "joinery", "metalwork", "external_works", "drainage",
+  "piling", "ground_stabilisation", "other",
+];
+
+// Same tool as MEP, with the civil categories and civil wording. Built from
+// BOQ_ITEM_TOOL so every other field (coordinates, source types, review
+// arrays) stays identical and the row mapping below needs no change.
+const CIVIL_BOQ_TOOL = (() => {
+  const t = JSON.parse(JSON.stringify(BOQ_ITEM_TOOL));
+  t.description = "Record the measured civil / structural / architectural Bill of Quantities items taken off this drawing.";
+  const p = t.input_schema.properties.items.items.properties;
+  p.system_category = { type: "string", enum: CIVIL_CATEGORIES, description: "The civil work section this item belongs to." };
+  p.description = {
+    type: "string",
+    description: "What is built or supplied, with its specification, as a QS would write it: e.g. \"Reinforced concrete C35/45 in ground beams\", \"200 mm hollow concrete blockwork in external walls\", \"Porcelain floor tiles 600x600 mm on adhesive bed\", \"Ceramic skirting 100 mm high\".",
+  };
+  p.unit = { type: "string", enum: ["m3", "m2", "m", "kg", "t", "nr", "item"], description: "Measurement unit: m3 volume, m2 area, m length, kg/t steel, nr for counted items, item for a lump sum." };
+  p.quantity_basis_notes = {
+    type: "string",
+    description: "REQUIRED for every measured item: the dimensions and arithmetic, e.g. \"Room 104: 2x(6.20+4.80)=22.00 m less door 0.90 = 21.10 m\" or \"Footing F1: 1.80x1.80x0.60 = 1.944 m3 x 12 nr = 23.33 m3\". Name where each dimension came from (dimension string, schedule, area tag, scale).",
+  };
+  p.quantity_formula = {
+    type: "string",
+    description: "REQUIRED for every measured row: the working as a plain arithmetic expression using only numbers, + - * / and brackets, in the row's unit -- e.g. \"2*(6.20+4.80)-0.90\" or \"1.80*1.80*0.60*12\". The platform calculates the quantity from this, so it must be the complete sum, not a fragment.",
+  };
+  delete p.manufacturer;
+  delete p.model_number;
+  delete p.testing_requirements;
+  delete p.commissioning_requirements;
+  p.installation_accessories = { type: "string", description: "Items deemed included with this row, e.g. \"adhesive, grout, spacers\" or \"tie wire, spacers, chairs\". Omit if none." };
+  return t;
+})();
+
+const CIVIL_TAKEOFF_RULES = `
+
+YOU ARE TAKING OFF CIVIL, STRUCTURAL AND ARCHITECTURAL QUANTITIES. These trades are MEASURED from dimensions, not counted from symbols.
+
+1. READ THE SHEET FIRST
+- Title block: drawing title, drawing number, revision, scale (e.g. 1:100 at A1) and units. Dimensions on construction drawings are in millimetres unless stated; levels are in metres.
+- Find every schedule and key on the sheet: room finish schedule, door and window schedule, footing / column / beam schedule, bar bending schedule, finish legend, hatch legend. A schedule is the best source of a specification; the plan is the source of where and how much.
+- Note what kind of sheet it is (plan, section, elevation, detail, schedule) and which items it can and cannot give. A floor plan gives floor areas, perimeters, wall lengths and openings; heights come from sections, elevations or notes.
+
+2. HOW TO GET A DIMENSION -- in this order, and say which one you used in quantity_basis_notes
+  a) A written dimension string, area tag (e.g. "AREA 24.5 m2") or schedule value. Always prefer these.
+  b) Add up a chain of written dimensions to get an overall length.
+  c) Only if nothing is written: scale it from the drawing using the printed scale or scale bar. Mark the row engineered, keep confidence at 60 or below, and say "scaled".
+  Never invent a dimension. If a needed dimension (often a height or a thickness) is not on this sheet, state the value you assumed in assumptions[], lower the confidence, and put the item in review_items.
+
+3. MEASUREMENT RULES (standard method of measurement practice)
+- Excavation, fill, concrete: m3, net volume, no allowance for bulking or waste. Concrete per element type and grade (blinding, footings, ground beams, slab on grade, columns, beams, suspended slabs, walls, stairs).
+- Formwork: m2 of the face in contact with concrete, per element type. Not to blinding or the top face of a slab.
+- Reinforcement: kg or t, per bar type, from a bar bending schedule or the bar marks and spacings shown. If there is no schedule and the bars are not detailed, give the item with an assumed rate in kg per m3 of concrete, status engineered, confidence 40 or below, and say so.
+- Blockwork / masonry: m2, per wall thickness and type, wall length x height. Deduct openings (doors, windows) larger than 0.5 m2.
+- Plaster, render, paint, wall tiles: m2 of the finished face, per side of the wall that receives it. Deduct openings larger than 0.5 m2.
+- Floor finishes, screed, ceilings, waterproofing: m2 of the room or zone, measured net within the walls. State the room.
+- Skirting, coving, kerbs, copings, DPC, handrails, edge strips: m, measured along the room perimeter or the line shown, LESS the width of every doorway the skirting does not run across.
+- Doors, windows, manholes, sanitary fixtures shown on architectural plans: nr, per type mark from the schedule (D1, W2...).
+- Paving, landscaping, road layers: m2 per layer and thickness; kerbs m; road base / sub-base can also be m3 if the drawing gives thickness.
+- Structural steel members: kg (or t), length x mass per metre from standard section tables for the profile shown, per profile; state the number of pieces and the kg/m used in the working. Plates: kg from size x thickness x 7850 kg/m3. Bolts and anchors: nr.
+- Ground stabilisation: shotcrete m2 per thickness, mesh m2, rock bolts / soil nails nr per length and diameter (and m of drilling), drainage holes nr. Piles nr per diameter and length, plus m of piling.
+
+4. ROWS
+- One row per item type per room or zone where the drawing names rooms (room field filled). If the sheet has very many rooms (more than about 25), give one row per item type per floor and list the room totals inside quantity_basis_notes instead.
+- Never put two different specifications in one row. Never repeat the same quantity in two rows.
+- A drawing title or note that says "TYPICAL" or "TYP." applies to the repetitions it states only if the number of repetitions is printed. Otherwise measure one and add a review item.
+- A plan that refers to another sheet for a detail ("SEE DWG A-501") does not give that detail: measure what this sheet shows and note the reference.
+- quantity_source_type: calculated_quantity for anything you worked out from dimensions; schedule_quantity when the number is printed in a schedule; physical_count for items counted on the plan (doors, manholes).
+- For a sheet that only shows a reference plan (e.g. a skirting reference plan or a finishes key plan), the finish codes on the plan tell you WHICH finish goes WHERE: measure each code's quantity from the room outlines and dimensions, and take its specification from the legend.
+- If a perimeter can only be estimated from a room's area tag (no dimensions, sheet not to scale), give ONE ROW PER ROOM, write "estimated from area" in the working, and keep confidence at 40 or below. Never total a set of estimates into one confident row.
+- If nothing on the sheet can be measured, return an EMPTY items list and explain why in analysis_notes. Never add a row that only describes the sheet.
+- A sheet of typical details with no number of repetitions: give each item with quantity 0, its full specification and the per-unit working in quantity_basis_notes, status review_required, so the estimator can multiply it once the number is known.
+
+5. CONFIDENCE
+- 85-95: taken from a written dimension, area tag or schedule.
+- 60-80: added up from several written dimensions, or a height taken from another part of the sheet.
+- 30-60: scaled, or depends on an assumed height or thickness.
+- Below 30: guessed from context. Put every such row in review_items.
+
+6. WHAT NOT TO MEASURE
+- Nothing from a legend, symbol key, title block or north arrow.
+- No MEP or ELV items (lights, sockets, ducts, pipes, cameras) -- those are taken off from the MEP drawings.
+- No prices or rates.
+
+Fill quantity_basis_notes on EVERY row with where each dimension came from, and quantity_formula with the complete arithmetic. The platform calculates the quantity from quantity_formula, so a quantity surveyor can check it in one look. A quantity without its working is not usable.`;
+
+function civilSystemPrompt(projectContext: string): string {
+  return `You are an expert quantity surveyor taking off civil, structural and architectural works from construction drawings to produce an accurate, checkable Bill of Quantities. ${projectContext}${CIVIL_TAKEOFF_RULES}`;
+}
+
+function civilUserText(drawing: any, usingSelection: boolean, selectionCount: number, coordsInstruction: string): string {
+  return `Take off this ${drawing.discipline ?? "civil"} drawing${drawing.floor_label ? ` for ${drawing.floor_label}` : ""}${usingSelection ? ` (${selectionCount} selected pages)` : ""}. ` +
+    `Read the title block, scale, schedules and legends first. Then measure every civil, structural and architectural item this sheet gives enough information for, ` +
+    `in m3, m2, m, kg/t or nr as the rules say, and record them with record_boq_items. Show the dimensions and arithmetic in quantity_basis_notes on every row. ` +
+    `Disclose every assumed height, thickness or dimension in assumptions, and give an honest confidence_score per row. ${coordsInstruction}`;
+}
+
+// Markers are point markers: only counted items (doors, windows, manholes)
+// can carry them; sanitizeCoordinates drops them for m, m2 and m3 anyway.
+const CIVIL_COORDS_INSTRUCTION =
+  "Give coordinates ONLY for doors, windows and manholes you counted on a plan, one point per occurrence (page 1-indexed, x/y as fractions of the page), and only where you can actually place each one. " +
+  "Omit coordinates for every measured item, for anything from a schedule or table, and whenever unsure -- a wrong marker is worse than none.";
+
+// Safe arithmetic for civil quantities (2026-10-21). The AI writes the working
+// as a plain expression, e.g. "2*(6.20+4.80)-0.90"; the platform does the sum.
+// In testing the AI listed room perimeters adding up to ~1,190 m and reported
+// 714.6 m -- a QS checks the arithmetic first, so the arithmetic is ours.
+// Numbers, + - * / and brackets only; anything else returns null.
+function evalQuantityFormula(src: unknown): number | null {
+  if (typeof src !== "string") return null;
+  const s = src.replace(/[×x]/g, "*").replace(/÷/g, "/").replace(/,/g, "").trim();
+  if (!s || s.length > 2000 || /[^0-9.+\-*/()\s]/.test(s)) return null;
+  let i = 0;
+  const peek = () => { while (s[i] === " " || s[i] === "\t" || s[i] === "\n") i++; return s[i]; };
+  const num = (): number => {
+    peek();
+    const m = /^\d*\.?\d+(?:e[+-]?\d+)?/i.exec(s.slice(i));
+    if (!m) throw new Error("number expected");
+    i += m[0].length;
+    return Number(m[0]);
+  };
+  const factor = (): number => {
+    const c = peek();
+    if (c === "-") { i++; return -factor(); }
+    if (c === "+") { i++; return factor(); }
+    if (c === "(") { i++; const v = expr(); if (peek() !== ")") throw new Error(") expected"); i++; return v; }
+    return num();
+  };
+  const term = (): number => {
+    let v = factor();
+    for (;;) {
+      const c = peek();
+      if (c === "*") { i++; v *= factor(); }
+      else if (c === "/") { i++; const d = factor(); if (d === 0) throw new Error("divide by zero"); v /= d; }
+      else return v;
+    }
+  };
+  const expr = (): number => {
+    let v = term();
+    for (;;) {
+      const c = peek();
+      if (c === "+") { i++; v += term(); }
+      else if (c === "-") { i++; v -= term(); }
+      else return v;
+    }
+  };
+  try {
+    const v = expr();
+    if (peek() !== undefined) return null;
+    return Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null;
+  } catch { return null; }
+}
+
+// Civil rows after the AI, before saving (2026-10-21). Learned from the first
+// four real drawings: the AI's own sums were wrong, it invented a category
+// ("shotcrete"), filed a "Ground floor plan" placeholder row, repeated a row,
+// and claimed 75% on perimeters it had guessed from room areas.
+const CIVIL_CATEGORY_ALIASES: Record<string, string> = {
+  shotcrete: "ground_stabilisation", rock_bolts: "ground_stabilisation", rock_bolt: "ground_stabilisation",
+  soil_nails: "ground_stabilisation", slope_protection: "ground_stabilisation", mesh: "ground_stabilisation",
+  excavation: "earthworks", backfill: "earthworks", blockwork: "masonry", brickwork: "masonry",
+  plaster: "plaster_render", render: "plaster_render", tiling: "floor_finishes", flooring: "floor_finishes",
+  ceiling: "ceiling_finishes", ceilings: "ceiling_finishes", paint: "painting", steelwork: "structural_steel",
+  steel: "structural_steel", rebar: "reinforcement", paving: "external_works", landscaping: "external_works",
+  roads: "external_works", kerbs: "external_works", cladding: "wall_finishes",
+};
+
+function finalizeCivilItems(items: any[]): { items: any[]; recalculated: number; dropped: number; indexMap: Map<number, number> } {
+  let recalculated = 0, dropped = 0;
+  const seen = new Set<string>();
+  const out: any[] = [];
+  const indexMap = new Map<number, number>();
+  for (const [idx, raw] of (items || []).entries()) {
+    const it = { ...raw };
+    const cat = String(it.system_category ?? "other").toLowerCase().trim();
+    it.system_category = CIVIL_CATEGORIES.includes(cat) ? cat : (CIVIL_CATEGORY_ALIASES[cat] ?? "other");
+
+    // A row that only describes the sheet is not a quantity.
+    const desc = String(it.description ?? "").toLowerCase();
+    if (it.system_category === "other" && String(it.unit ?? "") === "item" && /\b(plan|drawing|layout|sheet)\b/.test(desc)) {
+      dropped++; continue;
+    }
+
+    // The platform does the arithmetic.
+    const calc = evalQuantityFormula(it.quantity_formula);
+    if (calc !== null) {
+      const said = Number(it.quantity);
+      const value = Math.max(0, calc);
+      if (!Number.isFinite(said) || Math.abs(said - value) > Math.max(0.01, Math.abs(value) * 0.01)) {
+        recalculated++;
+        it.quantity_basis_notes = `${it.quantity_basis_notes ?? ""} [Quantity calculated by the platform from ${it.quantity_formula} = ${value}${Number.isFinite(said) ? `; the AI had written ${said}` : ""}.]`.trim();
+      } else {
+        it.quantity_basis_notes = `${it.quantity_basis_notes ?? ""} [Working: ${it.quantity_formula} = ${value}]`.trim();
+      }
+      if (calc < 0) {
+        it.optimization_status = "review_required";
+        it.optimization_note = "The working came out negative, so the quantity was set to 0 for review.";
+      }
+      it.quantity = value;
+    }
+
+    // Guessed geometry cannot claim high confidence.
+    const basis = String(it.quantity_basis_notes ?? "").toLowerCase();
+    if (/\b(approx|approximately|estimated from (the )?(room )?area|assum(ed|ing) (typical )?proportion|scaled)\b/.test(basis)) {
+      it.confidence_score = Math.min(Number(it.confidence_score ?? 50), 50);
+    }
+
+    // Markers only for counted items; measured items have no point position.
+    if (String(it.unit ?? "") !== "nr") delete it.coordinates;
+
+    const key = [it.system_category, desc.replace(/\s+/g, " ").trim(), it.unit, String(it.room ?? "").toLowerCase(), Number(it.quantity)].join("|");
+    if (seen.has(key)) { dropped++; continue; }
+    seen.add(key);
+    indexMap.set(idx, out.length);
+    out.push(it);
+  }
+  return { items: out, recalculated, dropped, indexMap };
+}
+
+// Assumptions, review notes and optimisations point at rows by position, so
+// they follow the rows that were kept; a note about a dropped row becomes a
+// sheet-level note instead of attaching to the wrong line.
+function applyCivilFinalize(result: any): string {
+  const f = finalizeCivilItems(result.items || []);
+  result.items = f.items;
+  for (const key of ["assumptions", "review_items", "cost_optimizations"]) {
+    for (const e of result[key] || []) {
+      if (typeof e?.item_ref !== "number") continue;
+      const to = f.indexMap.get(e.item_ref);
+      if (to === undefined) delete e.item_ref; else e.item_ref = to;
+    }
+  }
+  const bits: string[] = [];
+  if (f.recalculated) bits.push(`${f.recalculated} quantit${f.recalculated === 1 ? "y was" : "ies were"} recalculated by the platform from the working shown`);
+  if (f.dropped) bits.push(`${f.dropped} repeated or descriptive row${f.dropped === 1 ? " was" : "s were"} removed`);
+  return bits.length ? ` ${bits.join("; ")}.` : "";
+}
+
+// AUTO-DETECT (2026-10-21). A customer uploaded a skirting reference plan as
+// "Plumbing" because that was the nearest choice, and was charged for a run
+// that found nothing. Before an MEP/ELV read of a PDF or image, one short call
+// asks whether the sheet actually carries MEP/ELV work. If it carries none and
+// is an architectural, structural or civil sheet, it is measured as civil
+// works instead and the drawing's type is corrected, with a note saying so.
+const SHEET_KIND_TOOL = {
+  name: "record_sheet_kind",
+  description: "Say what kind of construction sheet this is.",
+  input_schema: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        enum: ["mep_elv", "architectural", "structural", "civil", "not_a_drawing"],
+        description: "mep_elv if ANY electrical, lighting, power, ELV, HVAC, plumbing, drainage or fire devices, fixtures, or cable/pipe/duct runs are drawn on it, even on an architectural background. Otherwise the sheet's own discipline: architectural (layouts, finishes, skirting, doors, windows), structural (foundations, concrete, steel, reinforcement) or civil (earthworks, roads, external works, ground stabilisation). not_a_drawing for a specification, schedule-only page or cover sheet.",
+      },
+      reason: { type: "string", description: "One short sentence: what on the sheet decided it." },
+    },
+    required: ["kind", "reason"],
+  },
+};
+
+async function detectSheetKind(apiKey: string, fileBlock: any): Promise<{ kind: string; reason: string } | null> {
+  try {
+    // Direct call, not callClaude: callClaude insists on an items list.
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL, max_tokens: 400,
+        system: "You sort construction drawings by trade before take-off. Look at the whole sheet, its title block and its legend.",
+        tools: [SHEET_KIND_TOOL], tool_choice: { type: "tool", name: SHEET_KIND_TOOL.name },
+        messages: [{ role: "user", content: [fileBlock, { type: "text", text: "What kind of sheet is this? Answer with record_sheet_kind." }] }],
+      }),
+      signal: AbortSignal.timeout(90_000),
+    });
+    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    const r = data.content?.find((c: any) => c.type === "tool_use")?.input as any;
+    return r?.kind ? { kind: String(r.kind), reason: String(r.reason ?? "") } : null;
+  } catch (e) {
+    console.warn("detectSheetKind failed, reading the sheet as typed:", describeError(e));
+    return null;
+  }
+}
+
 const PAGE_CLASSIFICATION_TOOL = {
   name: "record_page_classifications",
   description: "Classify every page of this construction drawing package by the system/discipline it primarily shows.",
@@ -1537,7 +1845,7 @@ async function checkRecentFailureHistory(admin: any, drawingId: string, confirmR
 // combined analysis finished silently with item_count 0, which is what a
 // customer reads as "it worked and my drawing has nothing on it".
 function emptyResultExplanation(context: string): string {
-  return `No BOQ lines came out of this ${context}. That normally means one of three things: the sheet is civil, structural or architectural -- Quantora reads MEP and ELV systems (electrical, lighting, HVAC, plumbing, fire, CCTV, access control and the rest), not steelwork, concrete or setting-out; or the file is a specification, schedule or material list rather than a drawing, in which case upload it on the Specification page where it is read as text; or the sheet is a title page, key plan or index with no devices drawn on it. Re-running the same file will produce the same result, so change the sheet rather than the button.`;
+  return `No BOQ lines came out of this ${context}. That normally means one of three things: the drawing type does not match the sheet -- an MEP or ELV type is read for devices and runs, while Civil, Structural and Architectural are measured for concrete, blockwork, finishes and the rest, so a finishes plan marked Plumbing finds nothing; or the file is a specification, schedule or material list rather than a drawing, in which case upload it on the Specification page where it is read as text; or the sheet is a title page, key plan or index with no devices drawn on it. Re-running the same file will produce the same result, so change the sheet rather than the button.`;
 }
 
 // OUT-OF-SCOPE DISCIPLINE GUARD (2026-09-03). Measured across every drawing
@@ -1550,7 +1858,10 @@ function emptyResultExplanation(context: string): string {
 //
 // Architectural is deliberately NOT gated: an architectural plan very often
 // carries the lighting and small-power layout, and one customer's did.
-const OUT_OF_SCOPE_DISCIPLINES = ["structural", "civil"];
+// 2026-10-21: civil, structural and architectural are now taken off by the
+// civil path (CIVIL_TAKEOFF_RULES), so nothing is out of scope any more. The
+// gate is kept, empty, so the request shape the app knows does not change.
+const OUT_OF_SCOPE_DISCIPLINES: string[] = [];
 
 function checkDisciplineScope(
   drawing: any,
@@ -2205,14 +2516,28 @@ Deno.serve(async (req: Request) => {
         const coordsInstruction = (fileContent.kind === "dxf" || fileContent.kind === "ifc")
           ? `This is raw ${fileContent.kind.toUpperCase()} exchange-format text, not a rendered drawing image, so omit "coordinates" for every item (there is no page image to reference).`
           : MARKUP_COORDS_INSTRUCTION;
+        let civil = isCivilDrawing(drawing);
+        let autoTypedNote = "";
+        if (!civil && (fileContent.kind === "pdf" || fileContent.kind === "image")) {
+          const sheet = await detectSheetKind(anthropicKey, fileContent.block);
+          if (sheet && ["architectural", "structural", "civil"].includes(sheet.kind)) {
+            civil = true;
+            autoTypedNote = `This sheet was uploaded as ${drawing.discipline ?? "unspecified"} but shows ${sheet.kind} work and no MEP or ELV items (${sheet.reason}), so it was measured as civil works and its type was changed to ${sheet.kind}. `;
+            await admin.from("drawings").update({ discipline: sheet.kind }).eq("id", drawing_id);
+            drawing.discipline = sheet.kind;
+          }
+        }
+        const takeoffTool = civil ? CIVIL_BOQ_TOOL : BOQ_ITEM_TOOL;
         const userContent = [
           fileContent.block,
           {
             type: "text",
-            text: `Analyze this ${drawing.discipline ?? "construction"} drawing${drawing.floor_label ? ` for ${drawing.floor_label}` : ""}${usingSelection ? ` (${page_selection!.length} selected pages)` : ""}. Identify every relevant system item (equipment, fixtures, devices, cable/pipe runs, symbols, schedules, legends). Count quantities precisely from what is visible/present in the data. Produce Bill of Quantities line items via the record_boq_items tool, following standard BOQ conventions (item description, technical spec, qty, unit, length/area where relevant, location, accessories, consumables, testing & commissioning requirements). Assign an honest confidence_score per item — lower it whenever the source is unclear, cropped, low resolution, or ambiguous. ${coordsInstruction}`,
+            text: civil
+              ? civilUserText(drawing, usingSelection, page_selection?.length ?? 0, (fileContent.kind === "dxf" || fileContent.kind === "ifc") ? coordsInstruction : CIVIL_COORDS_INSTRUCTION)
+              : `Analyze this ${drawing.discipline ?? "construction"} drawing${drawing.floor_label ? ` for ${drawing.floor_label}` : ""}${usingSelection ? ` (${page_selection!.length} selected pages)` : ""}. Identify every relevant system item (equipment, fixtures, devices, cable/pipe runs, symbols, schedules, legends). Count quantities precisely from what is visible/present in the data. Produce Bill of Quantities line items via the record_boq_items tool, following standard BOQ conventions (item description, technical spec, qty, unit, length/area where relevant, location, accessories, consumables, testing & commissioning requirements). Assign an honest confidence_score per item — lower it whenever the source is unclear, cropped, low resolution, or ambiguous. ${coordsInstruction}`,
           },
         ];
-        const systemPrompt = `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
+        const systemPrompt = civil ? civilSystemPrompt(projectContext) : `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
 
         const userTextForKey = (userContent[1] as any)?.text ?? "";
         const cacheKey = await buildCacheKey(processingBytes, systemPrompt, userTextForKey);
@@ -2241,13 +2566,15 @@ Deno.serve(async (req: Request) => {
         const startTime = Date.now();
         let parsed;
         try {
-          parsed = await callClaude(anthropicKey, systemPrompt, userContent);
+          parsed = await callClaude(anthropicKey, systemPrompt, userContent, takeoffTool);
         } catch (aiErr) {
           await admin.from("analysis_runs").update({ status: "failed", error_message: describeError(aiErr) }).eq("id", run.id);
           return;
         }
         const elapsedMs = Date.now() - startTime;
         const result = parsed.result as { items: any[]; analysis_notes: string; document_kind?: string; cost_optimizations?: any[]; assumptions?: any[]; review_items?: any[] };
+        const civilNote = civil ? applyCivilFinalize(result) : "";
+        if (civilNote) result.analysis_notes = `${result.analysis_notes ?? ""}${civilNote}`;
 
         // Right reasoning, wrong field: the model describes a typical detail in its
         // own basis note and then files the row as a physical count.
@@ -2294,11 +2621,13 @@ Deno.serve(async (req: Request) => {
             item_count: safeRows.length, derived_item_count: derived.length,
             typical_detail_rows: typicalFixed,
             found_nothing: safeRows.length === 0,
-            notes: safeRows.length === 0
-              ? `No BOQ items were produced. Nothing countable for the systems Quantora reads (MEP and ELV — cameras, readers, detectors, luminaires, panels, cable, containment, ducting, pipework) was found in this file. If it is a civil, structural or architectural drawing, Quantora does not read those yet. If it is a specification or a schedule rather than a drawing, upload it on the Specification page instead. What the AI saw: ${result.analysis_notes ?? "(no notes)"}`
+            notes: autoTypedNote + (safeRows.length === 0 && civil
+              ? `No BOQ items were produced. No measurable civil, structural or architectural work (concrete, blockwork, finishes, skirting, doors, external works) with readable dimensions was found on this sheet. ${result.analysis_notes ?? ""}`.trim()
+              : safeRows.length === 0
+              ? `No BOQ items were produced. Nothing countable for the systems Quantora reads (MEP and ELV — cameras, readers, detectors, luminaires, panels, cable, containment, ducting, pipework) was found in this file. If it is a civil, structural or architectural drawing, set its type to Civil, Structural or Architectural so it is measured as civil works. If it is a specification or a schedule rather than a drawing, upload it on the Specification page instead. What the AI saw: ${result.analysis_notes ?? "(no notes)"}`
               : (typicalFixed
                   ? `${result.analysis_notes ?? ""} ${typicalFixed} row(s) were recorded as typical-detail references rather than counted quantities: a typical detail shows how an item is built once, not how many the project contains.`.trim()
-                  : result.analysis_notes),
+                  : result.analysis_notes)),
           },
         }).eq("id", run.id);
         await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" || pageCheck.billing === "pack" ? pageCheck.billing : legacyUsage.billing, packUnits: pageCheck.packUnits }, userId, project.id, "analyze_drawing", parsed.usage, requestedPages, elapsedMs, isAdminOverride);
@@ -2332,6 +2661,11 @@ Deno.serve(async (req: Request) => {
       };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
       if (dErr || !drawing) throw new Error("Drawing not found.");
+      // Civil sheets are measured from the whole sheet: a tile cuts dimension
+      // strings and room outlines in half. The app sends them to analyze_drawing.
+      if (isCivilDrawing(drawing)) {
+        return jsonResponse({ error: "Civil, structural and architectural drawings are measured from the whole sheet, not in tiles. Reload the page and press Analyze again." }, 400);
+      }
 
       let tiles: TileSpec[];
       try {
@@ -2601,7 +2935,7 @@ Deno.serve(async (req: Request) => {
             reference_panels: panels.length,
             positions_discarded_in_panels: panelDropped,
             notes: (safeRows.length === 0
-              ? `No BOQ items were produced from this sheet. Every tile was read and nothing countable for the systems Quantora reads (MEP and ELV) was found. If this is a civil, structural or architectural drawing, Quantora does not read those yet — and if it is a specification or schedule rather than a drawing, upload it on the Specification page instead. Per-tile detail follows.\n\n`
+              ? `No BOQ items were produced from this sheet. Every tile was read and nothing countable for the systems Quantora reads (MEP and ELV) was found. If this is a civil, structural or architectural drawing, set its type to Civil, Structural or Architectural so it is measured as civil works — and if it is a specification or schedule rather than a drawing, upload it on the Specification page instead. Per-tile detail follows.\n\n`
               : ``) + `High-resolution tiled take-off: the sheet was rendered at full scale and read as ${tiles.length} overlapping tiles, so device symbols too small to resolve on a whole-sheet pass are legible. ${legendLine} ${removed} per-tile row(s) were merged into one line per device, so a device counted on several tiles is one BOQ line and not several. ${legendFlagged} line(s) disagree with the quantity printed in the sheet's own legend and are flagged for review rather than silently adjusted. ${panelDropped} marker position(s) landing inside a legend, schedule or title block were discarded, because a symbol drawn in a key is a reference and not a device in the building. ${emptyTiles} tile(s) contained no countable items.\n\n${notesParts.join("\n")}`,
           },
         }).eq("id", run.id);
@@ -2813,7 +3147,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
             typical_detail_rows: typicalFixed,
             found_nothing: safeRows.length === 0,
             notes: safeRows.length === 0
-              ? `No BOQ items were produced. Nothing countable for the systems Quantora reads (MEP and ELV — cameras, readers, detectors, luminaires, panels, cable, containment, ducting, pipework) was found in this file. If it is a civil, structural or architectural drawing, Quantora does not read those yet. If it is a specification or a schedule rather than a drawing, upload it on the Specification page instead. What the AI saw: ${result.analysis_notes ?? "(no notes)"}`
+              ? `No BOQ items were produced. Nothing countable for the systems Quantora reads (MEP and ELV — cameras, readers, detectors, luminaires, panels, cable, containment, ducting, pipework) was found in this file. If it is a civil, structural or architectural drawing, set its type to Civil, Structural or Architectural so it is measured as civil works. If it is a specification or a schedule rather than a drawing, upload it on the Specification page instead. What the AI saw: ${result.analysis_notes ?? "(no notes)"}`
               : (typicalFixed
                   ? `${result.analysis_notes ?? ""} ${typicalFixed} row(s) were recorded as typical-detail references rather than counted quantities: a typical detail shows how an item is built once, not how many the project contains.`.trim()
                   : result.analysis_notes),
@@ -2903,26 +3237,34 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         const fileContent = buildFileContentBlock(drawing.file_name, processingBytes);
         const coordsInstruction = (fileContent.kind === "dxf" || fileContent.kind === "ifc")
           ? `This is raw ${fileContent.kind.toUpperCase()} exchange-format text, not a rendered drawing image, so omit "coordinates" for every item.`
-          : MARKUP_COORDS_INSTRUCTION;
-        const systemPrompt = `You are revising a previous Bill of Quantities extraction based on user feedback. Do NOT discard correct prior items — reproduce the FULL corrected item list (including unchanged items) so this becomes the new authoritative revision. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
+          : (isCivilDrawing(drawing) ? CIVIL_COORDS_INSTRUCTION : MARKUP_COORDS_INSTRUCTION);
+        const civil = isCivilDrawing(drawing);
+        const takeoffTool = civil ? CIVIL_BOQ_TOOL : BOQ_ITEM_TOOL;
+        const systemPrompt = civil
+          ? `You are revising a previous civil, structural and architectural Bill of Quantities take-off based on user feedback. Do NOT discard correct prior items — reproduce the FULL corrected item list (including unchanged items) so this becomes the new authoritative revision. ${projectContext}${CIVIL_TAKEOFF_RULES}`
+          : `You are revising a previous Bill of Quantities extraction based on user feedback. Do NOT discard correct prior items — reproduce the FULL corrected item list (including unchanged items) so this becomes the new authoritative revision. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
         const userContent = [
           fileContent.block,
           {
             type: "text",
-            text: `Previous revision ${latestRevision} extracted these items:\n${JSON.stringify(currentItems.map((i: any) => ({ system_category: i.system_category, description: i.description, quantity: i.quantity, unit: i.unit, location: i.location })), null, 2)}\n\nUser correction comments to address:\n${comments.map((c, idx) => `${idx + 1}. ${c}`).join("\n")}\n\nRe-examine the source, apply these corrections, and output the COMPLETE corrected item list via record_boq_items (previous correct items plus fixes for what was flagged). ${coordsInstruction}`,
+            text: `Previous revision ${latestRevision} extracted these items:\n${JSON.stringify(currentItems.map((i: any) => civil
+              ? ({ system_category: i.system_category, description: i.description, quantity: i.quantity, unit: i.unit, room: i.room, location: i.location, working: i.quantity_basis_notes })
+              : ({ system_category: i.system_category, description: i.description, quantity: i.quantity, unit: i.unit, location: i.location })), null, 2)}\n\nUser correction comments to address:\n${comments.map((c, idx) => `${idx + 1}. ${c}`).join("\n")}\n\nRe-examine the source, apply these corrections, and output the COMPLETE corrected item list via record_boq_items (previous correct items plus fixes for what was flagged). ${coordsInstruction}`,
           },
         ];
 
         const startTime = Date.now();
         let parsed;
         try {
-          parsed = await callClaude(anthropicKey, systemPrompt, userContent);
+          parsed = await callClaude(anthropicKey, systemPrompt, userContent, takeoffTool);
         } catch (aiErr) {
           await admin.from("analysis_runs").update({ status: "failed", error_message: describeError(aiErr) }).eq("id", run.id);
           return;
         }
         const elapsedMs = Date.now() - startTime;
         const result = parsed.result as { items: any[]; analysis_notes: string; document_kind?: string; cost_optimizations?: any[]; assumptions?: any[]; review_items?: any[] };
+        const civilNote = civil ? applyCivilFinalize(result) : "";
+        if (civilNote) result.analysis_notes = `${result.analysis_notes ?? ""}${civilNote}`;
 
         // Right reasoning, wrong field: the model describes a typical detail in its
         // own basis note and then files the row as a physical count.
