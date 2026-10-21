@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-20.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-21.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -481,6 +481,21 @@ const SYSTEM_GROUPS = {
   "Other": ["other"],
 };
 const ALL_SYSTEMS = Object.values(SYSTEM_GROUPS).flat();
+
+// CIVIL TAKE-OFF (2026-10-21). Civil, structural and architectural drawings are
+// measured (m, m2, m3, kg) into these sections. Kept OUT of SYSTEM_GROUPS on
+// purpose: that map also feeds the MEP design pickers, and civil works are not
+// designed by the platform, only taken off. Must match the civil values in the
+// boq_items.system_category check constraint.
+const CIVIL_SYSTEMS = [
+  "site_works","earthworks","piling","ground_stabilisation","concrete","formwork","reinforcement","structural_steel",
+  "masonry","waterproofing","insulation","plaster_render","screed",
+  "floor_finishes","wall_finishes","ceiling_finishes","skirting","painting",
+  "doors","windows","joinery","metalwork","external_works",
+];
+const CIVIL_DISCIPLINES = ["civil", "structural", "architectural"];
+const isCivilDiscipline = (d) => CIVIL_DISCIPLINES.includes(String(d || "").toLowerCase());
+const BOQ_FILTER_SYSTEMS = [...ALL_SYSTEMS, ...CIVIL_SYSTEMS];
 
 // The system-brief question bank: what the platform asks before it designs a
 // system with no drawings to read. 34 systems, three sections each -- what
@@ -1388,7 +1403,8 @@ function bucketConsolidated(consolidated, groupBy) {
   if (groupBy === "category") {
     const g = {};
     consolidated.forEach(row => {
-      const groupName = Object.entries(SYSTEM_GROUPS).find(([, cats]) => cats.includes(row.systemCategory))?.[0] || "Other";
+      const groupName = CIVIL_SYSTEMS.includes(row.systemCategory) ? "Civil works"
+        : (Object.entries(SYSTEM_GROUPS).find(([, cats]) => cats.includes(row.systemCategory))?.[0] || "Other");
       g[groupName] = g[groupName] || []; g[groupName].push(row);
     });
     return g;
@@ -9349,6 +9365,13 @@ function DrawingsTab({ project }) {
     setErr("");
     const isPdf = d.file_type === "pdf" || d.analysis_source_type === "pdf";
 
+    // Civil sheets are measured from the whole sheet: tiles would cut the
+    // dimension strings and room outlines that the quantities come from.
+    if (isCivilDiscipline(d.discipline)) {
+      await analyze(d.id);
+      return;
+    }
+
     // Images and CAD text have no page geometry to measure, and pdf.js may
     // simply not have loaded. Both fall back to the standard path rather than
     // blocking the customer from analysing anything at all.
@@ -9437,7 +9460,7 @@ function DrawingsTab({ project }) {
           totalItems === 0
             ? `No BOQ items were produced.\n\nEvery tile of ${pages.length === 1 ? "this sheet" : `all ${pages.length} sheets`} was read at ` +
               `${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, and nothing countable for the systems Quantora reads ` +
-              `(MEP and ELV) was found.\n\nIf this is a civil, structural or architectural drawing, Quantora does not read those yet. ` +
+              `(MEP and ELV) was found.\n\nIf this is a civil, structural or architectural drawing, change its type to Architectural, Structural or Civil so it is measured as civil works. ` +
               `If it is a specification or a schedule rather than a drawing, upload it on the Specification page instead — ` +
               `it reads those clause by clause.\n\nOpen the drawing's analysis notes for what the AI actually saw on each tile.`
             : `High-resolution take-off complete.\n\n${totalItems} BOQ items from ${pages.length} sheet${pages.length === 1 ? "" : "s"}, ` +
@@ -9607,6 +9630,14 @@ function DrawingsTab({ project }) {
     } catch (ex) { setErr(ex.message); } finally { setAttachingExport(a => ({...a, [drawingId]: false})); }
   }
 
+  async function changeDiscipline(d, value) {
+    if (!value || value === d.discipline) return;
+    setErr("");
+    const { error } = await sb.from("drawings").update({ discipline: value }).eq("id", d.id);
+    if (error) { setErr(error.message); return; }
+    await load();
+  }
+
   const NEEDS_EXPORT_TYPES = ["dwg","revit"];
   const canAnalyze = (d) => (["pdf","image","scan","dxf","ifc"].includes(d.file_type) || (NEEDS_EXPORT_TYPES.includes(d.file_type) && d.analysis_source_path)) && d.discipline !== "specification";
 
@@ -9620,8 +9651,15 @@ function DrawingsTab({ project }) {
             <label className="text-xs font-semibold text-slate-600">Discipline / Document Type</label>
             <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={discipline} onChange={e=>setDiscipline(e.target.value)}>
               <option value="">Choose what this drawing shows…</option>
-              {["electrical","elv","mechanical","plumbing","fire_protection"].map(d=>
-                <option key={d} value={d}>{SYSTEM_LABEL(d)}</option>)}
+              <optgroup label="MEP & ELV — devices and runs are counted">
+                {["electrical","elv","mechanical","plumbing","fire_protection"].map(d=>
+                  <option key={d} value={d}>{SYSTEM_LABEL(d)}</option>)}
+              </optgroup>
+              <optgroup label="Civil works — measured in m, m², m³, kg">
+                <option value="architectural">Architectural / finishes</option>
+                <option value="structural">Structural</option>
+                <option value="civil">Civil / infrastructure</option>
+              </optgroup>
             </select>
             <p className="text-[11px] text-slate-500 mt-1">
               <strong>Drawings only.</strong> Specifications, requirement documents, schedules and material lists go on
@@ -9630,10 +9668,10 @@ function DrawingsTab({ project }) {
               read.
             </p>
             <p className="text-[11px] text-slate-500 mt-1">
-              Quantora measures MEP and ELV. Architectural, civil and structural sheets are not offered because they are
-              not measured yet — a concrete, steelwork or setting-out drawing has nothing on it this reads, and counting
-              symbols is not how those trades are taken off. If your architectural plan carries the lighting or
-              small-power layout, upload it as <strong>Electrical</strong>; that is what will be measured from it.
+              <strong>Architectural, Structural and Civil</strong> drawings are measured for civil works: excavation,
+              concrete, formwork, steel, blockwork, plaster, floor and wall finishes, skirting, doors, windows and
+              external works, each with its dimensions and working shown. If your architectural plan carries the
+              lighting or small-power layout and you want those counted, upload it as <strong>Electrical</strong>.
             </p>
           </div>
           <div className="flex items-end">
@@ -9681,7 +9719,27 @@ function DrawingsTab({ project }) {
                 <input type="checkbox" className="mt-1" checked={!!selectedForCombine[d.id]} onChange={()=>toggleCombineSelect(d.id)} title="Select for combined multi-drawing analysis" />
                 <div>
                 <div className="font-medium text-sm">{d.file_name}</div>
-                <div className="text-xs text-slate-500">{SYSTEM_LABEL(d.discipline || "unspecified")} · {d.floor_label || "No floor label"} · {d.file_type.toUpperCase()}</div>
+                <div className="text-xs text-slate-500 flex items-center gap-1 flex-wrap">
+                  {d.discipline === "specification" ? SYSTEM_LABEL(d.discipline) : (
+                    // The type decides how the sheet is read (counted for MEP/ELV,
+                    // measured for civil), so a wrong pick at upload must be
+                    // fixable here rather than by uploading the file again.
+                    <select className="border rounded px-1 py-0.5 text-xs bg-white" value={d.discipline || ""}
+                      title="Drawing type: decides whether it is read for MEP/ELV devices or measured for civil works"
+                      onChange={e => changeDiscipline(d, e.target.value)}>
+                      {!d.discipline || d.discipline === "unspecified" ? <option value="">Choose type…</option> : null}
+                      <optgroup label="MEP & ELV">
+                        {["electrical","elv","mechanical","plumbing","fire_protection"].map(x => <option key={x} value={x}>{SYSTEM_LABEL(x)}</option>)}
+                      </optgroup>
+                      <optgroup label="Civil works">
+                        <option value="architectural">Architectural / finishes</option>
+                        <option value="structural">Structural</option>
+                        <option value="civil">Civil / infrastructure</option>
+                      </optgroup>
+                    </select>
+                  )}
+                  <span>· {d.floor_label || "No floor label"} · {d.file_type.toUpperCase()}</span>
+                </div>
                 {d.file_type === "dxf" && (
                   <div className="text-[10px] text-teal-700 bg-teal-50 inline-block px-2 py-0.5 rounded-full mt-1">AI reads the real CAD exchange data — no markup positions available</div>
                 )}
@@ -13581,7 +13639,7 @@ function BoqTab({ project, onGoToEstimation }) {
           <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">System Filter</label>
           <select className="border rounded-lg px-3 py-1.5 text-sm" value={filterSystem} onChange={e=>setFilterSystem(e.target.value)}>
             <option value="all">All Systems</option>
-            {ALL_SYSTEMS.map(s => <option key={s} value={s}>{SYSTEM_LABEL(s)}</option>)}
+            {BOQ_FILTER_SYSTEMS.map(s => <option key={s} value={s}>{SYSTEM_LABEL(s)}</option>)}
           </select>
         </div>
         <div className="text-sm text-slate-500 ml-auto self-end">{consolidated.length} consolidated line{consolidated.length===1?"":"s"} ({consolidated.reduce((s,r)=>s+r.sourceCount,0)} source detections)</div>
