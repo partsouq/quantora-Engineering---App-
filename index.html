@@ -6456,6 +6456,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     project_name: existingProject.project_name || "", client_name: existingProject.client_name || "",
     consultant_name: existingProject.consultant_name || "", contractor_name: existingProject.contractor_name || "",
     country: existingProject.country || "UAE", city: existingProject.city || "Dubai",
+    currency: existingProject.currency || currencyForCountry(existingProject.country || "UAE") || "",
     building_type: existingProject.building_type || "residential_building",
     number_of_floors: existingProject.number_of_floors ?? "", area_size: existingProject.area_size ?? "",
     area_unit: existingProject.area_unit || "sqm", project_scope: existingProject.project_scope || "",
@@ -6471,11 +6472,13 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     project_name: "", client_name: "", consultant_name: "", contractor_name: "",
     // Blank, not UAE/Dubai. See LocationFields: a pre-filled location is never
     // validated and is silently wrong for every project outside it.
-    country: "", city: "", building_type: "",
+    country: "", city: "", building_type: "", currency: "",
     number_of_floors: "", area_size: "", area_unit: "sqm", project_scope: "",
     basement_levels: "", has_roof: true, project_type: "new_build", required_systems: [],
     region: "", measurement_standard: "", measurement_edition: "", boq_preambles: "",
   });
+  // The currency follows the country until the person picks one themselves.
+  const [currencyTouched, setCurrencyTouched] = useState(!!(existingProject && existingProject.currency));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   // An existing project may hold a type that predates the list -- including one
@@ -6582,6 +6585,10 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
       return;
     }
 
+    if (!String(form.currency || "").trim()) {
+      setErr("Choose the currency for this project's prices.");
+      return;
+    }
     setBusy(true); setErr("");
     try {
       const payload = {
@@ -6639,8 +6646,21 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
           <LocationFields
             country={form.country}
             city={form.city}
-            onChange={({ country, city }) => setForm(f => ({ ...f, country, city }))}
+            onChange={({ country, city }) => setForm(f => ({ ...f, country, city,
+              currency: currencyTouched ? f.currency : (currencyForCountry(country) || f.currency || "") }))}
           />
+          <div>
+            <label className="text-sm font-medium text-slate-700">Currency</label>
+            <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={form.currency || ""}
+              onChange={e => { setCurrencyTouched(true); setForm(f => ({ ...f, currency: e.target.value })); }}>
+              <option value="">{form.country ? "Choose a currency" : "Choose the country first, or pick one"}</option>
+              {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <div className="text-xs text-slate-500 mt-1">
+              {form.currency && currencyForCountry(form.country) === form.currency ? `Set from ${form.country}. Used for estimates, BOQ prices, RFQs, approvals and contracts.`
+                : "Used for estimates, BOQ prices, RFQs, approvals and contracts on this project."}
+            </div>
+          </div>
         </div>
         {/* Project type was removed from this form on 15 Aug to keep setup minimal, and
             restored the same day, by request, with a wider list and a free-text
@@ -6981,7 +7001,22 @@ function parseMoneyInput(v) {
   return Number.isFinite(n) ? Math.round(n * 100) : null;
 }
 
-const CURRENCIES = ["AED","SAR","QAR","KWD","BHD","OMR","INR","USD","EUR","GBP"];
+const CURRENCIES = ["AED","SAR","QAR","KWD","BHD","OMR","INR","PKR","BDT","LKR","MYR","SGD","IDR","THB","VND","PHP","HKD","AUD","AZN","ETB","USD","EUR","GBP"];
+// Each country's own currency, used as the default wherever money is entered.
+const COUNTRY_CURRENCY = {
+  "uae": "AED", "united arab emirates": "AED", "ksa": "SAR", "saudi arabia": "SAR", "qatar": "QAR", "kuwait": "KWD",
+  "bahrain": "BHD", "oman": "OMR", "india": "INR", "pakistan": "PKR", "bangladesh": "BDT", "sri lanka": "LKR",
+  "malaysia": "MYR", "singapore": "SGD", "indonesia": "IDR", "thailand": "THB", "vietnam": "VND", "philippines": "PHP",
+  "hong kong": "HKD", "australia": "AUD", "azerbaijan": "AZN", "ethiopia": "ETB", "uk": "GBP", "united kingdom": "GBP",
+  "us": "USD", "usa": "USD", "united states": "USD", "ireland": "EUR", "germany": "EUR", "france": "EUR",
+};
+function currencyForCountry(country) {
+  return COUNTRY_CURRENCY[String(country || "").trim().toLowerCase()] || null;
+}
+// The project's chosen currency, else its country's, else AED.
+function projectCurrency(project) {
+  return (project && (project.currency || currencyForCountry(project.country))) || "AED";
+}
 // OverviewTab declares its own fmtDate inside the component, so it is not in
 // scope here -- these pages get their own module-level formatter.
 function fmtDay(iso) {
@@ -7076,7 +7111,7 @@ function EstimationTab({ project }) {
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(null);
   const [saving, setSaving]     = useState(false);
-  const [header, setHeader]     = useState({ currency: "AED", margin_pct: 14, client_budget_cents: null, budget_source: "Client stated budget" });
+  const [header, setHeader]     = useState({ currency: projectCurrency(project), margin_pct: 14, client_budget_cents: null, budget_source: "Client stated budget" });
   const [systems, setSystems]   = useState([]);   // { key, label, items, qty, boqCents }
   const [labour, setLabour]     = useState({});   // system_category -> row
   const [staff, setStaff]       = useState([]);
@@ -7118,7 +7153,7 @@ function EstimationTab({ project }) {
 
       setSystems(sysList);
       setLabour(labMap);
-      setHeader(hdr || { currency: "AED", margin_pct: 14, client_budget_cents: null, budget_source: "Client stated budget" });
+      setHeader(hdr || { currency: projectCurrency(project), margin_pct: 14, client_budget_cents: null, budget_source: "Client stated budget" });
       setStaff((stf && stf.length) ? stf : DEFAULT_STAFF.map(r => ({ ...r, project_id: project.id })));
     } catch (e) {
       console.error("EstimationTab.load failed:", e);
@@ -7195,7 +7230,7 @@ function EstimationTab({ project }) {
   }
 
   // ---- derived ------------------------------------------------------------
-  const cur = header.currency || "AED";
+  const cur = header.currency || projectCurrency(project);
   const matOf = (sy) => {
     const ov = labour[sy.key]?.material_override_cents;
     return (ov !== null && ov !== undefined) ? Number(ov) : sy.boqCents;
@@ -7588,7 +7623,7 @@ function EstimationTab({ project }) {
 function CostBudgetTab({ project }) {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
-  const [cur, setCur]         = useState("AED");
+  const [cur, setCur]         = useState(projectCurrency(project));
   const [rows, setRows]       = useState([]);   // { key, label, estCents, budgetCents, note }
   const [pos, setPos]         = useState([]);
   const [open, setOpen]       = useState(null); // system key drilled into
@@ -7634,7 +7669,7 @@ function CostBudgetTab({ project }) {
 
       setRows(list);
       setPos(orders || []);
-      setCur(hdr?.currency || "AED");
+      setCur(hdr?.currency || projectCurrency(project));
     } catch (e) {
       console.error("CostBudgetTab.load failed:", e);
       setError(e.message || "Could not load cost and budget.");
@@ -7929,6 +7964,7 @@ async function ensureTender(project) {
     country: project.country || null,
     city: project.city || null,
     building_type: project.building_type || null,
+    currency: projectCurrency(project),
     status: "draft",
   }).select().single();
   if (insErr) throw insErr;
@@ -8494,7 +8530,7 @@ function RfqPackagesTab({ project }) {
         package_ref: draft.package_ref || null,
         system_categories: draft.system_categories || [],
         pricing_basis: draft.pricing_basis || "supply_and_install",
-        currency: draft.currency || "AED",
+        currency: draft.currency || projectCurrency(project),
         scope_note: draft.scope_note || null,
         response_deadline: draft.response_deadline ? new Date(draft.response_deadline).toISOString() : null,
         status: "draft",
@@ -8591,7 +8627,7 @@ function RfqPackagesTab({ project }) {
             </div>
             <div>
               <label className="text-xs font-semibold text-slate-600">Currency</label>
-              <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={draft.currency || "AED"}
+              <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={draft.currency || projectCurrency(project)}
                 onChange={e => setDraft({ ...draft, currency: e.target.value })}>
                 {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -8625,7 +8661,7 @@ function RfqPackagesTab({ project }) {
           </div>
         </div>
       ) : (
-        <button onClick={() => setDraft({ pricing_basis: "supply_and_install", currency: "AED", system_categories: [] })}
+        <button onClick={() => setDraft({ pricing_basis: "supply_and_install", currency: projectCurrency(project), system_categories: [] })}
           className="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-lg">+ New enquiry package</button>
       )}
 
@@ -8822,7 +8858,7 @@ function ComparisonTab({ project }) {
         const { error: insErr } = await sb.from("quotations").insert({
           tender_id: tender.id, package_id: pkgId, vendor_name: vendorName.trim(),
           file_name: f.name, storage_path: path,
-          currency: pack?.currency || "AED", extraction_status: "pending", uploaded_by: user.id,
+          currency: pack?.currency || projectCurrency(project), extraction_status: "pending", uploaded_by: user.id,
         });
         if (insErr) throw insErr;
       }
@@ -8872,7 +8908,7 @@ function ComparisonTab({ project }) {
   }
 
   const pack = packs.find(p => p.id === pkgId);
-  const cur = pack?.currency || "AED";
+  const cur = pack?.currency || projectCurrency(project);
 
   // rank by package total
   const ranked = [...quotes]
@@ -9302,7 +9338,7 @@ function ApprovalRequestForm({ project, onDone, onCancel }) {
   const [picked, setPicked] = useState([]);
   const [title, setTitle] = useState(""); const [titleTouched, setTitleTouched] = useState(false);
   const [amount, setAmount] = useState(""); const [amountTouched, setAmountTouched] = useState(false);
-  const [currency, setCurrency] = useState("AED");
+  const [currency, setCurrency] = useState(projectCurrency(project));
   const [note, setNote] = useState("");
   const [chain, setChain] = useState([
     { role: "Estimator", user_id: "", name: "", email: "" },
@@ -16341,7 +16377,7 @@ function ExportTab({ project }) {
       // the same overrides the Estimation page uses, so the sheet and the screen
       // cannot show two different estimates. See this patch's header note.
       const est = estRow || {};
-      const estCurrency = est.currency || "AED";
+      const estCurrency = est.currency || projectCurrency(project);
       const marginPct = Number(est.margin_pct ?? 14) || 0;
       const labourBy = {}; (labourRows || []).forEach(r => { labourBy[r.system_category] = r; });
       const matBySystem = {}, ratedBySystem = {};
@@ -16789,7 +16825,7 @@ function AdminAssistPanel() {
           <select className="w-full border rounded-lg p-2 text-sm" value={companyId} onChange={e => setCompanyId(e.target.value)}>
             <option value="">Select a company…</option>
             {companies.map(c => (
-              <option key={c.id} value={c.id}>{c.name} ({c.plan}{c.trial_end_date ? `, trial ends ${new Date(c.trial_end_date).toLocaleDateString()}` : ""})</option>
+              <option key={c.id} value={c.id}>{c.name} ({c.plan}{c.trial_end_date && !qWelcomeInfo(c) ? `, trial ends ${new Date(c.trial_end_date).toLocaleDateString()}` : ""})</option>
             ))}
           </select>
         </div>
@@ -17523,6 +17559,18 @@ function qBytes(bytes) {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+// Welcome pack: the trial has no real end (2126), only a 7-day preview of
+// Commercial and Operations, counted from sign-up or 25 Oct 2026, whichever is later.
+const WELCOME_PREVIEW_FROM = Date.parse("2026-10-25T00:00:00+04:00");
+function qWelcomeInfo(c) {
+  const end = c?.trial_end_date ? Date.parse(c.trial_end_date) : NaN;
+  const noEnd = !c?.trial_end_date || end - Date.now() > 3650 * 86400000;
+  if (!noEnd) return null;
+  const start = Math.max(Date.parse(c.trial_start_date || c.created_at || "") || Date.now(), WELCOME_PREVIEW_FROM);
+  const previewEnd = start + 7 * 86400000;
+  const left = Math.min(7, Math.ceil((previewEnd - Date.now()) / 86400000));
+  return { previewEnd, left };
 }
 function qDaysLeft(iso) {
   if (!iso) return null;
@@ -18564,7 +18612,9 @@ function AdminQuotaControls({ company, onChanged }) {
         <div className="detail-item"><span>Admin bonus pages (this company only)</span><b>{bonus}</b></div>
         <div className="detail-item"><span>Effective page limit</span><b>{effective}</b></div>
         {company.plan === "trial" && (
-          <div className="detail-item"><span>Trial ends</span><b>{company.trial_end_date ? new Date(company.trial_end_date).toLocaleString() : "—"}</b></div>
+          <div className="detail-item"><span>Trial ends</span><b>{qWelcomeInfo(company)
+            ? `No end date (welcome pack) · Commercial & Operations preview ${qWelcomeInfo(company).left > 0 ? `ends ${new Date(qWelcomeInfo(company).previewEnd).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : "ended"}`
+            : company.trial_end_date ? new Date(company.trial_end_date).toLocaleString() : "—"}</b></div>
         )}
         <div className="detail-item"><span>Current plan</span><b>{company.plan || "free"}</b></div>
         {company.manual_grant_expires_at && (
@@ -18732,12 +18782,15 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
         <table>
           <thead><tr><th>Company</th><th>Onboarded</th><th>Location</th><th>Plan</th><th className="num">Projects</th><th className="num">Drawings</th><th className="num">Pages</th><th className="num">Actual AI Cost</th><th className="num">Revenue (mo.)</th><th>Status</th></tr></thead>
           <tbody>
-            {companies.length === 0 ? <tr><td colSpan="10" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No companies yet.</td></tr> : companies.map(c => {
+            {companies.length === 0 ? <tr><td colSpan="10" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No companies yet.</td></tr> : [...companies].sort((a, b) => (Date.parse(b.created_at || "") || 0) - (Date.parse(a.created_at || "") || 0)).map(c => {
               const fin = perCompanyById[c.id];
-              const daysLeft = c.plan === "trial" ? qDaysLeft(c.trial_end_date) : null;
+              const welcome = c.plan === "trial" ? qWelcomeInfo(c) : null;
+              const daysLeft = c.plan === "trial" && !welcome ? qDaysLeft(c.trial_end_date) : null;
               const paidStatus = c.subscription_status ?? fin?.subscription_status;
               const isPaidActive = paidStatus === "active" || paidStatus === "trialing" || paidStatus === "manual";
-              const statusLabel = c.plan === "trial"
+              const statusLabel = welcome
+                ? (welcome.left > 0 ? `Preview ${welcome.left}d left` : "Preview ended")
+                : c.plan === "trial"
                 ? (daysLeft == null ? "Trial · no end date"
                    : daysLeft <= 0 ? "Trial · Expired"
                    : `Trial · ${daysLeft}d left`)
@@ -18772,7 +18825,7 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
                       </>);
                     })()}
                   </td>
-                  <td><span className={qPlanPillClass(c.plan)} style={{ textTransform: "capitalize" }}>{c.plan}</span></td>
+                  <td><span className={qPlanPillClass(c.plan)} style={{ textTransform: "capitalize", whiteSpace: "nowrap" }}>{welcome ? "Welcome pack" : c.plan}</span></td>
                   <td className="num">{fin?.projects_count ?? 0}</td>
                   <td className="num">{fin?.drawings_count ?? 0}</td>
                   <td className="num">{fin?.pages_processed ?? 0}</td>
@@ -23531,7 +23584,7 @@ function OperationsProject({ project, onBack, onReload }) {
       contract, invoiced, certified, paid,
       bookedPct: contract > 0 ? Math.round(invoiced / contract * 100) : null,
       outstanding: certified - paid,
-      currency: state.contract ? state.contract.currency || "AED" : "AED",
+      currency: state.contract?.currency || projectCurrency(project),
       wirRaised: wirs.length,
       wirOpen: wirs.filter(w => w.status === "raised").length,
       wirApproved: wirs.filter(w => w.status === "approved" || w.status === "approved_comments").length,
@@ -24152,7 +24205,7 @@ function RevenuePage({ onNavigate }) {
     setErr("");
     try {
       const { data: p, error: pErr } = await sb.from("projects")
-        .select("id, project_name, project_ref, status").order("created_at", { ascending: false });
+        .select("id, project_name, project_ref, status, country, currency").order("created_at", { ascending: false });
       if (pErr) throw pErr;
       setProjects(p || []);
       const ids = (p || []).map(x => x.id);
@@ -24222,6 +24275,7 @@ function RevenuePage({ onNavigate }) {
         contract_value: Number(form.contract_value) || 0,
         retention_pct: Number(form.retention_pct) || 0,
         payment_terms_days: Number(form.payment_terms_days) || 30,
+        currency: form.currency || projectCurrency((projects || []).find(x => x.id === contractFor)),
       }, { onConflict: "project_id" });
       if (error) throw error;
       setContractFor(null); setForm({}); await load();
