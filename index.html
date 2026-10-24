@@ -24888,8 +24888,33 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
     return () => { alive = false; };
   }, []);
 
+  // Enough per-project numbers to show each recent project's stage and activity.
+  const [jm, setJm] = useState({});
+  useEffect(() => {
+    if (!projects.length) return;
+    let alive = true;
+    (async () => {
+      try {
+        const [{ data: d }, { data: b }, { data: e }, { data: r }] = await Promise.all([
+          sb.from("drawings").select("project_id"),
+          sb.from("boq_items").select("project_id").limit(BOQ_FETCH_LIMIT),
+          sb.from("project_estimates").select("project_id"),
+          sb.from("analysis_runs").select("project_id, created_at").order("created_at", { ascending: false }).limit(500),
+        ]);
+        const m = {};
+        const at = id => (m[id] = m[id] || { drawings: 0, boq: 0, priced: false, lastRun: null });
+        (d || []).forEach(x => at(x.project_id).drawings++);
+        (b || []).forEach(x => at(x.project_id).boq++);
+        (e || []).forEach(x => { at(x.project_id).priced = true; });
+        (r || []).forEach(x => { const o = at(x.project_id); if (!o.lastRun) o.lastRun = x.created_at; });
+        if (alive) setJm(m);
+      } catch (err) { console.error("jump-back metrics failed (non-fatal):", err); }
+    })();
+    return () => { alive = false; };
+  }, [projects.length]);
+
   const active = projects.filter(p => p.status !== "archived");
-  const recent = projects.slice(0, 3);
+  const recent = active.length ? active : projects;
   const STATS = {
     projects:   [[loading ? "—" : String(active.length), "Active"]],
     commercial: counts.contracts != null ? [[String(counts.contracts), "Contracts tracked"]] : [],
@@ -24944,21 +24969,11 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
 
       {recent.length > 0 && (
         <div className="mt-9">
-          <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400 mb-3">Jump back in</div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {recent.map(p => (
-              <button key={p.id} onClick={() => onOpenProject(p)}
-                className="bg-white border rounded-xl p-4 flex items-center gap-3 text-left hover:shadow-md transition-shadow qjump">
-                <ProjectRef value={p.project_ref} />
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold truncate">{p.project_name}</div>
-                  <div className="text-[11px] text-slate-400 truncate">
-                    {[p.city, p.country].filter(Boolean).join(", ")}
-                  </div>
-                </div>
-              </button>
-            ))}
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Jump back in</div>
+            {onPick && <button type="button" className="text-xs font-semibold text-blue-600 hover:underline" onClick={() => onPick("projects")}>Open Projects →</button>}
           </div>
+          <ProjectTable projects={recent} metrics={jm} onOpen={onOpenProject} compact limit={5} />
         </div>
       )}
     </div>
@@ -31266,6 +31281,7 @@ select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102
 .qstage .st{cursor:pointer;text-align:left;font:inherit}
 .qstage .st:hover{border-color:color-mix(in srgb,var(--st) 50%,#e2e8f0)!important}
 .qstage .st.on{border-color:var(--st)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--st) 18%,transparent)}
+@container (min-width:900px){.qpt.compact .pt-t{max-width:340px}.qpt.compact .pt-s{max-width:420px}}
 /* Narrow screens drop the least important columns instead of scrolling sideways. */
 @container (max-width:820px){.qpt .c-approvals{display:none}}
 @container (max-width:700px){.qpt .c-activity{display:none}.qpt .pt-t{max-width:190px}.qpt .pt-s{max-width:220px}.qpt tbody td,.qpt thead th button{padding-left:10px;padding-right:10px}}
