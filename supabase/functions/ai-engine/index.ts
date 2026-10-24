@@ -5,6 +5,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { PDFDocument } from "npm:pdf-lib@1.17.1";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
 import { localNormsLine, civilMethodLine } from "./authorities.ts";
+import { evalQuantityFormula, measureLine, standardForProject, civilStandardPrompt, VALIDATION, type Rule, type StandardChoice } from "./civil_rules.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -818,7 +819,9 @@ const CIVIL_CATEGORIES = [
   "masonry", "waterproofing", "insulation", "plaster_render", "screed",
   "floor_finishes", "wall_finishes", "ceiling_finishes", "skirting", "painting",
   "doors", "windows", "joinery", "metalwork", "external_works", "drainage",
-  "piling", "ground_stabilisation", "other",
+  "piling", "ground_stabilisation",
+  "partitions", "glazing", "cladding", "mouldings_trims", "roofing", "stairs_ramps", "pools_water_features",
+  "other",
 ];
 
 // Same tool as MEP, with the civil categories and civil wording. Built from
@@ -847,6 +850,25 @@ const CIVIL_BOQ_TOOL = (() => {
   delete p.testing_requirements;
   delete p.commissioning_requirements;
   p.installation_accessories = { type: "string", description: "Items deemed included with this row, e.g. \"adhesive, grout, spacers\" or \"tie wire, spacers, chairs\". Omit if none." };
+  p.gross_formula = {
+    type: "string",
+    description: "For walls, partitions, finishes, cladding and skirting: the working BEFORE any opening is taken out, as plain arithmetic, e.g. \"(6.20+4.80)*2*3.00\". The platform applies the project's deduction rule to the openings listed in deductions.",
+  };
+  p.deductions = {
+    type: "array",
+    description: "Every opening or doorway in this row, one entry each, with its own working. List them all, even small ones: the platform decides which are deducted under the project's method of measurement.",
+    items: { type: "object", properties: {
+      description: { type: "string", description: "e.g. \"door D1 0.90x2.10\", \"window W3\", \"doorway to corridor\"" },
+      formula: { type: "string", description: "Plain arithmetic in the row's unit: m2 for an area row (width*height), m for a length row (the doorway width)." },
+    }, required: ["description", "formula"] },
+  };
+  p.dimensions = {
+    type: "object",
+    description: "The main dimensions read for this row, in metres (thickness in mm). Only values actually read from the drawing.",
+    properties: { length_m: { type: "number" }, width_m: { type: "number" }, height_m: { type: "number" }, depth_m: { type: "number" }, thickness_mm: { type: "number" } },
+  };
+  p.drawing_revision = { type: "string", description: "Drawing number and revision from the title block, e.g. \"A-201 rev C\"." };
+  p.discrepancy = { type: "string", description: "Only when two documents disagree for this row (plan vs schedule vs section): what each says. Omit otherwise." };
   return t;
 })();
 
@@ -878,6 +900,12 @@ YOU ARE TAKING OFF CIVIL, STRUCTURAL AND ARCHITECTURAL QUANTITIES. These trades 
 - Structural steel members: kg (or t), length x mass per metre from standard section tables for the profile shown, per profile; state the number of pieces and the kg/m used in the working. Plates: kg from size x thickness x 7850 kg/m3. Bolts and anchors: nr.
 - Ground stabilisation: shotcrete m2 per thickness, mesh m2, rock bolts / soil nails nr per length and diameter (and m of drilling), drainage holes nr. Piles nr per diameter and length, plus m of piling.
 
+3a. GROSS, OPENINGS AND THE PROJECT'S RULES
+- For walls, partitions, blockwork, plaster, paint, wall tiles, cladding and skirting give gross_formula (before openings) and list EVERY opening or doorway in deductions with its own working. Do not decide yourself which openings are deducted: the platform applies the project's method of measurement to the list. quantity_formula is then optional.
+- Record the drawing number and revision from the title block in drawing_revision on every row.
+- If the plan, a section and a schedule disagree for an item, say what each shows in discrepancy and use the value you think governs in the working. Never silently pick one.
+- Interior fit-out: partitions (m2 per type, length x height to the ceiling or soffit shown), ceilings (m2 per type per room, bulkheads in m), column and shopfront cladding (m2), shopfront glazing (m2 per type, or nr per type mark), vinyl and tile flooring (m2 per finish per room), mouldings and trims (m per profile), shelves and TV niches (nr per type, or m for linear shelving), joinery (nr / m / m2 per item type).
+
 4. ROWS
 - One row per item type per room or zone where the drawing names rooms (room field filled). If the sheet has very many rooms (more than about 25), give one row per item type per floor and list the room totals inside quantity_basis_notes instead.
 - Never put two different specifications in one row. Never repeat the same quantity in two rows.
@@ -902,8 +930,14 @@ YOU ARE TAKING OFF CIVIL, STRUCTURAL AND ARCHITECTURAL QUANTITIES. These trades 
 
 Fill quantity_basis_notes on EVERY row with where each dimension came from, and quantity_formula with the complete arithmetic. The platform calculates the quantity from quantity_formula, so a quantity surveyor can check it in one look. A quantity without its working is not usable.`;
 
-function civilSystemPrompt(projectContext: string, country?: unknown): string {
-  return `You are an expert quantity surveyor taking off civil, structural and architectural works from construction drawings to produce an accurate, checkable Bill of Quantities. ${projectContext}${civilMethodLine(country)}${CIVIL_TAKEOFF_RULES}`;
+function civilSystemPrompt(projectContext: string, project?: any): string {
+  return `You are an expert quantity surveyor taking off civil, structural and architectural works from construction drawings to produce an accurate, checkable Bill of Quantities. ${projectContext}${civilMeasurementContext(project)}${CIVIL_TAKEOFF_RULES}`;
+}
+
+/** Method of measurement and BOQ preambles for the civil prompts. */
+function civilMeasurementContext(project: any): string {
+  const choice = standardForProject(project);
+  return civilStandardPrompt(project, choice) + (choice.source === "country_default" ? civilMethodLine(project?.country) : "");
 }
 
 function civilUserText(drawing: any, usingSelection: boolean, selectionCount: number, coordsInstruction: string): string {
@@ -919,55 +953,8 @@ const CIVIL_COORDS_INSTRUCTION =
   "Give coordinates ONLY for doors, windows and manholes you counted on a plan, one point per occurrence (page 1-indexed, x/y as fractions of the page), and only where you can actually place each one. " +
   "Omit coordinates for every measured item, for anything from a schedule or table, and whenever unsure -- a wrong marker is worse than none.";
 
-// Safe arithmetic for civil quantities (2026-10-21). The AI writes the working
-// as a plain expression, e.g. "2*(6.20+4.80)-0.90"; the platform does the sum.
-// In testing the AI listed room perimeters adding up to ~1,190 m and reported
-// 714.6 m -- a QS checks the arithmetic first, so the arithmetic is ours.
-// Numbers, + - * / and brackets only; anything else returns null.
-function evalQuantityFormula(src: unknown): number | null {
-  if (typeof src !== "string") return null;
-  const s = src.replace(/[×x]/g, "*").replace(/÷/g, "/").replace(/,/g, "").trim();
-  if (!s || s.length > 2000 || /[^0-9.+\-*/()\s]/.test(s)) return null;
-  let i = 0;
-  const peek = () => { while (s[i] === " " || s[i] === "\t" || s[i] === "\n") i++; return s[i]; };
-  const num = (): number => {
-    peek();
-    const m = /^\d*\.?\d+(?:e[+-]?\d+)?/i.exec(s.slice(i));
-    if (!m) throw new Error("number expected");
-    i += m[0].length;
-    return Number(m[0]);
-  };
-  const factor = (): number => {
-    const c = peek();
-    if (c === "-") { i++; return -factor(); }
-    if (c === "+") { i++; return factor(); }
-    if (c === "(") { i++; const v = expr(); if (peek() !== ")") throw new Error(") expected"); i++; return v; }
-    return num();
-  };
-  const term = (): number => {
-    let v = factor();
-    for (;;) {
-      const c = peek();
-      if (c === "*") { i++; v *= factor(); }
-      else if (c === "/") { i++; const d = factor(); if (d === 0) throw new Error("divide by zero"); v /= d; }
-      else return v;
-    }
-  };
-  const expr = (): number => {
-    let v = term();
-    for (;;) {
-      const c = peek();
-      if (c === "+") { i++; v += term(); }
-      else if (c === "-") { i++; v -= term(); }
-      else return v;
-    }
-  };
-  try {
-    const v = expr();
-    if (peek() !== undefined) return null;
-    return Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null;
-  } catch { return null; }
-}
+// Safe arithmetic for civil quantities lives in civil_rules.ts (evalQuantityFormula):
+// the AI writes the working, the platform does the sum.
 
 // Civil rows after the AI, before saving (2026-10-21). Learned from the first
 // four real drawings: the AI's own sums were wrong, it invented a category
@@ -980,14 +967,23 @@ const CIVIL_CATEGORY_ALIASES: Record<string, string> = {
   plaster: "plaster_render", render: "plaster_render", tiling: "floor_finishes", flooring: "floor_finishes",
   ceiling: "ceiling_finishes", ceilings: "ceiling_finishes", paint: "painting", steelwork: "structural_steel",
   steel: "structural_steel", rebar: "reinforcement", paving: "external_works", landscaping: "external_works",
-  roads: "external_works", kerbs: "external_works", cladding: "wall_finishes",
+  roads: "external_works", kerbs: "external_works",
+  partition: "partitions", drywall: "partitions", gypsum_partition: "partitions", stud_partition: "partitions",
+  shopfront: "glazing", shopfront_glazing: "glazing", curtain_wall: "glazing", glass: "glazing",
+  column_cladding: "cladding", shopfront_cladding: "cladding", facade: "cladding",
+  moulding: "mouldings_trims", mouldings: "mouldings_trims", cornice: "mouldings_trims", trims: "mouldings_trims",
+  roof: "roofing", stairs: "stairs_ramps", ramps: "stairs_ramps", staircase: "stairs_ramps",
+  pool: "pools_water_features", swimming_pool: "pools_water_features", water_feature: "pools_water_features",
+  shelves: "joinery", tv_niche: "joinery", carpentry: "joinery", vinyl: "floor_finishes",
 };
 
-function finalizeCivilItems(items: any[]): { items: any[]; recalculated: number; dropped: number; indexMap: Map<number, number> } {
+function finalizeCivilItems(items: any[], rules: Rule[] = [], choice?: StandardChoice): { items: any[]; recalculated: number; dropped: number; indexMap: Map<number, number>; byStatus: Record<string, number> } {
   let recalculated = 0, dropped = 0;
   const seen = new Set<string>();
   const out: any[] = [];
   const indexMap = new Map<number, number>();
+  const byStatus: Record<string, number> = {};
+  const std = choice ?? standardForProject({});
   for (const [idx, raw] of (items || []).entries()) {
     const it = { ...raw };
     const cat = String(it.system_category ?? "other").toLowerCase().trim();
@@ -999,47 +995,53 @@ function finalizeCivilItems(items: any[]): { items: any[]; recalculated: number;
       dropped++; continue;
     }
 
-    // The platform does the arithmetic.
-    const calc = evalQuantityFormula(it.quantity_formula);
-    if (calc !== null) {
-      const said = Number(it.quantity);
-      const value = Math.max(0, calc);
-      if (!Number.isFinite(said) || Math.abs(said - value) > Math.max(0.01, Math.abs(value) * 0.01)) {
-        recalculated++;
-        it.quantity_basis_notes = `${it.quantity_basis_notes ?? ""} [Quantity calculated by the platform from ${it.quantity_formula} = ${value}${Number.isFinite(said) ? `; the AI had written ${said}` : ""}.]`.trim();
-      } else {
-        it.quantity_basis_notes = `${it.quantity_basis_notes ?? ""} [Working: ${it.quantity_formula} = ${value}]`.trim();
-      }
-      if (calc < 0) {
-        it.optimization_status = "review_required";
-        it.optimization_note = "The working came out negative, so the quantity was set to 0 for review.";
-      }
-      it.quantity = value;
-    }
-
     // Guessed geometry cannot claim high confidence.
-    const basis = String(it.quantity_basis_notes ?? "").toLowerCase();
-    if (/\b(approx|approximately|estimated from (the )?(room )?area|assum(ed|ing) (typical )?proportion|scaled)\b/.test(basis)) {
+    const basis0 = String(it.quantity_basis_notes ?? "").toLowerCase();
+    if (/\b(approx|approximately|estimated from (the )?(room )?area|assum(ed|ing) (typical )?proportion|scaled)\b/.test(basis0)) {
       it.confidence_score = Math.min(Number(it.confidence_score ?? 50), 50);
     }
+
+    // The platform does the arithmetic and applies the project's measurement rule
+    // (civil_rules.ts): gross, each deduction, net, the rule used and the status.
+    const said = Number(it.quantity);
+    const m = measureLine(it, rules, std);
+    if (!Number.isFinite(said) || Math.abs(said - m.quantity) > Math.max(0.01, Math.abs(m.quantity) * 0.01)) recalculated++;
+    it.quantity = m.quantity;
+    it.gross_quantity = m.gross_quantity;
+    it.deduction_quantity = m.deduction_quantity;
+    it.deductions = m.deductions;
+    it.calc_formula = m.calc_formula;
+    it.measurement_standard = m.measurement_standard;
+    it.measurement_rule_code = m.measurement_rule_code;
+    it.validation_status = m.validation_status;
+    it.validation_notes = m.validation_notes || null;
+    it.dimensions = it.dimensions && typeof it.dimensions === "object" ? it.dimensions : null;
+    it.drawing_revision = it.drawing_revision ? String(it.drawing_revision).slice(0, 120) : null;
+    it.quantity_basis_notes = `${it.quantity_basis_notes ?? ""} ${m.basis_suffix}`.trim();
+    if (m.validation_status !== "verified" && m.validation_status !== "calculated_review_required") {
+      it.optimization_status = "review_required";
+      it.optimization_note = `${VALIDATION[m.validation_status]}: ${m.validation_notes}`.slice(0, 1000);
+    }
+    byStatus[m.validation_status] = (byStatus[m.validation_status] ?? 0) + 1;
+    delete it.gross_formula; delete it.discrepancy;
 
     // Markers only for counted items; measured items have no point position.
     if (String(it.unit ?? "") !== "nr") delete it.coordinates;
 
     const key = [it.system_category, desc.replace(/\s+/g, " ").trim(), it.unit, String(it.room ?? "").toLowerCase(), Number(it.quantity)].join("|");
-    if (seen.has(key)) { dropped++; continue; }
+    if (seen.has(key)) { dropped++; byStatus[m.validation_status]--; continue; }
     seen.add(key);
     indexMap.set(idx, out.length);
     out.push(it);
   }
-  return { items: out, recalculated, dropped, indexMap };
+  return { items: out, recalculated, dropped, indexMap, byStatus };
 }
 
 // Assumptions, review notes and optimisations point at rows by position, so
 // they follow the rows that were kept; a note about a dropped row becomes a
 // sheet-level note instead of attaching to the wrong line.
-function applyCivilFinalize(result: any): string {
-  const f = finalizeCivilItems(result.items || []);
+function applyCivilFinalize(result: any, rules: Rule[] = [], choice?: StandardChoice): string {
+  const f = finalizeCivilItems(result.items || [], rules, choice);
   result.items = f.items;
   for (const key of ["assumptions", "review_items", "cost_optimizations"]) {
     for (const e of result[key] || []) {
@@ -1048,10 +1050,32 @@ function applyCivilFinalize(result: any): string {
       if (to === undefined) delete e.item_ref; else e.item_ref = to;
     }
   }
+  result.civil_validation = f.byStatus;
   const bits: string[] = [];
-  if (f.recalculated) bits.push(`${f.recalculated} quantit${f.recalculated === 1 ? "y was" : "ies were"} recalculated by the platform from the working shown`);
+  if (f.recalculated) bits.push(`${f.recalculated} quantit${f.recalculated === 1 ? "y was" : "ies were"} recalculated by the platform from the working and the measurement rules`);
   if (f.dropped) bits.push(`${f.dropped} repeated or descriptive row${f.dropped === 1 ? " was" : "s were"} removed`);
+  const st = Object.entries(f.byStatus).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${VALIDATION[k as keyof typeof VALIDATION]}`);
+  if (st.length) bits.push(`status: ${st.join(", ")}`);
+  if (choice) bits.push(`measured to ${choice.label}${choice.edition ? ` ${choice.edition}` : ""}${choice.source === "country_default" ? " (assumed from the project country; set the contract's method of measurement on the project to change it)" : ""}`);
   return bits.length ? ` ${bits.join("; ")}.` : "";
+}
+
+/** The rules the take-off needs: the project's standard and the base set. */
+async function loadCivilRules(admin: any, choice: StandardChoice): Promise<Rule[]> {
+  const { data, error } = await admin.from("civil_measurement_rules")
+    .select("standard, edition, rule_code, work_category, item_type, unit, measurement_basis, deduct_openings, deduction_threshold, deduction_unit, rounding_dp, verification_status, version")
+    .in("standard", [choice.standard, "BASE"]).eq("active", true);
+  if (error) { console.error("civil rules not loaded:", describeError(error)); return []; }
+  const rows = (data ?? []) as Rule[];
+  // edition-specific rules beat edition-less ones; the newest version of a code wins
+  const best = new Map<string, Rule>();
+  for (const r of rows) {
+    if (r.edition && choice.edition && r.edition !== choice.edition) continue;
+    const k = `${r.standard}|${r.rule_code.replace(/-v\d+$/, "")}`;
+    const cur = best.get(k);
+    if (!cur || (r.edition && !cur.edition) || (Number(r.version ?? 1) > Number(cur.version ?? 1))) best.set(k, r);
+  }
+  return [...best.values()];
 }
 
 // AUTO-DETECT (2026-10-21). A customer uploaded a skirting reference plan as
@@ -2503,7 +2527,7 @@ Deno.serve(async (req: Request) => {
               : `Analyze this ${drawing.discipline ?? "construction"} drawing${drawing.floor_label ? ` for ${drawing.floor_label}` : ""}${usingSelection ? ` (${page_selection!.length} selected pages)` : ""}. Identify every relevant system item (equipment, fixtures, devices, cable/pipe runs, symbols, schedules, legends). Count quantities precisely from what is visible/present in the data. Produce Bill of Quantities line items via the record_boq_items tool, following standard BOQ conventions (item description, technical spec, qty, unit, length/area where relevant, location, accessories, consumables, testing & commissioning requirements). Assign an honest confidence_score per item — lower it whenever the source is unclear, cropped, low resolution, or ambiguous. ${coordsInstruction}`,
           },
         ];
-        const systemPrompt = civil ? civilSystemPrompt(projectContext, project.country) : `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
+        const systemPrompt = civil ? civilSystemPrompt(projectContext, project) : `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
 
         const userTextForKey = (userContent[1] as any)?.text ?? "";
         const cacheKey = await buildCacheKey(processingBytes, systemPrompt, userTextForKey);
@@ -2539,7 +2563,8 @@ Deno.serve(async (req: Request) => {
         }
         const elapsedMs = Date.now() - startTime;
         const result = parsed.result as { items: any[]; analysis_notes: string; document_kind?: string; cost_optimizations?: any[]; assumptions?: any[]; review_items?: any[] };
-        const civilNote = civil ? applyCivilFinalize(result) : "";
+        const civilChoice = civil ? standardForProject(project) : undefined;
+        const civilNote = civil ? applyCivilFinalize(result, await loadCivilRules(admin, civilChoice!), civilChoice) : "";
         if (civilNote) result.analysis_notes = `${result.analysis_notes ?? ""}${civilNote}`;
 
         // Right reasoning, wrong field: the model describes a typical detail in its
@@ -2572,6 +2597,13 @@ Deno.serve(async (req: Request) => {
           quantity_source_type: it.quantity_source_type ?? "physical_count",
           schedule_quantity_crosscheck: it.schedule_quantity_crosscheck ?? null,
           quantity_basis_notes: it.quantity_basis_notes ?? null,
+          ...(civil ? {
+            gross_quantity: it.gross_quantity ?? null, deduction_quantity: it.deduction_quantity ?? null,
+            deductions: it.deductions ?? null, dimensions: it.dimensions ?? null, calc_formula: it.calc_formula ?? null,
+            measurement_standard: it.measurement_standard ?? null, measurement_rule_code: it.measurement_rule_code ?? null,
+            drawing_revision: it.drawing_revision ?? null, validation_status: it.validation_status ?? null,
+            validation_notes: it.validation_notes ?? null,
+          } : {}),
         }));
         const { rows: promotedRows, promoted: promotedScheduleRows } = promoteSoleSourceScheduleRows(rows);
         if (promotedScheduleRows > 0) {
@@ -3208,7 +3240,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         const civil = isCivilDrawing(drawing);
         const takeoffTool = civil ? CIVIL_BOQ_TOOL : BOQ_ITEM_TOOL;
         const systemPrompt = civil
-          ? `You are revising a previous civil, structural and architectural Bill of Quantities take-off based on user feedback. Do NOT discard correct prior items — reproduce the FULL corrected item list (including unchanged items) so this becomes the new authoritative revision. ${projectContext}${civilMethodLine(project.country)}${CIVIL_TAKEOFF_RULES}`
+          ? `You are revising a previous civil, structural and architectural Bill of Quantities take-off based on user feedback. Do NOT discard correct prior items — reproduce the FULL corrected item list (including unchanged items) so this becomes the new authoritative revision. ${projectContext}${civilMeasurementContext(project)}${CIVIL_TAKEOFF_RULES}`
           : `You are revising a previous Bill of Quantities extraction based on user feedback. Do NOT discard correct prior items — reproduce the FULL corrected item list (including unchanged items) so this becomes the new authoritative revision. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
         const userContent = [
           fileContent.block,
@@ -3230,7 +3262,8 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         }
         const elapsedMs = Date.now() - startTime;
         const result = parsed.result as { items: any[]; analysis_notes: string; document_kind?: string; cost_optimizations?: any[]; assumptions?: any[]; review_items?: any[] };
-        const civilNote = civil ? applyCivilFinalize(result) : "";
+        const civilChoice = civil ? standardForProject(project) : undefined;
+        const civilNote = civil ? applyCivilFinalize(result, await loadCivilRules(admin, civilChoice!), civilChoice) : "";
         if (civilNote) result.analysis_notes = `${result.analysis_notes ?? ""}${civilNote}`;
 
         // Right reasoning, wrong field: the model describes a typical detail in its
@@ -3263,6 +3296,13 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
           quantity_source_type: it.quantity_source_type ?? "physical_count",
           schedule_quantity_crosscheck: it.schedule_quantity_crosscheck ?? null,
           quantity_basis_notes: it.quantity_basis_notes ?? null,
+          ...(civil ? {
+            gross_quantity: it.gross_quantity ?? null, deduction_quantity: it.deduction_quantity ?? null,
+            deductions: it.deductions ?? null, dimensions: it.dimensions ?? null, calc_formula: it.calc_formula ?? null,
+            measurement_standard: it.measurement_standard ?? null, measurement_rule_code: it.measurement_rule_code ?? null,
+            drawing_revision: it.drawing_revision ?? null, validation_status: it.validation_status ?? null,
+            validation_notes: it.validation_notes ?? null,
+          } : {}),
         }));
         const { rows: promotedRows, promoted: promotedScheduleRows } = promoteSoleSourceScheduleRows(rows);
         if (promotedScheduleRows > 0) {
