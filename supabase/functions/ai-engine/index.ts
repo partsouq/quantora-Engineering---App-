@@ -4,7 +4,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { PDFDocument } from "npm:pdf-lib@1.17.1";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
-import { localNormsLine } from "./authorities.ts";
+import { localNormsLine, civilMethodLine } from "./authorities.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -902,8 +902,8 @@ YOU ARE TAKING OFF CIVIL, STRUCTURAL AND ARCHITECTURAL QUANTITIES. These trades 
 
 Fill quantity_basis_notes on EVERY row with where each dimension came from, and quantity_formula with the complete arithmetic. The platform calculates the quantity from quantity_formula, so a quantity surveyor can check it in one look. A quantity without its working is not usable.`;
 
-function civilSystemPrompt(projectContext: string): string {
-  return `You are an expert quantity surveyor taking off civil, structural and architectural works from construction drawings to produce an accurate, checkable Bill of Quantities. ${projectContext}${CIVIL_TAKEOFF_RULES}`;
+function civilSystemPrompt(projectContext: string, country?: unknown): string {
+  return `You are an expert quantity surveyor taking off civil, structural and architectural works from construction drawings to produce an accurate, checkable Bill of Quantities. ${projectContext}${civilMethodLine(country)}${CIVIL_TAKEOFF_RULES}`;
 }
 
 function civilUserText(drawing: any, usingSelection: boolean, selectionCount: number, coordsInstruction: string): string {
@@ -2503,7 +2503,7 @@ Deno.serve(async (req: Request) => {
               : `Analyze this ${drawing.discipline ?? "construction"} drawing${drawing.floor_label ? ` for ${drawing.floor_label}` : ""}${usingSelection ? ` (${page_selection!.length} selected pages)` : ""}. Identify every relevant system item (equipment, fixtures, devices, cable/pipe runs, symbols, schedules, legends). Count quantities precisely from what is visible/present in the data. Produce Bill of Quantities line items via the record_boq_items tool, following standard BOQ conventions (item description, technical spec, qty, unit, length/area where relevant, location, accessories, consumables, testing & commissioning requirements). Assign an honest confidence_score per item — lower it whenever the source is unclear, cropped, low resolution, or ambiguous. ${coordsInstruction}`,
           },
         ];
-        const systemPrompt = civil ? civilSystemPrompt(projectContext) : `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
+        const systemPrompt = civil ? civilSystemPrompt(projectContext, project.country) : `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
 
         const userTextForKey = (userContent[1] as any)?.text ?? "";
         const cacheKey = await buildCacheKey(processingBytes, systemPrompt, userTextForKey);
@@ -3208,7 +3208,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         const civil = isCivilDrawing(drawing);
         const takeoffTool = civil ? CIVIL_BOQ_TOOL : BOQ_ITEM_TOOL;
         const systemPrompt = civil
-          ? `You are revising a previous civil, structural and architectural Bill of Quantities take-off based on user feedback. Do NOT discard correct prior items — reproduce the FULL corrected item list (including unchanged items) so this becomes the new authoritative revision. ${projectContext}${CIVIL_TAKEOFF_RULES}`
+          ? `You are revising a previous civil, structural and architectural Bill of Quantities take-off based on user feedback. Do NOT discard correct prior items — reproduce the FULL corrected item list (including unchanged items) so this becomes the new authoritative revision. ${projectContext}${civilMethodLine(project.country)}${CIVIL_TAKEOFF_RULES}`
           : `You are revising a previous Bill of Quantities extraction based on user feedback. Do NOT discard correct prior items — reproduce the FULL corrected item list (including unchanged items) so this becomes the new authoritative revision. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
         const userContent = [
           fileContent.block,
