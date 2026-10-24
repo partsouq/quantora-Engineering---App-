@@ -28373,7 +28373,7 @@ function qd3dLoadThree() {
     scene.add(new T.HemisphereLight(0xffffff, 0x9aa6b6, 0.72));
     const sun = new T.DirectionalLight(0xffffff, 0.62); sun.position.set(-40, 90, 55); scene.add(sun);
     const fill = new T.DirectionalLight(0xffffff, 0.22); fill.position.set(50, 30, -40); scene.add(fill);
-    const camera = new T.PerspectiveCamera(38, W() / H(), 0.1, 2000);
+    const camera = new T.PerspectiveCamera(38, W() / H(), 0.02, 6000);
 
     // bounds
     let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
@@ -28645,13 +28645,79 @@ function qd3dLoadThree() {
       if (im) im.userData.segs = body.map(b => b.sg);
     });
 
-    // camera orbit
-    const orb = { th: -0.75, ph: 0.95, r: span * 1.3, t: new T.Vector3(0, 3, 0) };
+    // camera: orbit around a target that moves with you. Zoom goes towards
+    // whatever is under the cursor, double-click flies to a point, pan works
+    // with right/middle drag, Shift/Ctrl+drag or two fingers, and the camera
+    // can go all the way round and underneath.
+    const HOME = { th: -0.75, ph: 0.95, r: span * 1.3 };
+    const orb = { th: HOME.th, ph: HOME.ph, r: HOME.r, t: new T.Vector3(0, 3, 0) };
+    const R_MIN = 0.15, R_MAX = Math.max(60, span * 8);
+    let anim = null;
     function place() {
-      orb.ph = Math.max(0.05, Math.min(1.5, orb.ph));
+      orb.ph = Math.max(0.02, Math.min(Math.PI - 0.02, orb.ph));
+      orb.r = Math.max(R_MIN, Math.min(R_MAX, orb.r));
       camera.position.set(orb.t.x + orb.r * Math.sin(orb.ph) * Math.sin(orb.th), orb.t.y + orb.r * Math.cos(orb.ph),
                           orb.t.z + orb.r * Math.sin(orb.ph) * Math.cos(orb.th));
       camera.lookAt(orb.t);
+      camera.updateMatrixWorld();
+    }
+    function animateTo(to, dur) {
+      let th = to.th != null ? to.th : orb.th;
+      while (th - orb.th > Math.PI) th -= 2 * Math.PI;           // take the short way round
+      while (th - orb.th < -Math.PI) th += 2 * Math.PI;
+      anim = { a: { th: orb.th, ph: orb.ph, r: orb.r, t: orb.t.clone() },
+               b: { th, ph: to.ph != null ? to.ph : orb.ph, r: to.r != null ? to.r : orb.r, t: to.t ? to.t.clone() : orb.t.clone() },
+               t0: performance.now(), dur: dur || 450 };
+    }
+    function stepAnim() {
+      if (!anim) return;
+      const k = Math.min(1, (performance.now() - anim.t0) / anim.dur), e = 1 - Math.pow(1 - k, 3);
+      orb.th = anim.a.th + (anim.b.th - anim.a.th) * e; orb.ph = anim.a.ph + (anim.b.ph - anim.a.ph) * e;
+      orb.r = anim.a.r + (anim.b.r - anim.a.r) * e; orb.t.lerpVectors(anim.a.t, anim.b.t, e);
+      place(); if (k >= 1) anim = null;
+    }
+    const shown = o => { for (let x = o; x; x = x.parent) if (!x.visible) return false; return true; };
+    // The point under a screen position: the nearest visible solid, else the
+    // horizontal plane through the current target.
+    function pointAt(clientX, clientY) {
+      const rc = el.getBoundingClientRect();
+      mouse.set(((clientX - rc.left) / rc.width) * 2 - 1, -((clientY - rc.top) / rc.height) * 2 + 1);
+      ray.setFromCamera(mouse, camera);
+      const hit = ray.intersectObjects(scene.children, true)
+        .find(h => (h.object.isMesh || h.object.isInstancedMesh) && h.object !== halo && shown(h.object));
+      if (hit) return hit.point.clone();
+      const plane = new T.Plane(new T.Vector3(0, 1, 0), -orb.t.y), out = new T.Vector3();
+      return ray.ray.intersectPlane(plane, out) ? out : null;
+    }
+    function zoomAt(f, clientX, clientY) {
+      anim = null;
+      const nr = Math.max(R_MIN, Math.min(R_MAX, orb.r * f));
+      const p = clientX != null ? pointAt(clientX, clientY) : null;
+      if (p) orb.t.add(p.sub(orb.t).multiplyScalar(1 - nr / orb.r));
+      orb.r = nr; place();
+    }
+    function pan(dx, dy) {
+      anim = null;
+      const per = 2 * orb.r * Math.tan((camera.fov * Math.PI / 180) / 2) / H();
+      const right = new T.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+      const up = new T.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+      orb.t.addScaledVector(right, -dx * per).addScaledVector(up, dy * per);
+      place();
+    }
+    function visibleBox() {
+      const box = new T.Box3();
+      Object.values(groups).forEach(g => { if (g.visible) box.expandByObject(g); });
+      return box.isEmpty() ? null : box;
+    }
+    function fitTo(dir, dur) {
+      const box = visibleBox();
+      const to = Object.assign({}, dir || {});
+      if (box) {
+        const c = box.getCenter(new T.Vector3()), sz = box.getSize(new T.Vector3());
+        const rad = Math.max(sz.x, sz.y, sz.z) / 2;
+        to.t = c; to.r = Math.max(2, rad / Math.sin((camera.fov * Math.PI / 180) / 2) * 1.05);
+      }
+      animateTo(to, dur);
     }
     function layout() {
       Object.values(groups).forEach(g => {
@@ -28665,29 +28731,61 @@ function qd3dLoadThree() {
     let drag = null;
     const el = renderer.domElement;
     el.style.touchAction = "none";
-    const touches = new Map(); let pinch = 0;
-    el.addEventListener("pointerdown", e => { touches.set(e.pointerId, [e.clientX, e.clientY]); drag = { x: e.clientX, y: e.clientY, b: e.button, moved: false }; el.setPointerCapture(e.pointerId); });
-    el.addEventListener("pointercancel", e => { touches.delete(e.pointerId); drag = null; });
+    el.tabIndex = 0; el.style.outline = "none";
+    const touches = new Map(); let pinch = 0, mid = null;
+    el.addEventListener("pointerdown", e => {
+      el.focus({ preventScroll: true }); anim = null;
+      touches.set(e.pointerId, [e.clientX, e.clientY]);
+      const panMode = e.button === 1 || e.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey;
+      drag = { x: e.clientX, y: e.clientY, pan: panMode, moved: false };
+      el.setPointerCapture(e.pointerId);
+      if (e.button === 1) e.preventDefault();
+    });
+    el.addEventListener("pointercancel", e => { touches.delete(e.pointerId); drag = null; pinch = 0; mid = null; });
     el.addEventListener("pointermove", e => {
       if (touches.has(e.pointerId)) touches.set(e.pointerId, [e.clientX, e.clientY]);
       if (touches.size === 2) {
         const [a, b] = [...touches.values()]; const dist = Math.hypot(a[0] - b[0], a[1] - b[1]);
-        if (pinch) { orb.r = Math.max(2, Math.min(span * 4, orb.r * pinch / dist)); place(); }
-        pinch = dist; if (drag) drag.moved = true; return;
+        const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (pinch) zoomAt(pinch / dist, m[0], m[1]);
+        if (mid) pan(m[0] - mid[0], m[1] - mid[1]);
+        pinch = dist; mid = m; if (drag) drag.moved = true; return;
       }
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
       if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
-      if (drag.b === 2 || e.shiftKey) {
-        const f = orb.r / H();
-        const right = new T.Vector3().subVectors(camera.position, orb.t).cross(camera.up).normalize();
-        orb.t.add(right.multiplyScalar(dx * f)); orb.t.y += dy * f;
-      } else { orb.th -= dx * 0.006; orb.ph -= dy * 0.006; }
-      place();
+      if (drag.pan) pan(dx, dy);
+      else { orb.th -= dx * 0.006; orb.ph -= dy * 0.006; place(); }
     });
-    el.addEventListener("pointerup", e => { touches.delete(e.pointerId); if (touches.size < 2) pinch = 0; if (drag && !drag.moved) pick(e); if (!touches.size) drag = null; });
+    el.addEventListener("pointerup", e => {
+      touches.delete(e.pointerId); if (touches.size < 2) { pinch = 0; mid = null; }
+      if (drag && !drag.moved && touches.size === 0) pick(e);
+      if (!touches.size) drag = null;
+    });
     el.addEventListener("contextmenu", e => e.preventDefault());
-    el.addEventListener("wheel", e => { e.preventDefault(); orb.r *= Math.exp(e.deltaY * 0.001); orb.r = Math.max(2, Math.min(span * 4, orb.r)); place(); }, { passive: false });
+    el.addEventListener("wheel", e => {
+      e.preventDefault();
+      // A trackpad pinch arrives as a wheel event with ctrlKey and small steps.
+      zoomAt(Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0012)), e.clientX, e.clientY);
+    }, { passive: false });
+    el.addEventListener("dblclick", e => {
+      const p = pointAt(e.clientX, e.clientY);
+      if (p) animateTo({ t: p, r: Math.max(1.2, Math.min(orb.r * 0.4, 12)) }, 500);
+    });
+    const onKey = e => {
+      if (document.activeElement !== el) return;
+      const k = e.key, step = 40;
+      if (k === "ArrowLeft") { orb.th += 0.08; place(); }
+      else if (k === "ArrowRight") { orb.th -= 0.08; place(); }
+      else if (k === "ArrowUp") { if (e.shiftKey) pan(0, step); else { orb.ph -= 0.06; place(); } }
+      else if (k === "ArrowDown") { if (e.shiftKey) pan(0, -step); else { orb.ph += 0.06; place(); } }
+      else if (k === "+" || k === "=") zoomAt(0.85);
+      else if (k === "-" || k === "_") zoomAt(1 / 0.85);
+      else if (k === "f" || k === "F" || k === "Home") fitTo(null);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
 
     const ray = new T.Raycaster(), mouse = new T.Vector2();
     const halo = new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(1, 1, 1)), new T.LineBasicMaterial({ color: 0xf59e0b }));
@@ -28740,7 +28838,7 @@ function qd3dLoadThree() {
       });
     }
     let raf;
-    function loop() { renderer.render(scene, camera); drawLabels(); raf = requestAnimationFrame(loop); }
+    function loop() { stepAnim(); renderer.render(scene, camera); drawLabels(); raf = requestAnimationFrame(loop); }
     function resize() { renderer.setSize(W(), H()); camera.aspect = W() / H(); camera.updateProjectionMatrix(); }
     window.addEventListener("resize", resize);
     state.showLabels = true;
@@ -28755,14 +28853,19 @@ function qd3dLoadThree() {
       setCones(on) { state.noCones = !on; layout(); },
       focus(item) { focus(item); },
       view(name) {
-        if (name === "top") { orb.ph = 0.06; orb.th = 0; }
-        else if (name === "front") { orb.ph = 1.35; orb.th = 0; }
-        else { orb.ph = 0.95; orb.th = -0.75; }
-        orb.r = span * 1.3; orb.t.set(0, 3, 0); place();
+        const V = { top: [0.02, 0], bottom: [Math.PI - 0.02, 0], front: [Math.PI / 2 - 0.12, 0], back: [Math.PI / 2 - 0.12, Math.PI],
+                    left: [Math.PI / 2 - 0.12, -Math.PI / 2], right: [Math.PI / 2 - 0.12, Math.PI / 2], iso: [HOME.ph, HOME.th] }[name] || [HOME.ph, HOME.th];
+        fitTo({ ph: V[0], th: V[1] }, 550);
+      },
+      fit() { fitTo(null, 450); },
+      flyTo(item) {
+        if (!item || !groups[item.f]) return;
+        const g = groups[item.f], p = P(item.x || 0, item.y || 0, item.z || 0); p.y += g.position.y;
+        animateTo({ t: p, r: Math.max(1.5, Math.min(orb.r, 6)) }, 550);
       },
       orbit(o) { Object.assign(orb, { th: o.th ?? orb.th, ph: o.ph ?? orb.ph, r: o.r ?? orb.r }); if (o.t) orb.t.set(...o.t); place(); },
-      zoom(f) { orb.r *= f; place(); },
-      dispose() { cancelAnimationFrame(raf); window.removeEventListener("resize", resize); renderer.dispose(); host.innerHTML = ""; },
+      zoom(f) { zoomAt(f); },
+      dispose() { cancelAnimationFrame(raf); window.removeEventListener("resize", resize); window.removeEventListener("keydown", onKey); renderer.dispose(); host.innerHTML = ""; },
       colours: COL,
     };
   }
@@ -28797,6 +28900,8 @@ const QD3D_CSS = `
 .q3-info .k{font-size:11px;color:#8a99ad;text-transform:uppercase;letter-spacing:.07em;margin-top:9px}
 .q3-info .v{font-weight:700;color:#0f2140;overflow-wrap:anywhere}
 .q3-chip{display:inline-block;font-size:11.5px;font-weight:700;border-radius:7px;padding:3px 9px;color:#fff}
+.q3-fly{margin-top:12px;width:100%;border:1px solid #c8dafc;background:#eef4ff;color:#1c6ce6;font-weight:800;font-size:12.5px;border-radius:9px;padding:8px 10px;cursor:pointer}
+.q3-fly:hover{background:#e0ebff}
 .q3-hint{position:absolute;left:16px;bottom:16px;background:rgba(255,255,255,.92);border:1px solid #e3e9f1;border-radius:10px;padding:7px 12px;color:#5a6b82;font-size:12px}
 .q3-stats{position:absolute;right:16px;bottom:16px;display:flex;gap:10px}
 .q3-stats div{background:#fff;border:1px solid #e3e9f1;border-radius:12px;padding:8px 14px;box-shadow:0 8px 20px -16px rgba(15,42,82,.4)}
@@ -28901,9 +29006,14 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
         <div className="q3-tt"><b>3D model — {title}</b><span>{sub}</span></div>
         <div className="q3-sp" />
         <div className="q3-seg">
-          {[["iso", "3D"], ["top", "Top"], ["front", "Front"]].map(([k, l]) => (
+          {[["iso", "3D"], ["top", "Top"], ["front", "Front"], ["back", "Back"], ["left", "Left"], ["right", "Right"]].map(([k, l]) => (
             <button key={k} className={view === k ? "on" : ""} onClick={() => { setView(k); v && v.view(k); }}>{l}</button>
           ))}
+        </div>
+        <div className="q3-seg">
+          <button onClick={() => v && v.zoom(0.8)} title="Zoom in (+)">＋</button>
+          <button onClick={() => v && v.zoom(1.25)} title="Zoom out (−)">－</button>
+          <button onClick={() => v && v.fit()} title="Fit everything in view (F)">Fit</button>
         </div>
         {model && (
           <div className="q3-seg" style={{ overflowX: "auto", maxWidth: "100%" }}>
@@ -28955,10 +29065,11 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
                     </>)}
                   </>)}
                   <div className="k">Floor</div><div className="v">{picked.f}</div>
+                  {!picked.run && <button className="q3-fly" onClick={() => v && v.flyTo(picked)}>Zoom to this item</button>}
                 </>
               )}
             </div>
-            <div className="q3-hint">Drag to turn · right-drag to move · scroll to zoom · tap an item for details</div>
+            <div className="q3-hint">Drag to rotate · right-drag or Shift+drag to move · scroll to zoom where you point · double-click to focus · F to fit · tap an item for details</div>
             <div className="q3-stats">
               <div><b>{model.devices.length}</b><span>devices placed</span></div>
               {stats.cams > 0 && <div><b>{stats.cams}</b><span>cameras with view</span></div>}
