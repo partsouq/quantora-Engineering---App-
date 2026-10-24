@@ -658,7 +658,7 @@ function DrawingScopePicker({ discipline, setDiscipline, systems, setSystems, cu
   return (
     <div className="space-y-4">
       <div>
-        <div className="text-xs font-semibold text-slate-600 mb-2">1. Discipline</div>
+        <div className="text-xs font-semibold text-slate-600 mb-2 qstep"><i>1</i>Discipline</div>
         {groups.map(([g, gl]) => (
           <div key={g} className="mb-2">
             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">{gl}</div>
@@ -685,7 +685,7 @@ function DrawingScopePicker({ discipline, setDiscipline, systems, setSystems, cu
       {discipline && (
         <div>
           <div className="flex items-center gap-3 flex-wrap mb-2">
-            <div className="text-xs font-semibold text-slate-600">2. Systems to take off</div>
+            <div className="text-xs font-semibold text-slate-600 qstep"><i>2</i>Systems to take off</div>
             <span className="text-[11px] text-slate-500">{systems.length + custom.length ? `${systems.length + custom.length} selected` : "None ticked = everything on the sheet"}</span>
             <button type="button" className="text-[11px] font-semibold text-blue-600 hover:underline" onClick={() => setSystems(list.map(keyOf))}>Select all</button>
             <button type="button" className="text-[11px] font-semibold text-slate-500 hover:underline" onClick={() => { setSystems([]); setCustom([]); }}>Clear</button>
@@ -723,7 +723,7 @@ function DrawingScopePicker({ discipline, setDiscipline, systems, setSystems, cu
 
       {discipline && (
         <div>
-          <div className="text-xs font-semibold text-slate-600 mb-1">3. What kind of sheet is it?</div>
+          <div className="text-xs font-semibold text-slate-600 mb-1 qstep"><i>3</i>What kind of sheet is it?</div>
           <select className="border rounded-lg px-3 py-2 text-sm" style={{ maxWidth: 320, width: "100%" }} value={sheetType} onChange={e => setSheetType(e.target.value)}>
             {SHEET_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
@@ -10085,8 +10085,8 @@ function DrawingsTab({ project }) {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white border rounded-xl p-5">
-        <h3 className="font-semibold mb-3">Upload Drawings</h3>
+      <div className="bg-white border rounded-xl p-5 qup">
+        <h3 className="font-semibold mb-3 qup-h">Upload Drawings<span>Pick the discipline, tick the systems, then add your files</span></h3>
         {err && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2 mb-3">{err}</div>}
         <div className="mb-3">
           <DrawingScopePicker discipline={discipline} setDiscipline={setDiscipline}
@@ -19831,8 +19831,8 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
           ["revenue",    "Revenue",                  "Invoices, certification, collection", "\u25CE", "#9085e9", false],
         ].filter(([, , , , , adminOnly]) => !adminOnly || isPlatformAdmin)
          .map(([key, title, sub, glyph, colour, adminOnly]) => (
-          <button key={key} className="qh-act" onClick={() => onNavigate(key)}
-            style={{ borderTop: `2px solid ${colour}` }}>
+          <button key={key} className="qh-act qh-tone" onClick={() => onNavigate(key)}
+            style={{ "--c": colour }}>
             <span className="ic" style={{ background: colour + "22", color: colour }} aria-hidden="true">{glyph}</span>
             <span className="tx">
               <b>{title}</b>
@@ -19851,7 +19851,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
       <h3 className="qh-sec">What would you like to do today?</h3>
       <div className="qh-grid3">
         {HOME_TILES.map(([key, title, sub, glyph, colour, tint]) => (
-          <button key={key} className="qh-act" onClick={() => (key === "new" ? onNewProject() : onNavigate(key))}>
+          <button key={key} className="qh-act qh-tone" style={{ "--c": colour }} onClick={() => (key === "new" ? onNewProject() : onNavigate(key))}>
             <span className="ic" style={{ background: tint, color: colour }} aria-hidden="true">{glyph}</span>
             <span className="tx"><b>{title}</b><span>{sub}</span></span>
             <span className="arw" aria-hidden="true">&rsaquo;</span>
@@ -19903,7 +19903,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
       </div>
 
       <div className="qh-two">
-        <div className="qh-card">
+        <div className="qh-card qh-tc" style={{ "--c": "#1c6ce6" }}>
           <div className="qh-ph">Your recent projects</div>
           {err ? <div className="qh-empty">{err}</div>
            : loading ? <div className="qh-empty">Loading…</div>
@@ -19934,7 +19934,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
           {recent.length > 0 && <button className="qh-viewall" onClick={() => onNavigate("dashboard")}>View all projects →</button>}
         </div>
 
-        <div className="qh-card">
+        <div className="qh-card qh-tc" style={{ "--c": "#7c3aed" }}>
           <div className="qh-ph">What the AI flagged<small>From your own analyses — nothing estimated</small></div>
           <button className="qh-ins" onClick={() => onNavigate("boq")}>
             <span className="ic" style={{ background: "rgba(14,165,233,.16)", color: "#0284c7" }}>◈</span>
@@ -19955,7 +19955,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
       </div>
 
       <div className="qh-two">
-        <div className="qh-card qh-trial">
+        <div className="qh-card qh-trial qh-tc" style={{ "--c": "#1c6ce6" }}>
           <div className="t"><span className="mk">Q</span>{usage?.plan?.name || "Your plan"}</div>
           {usage ? (
             <React.Fragment>
@@ -19977,7 +19977,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
           <button className="qh-upg" onClick={onUpgrade}>Upgrade plan</button>
         </div>
 
-        <div className="qh-card qh-res">
+        <div className="qh-card qh-res qh-tc" style={{ "--c": "#0d9488" }}>
           <div className="qh-ph">Quick access</div>
           {[["compliance", "Compliance rules"], ["approvals", "Approval tracking"], ["reports", "Reports & exports"],
             ["team", "Team members"], ["billing", "Billing & invoices"], ["help", "Help & support"]].map(([k, l]) => (
@@ -24259,7 +24259,7 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
           <div className="grid gap-3 sm:grid-cols-3">
             {recent.map(p => (
               <button key={p.id} onClick={() => onOpenProject(p)}
-                className="bg-white border rounded-xl p-4 flex items-center gap-3 text-left hover:shadow-md transition-shadow">
+                className="bg-white border rounded-xl p-4 flex items-center gap-3 text-left hover:shadow-md transition-shadow qjump">
                 <ProjectRef value={p.project_ref} />
                 <div className="min-w-0">
                   <div className="text-sm font-semibold truncate">{p.project_name}</div>
@@ -30832,6 +30832,52 @@ html:has(.qx),html:has(.qx) body{background:#f5f8fc !important}
 .qsys input[type=checkbox]{accent-color:var(--c);width:15px;height:15px}
 .qsys-i{border-radius:8px;padding:3px 6px}
 .qsys-i.on{background:color-mix(in srgb,var(--c) 13%,#fff);color:#0f2140;font-weight:600}
+/* ---- finishing pass: coloured backgrounds (2026-10-24) ---- */
+html:has(.qx),html:has(.qx) body{background:
+  radial-gradient(900px 520px at 100% -10%,rgba(28,108,230,.10),transparent 60%),
+  radial-gradient(700px 480px at -10% 30%,rgba(13,148,136,.08),transparent 60%),
+  radial-gradient(800px 600px at 60% 110%,rgba(124,58,237,.07),transparent 60%),#f3f7fc !important;background-attachment:fixed !important}
+.qx{background:transparent}
+.qx .qh-tone{background:linear-gradient(135deg,color-mix(in srgb,var(--c) 11%,#fff) 0%,#fff 70%) !important;
+  border:1px solid color-mix(in srgb,var(--c) 26%,#e3e9f1) !important;border-left:4px solid var(--c) !important;transition:transform .15s,box-shadow .15s}
+.qx .qh-tone:hover{transform:translateY(-2px);box-shadow:0 14px 28px -18px var(--c) !important}
+.qx .qh-tone .ic{background:linear-gradient(135deg,var(--c),color-mix(in srgb,var(--c) 70%,#0f2a52)) !important;color:#fff !important;
+  box-shadow:0 6px 14px -8px var(--c)}
+.qx .qh-tone .tx b{color:#0f2140}
+.qx .qh-tone .arw{color:var(--c)}
+.qx .qh-tc{overflow:hidden;border-top:3px solid var(--c) !important;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--c) 7%,#fff) 0,#fff 120px) !important}
+.qx .qh-tc .qh-ph{color:#0f2140}
+.qx .qh-tc .qh-tbl th{background:color-mix(in srgb,var(--c) 8%,#fff) !important;color:color-mix(in srgb,var(--c) 70%,#0f2140) !important}
+.qx .qh-tc .qh-tbl tr:hover td{background:color-mix(in srgb,var(--c) 5%,#fff)}
+.qx .qh-ins{border-radius:12px;margin:2px 6px}
+.qx .qh-ins:hover{background:color-mix(in srgb,var(--c) 7%,#fff)}
+.qx .qh-res button:hover{background:color-mix(in srgb,var(--c) 8%,#fff) !important}
+.qx .qh-kpi{border-radius:18px !important}
+.qx .qh-grid4 .qh-kpi:nth-child(1){background:linear-gradient(135deg,#fff 30%,#efe8fe) !important}
+.qx .qh-grid4 .qh-kpi:nth-child(2){background:linear-gradient(135deg,#fff 30%,#e2f1fc) !important}
+.qx .qh-grid4 .qh-kpi:nth-child(3){background:linear-gradient(135deg,#fff 30%,#dff5ea) !important}
+.qx .qh-grid4 .qh-kpi:nth-child(4){background:linear-gradient(135deg,#fff 30%,#fdf0d2) !important}
+.qx .qh-sec{display:flex;align-items:center;gap:9px}
+.qx .qh-sec:before{content:"";width:6px;height:18px;border-radius:4px;background:linear-gradient(180deg,#1c6ce6,#7c3aed)}
+
+.qx .qws-card{background:linear-gradient(180deg,#fff 40%,color-mix(in srgb,var(--c) 9%,#fff)) !important}
+.qx .qws-card .border-t{border-color:color-mix(in srgb,var(--c) 22%,#e3e9f1) !important}
+.qx .qws-card .text-xl{color:var(--c)}
+
+.qx .qup{padding:0 !important;overflow:hidden;border-top:3px solid #1c6ce6 !important}
+.qx .qup > *:not(.qup-h){margin-left:20px;margin-right:20px}
+.qx .qup > *:last-child{margin-bottom:20px}
+.qx .qup-h{margin:0 0 16px !important;padding:16px 20px;font-size:17px;font-weight:800;color:#0f2140;display:flex;flex-direction:column;gap:2px;
+  background:linear-gradient(120deg,#eaf2fe 0%,#f3eefe 55%,#e8f8f4 100%);border-bottom:1px solid #e3e9f1}
+.qx .qup-h span{font-size:12.5px;font-weight:500;color:#5a6b82}
+.qx .qstep{display:flex;align-items:center;gap:8px;font-size:13px !important;font-weight:700 !important;color:#0f2140 !important}
+.qx .qstep i{font-style:normal;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#1c6ce6,#7c3aed);color:#fff;font-size:11.5px;font-weight:800}
+.qx .qup select{border-radius:10px;border-color:#cdd7e4;background:#fff}
+.qx .qup input[type=file]{border:1.5px dashed #9fbbe6;border-radius:12px;padding:14px;background:#f5f9ff;width:100%}
+.qx .qjump{background:linear-gradient(120deg,#eef4fe,#fff 60%) !important;border-left:4px solid #1c6ce6 !important}
+.qx .qjump:hover{border-color:#1c6ce6 !important}
 </style>
 </body>
 </html>
