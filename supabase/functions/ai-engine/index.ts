@@ -4,6 +4,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { PDFDocument } from "npm:pdf-lib@1.17.1";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
+import { localNormsLine } from "./authorities.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -2325,7 +2326,7 @@ Deno.serve(async (req: Request) => {
       project = proj;
     }
 
-    const projectContext = `Project context:\n- Project name: ${project.project_name}\n- Building type: ${project.building_type}\n- Location: ${project.city}, ${project.country}\n- Number of floors: ${project.number_of_floors ?? "unspecified"}\n- Area size: ${project.area_size ?? "unspecified"} ${project.area_unit ?? ""}\n- Project scope: ${project.project_scope ?? "unspecified"}\n- Required systems: ${(project.required_systems ?? []).join(", ") || "unspecified"}\nUse local UAE/regional norms (DEWA, Dubai Civil Defence, SIRA, TRA, ADDC, etc. as applicable to the stated city/country) to inform coverage, spacing, and specification choices when relevant.`;
+    const projectContext = `Project context:\n- Project name: ${project.project_name}\n- Building type: ${project.building_type}\n- Location: ${project.city}, ${project.country}\n- Number of floors: ${project.number_of_floors ?? "unspecified"}\n- Area size: ${project.area_size ?? "unspecified"} ${project.area_unit ?? ""}\n- Project scope: ${project.project_scope ?? "unspecified"}\n- Required systems: ${(project.required_systems ?? []).join(", ") || "unspecified"}\n${localNormsLine(project.country, project.city)} Use them to inform coverage, spacing, and specification choices when relevant.`;
 
     if (action === "classify_pages") {
       const { drawing_id, force } = body as { drawing_id: string; force?: boolean };
@@ -3473,7 +3474,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
       const avgConfidence = items && items.length ? (items.reduce((s: number, i: any) => s + Number(i.confidence_score ?? 0), 0) / items.length).toFixed(1) : "n/a";
       const pendingCount = (items ?? []).filter((i: any) => i.review_status === "pending").length;
 
-      const { data: complianceRows } = await admin.from("compliance_rules").select("*").eq("country", project.country).ilike("city", project.city);
+      const { data: complianceRows } = await admin.rpc("get_compliance_rules", { p_country: project.country, p_city: project.city });
 
       const dataSnapshot = `BOQ summary by system (quantity, line-item count): ${JSON.stringify(bySystem)}\nTotal line items: ${items?.length ?? 0}. Pending review: ${pendingCount}. Average AI confidence: ${avgConfidence}%.\nApplicable compliance rules for ${project.city}, ${project.country}: ${JSON.stringify(complianceRows ?? [])}`;
 

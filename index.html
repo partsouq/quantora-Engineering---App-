@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-21.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-24.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -14338,6 +14338,18 @@ function SpecificationTab({ project }) {
 // ---------------------------------------------------------------------------
 // Compliance tab
 // ---------------------------------------------------------------------------
+// match_level 'international' = no rule for this system in the project's
+// country, so the international baseline is shown. Labelled plainly so it is
+// never mistaken for the country's own requirement.
+function complianceBadge(r) {
+  if (r.match_level === "city") return { label: r.city || "City", title: `Specific to ${r.city}`,
+    cls: "bg-blue-50 text-blue-700 border border-blue-200" };
+  if (r.match_level === "international") return { label: "International baseline \u2014 confirm locally",
+    title: "No rule held for this system in the project's country yet. This is the international baseline; confirm with the local authority.",
+    cls: "bg-amber-50 text-amber-700 border border-amber-200" };
+  return { label: `${r.country} national`, title: `National requirement for ${r.country} \u2014 no separate rule for this city`,
+    cls: "bg-slate-100 text-slate-500 border border-slate-200" };
+}
 function ComplianceTab({ project }) {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -14368,6 +14380,8 @@ function ComplianceTab({ project }) {
           {rules.filter(r => r.match_level === "city").length} rule(s) specific to {project.city}
           {rules.filter(r => r.match_level === "country").length > 0 &&
             ` · ${rules.filter(r => r.match_level === "country").length} from the ${project.country} national requirements`}
+          {rules.filter(r => r.match_level === "international").length > 0 &&
+            ` · ${rules.filter(r => r.match_level === "international").length} international baseline (no ${project.country} rule held yet \u2014 confirm with the local authority)`}
         </p>
       )}
       {error ? (
@@ -14385,13 +14399,9 @@ function ComplianceTab({ project }) {
             <div key={r.id} className="bg-white border rounded-xl p-4">
               <div className="flex items-center justify-between mb-1 gap-2">
                 <span className="text-xs font-bold uppercase tracking-wide bg-slate-900 text-white px-2 py-0.5 rounded-full">{SYSTEM_LABEL(r.system_category)}</span>
-                <span
-                  title={r.match_level === "city"
-                    ? `Specific to ${r.city}`
-                    : `National requirement for ${r.country} — no separate rule for this city`}
-                  className={"text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap " +
-                    (r.match_level === "city" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-slate-100 text-slate-500 border border-slate-200")}
-                >{r.match_level === "city" ? (r.city || "City") : `${r.country} national`}</span>
+                <span title={complianceBadge(r).title}
+                  className={"text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap " + complianceBadge(r).cls}
+                >{complianceBadge(r).label}</span>
               </div>
               <div className="text-sm font-semibold mt-2">{r.authority}</div>
               <div className="text-sm text-slate-600 mt-1">{r.requirement}</div>
@@ -19545,15 +19555,16 @@ function CompliancePage({ projects, bare }) {
           <p style={{ fontSize: 12, color: "var(--q-text-dimmer,#94a3b8)", margin: "0 0 12px 2px" }}>
             {shown.length} rule{shown.length === 1 ? "" : "s"} shown
             {city ? ` · ${cityCount} specific to ${city}, the rest national` : ` · every city in ${country}`}
+            {rules.some(r => r.match_level === "international") && ` · ${rules.filter(r => r.match_level === "international").length} international baseline \u2014 confirm locally`}
           </p>
           <div className="grid md:grid-cols-2 gap-4">
             {shown.map(r => (
               <div key={r.id} className="bg-white border rounded-xl p-4">
                 <div className="flex items-center justify-between mb-1 gap-2">
                   <span className="text-xs font-bold uppercase tracking-wide bg-slate-900 text-white px-2 py-0.5 rounded-full">{SYSTEM_LABEL(r.system_category)}</span>
-                  <span className={"text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap " +
-                    (r.match_level === "city" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-slate-100 text-slate-500 border border-slate-200")}>
-                    {r.match_level === "city" ? (r.city || "City") : `${r.country} national`}
+                  <span title={complianceBadge(r).title}
+                    className={"text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap " + complianceBadge(r).cls}>
+                    {complianceBadge(r).label}
                   </span>
                 </div>
                 <div className="text-sm font-semibold mt-2">{r.authority}</div>
@@ -24392,19 +24403,48 @@ function QdField({ label, hint, children }) {
 // Chosen from the project country unless the user picks one — the way to say
 // "design to these rules" when there is no specification. MEP (fire, HVAC,
 // plumbing, electrical) has a full pack for the UAE only today.
+// Rule packs the draftsman worker holds (scripts/elv/rules/*.yaml). The project
+// country picks one automatically; a country without its own pack gets the
+// international pack (NFPA / EN / IEC baseline with CONFIRM flags), never UAE.
 const QD_AUTHORITIES = [
   ["uae_default", "\u{1F1E6}\u{1F1EA}", "United Arab Emirates", "UAE Fire & Life Safety Code 2018 (Civil Defence) \u00b7 Dubai Building Code 2021 \u00b7 DEWA electrical regulations \u00b7 SIRA (CCTV) \u00b7 TDRA (ICT)", "FLSC \u00b7 DBC \u00b7 DEWA \u00b7 SIRA"],
-  ["ksa_sbc", "\u{1F1F8}\u{1F1E6}", "Saudi Arabia", "Saudi Building Code (SBC) \u00b7 Civil Defence requirements", "SBC \u00b7 Civil Defence"],
-  ["eu_en", "\u{1F1EA}\u{1F1FA}", "Europe (EU)", "EN 54 (fire detection) \u00b7 EN 1838 (emergency lighting) \u00b7 EN 62676 (CCTV) \u00b7 EN 50173 (cabling)", "EN 54 \u00b7 EN 1838 \u00b7 EN 62676"],
-  ["za_sans", "\u{1F1FF}\u{1F1E6}", "South Africa", "SANS 10139 (fire detection) \u00b7 SANS 10400 (building regulations)", "SANS 10139 \u00b7 SANS 10400"],
+  ["ksa_sbc", "\u{1F1F8}\u{1F1E6}", "Saudi Arabia", "Saudi Building Code (SBC 201 / 401 / 501 / 801) \u00b7 Saudi Civil Defence \u00b7 SEC \u00b7 HCIS / MOI (CCTV) \u00b7 CST (ICT)", "SBC \u00b7 Civil Defence"],
+  ["qa_qcdd", "\u{1F1F6}\u{1F1E6}", "Qatar", "QCDD fire safety requirements \u00b7 QCS \u00b7 KAHRAMAA \u00b7 MOI SSD (CCTV) \u00b7 CRA (ICT)", "QCDD \u00b7 QCS \u00b7 KAHRAMAA"],
+  ["kw_kff", "\u{1F1F0}\u{1F1FC}", "Kuwait", "Kuwait Fire Force \u00b7 MEW regulations \u00b7 Ministry of Interior (CCTV) \u00b7 CITRA (ICT)", "KFF \u00b7 MEW"],
+  ["bh_cd", "\u{1F1E7}\u{1F1ED}", "Bahrain", "General Directorate of Civil Defence \u00b7 EWA \u00b7 Ministry of Interior (CCTV) \u00b7 TRA (ICT)", "Civil Defence \u00b7 EWA"],
+  ["om_cdaa", "\u{1F1F4}\u{1F1F2}", "Oman", "Civil Defence and Ambulance Authority (CDAA) \u00b7 Nama / APSR \u00b7 Royal Oman Police (CCTV) \u00b7 TRA (ICT)", "CDAA \u00b7 Nama"],
+  ["in_nbc", "\u{1F1EE}\u{1F1F3}", "India", "National Building Code 2016 Part 4 \u00b7 IS 2189 (fire alarm) \u00b7 IS 15105 (sprinklers) \u00b7 IS 732 / CEA Regulations \u00b7 State Fire Services NOC \u00b7 ECBC", "NBC 2016 \u00b7 IS 2189 \u00b7 CEA"],
+  ["pk_bcp", "\u{1F1F5}\u{1F1F0}", "Pakistan", "Building Code of Pakistan (Fire Safety Provisions 2016) \u00b7 NFPA 72 / 13 \u00b7 NEPRA / DISCO \u00b7 PTA (ICT)", "BCP Fire \u00b7 NEPRA"],
+  ["bd_bnbc", "\u{1F1E7}\u{1F1E9}", "Bangladesh", "BNBC 2020 \u00b7 Fire Service and Civil Defence \u00b7 DPDC / DESCO \u00b7 BTRC (ICT)", "BNBC 2020 \u00b7 FSCD"],
+  ["lk_uda", "\u{1F1F1}\u{1F1F0}", "Sri Lanka", "UDA regulations \u00b7 Municipal Fire Brigade \u00b7 CEB / LECO \u00b7 TRCSL (ICT)", "UDA \u00b7 CEB"],
+  ["sg_scdf", "\u{1F1F8}\u{1F1EC}", "Singapore", "SCDF Fire Code \u00b7 SS 645 (fire alarm) \u00b7 SS CP 52 (sprinklers) \u00b7 SS 638 (electrical) \u00b7 IMDA COPIF (ICT)", "SCDF \u00b7 SS 645 \u00b7 SS 638"],
+  ["my_ubbl", "\u{1F1F2}\u{1F1FE}", "Malaysia", "UBBL 1984 \u00b7 Bomba \u00b7 MS 1745 (fire alarm) \u00b7 MS 1910 (sprinklers) \u00b7 Energy Commission / TNB \u00b7 MCMC (ICT)", "UBBL \u00b7 Bomba \u00b7 MS 1745"],
+  ["ph_bfp", "\u{1F1F5}\u{1F1ED}", "Philippines", "Fire Code (RA 9514) \u00b7 BFP \u00b7 National Building Code (PD 1096) \u00b7 Philippine Electrical Code \u00b7 NTC (ICT)", "RA 9514 \u00b7 PEC"],
+  ["hk_fsd", "\u{1F1ED}\u{1F1F0}", "Hong Kong", "FSD Codes of Practice \u00b7 Code of Practice for Fire Safety in Buildings \u00b7 EMSD wiring CoP \u00b7 OFCA (ICT)", "FSD \u00b7 EMSD"],
+  ["au_ncc", "\u{1F1E6}\u{1F1FA}", "Australia", "NCC (BCA) \u00b7 AS 1670.1 (fire detection) \u00b7 AS 2118 (sprinklers) \u00b7 AS/NZS 2293 (emergency lighting) \u00b7 AS/NZS 3000 (wiring)", "NCC \u00b7 AS 1670.1 \u00b7 AS/NZS 3000"],
+  ["uk_bs", "\u{1F1EC}\u{1F1E7}", "United Kingdom", "Approved Document B \u00b7 BS 5839-1 (fire alarm) \u00b7 BS 5266 (emergency lighting) \u00b7 BS EN 12845 \u00b7 BS 7671 (wiring)", "AD B \u00b7 BS 5839 \u00b7 BS 7671"],
+  ["us_nfpa", "\u{1F1FA}\u{1F1F8}", "United States", "IBC / IFC as adopted by the AHJ \u00b7 NFPA 72 \u00b7 NFPA 13 \u00b7 NFPA 101 \u00b7 NFPA 70 (NEC)", "IBC \u00b7 NFPA 72 \u00b7 NEC"],
+  ["eu_en", "\u{1F1EA}\u{1F1FA}", "Europe (EU)", "EN 54 (fire detection) \u00b7 EN 1838 (emergency lighting) \u00b7 EN 12845 \u00b7 EN 62676 (CCTV) \u00b7 EN 50173 (cabling)", "EN 54 \u00b7 EN 1838 \u00b7 EN 62676"],
+  ["za_sans", "\u{1F1FF}\u{1F1E6}", "South Africa", "SANS 10400 \u00b7 SANS 10139 (fire detection) \u00b7 SANS 10142-1 (wiring)", "SANS 10139 \u00b7 SANS 10400"],
+  ["intl_default", "\u{1F310}", "International (any other country)", "International baseline: NFPA 72 / EN 54 \u00b7 NFPA 13 / EN 12845 \u00b7 IEC 60364 \u00b7 IEC 62676 \u00b7 TIA-568 / EN 50173 \u2014 every local item marked CONFIRM", "NFPA \u00b7 EN \u00b7 IEC"],
 ];
-const QD_EU = ["germany","france","italy","spain","netherlands","belgium","ireland","portugal","austria","sweden","denmark","finland","poland","greece","czech republic","luxembourg"];
+const QD_EU = ["germany","france","italy","spain","netherlands","belgium","ireland","portugal","austria","sweden","denmark","finland","poland","greece","czech republic","czechia","luxembourg","romania","hungary","norway","switzerland"];
+const QD_COUNTRY_PACK = {
+  uae_default: ["uae", "united arab emirates", "ae", "emirates", "dubai", "abu dhabi", "sharjah"],
+  ksa_sbc: ["ksa", "saudi arabia", "saudi", "sa", "kingdom of saudi arabia"],
+  qa_qcdd: ["qatar", "qa"], kw_kff: ["kuwait", "kw"], bh_cd: ["bahrain", "bh"], om_cdaa: ["oman", "om"],
+  in_nbc: ["india", "in", "bharat"], pk_bcp: ["pakistan", "pk"], bd_bnbc: ["bangladesh", "bd"], lk_uda: ["sri lanka", "srilanka", "lk"],
+  sg_scdf: ["singapore", "sg"], my_ubbl: ["malaysia", "my"], ph_bfp: ["philippines", "ph"], hk_fsd: ["hong kong", "hk"],
+  au_ncc: ["australia", "au"], uk_bs: ["uk", "united kingdom", "great britain", "gb", "england", "scotland", "wales", "northern ireland"],
+  us_nfpa: ["us", "usa", "united states", "united states of america", "america"], za_sans: ["south africa", "za", "rsa"],
+};
+// Same mapping as the worker's region_for(): keep the two in step.
 function qdAuthorityFor(country) {
-  const c = String(country || "").trim().toLowerCase();
-  if (["ksa", "saudi arabia", "saudi"].includes(c)) return "ksa_sbc";
-  if (["south africa", "za", "rsa"].includes(c)) return "za_sans";
+  const c = String(country || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!c) return "uae_default";
+  for (const [pack, names] of Object.entries(QD_COUNTRY_PACK)) if (names.includes(c)) return pack;
   if (QD_EU.includes(c)) return "eu_en";
-  return "uae_default";
+  return "intl_default";
 }
 
 function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
@@ -24807,23 +24847,16 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
               <div className="text-xs font-bold mb-1" style={{ color: "#1d4ed8" }}>
                 {specDocs.length ? "Authority rules under the specification" : "No specification? Design to the rules of"}
               </div>
-              <div className="grid sm:grid-cols-2 gap-1.5 mt-2">
-                {QD_AUTHORITIES.map(([k, flag, name, , short]) => {
-                  const on = k === cur;
-                  return (
-                    <button type="button" key={k} onClick={() => set("authority_region", k === auto ? "" : k)}
-                      className="flex items-center justify-between gap-2 text-left rounded-lg px-3 py-2 text-sm bg-white"
-                      style={on ? { border: "2px solid #3b82f6", fontWeight: 700 } : { border: "1px solid var(--q-border,#dbeafe)" }}>
-                      <span>{flag} {name}{k === auto ? <span className="text-[10px] text-slate-400 font-normal"> (project country)</span> : null}</span>
-                      <span className="text-[10px] text-slate-500 font-normal">{short}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              <select value={cur} onChange={e => set("authority_region", e.target.value === auto ? "" : e.target.value)}
+                className="mt-2 w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                {QD_AUTHORITIES.map(([k, flag, name, , short]) => (
+                  <option key={k} value={k}>{flag} {name}{k === auto ? " (project country)" : ""}{" \u2014 "}{short}</option>
+                ))}
+              </select>
               <div className="text-xs mt-2 leading-relaxed" style={{ color: "var(--q-text,#1e3a8a)" }}><b>Applies:</b> {pack[3]}</div>
               {cur !== "uae_default" && (
                 <div className="text-[11px] mt-1" style={{ color: "#b45309" }}>
-                  Fire, HVAC, plumbing and electrical drawings follow the UAE rules for now; ELV systems follow {pack[2]}.
+                  ELV, fire, HVAC, plumbing and electrical drawings cite {pack[2]} authorities and codes. Items the local code may set differently are marked CONFIRM on the drawings for the engineer to check before submission.
                 </div>
               )}
               {specDocs.length > 0 && (
