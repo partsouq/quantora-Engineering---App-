@@ -4778,7 +4778,7 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
             const { data: prof } = await sb.from("profiles").select("full_name, country").eq("id", data.user.id).maybeSingle();
             if (!prof || !prof.full_name || !prof.country) {
               await sb.from("profiles").upsert({
-                id: data.user.id, role: "admin",
+                id: data.user.id,
                 first_name: fn, last_name: ln, full_name: whole, country,
               }, { onConflict: "id" });
             }
