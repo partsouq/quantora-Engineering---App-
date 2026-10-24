@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-21.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-21.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -10283,6 +10283,12 @@ function MarkupViewerModal({ drawing, onClose }) {
   // re-download it -- and so a page render never depends on a signed URL that
   // may since have expired.
   const pdfRef = useRef(null);
+  // CIVIL LINE MEASUREMENT (2026-10-21). For a civil sheet the worker measures
+  // the legend-coded lines (S-1 skirting and so on) and saves the sheet with
+  // every measured line drawn solid red. That picture IS the markup for those
+  // lines, so the page shows it instead of a plain render. {page: storage path}
+  const measuredRef = useRef({});
+  const [measured, setMeasured] = useState(null);   // [{code, quantity_m, category}]
   const isImage = drawing.file_type === "image" || drawing.file_type === "scan";
   const isPdf = drawing.file_type === "pdf";
 
@@ -10320,6 +10326,20 @@ function MarkupViewerModal({ drawing, onClose }) {
       // meaning passes through the compression.
       setImgAspect(canvas.width / Math.max(1, canvas.height));
       setImgUrl(canvas.toDataURL("image/jpeg", 0.92));
+      const measuredPic = measuredRef.current[n];
+      if (measuredPic) {
+        try {
+          const { data: sg, error: sgErr } = await sb.storage.from("drawings").createSignedUrl(measuredPic, 3600);
+          if (sgErr) throw sgErr;
+          await new Promise((ok, bad) => {
+            const im = new Image();
+            im.onload = () => { setImgAspect(im.naturalWidth / Math.max(1, im.naturalHeight)); ok(); };
+            im.onerror = () => bad(new Error("measured picture did not load"));
+            im.src = sg.signedUrl;
+          });
+          setImgUrl(sg.signedUrl);
+        } catch (mErr) { console.warn("Measured-line picture not shown, using the plain page:", mErr); }
+      }
       if (panelRef.current) panelRef.current.scrollTop = 0;
       setPageNum(n);
       // Read this page's device tags once and keep them. Cheap, local, and the
@@ -10389,6 +10409,18 @@ function MarkupViewerModal({ drawing, onClose }) {
       if (qErr) throw qErr;
       const latestRev = data && data.length ? Math.max(...data.map(i=>i.revision_number)) : 0;
       setItems((data||[]).filter(i => i.revision_number === latestRev));
+      try {
+        const { data: lr } = await sb.from("analysis_runs").select("summary")
+          .eq("drawing_id", drawing.id).eq("status", "completed").order("created_at", { ascending: false }).limit(1);
+        const sm = (lr && lr[0] && lr[0].summary) || {};
+        const pics = {};
+        for (const p of sm.civil_measure_pictures || []) {
+          const m = /page-(\d+)\.png$/.exec(p);
+          if (m) pics[Number(m[1])] = p;
+        }
+        measuredRef.current = pics;
+        setMeasured(Object.keys(pics).length ? (sm.civil_measured || []) : null);
+      } catch (mErr) { console.warn("Could not read the measured lines:", mErr); }
       if (isImage) {
         const { data: signed, error: sErr } = await sb.storage.from("drawings").createSignedUrl(drawing.storage_path, 300);
         if (sErr) throw sErr;
@@ -10769,6 +10801,14 @@ function MarkupViewerModal({ drawing, onClose }) {
                 ) : (
                   "Inline page rendering with overlay markers is only available for image (PNG/JPG) uploads in this release. Item locations below are still shown as page numbers and coordinates where the AI captured them."
                 )}
+              </div>
+            )}
+            {imgUrl && measured && measuredRef.current[pageNum] && (
+              <div className="text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-2">
+                <strong>Red lines are what was measured on this sheet</strong> — every line drawn for the legend
+                code, read from the drawing itself (not estimated):{" "}
+                {measured.map(m => `${m.code} ${Number(m.quantity_m).toLocaleString(undefined, { maximumFractionDigits: 2 })} m`).join(" · ")}.
+                Zoom in to check any run.
               </div>
             )}
             {imgUrl && (
