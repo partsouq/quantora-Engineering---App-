@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-24.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-24.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -2620,9 +2620,8 @@ function PagePacksCard({ compact }) {
   async function buy() {
     setBusy(true); setMsg(null);
     try {
-      const res = await callPagePacks("create_checkout", { boq: qty.boq_page, draftsman: qty.draftsman_page, spec: qty.spec_page });
-      if (res?.url) window.location.href = res.url;
-      else setMsg({ ok: false, text: "Checkout did not return a payment link." });
+      // Paddle checkout is off; page packs move to Razorpay in a later step.
+      setMsg({ ok: false, text: CARD_OFF_MSG });
     } catch (e) { setMsg({ ok: false, text: e.message }); }
     finally { setBusy(false); }
   }
@@ -2672,7 +2671,7 @@ function PagePacksCard({ compact }) {
         </div>
       </div>
       {total > 0 && total < minOrder && <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>Add ${(minOrder - total).toFixed(2)} more to reach the ${minOrder} minimum.</div>}
-      {(data.offline || !allAvailable) && <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 6 }}>Online purchase of pages opens soon. Contact us and we will add pages for you.</div>}
+      {(data.offline || !allAvailable) && <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 6 }}>Card payment is not switched on for this account yet.</div>}
       {msg && <div style={{ fontSize: 12.5, marginTop: 8, color: msg.ok ? "#059669" : "#e11d48" }}>{msg.text}</div>}
     </div>
   );
@@ -2693,6 +2692,69 @@ async function callPaddleBilling(action, payload) {
   const json = await res.json();
   if (!res.ok) throw new Error(json.error || "Billing request failed");
   return json;
+}
+
+// ---------------------------------------------------------------------------
+// RAZORPAY (2026-10-24). Monthly plans and storage add-ons are Razorpay
+// Subscriptions. The browser only opens the payment; access is switched on by
+// the server once Razorpay confirms it (checkout signature or webhook).
+// ---------------------------------------------------------------------------
+const RAZORPAY_FN_URL = `${SUPABASE_URL}/functions/v1/razorpay-billing`;
+async function callRazorpay(action, payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(RAZORPAY_FN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action, ...(payload || {}) }),
+  });
+  let json = {};
+  try { json = await res.json(); } catch (e) { /* not JSON */ }
+  if (!res.ok) throw new Error(json.error || "Payment request failed. Please try again.");
+  return json;
+}
+let _rzScript = null;
+function loadRazorpayCheckout() {
+  if (window.Razorpay) return Promise.resolve(true);
+  if (_rzScript) return _rzScript;
+  _rzScript = new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = "https://checkout.razorpay.com/v1/checkout.js";
+    el.onload = () => resolve(true);
+    el.onerror = () => { _rzScript = null; reject(new Error("The Razorpay payment window could not load. Check your connection or ad blocker and try again.")); };
+    document.head.appendChild(el);
+  });
+  return _rzScript;
+}
+// Starts a subscription and opens Razorpay's window. Resolves true once the
+// payment is verified, false if the customer closed the window.
+const CARD_OFF_MSG = "Card payment is not switched on for this account yet.";
+async function razorpaySubscribe(action, payload, description) {
+  // Until Razorpay is switched on (keys entered, engine deployed) say one short thing.
+  const cfg = await callRazorpay("config", {}).catch(() => null);
+  if (!cfg || !cfg.enabled) throw new Error(CARD_OFF_MSG);
+  const start = await callRazorpay(action, payload);
+  if (start.changed) return true;                      // existing subscription switched plan
+  await loadRazorpayCheckout();
+  return new Promise((resolve, reject) => {
+    const rzp = new window.Razorpay({
+      key: start.key_id,
+      subscription_id: start.subscription_id,
+      name: "Quantora Engineering",
+      description: description || start.name,
+      prefill: { email: start.email || undefined, name: start.contact_name || undefined },
+      theme: { color: "#1c6ce6" },
+      handler: async (resp) => {
+        try {
+          await callRazorpay("verify", resp);
+          window.dispatchEvent(new CustomEvent("plan-changed"));
+          resolve(true);
+        } catch (e) { reject(e); }
+      },
+      modal: { ondismiss: () => resolve(false) },
+    });
+    rzp.on("payment.failed", (r) => reject(new Error(r?.error?.description || "The payment did not go through.")));
+    rzp.open();
+  });
 }
 
 // Platform-admin manual plan activation (see the admin-plan edge function).
@@ -5005,9 +5067,8 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
       // Non-fatal: the plan grid is the primary purpose of this modal, so a
       // failure to list top-up packs must not blank the whole thing.
       try {
-        const res = await callPaddleBilling("list_credit_packs", {});
-        setPacks(res?.packs ?? []);
-        if (typeof res?.balance_cents === "number") setBalanceCents(res.balance_cents);
+        // Pay-as-you-go credit top-ups were Paddle-only; hidden until they move to Razorpay.
+        setPacks([]);
       } catch (packErr) {
         console.error("list_credit_packs failed:", packErr);
         setPacks([]);
@@ -5018,24 +5079,24 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
   async function buyCredits(packId) {
     setBusyPackId(packId); setErr("");
     try {
-      const { url } = await callPaddleBilling("create_topup_checkout", { pack_id: packId });
-      window.location.href = url;
+      throw new Error(CARD_OFF_MSG);
     } catch (ex) { setErr(ex.message); setBusyPackId(null); }
   }
 
   async function subscribe(planId) {
     setBusyPlanId(planId); setErr("");
     try {
-      const { url } = await callPaddleBilling("create_checkout_session", { plan_id: planId });
-      window.location.href = url;
+      const ok = await razorpaySubscribe("subscribe_plan", { plan_id: planId });
+      setBusyPlanId(null);
+      if (ok) { onClose && onClose(); window.dispatchEvent(new CustomEvent("profile-updated")); }
     } catch (ex) { setErr(ex.message); setBusyPlanId(null); }
   }
 
   async function manageBilling() {
     setPortalBusy(true); setErr("");
     try {
-      const { url } = await callPaddleBilling("create_portal_session", {});
-      window.location.href = url;
+      setPortalBusy(false);
+      setErr("To change payment details or cancel, open Billing & Subscription from the menu. Cancelling keeps your plan until the end of the paid month.");
     } catch (ex) { setErr(ex.message); setPortalBusy(false); }
   }
 
@@ -5080,7 +5141,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
               // Paddle is the live provider; the Stripe check is kept as a fallback so
               // that switching back later (once a UAE freelance permit exists) needs no
               // frontend change.
-              const selfServe = !!(plan.paddle_price_id || plan.stripe_price_id);
+              const selfServe = !plan.is_trial && Number(plan.price_usd) > 0 && plan.id !== "enterprise";
               return (
                 <div key={plan.id} className={`rounded-xl border p-4 flex flex-col ${isCurrent ? "border-slate-900 ring-1 ring-slate-900" : "border-slate-200"}`}>
                   <div className="font-bold">{plan.name}</div>
@@ -5128,7 +5189,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                   ) : selfServe ? (
                     <button onClick={() => subscribe(plan.id)} disabled={busyPlanId === plan.id}
                       className="mt-4 bg-slate-900 text-white text-sm font-semibold rounded-lg py-2 hover:bg-slate-800 disabled:opacity-50">
-                      {busyPlanId === plan.id ? "Redirecting…" : `Subscribe to ${plan.name}`}
+                      {busyPlanId === plan.id ? "Opening payment…" : `Subscribe to ${plan.name}`}
                     </button>
                   ) : (
                     <a href="mailto:support@quantoraengineering.com?subject=Enterprise%20plan%20enquiry" className="mt-4 text-center text-sm font-semibold border rounded-lg py-2 hover:bg-slate-50">Contact sales</a>
@@ -5180,10 +5241,10 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
           </div>
         )}
 
-        {(company?.paddle_customer_id || company?.stripe_customer_id) && (
+        {company?.billing_provider === "razorpay" && (
           <div className="mt-5 text-center">
             <button onClick={manageBilling} disabled={portalBusy} className="text-sm text-slate-500 underline hover:text-slate-900 disabled:opacity-50">
-              {portalBusy ? "Opening billing portal…" : "Manage billing / payment method / cancel subscription"}
+              {"Manage or cancel your subscription"}
             </button>
           </div>
         )}
@@ -20272,8 +20333,53 @@ function BillingPage({ onUpgrade }) {
           </>
          )}
       </div>
+      <PlanSubscriptionCard />
       <StorageCard />
       <PagePacksCard />
+    </div>
+  );
+}
+
+// Billing page: the monthly plan paid through Razorpay, with cancel.
+function PlanSubscriptionCard() {
+  const [cfg, setCfg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [ask, setAsk] = useState(false);
+  const [msg, setMsg] = useState(null);
+  async function load() { try { setCfg(await callRazorpay("config", {})); } catch (e) { setCfg(null); } }
+  useEffect(() => { load(); }, []);
+  const sub = cfg?.plan_subscription;
+  if (!sub || !sub.id) return null;
+  const until = sub.paid_until ? new Date(sub.paid_until).toLocaleDateString() : null;
+  async function cancel() {
+    setBusy(true); setMsg(null);
+    try {
+      await callRazorpay("cancel", { subscription_id: sub.id });
+      setMsg({ ok: true, text: `Cancelled. Your plan stays until ${until || "the end of the paid month"}, then the account moves to the free plan. Your data is kept.` });
+      setAsk(false); load();
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="qp-card">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>Monthly subscription</div>
+        <span style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>
+          {sub.status === "active" ? `Paid through Razorpay. Renews ${until ? `on ${until}` : "monthly"}.`
+            : sub.status === "cancelled" ? `Cancelled. Your plan stays until ${until || "the end of the paid month"}.`
+            : sub.status === "pending" || sub.status === "halted" ? "The last payment failed. Razorpay is retrying; update your card from the link in Razorpay's email."
+            : `Status: ${sub.status}`}
+        </span>
+        {sub.status === "active" && (ask ? (
+          <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button className="qp-btn" onClick={cancel} disabled={busy}>{busy ? "Cancelling…" : "Yes, cancel"}</button>
+            <button className="qp-btn" onClick={() => setAsk(false)}>Keep my plan</button>
+          </span>
+        ) : (
+          <button className="qp-btn" style={{ marginLeft: "auto" }} onClick={() => setAsk(true)}>Cancel subscription</button>
+        ))}
+      </div>
+      {msg && <div style={{ marginTop: 8, fontSize: 12.5, color: msg.ok ? "#047857" : "#dc2626" }}>{msg.text}</div>}
     </div>
   );
 }
@@ -20286,7 +20392,37 @@ const STORAGE_ADDONS = [
 ];
 function StorageCard() {
   const st = useStorageUsage();
+  const [cfg, setCfg] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [confirmCancel, setConfirmCancel] = useState("");
+  async function loadCfg() {
+    try { setCfg(await callRazorpay("config", {})); } catch (e) { setCfg({ enabled: false }); }
+  }
+  useEffect(() => { loadCfg(); }, []);
+  async function buy(gb) {
+    setBusy(`gb${gb}`); setMsg(null);
+    try {
+      const ok = await razorpaySubscribe("subscribe_storage", { gb }, `Storage +${gb} GB, monthly`);
+      if (ok) { setMsg({ ok: true, text: `+${gb} GB added. It may take a minute to show in your total.` }); loadCfg(); }
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
+    finally { setBusy(""); }
+  }
+  async function cancel(id) {
+    setBusy(id); setMsg(null);
+    try {
+      await callRazorpay("cancel", { subscription_id: id });
+      setMsg({ ok: true, text: "Cancelled. The storage stays until the end of the month you have paid for." });
+      setConfirmCancel(""); loadCfg();
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
+    finally { setBusy(""); }
+  }
   if (!st || st.quota_bytes == null) return null;
+  const live = !!cfg?.enabled;
+  const priceList = live && Array.isArray(cfg.storage_addons) && cfg.storage_addons.length
+    ? cfg.storage_addons.map(a => ({ gb: a.gb, usd: a.price, note: a.note })) : STORAGE_ADDONS;
+  const cur = live && cfg.currency === "INR" ? "₹" : "$";
+  const mine = (cfg?.storage_subscriptions || []).filter(s => ["active", "pending", "halted", "cancelled"].includes(s.status));
   const used = Number(st.used_bytes || 0), quota = Number(st.quota_bytes || 0);
   const pct = quota > 0 ? Math.min(100, (used / quota) * 100) : 100;
   const tone = pct >= 100 ? "#dc2626" : pct >= 80 ? "#d97706" : "#f97316";
@@ -20307,16 +20443,45 @@ function StorageCard() {
         {pct >= 100 ? " Storage is full, so new uploads are paused. Nothing has been deleted." : ""}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10, marginTop: 14 }}>
-        {STORAGE_ADDONS.map(a => (
+        {priceList.map(a => (
           <div key={a.gb} style={{ border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 10, padding: 12 }}>
             <div style={{ fontWeight: 800, fontSize: 15 }}>+{a.gb} GB</div>
-            <div style={{ fontSize: 13, marginTop: 2 }}><b>${a.usd}</b> / month</div>
+            <div style={{ fontSize: 13, marginTop: 2 }}><b>{cur}{a.usd}</b> / month</div>
             <div style={{ fontSize: 11.5, color: "var(--q-text-dim,#64748b)", marginTop: 4 }}>{a.note}</div>
-            <button className="qp-btn" disabled style={{ marginTop: 10, width: "100%", opacity: 0.6, cursor: "not-allowed" }}
-              title="Online payment for add-ons is being set up">Available soon</button>
+            {live ? (
+              <button className="qp-btn pri" onClick={() => buy(a.gb)} disabled={!!busy}
+                style={{ marginTop: 10, width: "100%" }}>{busy === `gb${a.gb}` ? "Opening payment…" : `Add ${a.gb} GB`}</button>
+            ) : (
+              <button className="qp-btn" disabled style={{ marginTop: 10, width: "100%", opacity: 0.6, cursor: "not-allowed" }}
+                title="Online payment for add-ons is being set up">Available soon</button>
+            )}
           </div>
         ))}
       </div>
+      {mine.length > 0 && (
+        <div style={{ marginTop: 14, borderTop: "1px solid var(--q-border,#e2e8f0)", paddingTop: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Your storage add-ons</div>
+          {mine.map(sx => (
+            <div key={sx.razorpay_subscription_id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5, padding: "6px 0" }}>
+              <b>+{sx.addon_gb} GB</b>
+              <span style={{ color: "var(--q-text-dim,#64748b)" }}>
+                {sx.status === "active" ? `Renews monthly${sx.current_end ? `, next on ${new Date(sx.current_end).toLocaleDateString()}` : ""}`
+                  : sx.status === "cancelled" ? `Cancelled, kept until ${sx.current_end ? new Date(sx.current_end).toLocaleDateString() : "the end of the month"}`
+                  : "Payment is being retried"}
+              </span>
+              {sx.status === "active" && (confirmCancel === sx.razorpay_subscription_id ? (
+                <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                  <button className="qp-btn" onClick={() => cancel(sx.razorpay_subscription_id)} disabled={!!busy}>{busy === sx.razorpay_subscription_id ? "Cancelling…" : "Yes, cancel"}</button>
+                  <button className="qp-btn" onClick={() => setConfirmCancel("")}>Keep it</button>
+                </span>
+              ) : (
+                <button className="qp-btn" style={{ marginLeft: "auto" }} onClick={() => setConfirmCancel(sx.razorpay_subscription_id)}>Cancel</button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+      {msg && <div style={{ marginTop: 10, fontSize: 12.5, color: msg.ok ? "#047857" : "#dc2626" }}>{msg.text}</div>}
     </div>
   );
 }
