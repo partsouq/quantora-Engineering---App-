@@ -38,7 +38,7 @@ window.safeStorageName = function (name) {
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
 <meta name="author" content="Quantora Engineering" />
-<meta name="keywords" content="AI quantity surveying, BOQ software, bill of quantities, construction take-off, MEP take-off, ELV take-off, CCTV BOQ, fire alarm BOQ, drawing analysis, compliance checking, UAE, Dubai, Abu Dhabi, Saudi Arabia, Qatar, Kuwait, Bahrain, Oman, India, Mumbai, Singapore, Malaysia, Indonesia, Philippines, Thailand, Vietnam, Hong Kong, Pakistan, Sri Lanka, Bangladesh" />
+<meta name="keywords" content="AI quantity surveying, BOQ software, bill of quantities, construction take-off, MEP take-off, ELV take-off, CCTV BOQ, fire alarm BOQ, drawing analysis, compliance checking, UAE, Dubai, Abu Dhabi, Saudi Arabia, Qatar, Kuwait, Bahrain, Oman, India, Mumbai, Singapore, Malaysia, Indonesia, Philippines, Thailand, Vietnam, Hong Kong, Pakistan, Sri Lanka, Bangladesh, United Kingdom, London, Manchester, Europe, Germany, France, Ireland, United States, Canada, Australia, New Zealand, South Africa, Egypt, Kenya, Nigeria, Middle East, GCC, Asia" />
 
 <!-- Open Graph / social sharing preview -->
 <meta property="og:type" content="website" />
@@ -65,9 +65,9 @@ window.safeStorageName = function (name) {
   "url": "https://quantoraengineering.com/",
   "description": "AI platform that reads construction drawings and generates complete bills of quantities, technical specifications and location-specific compliance references for 33 MEP and low-current systems, covering 20 countries across the Gulf, South Asia, South East Asia, the UK, the US and Australia.",
   "offers": [
-    { "@type": "Offer", "name": "Individual", "price": "19", "priceCurrency": "USD" },
+    { "@type": "Offer", "name": "Individual", "price": "24", "priceCurrency": "USD" },
     { "@type": "Offer", "name": "Professional", "price": "99", "priceCurrency": "USD" },
-    { "@type": "Offer", "name": "Team", "price": "199", "priceCurrency": "USD" }
+    { "@type": "Offer", "name": "Team", "price": "249", "priceCurrency": "USD" }
   ]
 }
 </script>
@@ -79,8 +79,8 @@ window.safeStorageName = function (name) {
   "url": "https://quantoraengineering.com/",
   "logo": "https://quantoraengineering.com/icon512.png",
   "email": "support@quantoraengineering.com",
-  "description": "AI Construction Intelligence Platform for automated take-off, bill of quantities, specifications and country-specific compliance checking across the Gulf, South Asia, South East Asia and beyond.",
-  "areaServed": ["AE","SA","QA","KW","BH","OM","IN","PK","LK","BD","SG","MY","ID","PH","TH","VN","HK","GB","US","AU"]
+  "description": "AI Construction Intelligence Platform for automated take-off, bill of quantities, specifications and country-specific compliance checking across the Middle East, Asia, the UK, Europe, the Americas, Africa and Australia.",
+  "areaServed": ["AE","SA","QA","KW","BH","OM","IN","PK","LK","BD","NP","SG","MY","ID","PH","TH","VN","HK","GB","IE","DE","FR","EU","US","CA","AU","NZ","ZA","EG","JO","TR","AZ","ET","KE","NG"]
 }
 </script>
 <script>
@@ -344,11 +344,13 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
      chillers, ducting, ventilation, sprinklers and pumps.</p>
 
   <h2>Where it applies</h2>
-  <p>Authority requirements are held for the Gulf (United Arab Emirates, Saudi
-     Arabia, Qatar, Kuwait, Bahrain, Oman), South Asia (India, Pakistan, Sri
+  <p>Authority requirements are held for the Middle East (United Arab Emirates,
+     Saudi Arabia, Qatar, Kuwait, Bahrain, Oman), South Asia (India, Pakistan, Sri
      Lanka, Bangladesh), South East Asia (Singapore, Malaysia, Indonesia, the
      Philippines, Thailand, Vietnam), Hong Kong, the United Kingdom, the United
-     States and Australia.</p>
+     States and Australia. Germany, France and the rest of Europe are covered by
+     their national codes and the EN standards (EN 54, EN 12845, HD 60364), and
+     anywhere else falls back to IEC, ISO and EN standards.</p>
 
   <h2>About</h2>
   <p>Quantora Engineering is an AI construction estimating platform for quantity
@@ -3385,6 +3387,23 @@ const QUANTORA_LANDING_CSS = `
 
   /* digital team + disciplines */
   .team-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;}
+  .qx-local{font-size:12.5px;font-weight:600;color:#93c5fd;margin-top:2px;min-height:0}
+  .hero-global{margin:-4px 0 18px;font-size:13.5px;font-weight:600;color:#a5c8ff;display:flex;gap:8px;align-items:flex-start}
+  .hero-global::before{content:"";flex:0 0 8px;height:8px;margin-top:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 4px rgba(34,197,94,.18)}
+  .qcov-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-top:22px}
+  .qcov-card{border-top:3px solid var(--qc)!important;display:flex;flex-direction:column}
+  .qcov-card h3{color:#fff}
+  .qcov-card .sec-list{flex:1}
+  .qcov-soon{margin-top:12px;font-size:11.5px;font-weight:700;color:var(--qc);background:color-mix(in srgb,var(--qc) 14%,transparent);border:1px dashed color-mix(in srgb,var(--qc) 50%,transparent);border-radius:8px;padding:6px 9px}
+  .qcov-links{margin-top:12px;display:flex;gap:12px;flex-wrap:wrap}
+  .qcov-links a{font-size:12.5px;font-weight:700;color:var(--qc);text-decoration:none}
+  .qcov-links a::after{content:" →"}
+  .qcov-proof{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:18px}
+  .qcov-proof-h{font-size:12.5px;font-weight:800;color:#fff;margin-right:6px}
+  .qcov-chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#dde1ec;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:4px 10px 4px 4px}
+  .qcov-chip b{font-size:10px;font-weight:800;color:#0b1220;background:#93c5fd;border-radius:999px;padding:2px 6px}
+  @media (max-width:1100px){.qcov-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media (max-width:640px){.qcov-grid{grid-template-columns:1fr}}
   .team-card{background:var(--panel-solid);border:1px solid var(--border);border-radius:16px;padding:24px 22px;min-width:0;
     transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;}
   .team-card:hover{transform:translateY(-3px);border-color:rgba(99,102,241,0.42);
@@ -3663,6 +3682,7 @@ const QUANTORA_LANDING_HTML = `
       <h1>From Drawings to <span class="grad-text">Design, BOQ, Pricing &amp; 3D</span> &mdash; All in One AI Platform.</h1>
       <div class="hero-poweredby">Powered by Quantora AI</div>
       <p class="sub">Transform architectural plans, MEP/ELV drawings and project specifications into traceable quantity take-offs, Design BOQs, priced estimates, detailed shop drawings and 3D coordination models. Then connect your engineering work with tender estimation, commercial management and project operations.</p>
+      <div class="hero-global">Built for MEP contractors and estimators across the Middle East, Asia, the UK and Europe &mdash; compliance follows each project's country.</div>
       <div class="hero-ctas">
         <a class="btn btn-lg btn-grad" href="?auth=signup">Start Free Trial →</a>
         <a class="btn btn-lg btn-outline-lg" href="#works"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z" fill="currentColor" stroke="none"/></svg> Watch How It Works</a>
@@ -4272,47 +4292,58 @@ const QUANTORA_LANDING_HTML = `
 <section id="coverage">
   <div class="wrap">
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18a15 15 0 010-18"/></svg>Global Coverage</div>
-    <h2 class="sectitle">Compliance that follows your project's location</h2>
-    <p class="secsub">Choose the country and city, and Quantora applies that jurisdiction's authorities, approvals, certificates and codes &mdash; not a generic checklist. <strong>532 regulatory rules across 20 countries</strong>, 17 system categories each. Where a city has its own authority it takes precedence; everywhere else the national requirement applies automatically.</p>
-    <div class="team-grid">
-      <div class="team-card">
-        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#86efac;"><path d="M12 3l7 3v5.5c0 4.3-3 8.1-7 9.5-4-1.4-7-5.2-7-9.5V6l7-3z"/><path d="M9 12.2l2.2 2.2L15.5 10"/></svg></div>
-        <h3>Gulf &amp; Middle East</h3>
+    <h2 class="sectitle">Compliance that follows your project, wherever it is</h2>
+    <p class="secsub">Choose the country and city, and Quantora applies that jurisdiction's authorities, approvals, certificates and codes &mdash; not a generic checklist. <strong>532 regulatory rules across 20 countries</strong>, 17 system categories each, from the Middle East and Asia to the UK, Europe, the Americas and Australia. Where a city has its own authority it takes precedence; everywhere else the national requirement applies automatically.</p>
+    <div class="qcov-proof"><span class="qcov-proof-h">Projects already set up in 10 countries</span><span class="qcov-chip"><b>AE</b>UAE</span><span class="qcov-chip"><b>SA</b>Saudi Arabia</span><span class="qcov-chip"><b>KW</b>Kuwait</span><span class="qcov-chip"><b>OM</b>Oman</span><span class="qcov-chip"><b>GB</b>United Kingdom</span><span class="qcov-chip"><b>PK</b>Pakistan</span><span class="qcov-chip"><b>BD</b>Bangladesh</span><span class="qcov-chip"><b>PH</b>Philippines</span><span class="qcov-chip"><b>AZ</b>Azerbaijan</span><span class="qcov-chip"><b>ET</b>Ethiopia</span></div>
+    <div class="qcov-grid">
+      <div class="team-card qcov-card" style="--qc:#22c55e">
+        <h3>Middle East (GCC)</h3>
         <div class="sec-list small">
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>UAE &mdash; all seven emirates, each with its own Civil Defence</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Dubai: DCD, DEWA and SIRA &middot; Abu Dhabi: ADCDA, TAQA and ADMCC</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Saudi Arabia &mdash; GDCD, SEC and the Saudi Building Code</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Saudi Arabia &mdash; Civil Defense (Salamah), SEC and the Saudi Building Code</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Qatar, Kuwait, Bahrain and Oman &mdash; QCDD, KFF, Kahramaa, CDAA</div>
         </div>
+        <div class="qcov-links"><a href="uaecompliance.html">UAE guide</a><a href="saudicompliance.html">Saudi guide</a></div>
       </div>
-      <div class="team-card">
-        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#a5b4fc;"><path d="M12 21s7-6.2 7-11a7 7 0 10-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/></svg></div>
+      <div class="team-card qcov-card" style="--qc:#f59e0b">
         <h3>South Asia</h3>
         <div class="sec-list small">
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>India &mdash; National Building Code 2016 and the IS codes</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>State fire NOC resolved per city, Mumbai to Ahmedabad</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>CEA Regulations and the state electrical inspectorate</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>State Fire NOC resolved per city, Mumbai to Ahmedabad</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>CEA Regulations and the state Electrical Inspectorate</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Pakistan, Sri Lanka and Bangladesh</div>
         </div>
+        <div class="qcov-links"><a href="indiacompliance.html">India guide</a></div>
       </div>
-      <div class="team-card">
-        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#93c5fd;"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/></svg></div>
+      <div class="team-card qcov-card" style="--qc:#38bdf8">
         <h3>South East Asia &amp; Hong Kong</h3>
         <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Singapore &mdash; SCDF Fire Safety Certificate, SS 638, PUB, IMDA</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Singapore &mdash; SCDF Fire Code, SS 638, PUB and IMDA</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Malaysia &mdash; Bomba Fire Certificate and UBBL 1984</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Indonesia, Philippines (BFP, RA 9514), Thailand, Vietnam</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Hong Kong &mdash; FSD, Buildings Department and EMSD</div>
         </div>
+        <div class="qcov-links"><a href="singaporecompliance.html">Singapore guide</a></div>
       </div>
-      <div class="team-card">
-        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#d8b4fe;"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18a15 15 0 010-18"/></svg></div>
-        <h3>Beyond the region</h3>
+      <div class="team-card qcov-card" style="--qc:#a78bfa">
+        <h3>UK &amp; Europe</h3>
         <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>United Kingdom &mdash; BS 5839, BS 7671 and BS EN 12845</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>United States &mdash; NFPA 72, NFPA 13/20 and the NEC</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Australia &mdash; AS 1670.1, AS 2118 and AS/NZS 3000</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Anywhere else &mdash; falls back to IEC, ISO and BS EN, and says so</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>United Kingdom &mdash; Building Regulations, BS 5839, BS 7671, BS EN 12845</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Germany &mdash; DIN 14675, VdS, DIN VDE 0100 &middot; France &mdash; NF S 61-970, NF C 15-100</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Rest of the EU &mdash; EN 54, EN 12845, HD 60364 and EN 1838 emergency lighting</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Every line states the standard it was checked against</div>
+        </div>
+        <div class="qcov-soon">Full authority rule sets for EU states: coming soon</div>
+        <div class="qcov-links"><a href="ukcompliance.html">UK guide</a></div>
+      </div>
+      <div class="team-card qcov-card" style="--qc:#f472b6">
+        <h3>Americas, Africa &amp; Australia</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>United States &mdash; NFPA 72, NFPA 13/20, NEC &middot; Canada &mdash; CAN/ULC-S524, CSA C22.1</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Australia and New Zealand &mdash; AS 1670.1, AS 2118 and AS/NZS 3000</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>South Africa, Egypt, Kenya, Nigeria and Ethiopia &mdash; national codes named</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Anywhere else &mdash; falls back to IEC, ISO and EN standards, and says so</div>
         </div>
       </div>
     </div>
@@ -4422,7 +4453,7 @@ const QUANTORA_LANDING_HTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px;margin-top:24px;">
       <div class="panel" style="padding:22px;display:flex;flex-direction:column;">
         <div style="font-weight:700;font-size:15px;color:#fff;">Individual</div>
-        <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$24</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span></div>
+        <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$24</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span><div class="qx-local" data-usd="24"></div></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div><b style="color:#fff;">10 draftsman drawing pages/month</b></div>
           <div>30 AI-processed pages/month</div>
@@ -4435,7 +4466,7 @@ const QUANTORA_LANDING_HTML = `
       <div class="panel" style="padding:22px;display:flex;flex-direction:column;border-color:var(--blue,#3b82f6);position:relative;">
         <div style="position:absolute;top:-11px;right:20px;background:var(--blue,#3b82f6);color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:9999px;">Most Popular</div>
         <div style="font-weight:700;font-size:15px;color:#fff;">Professional</div>
-        <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$99</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span></div>
+        <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$99</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span><div class="qx-local" data-usd="99"></div></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div><b style="color:#fff;">40 draftsman drawing pages/month</b></div>
           <div>150 AI-processed pages/month</div>
@@ -4447,7 +4478,7 @@ const QUANTORA_LANDING_HTML = `
       </div>
       <div class="panel" style="padding:22px;display:flex;flex-direction:column;">
         <div style="font-weight:700;font-size:15px;color:#fff;">Team</div>
-        <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$249</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span></div>
+        <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$249</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span><div class="qx-local" data-usd="249"></div></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div><b style="color:#fff;">100 draftsman drawing pages/month</b></div>
           <div>400 AI-processed pages/month</div>
@@ -4459,7 +4490,7 @@ const QUANTORA_LANDING_HTML = `
       </div>
       <div class="panel" style="padding:22px;display:flex;flex-direction:column;">
         <div style="font-weight:700;font-size:15px;color:#fff;">Enterprise</div>
-        <div style="margin:10px 0;"><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">From </span><span style="font-size:32px;font-weight:800;color:#fff;">$5,000</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span></div>
+        <div style="margin:10px 0;"><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">From </span><span style="font-size:32px;font-weight:800;color:#fff;">$5,000</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span><div class="qx-local" data-usd="5000"></div></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div><b style="color:#fff;">500 draftsman drawing pages/month</b></div>
           <div>10,000 AI-processed pages/month</div>
@@ -4469,6 +4500,7 @@ const QUANTORA_LANDING_HTML = `
         <a class="btn btn-outline-lg" href="#demo" style="margin-top:16px;text-align:center;">Talk to us</a>
       </div>
     </div>
+    <p class="secsub qx-local-note" style="margin-top:14px;font-size:12px;display:none;"></p>
     <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 draftsman drawing pages and 5 AI-processed pages, used once, no expiry &mdash; no credit card required.</p>
   </div>
 </section>
@@ -4656,6 +4688,17 @@ function LandingPage({ onGetStarted }) {
   // else -- every section, all copy, the full color system, layout and the one real
   // brand logo -- is preserved exactly.
   const containerRef = useRef(null);
+
+  // Pricing in the visitor's own currency, next to the US dollar price.
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+    const cur = visitorCurrency();
+    if (!cur || cur === "USD" || !USD_RATES[cur]) return;
+    root.querySelectorAll(".qx-local[data-usd]").forEach(el => { el.textContent = localPriceText(Number(el.dataset.usd), cur); });
+    const note = root.querySelector(".qx-local-note");
+    if (note) { note.textContent = `Prices in ${cur} are approximate, to give you a feel for the cost. Plans are billed in US dollars${cur === "INR" ? " (or Indian rupees in India)" : ""}.`; note.style.display = ""; }
+  }, []);
 
   useEffect(() => {
     const root = containerRef.current;
@@ -7001,7 +7044,7 @@ function parseMoneyInput(v) {
   return Number.isFinite(n) ? Math.round(n * 100) : null;
 }
 
-const CURRENCIES = ["AED","SAR","QAR","KWD","BHD","OMR","INR","PKR","BDT","LKR","MYR","SGD","IDR","THB","VND","PHP","HKD","AUD","AZN","ETB","USD","EUR","GBP"];
+const CURRENCIES = ["AED","SAR","QAR","KWD","BHD","OMR","INR","PKR","BDT","LKR","NPR","MYR","SGD","IDR","THB","VND","PHP","HKD","AUD","NZD","AZN","ETB","EGP","JOD","TRY","KES","NGN","ZAR","USD","CAD","EUR","GBP"];
 // Each country's own currency, used as the default wherever money is entered.
 const COUNTRY_CURRENCY = {
   "uae": "AED", "united arab emirates": "AED", "ksa": "SAR", "saudi arabia": "SAR", "qatar": "QAR", "kuwait": "KWD",
@@ -7009,7 +7052,45 @@ const COUNTRY_CURRENCY = {
   "malaysia": "MYR", "singapore": "SGD", "indonesia": "IDR", "thailand": "THB", "vietnam": "VND", "philippines": "PHP",
   "hong kong": "HKD", "australia": "AUD", "azerbaijan": "AZN", "ethiopia": "ETB", "uk": "GBP", "united kingdom": "GBP",
   "us": "USD", "usa": "USD", "united states": "USD", "ireland": "EUR", "germany": "EUR", "france": "EUR",
+  "nepal": "NPR", "new zealand": "NZD", "egypt": "EGP", "jordan": "JOD", "turkey": "TRY", "kenya": "KES",
+  "nigeria": "NGN", "south africa": "ZAR", "canada": "CAD", "spain": "EUR", "italy": "EUR", "netherlands": "EUR",
+  "belgium": "EUR", "austria": "EUR", "portugal": "EUR", "greece": "EUR", "finland": "EUR",
 };
+// Approximate US dollar rates for the pricing page's "about this much in your
+// currency" line (pegged Gulf currencies exactly; the rest as of Oct 2026).
+// Prices are billed in USD; these are a guide only, so a currency whose rate
+// moves too fast to quote is simply left out.
+const USD_RATES = {
+  AED: 3.6725, SAR: 3.75, QAR: 3.64, KWD: 0.307, BHD: 0.376, OMR: 0.3845, JOD: 0.709, AZN: 1.7,
+  INR: 96, PKR: 277, BDT: 122, LKR: 300, NPR: 154, SGD: 1.28, MYR: 3.98, IDR: 17680, THB: 33.6,
+  VND: 26300, PHP: 61.7, HKD: 7.84, AUD: 1.44, NZD: 1.7, GBP: 0.757, EUR: 0.889, CAD: 1.42, TRY: 49,
+};
+const EURO_TZ = ["Madrid","Rome","Amsterdam","Brussels","Vienna","Lisbon","Athens","Helsinki","Luxembourg","Bratislava",
+  "Ljubljana","Tallinn","Riga","Vilnius","Zagreb","Valletta","Nicosia","Paris","Berlin","Dublin","Monaco"];
+// The visitor's own currency, from their time zone (no lookup, nothing sent anywhere).
+function visitorCurrency() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    if (tz.startsWith("Europe/") && EURO_TZ.includes(tz.split("/")[1])) return "EUR";
+    if (tz.startsWith("America/") && !/Toronto|Vancouver|Edmonton|Winnipeg|Halifax|Regina|St_Johns/.test(tz)) {
+      return /New_York|Chicago|Denver|Los_Angeles|Phoenix|Anchorage|Detroit|Indiana|Boise/.test(tz) ? "USD" : null;
+    }
+    if (/Toronto|Vancouver|Edmonton|Winnipeg|Halifax|Regina|St_Johns/.test(tz)) return "CAD";
+    if (tz.startsWith("Australia/")) return "AUD";
+    const country = (typeof Q_TZ_COUNTRY !== "undefined" && Q_TZ_COUNTRY[tz]) || null;
+    return currencyForCountry(country);
+  } catch (e) { return null; }
+}
+function localPriceText(usd, cur) {
+  const rate = USD_RATES[cur];
+  if (!rate || cur === "USD") return "";
+  let v = usd * rate;
+  const step = v >= 100000 ? 1000 : v >= 10000 ? 100 : v >= 1000 ? 10 : v >= 100 ? 5 : 1;
+  v = Math.round(v / step) * step;
+  try {
+    return "\u2248 " + new Intl.NumberFormat(undefined, { style: "currency", currency: cur, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v) + " /mo";
+  } catch (e) { return `\u2248 ${cur} ${v.toLocaleString()} /mo`; }
+}
 function currencyForCountry(country) {
   return COUNTRY_CURRENCY[String(country || "").trim().toLowerCase()] || null;
 }
