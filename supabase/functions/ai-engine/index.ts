@@ -13,6 +13,63 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// ---------------------------------------------------------------------------
+// Take-off scope chosen on upload (2026-10-24): the systems the customer ticked
+// ('category|Label'), any typed in by hand, and the kind of sheet. Nothing
+// ticked means everything on the sheet, exactly as before.
+// ---------------------------------------------------------------------------
+const SHEET_GUIDE: Record<string, string> = {
+  floor_plan: "This is a FLOOR PLAN / LAYOUT: count device symbols one by one and measure runs on the plan; use the legend to recognise symbols.",
+  riser_schematic: "This is a RISER / SCHEMATIC: read panels, risers, outlets per floor and cable/pipe sizes from the diagram; do not invent floor-plan positions.",
+  single_line: "This is a SINGLE-LINE DIAGRAM: read every board, breaker, rating, cable size and length shown; quantities come from the diagram, not from a plan.",
+  schedule: "This is a SCHEDULE / TABLE: read it row by row and take quantities from the table (quantity_source_type schedule_reference); do not count symbols.",
+  legend: "This is a LEGEND / SYMBOLS sheet: it explains symbols and is not a take-off on its own. Return only items the sheet itself quantifies, if any, and say so in analysis_notes.",
+  section_detail: "This is a SECTION / DETAIL: read dimensions, layers and build-ups; quantities apply only to what the detail itself covers.",
+  mixed: "The sheet type is mixed or unknown: decide page by page whether to count symbols, read a schedule or read a diagram, and say which in quantity_basis_notes.",
+};
+const GENERIC_SCOPE_CATEGORIES = new Set(["containment", "cable_sizing", "other"]);
+
+function scopeOf(drawing: any): { cats: Set<string>; labels: string[]; custom: string[]; sheet: string | null } {
+  const sys: string[] = Array.isArray(drawing?.takeoff_systems) ? drawing.takeoff_systems : [];
+  const custom: string[] = Array.isArray(drawing?.takeoff_custom) ? drawing.takeoff_custom.filter((x: any) => typeof x === "string" && x.trim()) : [];
+  const cats = new Set<string>(), labels: string[] = [];
+  for (const k of sys) {
+    const i = String(k).indexOf("|");
+    if (i > 0) { cats.add(String(k).slice(0, i)); labels.push(String(k).slice(i + 1)); }
+  }
+  return { cats, labels, custom, sheet: drawing?.sheet_type ?? null };
+}
+
+function takeoffScopeText(drawing: any): string {
+  const sc = scopeOf(drawing);
+  const parts: string[] = [];
+  if (sc.labels.length || sc.custom.length) {
+    const all = [...sc.labels, ...sc.custom];
+    parts.push(`SCOPE CHOSEN BY THE CUSTOMER FOR THIS SHEET. Take off ONLY these systems: ${all.join("; ")}.` +
+      (sc.custom.length ? ` The customer typed in ${sc.custom.join("; ")} by hand: file those rows under system_category "other" and start each description with the system name.` : "") +
+      ` Do NOT add rows for any other system, even if it is drawn on the sheet. Instead, end analysis_notes with one line "Also on this sheet, not taken off: ..." naming those other systems, so the customer knows they are there.`);
+  }
+  if (sc.sheet && SHEET_GUIDE[sc.sheet]) parts.push(SHEET_GUIDE[sc.sheet]);
+  return parts.length ? `\n\n${parts.join("\n")}` : "";
+}
+
+/** Rows of a known system the customer did not tick are moved out of the BOQ into a note. */
+function applyTakeoffScope(result: any, drawing: any): string {
+  const sc = scopeOf(drawing);
+  if (!sc.cats.size || !Array.isArray(result?.items)) return "";
+  const allowed = new Set([...sc.cats, ...GENERIC_SCOPE_CATEGORIES]);
+  const kept: any[] = [], dropped = new Map<string, number>();
+  for (const it of result.items) {
+    const c = String(it?.system_category ?? "other");
+    if (allowed.has(c)) kept.push(it);
+    else dropped.set(c, (dropped.get(c) ?? 0) + 1);
+  }
+  if (!dropped.size) return "";
+  result.items = kept;
+  const list = [...dropped.entries()].map(([c, n]) => `${c.replace(/_/g, " ")} (${n} line${n === 1 ? "" : "s"})`).join(", ");
+  return `\n\nOutside the systems you selected, so not added to the BOQ: ${list}. To include them, open Systems on this drawing, tick them and run the take-off again.`;
+}
+
 const ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";
 
 const ACTUAL_INPUT_PER_MTOK_USD = 3.0;
@@ -2527,6 +2584,7 @@ Deno.serve(async (req: Request) => {
               : `Analyze this ${drawing.discipline ?? "construction"} drawing${drawing.floor_label ? ` for ${drawing.floor_label}` : ""}${usingSelection ? ` (${page_selection!.length} selected pages)` : ""}. Identify every relevant system item (equipment, fixtures, devices, cable/pipe runs, symbols, schedules, legends). Count quantities precisely from what is visible/present in the data. Produce Bill of Quantities line items via the record_boq_items tool, following standard BOQ conventions (item description, technical spec, qty, unit, length/area where relevant, location, accessories, consumables, testing & commissioning requirements). Assign an honest confidence_score per item — lower it whenever the source is unclear, cropped, low resolution, or ambiguous. ${coordsInstruction}`,
           },
         ];
+        (userContent[1] as any).text += takeoffScopeText(drawing);
         const systemPrompt = civil ? civilSystemPrompt(projectContext, project) : `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
 
         const userTextForKey = (userContent[1] as any)?.text ?? "";
@@ -2563,6 +2621,8 @@ Deno.serve(async (req: Request) => {
         }
         const elapsedMs = Date.now() - startTime;
         const result = parsed.result as { items: any[]; analysis_notes: string; document_kind?: string; cost_optimizations?: any[]; assumptions?: any[]; review_items?: any[] };
+        const scopeNote = applyTakeoffScope(result, drawing);
+        if (scopeNote) result.analysis_notes = `${result.analysis_notes ?? ""}${scopeNote}`;
         const civilChoice = civil ? standardForProject(project) : undefined;
         const civilNote = civil ? applyCivilFinalize(result, await loadCivilRules(admin, civilChoice!), civilChoice) : "";
         if (civilNote) result.analysis_notes = `${result.analysis_notes ?? ""}${civilNote}`;
@@ -3251,6 +3311,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
               : ({ system_category: i.system_category, description: i.description, quantity: i.quantity, unit: i.unit, location: i.location })), null, 2)}\n\nUser correction comments to address:\n${comments.map((c, idx) => `${idx + 1}. ${c}`).join("\n")}\n\nRe-examine the source, apply these corrections, and output the COMPLETE corrected item list via record_boq_items (previous correct items plus fixes for what was flagged). ${coordsInstruction}`,
           },
         ];
+        (userContent[1] as any).text += takeoffScopeText(drawing);
 
         const startTime = Date.now();
         let parsed;
@@ -3262,6 +3323,8 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         }
         const elapsedMs = Date.now() - startTime;
         const result = parsed.result as { items: any[]; analysis_notes: string; document_kind?: string; cost_optimizations?: any[]; assumptions?: any[]; review_items?: any[] };
+        const scopeNote = applyTakeoffScope(result, drawing);
+        if (scopeNote) result.analysis_notes = `${result.analysis_notes ?? ""}${scopeNote}`;
         const civilChoice = civil ? standardForProject(project) : undefined;
         const civilNote = civil ? applyCivilFinalize(result, await loadCivilRules(admin, civilChoice!), civilChoice) : "";
         if (civilNote) result.analysis_notes = `${result.analysis_notes ?? ""}${civilNote}`;
@@ -3417,7 +3480,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         const anyVisual = fetched.some(f => f.content.kind === "pdf" || f.content.kind === "image");
         const userContent: any[] = [];
         fetched.forEach((f, idx) => {
-          userContent.push({ type: "text", text: `Drawing ${idx + 1} of ${fetched.length}: "${f.drawing.file_name}" (${f.drawing.discipline ?? "unspecified discipline"}${f.drawing.floor_label ? `, ${f.drawing.floor_label}` : ""}).` });
+          userContent.push({ type: "text", text: `Drawing ${idx + 1} of ${fetched.length}: "${f.drawing.file_name}" (${f.drawing.discipline ?? "unspecified discipline"}${f.drawing.floor_label ? `, ${f.drawing.floor_label}` : ""}).` + takeoffScopeText(f.drawing) });
           userContent.push(f.content.block);
         });
         userContent.push({

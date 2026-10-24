@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-24.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-24.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -496,6 +496,241 @@ const CIVIL_SYSTEMS = [
 ];
 const CIVIL_DISCIPLINES = ["civil", "structural", "architectural"];
 const isCivilDiscipline = (d) => CIVIL_DISCIPLINES.includes(String(d || "").toLowerCase());
+// ---------------------------------------------------------------------------
+// TAKE-OFF SCOPE (2026-10-24). On upload the customer picks the discipline,
+// ticks the systems they want taken off, and says what kind of sheet it is.
+// Each entry is [boq_items.system_category, label]: the category is where the
+// rows land; the label is what the AI is told to look for. Anything missing
+// can be typed in by hand. Nothing ticked means "take off everything".
+// ---------------------------------------------------------------------------
+const TAKEOFF_DISCIPLINES = [
+  // [discipline value saved on the drawing, card title, group, colour, hint]
+  ["elv",             "ELV & Security",          "MEP", "#1d6fe0", "CCTV, access, data, PA, BMS"],
+  ["electrical",      "Electrical",              "MEP", "#f59e0b", "Lighting, power, DBs, cables"],
+  ["mechanical",      "Mechanical (HVAC)",       "MEP", "#0ea5a5", "AC, ducting, ventilation"],
+  ["plumbing",        "Plumbing & Drainage",     "MEP", "#0891b2", "Water, drainage, fixtures"],
+  ["fire_protection", "Fire Protection",         "MEP", "#e0451d", "Fire alarm, sprinklers, hose reels"],
+  ["architectural",   "Architectural & Fit-out", "Civil", "#8b5cf6", "Partitions, ceilings, finishes"],
+  ["structural",      "Structural",              "Civil", "#64748b", "Concrete, rebar, steel"],
+  ["civil",           "Civil & Infrastructure",  "Civil", "#78716c", "Earthworks, roads, networks"],
+];
+const TAKEOFF_CATALOG = {
+  elv: [
+    ["cctv","CCTV cameras & recorders"],["cctv","Video management system (VMS)"],["access_control","Access control (readers, maglocks, controllers)"],
+    ["access_control","Turnstiles & speed gates"],["access_control","Visitor management"],["access_control","Intrusion / burglar alarm"],
+    ["access_control","Perimeter intrusion detection"],["intercom","Video intercom"],["intercom","Audio intercom"],
+    ["structured_cabling","Structured cabling (data & voice)"],["structured_cabling","Fibre optic backbone"],["structured_cabling","Racks, patch panels & network switches"],
+    ["wifi","Wi-Fi / wireless LAN"],["public_address","Public address & voice evacuation"],["public_address","Background music"],
+    ["iptv","IPTV / MATV / SMATV"],["iptv","Satellite TV"],["audio_visual","Audio visual & meeting rooms"],["audio_visual","Digital signage"],
+    ["parking_management","Car park guidance"],["gate_barrier","Parking barriers & ticketing"],["gate_barrier","Vehicle gates, bollards & road blockers"],
+    ["anpr","ANPR cameras"],["bms","Building management system (BMS)"],["bms","Energy & utility metering"],["bms","Water leak detection"],
+    ["bms","Smart home / home automation"],["grms","Guest room management (GRMS)"],["pabx","PABX / IP telephony"],
+    ["security_room","Security control room"],["security_room","Guard tour"],["security_room","X-ray & metal detectors"],
+    ["nurse_call","Nurse call"],["nurse_call","Disabled toilet & refuge call"],["nurse_call","Infant protection / baby tagging"],
+    ["other","Master clock"],["other","Queue management"],["other","Distributed antenna system (DAS)"],["other","RTLS / asset tracking"],
+    ["containment","ELV containment (trays, conduit, trunking)"],
+  ],
+  electrical: [
+    ["lighting","Lighting fixtures"],["lighting","Emergency lighting"],["lighting","Exit signs"],["lighting","External & street lighting"],
+    ["lighting","Facade & landscape lighting"],["lighting","Lighting control (DALI, sensors)"],["power_distribution","Small power & sockets"],
+    ["power_distribution","Isolators & equipment connections"],["power_distribution","Floor boxes"],["power_distribution","EV chargers"],
+    ["db_panels","Distribution boards (DB)"],["lv_panel","MDB / SMDB / LV panels"],["lv_panel","Capacitor bank / power factor correction"],
+    ["lv_panel","Energy meters"],["bus_duct","Busbar / bus duct"],["cable_sizing","Cables & wiring"],["containment","Cable trays, trunking & conduit"],
+    ["earthing","Earthing & bonding"],["lightning_protection","Lightning protection"],["ups","UPS"],["generator","Generator & ATS"],
+    ["transformer","Transformer & MV switchgear"],["solar_pv","Solar PV"],
+  ],
+  mechanical: [
+    ["hvac","Split / VRF units"],["hvac","Package units"],["hvac","Refrigerant piping"],["fcu","Fan coil units (FCU)"],
+    ["ahu","AHU / FAHU"],["ahu","Heat recovery units"],["chillers","Chillers"],["chillers","Chilled water piping & valves"],
+    ["chillers","Cooling towers"],["pumps","HVAC pumps"],["ducting","Ductwork"],["ducting","Diffusers & grilles"],
+    ["ducting","Dampers (VCD, fire, smoke)"],["ducting","Duct insulation"],["ventilation","Exhaust & supply fans"],
+    ["ventilation","Kitchen exhaust"],["ventilation","Car park ventilation & jet fans"],["smoke_management","Smoke extract & stair pressurisation"],
+    ["bms","Thermostats & HVAC controls"],["drainage","Condensate drain"],
+  ],
+  plumbing: [
+    ["water_supply","Cold water supply"],["hot_water","Hot water"],["hot_water","Water heaters & calorifiers"],["hot_water","Solar water heating"],
+    ["water_supply","Water tanks"],["water_supply","Water treatment & filtration"],["water_supply","Irrigation"],["pumps","Booster & transfer pumps"],
+    ["pumps","Sump & sewage pumps"],["fixtures","Sanitary fixtures"],["fixtures","Toilet accessories"],["drainage","Soil & waste drainage"],
+    ["drainage","Vent pipes"],["drainage","Stormwater & rainwater"],["drainage","Floor drains & gullies"],["drainage","Manholes & inspection chambers"],
+    ["drainage","Grease traps & interceptors"],["other","LPG / gas piping"],["other","Swimming pool plant"],
+  ],
+  fire_protection: [
+    ["fire_alarm","Fire alarm & detection"],["fire_alarm","Aspirating smoke detection"],["fire_alarm","Linear heat detection"],
+    ["fire_alarm","Gas leak detection"],["fire_alarm","Emergency voice & fireman telephone"],["sprinkler","Sprinklers"],
+    ["sprinkler","Deluge & water spray"],["fire_fighting","Fire hose reels"],["fire_fighting","Wet / dry risers & landing valves"],
+    ["fire_fighting","Fire extinguishers"],["fire_fighting","Fire hydrants"],["fire_fighting","Fire water tank"],["fire_fighting","Foam system"],
+    ["fire_pump","Fire pumps"],["gas_suppression","Gas suppression (FM-200, Novec, CO2)"],["gas_suppression","Kitchen hood suppression"],
+    ["smoke_management","Smoke management"],["lighting","Emergency lighting & exit signs"],["other","Fire stopping & fire-rated sealing"],
+  ],
+  architectural: [
+    ["masonry","Blockwork & masonry"],["partitions","Gypsum / drywall partitions"],["glazing","Glass partitions"],
+    ["ceiling_finishes","Ceilings (gypsum, tiles)"],["ceiling_finishes","Bulkheads"],["floor_finishes","Floor tiles & porcelain"],
+    ["floor_finishes","Marble & stone"],["floor_finishes","Vinyl, carpet & raised floor"],["screed","Screed"],["wall_finishes","Wall tiles"],
+    ["cladding","Wall & column cladding"],["plaster_render","Plaster & render"],["painting","Painting"],["skirting","Skirting"],
+    ["mouldings_trims","Mouldings, cornices & trims"],["doors","Doors & ironmongery"],["windows","Windows"],
+    ["glazing","Curtain wall & shopfront glazing"],["cladding","Facade cladding"],["joinery","Joinery (shelves, niches, vanities)"],
+    ["joinery","Kitchen cabinets"],["waterproofing","Waterproofing"],["insulation","Thermal insulation"],["roofing","Roofing"],
+    ["stairs_ramps","Stairs, ramps & handrails"],["metalwork","Balustrades, railings & metalwork"],["other","Signage"],
+    ["pools_water_features","Pools & water features"],["external_works","Landscaping & external works"],
+  ],
+  structural: [
+    ["earthworks","Excavation & backfill"],["piling","Piling"],["ground_stabilisation","Ground improvement"],["site_works","Dewatering"],
+    ["concrete","Blinding concrete"],["concrete","Foundations & footings"],["concrete","Columns"],["concrete","Beams"],["concrete","Slabs"],
+    ["concrete","RC & shear walls"],["concrete","RC stairs"],["concrete","Precast concrete"],["formwork","Formwork"],
+    ["reinforcement","Reinforcement / rebar"],["reinforcement","Mesh"],["reinforcement","Post-tensioning"],
+    ["structural_steel","Structural steel"],["structural_steel","Metal deck"],["structural_steel","Steel connections & bolts"],
+    ["waterproofing","Below-ground waterproofing"],
+  ],
+  civil: [
+    ["site_works","Site clearance"],["earthworks","Earthworks & grading"],["external_works","Roads & pavement"],["external_works","Kerbs & edging"],
+    ["external_works","Interlock paving"],["external_works","Road marking & signage"],["drainage","Storm drainage network"],
+    ["drainage","Sewer network"],["water_supply","Water network"],["drainage","Manholes & chambers"],["concrete","Culverts"],
+    ["concrete","Retaining walls"],["external_works","Boundary walls & fencing"],["metalwork","Gates"],
+    ["external_works","Landscaping & irrigation"],["external_works","Utility ducts & trenches"],["lighting","Street lighting"],
+  ],
+};
+const SHEET_TYPES = [
+  ["floor_plan",      "Floor plan / layout",       "Symbols are counted and runs measured on the plan"],
+  ["riser_schematic", "Riser / schematic",         "Read the riser for panels, risers and per-floor quantities"],
+  ["single_line",     "Single-line diagram (SLD)", "Read boards, breakers, cables and ratings"],
+  ["schedule",        "Schedule / table",          "Read the table row by row; nothing is counted from symbols"],
+  ["legend",          "Legend / symbols sheet",    "Used to recognise symbols; not taken off on its own"],
+  ["section_detail",  "Section / detail",          "Read dimensions, layers and build-ups"],
+  ["mixed",           "Mixed / not sure",          "The AI decides page by page"],
+];
+
+// Change the systems / sheet type on a drawing already uploaded.
+function DrawingScopeEditor({ d, project, onSaved, onClose }) {
+  const [discipline, setDiscipline] = useState(d.discipline || "");
+  const [systems, setSystems] = useState(Array.isArray(d.takeoff_systems) ? d.takeoff_systems : []);
+  const [custom, setCustom] = useState(Array.isArray(d.takeoff_custom) ? d.takeoff_custom : []);
+  const [sheetType, setSheetType] = useState(d.sheet_type || "floor_plan");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const setDisc = (v) => { setDiscipline(v); };
+  async function save() {
+    setBusy(true); setErr("");
+    const { error } = await sb.from("drawings").update({
+      discipline, takeoff_systems: systems, takeoff_custom: custom, sheet_type: sheetType || null,
+    }).eq("id", d.id);
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onSaved && onSaved();
+  }
+  return (
+    <div className="mt-3 border rounded-xl p-4 bg-white">
+      <DrawingScopePicker discipline={discipline} setDiscipline={setDisc} systems={systems} setSystems={setSystems}
+        custom={custom} setCustom={setCustom} sheetType={sheetType} setSheetType={setSheetType}
+        projectSystems={project?.required_systems || []} />
+      {err && <div className="text-xs text-rose-600 mt-2">{err}</div>}
+      <div className="flex gap-2 mt-3">
+        <button type="button" onClick={save} disabled={busy || !discipline} className="text-xs font-semibold bg-blue-600 text-white px-3 py-2 rounded-lg disabled:opacity-50">{busy ? "Saving…" : "Save"}</button>
+        <button type="button" onClick={onClose} className="text-xs font-semibold border px-3 py-2 rounded-lg">Cancel</button>
+        <span className="text-[11px] text-slate-500 self-center">Run the take-off again after saving to apply the new systems.</span>
+      </div>
+    </div>
+  );
+}
+function scopeSummary(d) {
+  const labels = (d.takeoff_systems || []).map(k => String(k).split("|")[1]).filter(Boolean).concat(d.takeoff_custom || []);
+  const sheet = (SHEET_TYPES.find(t => t[0] === d.sheet_type) || [])[1];
+  const sys = labels.length === 0 ? "All systems" : labels.length <= 2 ? labels.join(", ") : `${labels.slice(0, 2).join(", ")} +${labels.length - 2}`;
+  return sheet ? `${sys} · ${sheet}` : sys;
+}
+
+function DrawingScopePicker({ discipline, setDiscipline, systems, setSystems, custom, setCustom, sheetType, setSheetType, projectSystems }) {
+  const [typed, setTyped] = useState("");
+  const list = TAKEOFF_CATALOG[discipline] || [];
+  const keyOf = ([c, l]) => `${c}|${l}`;
+  const pick = (d) => {
+    setDiscipline(d);
+    const cat = TAKEOFF_CATALOG[d] || [];
+    const pre = cat.filter(([c]) => (projectSystems || []).includes(c)).map(keyOf);
+    setSystems(pre);
+  };
+  const toggle = (k) => setSystems(systems.includes(k) ? systems.filter(x => x !== k) : [...systems, k]);
+  const addTyped = () => {
+    const v = typed.trim().replace(/\s+/g, " ").slice(0, 80);
+    if (v && !custom.some(c => c.toLowerCase() === v.toLowerCase())) setCustom([...custom, v]);
+    setTyped("");
+  };
+  const groups = [["MEP", "MEP & ELV: devices are counted, runs measured"], ["Civil", "Civil & architectural: measured in m, m², m³, kg"]];
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-xs font-semibold text-slate-600 mb-2">1. Discipline</div>
+        {groups.map(([g, gl]) => (
+          <div key={g} className="mb-2">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">{gl}</div>
+            <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))" }}>
+              {TAKEOFF_DISCIPLINES.filter(d => d[2] === g).map(([v, title, , colour, hint]) => {
+                const on = discipline === v;
+                return (
+                  <button type="button" key={v} onClick={() => pick(v)} aria-pressed={on}
+                    className="text-left rounded-xl border px-3 py-2.5 transition-shadow"
+                    style={on ? { borderColor: colour, boxShadow: `inset 0 0 0 1.5px ${colour}`, background: `${colour}0f` } : {}}>
+                    <div className="text-sm font-semibold" style={on ? { color: colour } : {}}>{title}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">{hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {discipline && (
+        <div>
+          <div className="flex items-center gap-3 flex-wrap mb-2">
+            <div className="text-xs font-semibold text-slate-600">2. Systems to take off</div>
+            <span className="text-[11px] text-slate-500">{systems.length + custom.length ? `${systems.length + custom.length} selected` : "None ticked = everything on the sheet"}</span>
+            <button type="button" className="text-[11px] font-semibold text-blue-600 hover:underline" onClick={() => setSystems(list.map(keyOf))}>Select all</button>
+            <button type="button" className="text-[11px] font-semibold text-slate-500 hover:underline" onClick={() => { setSystems([]); setCustom([]); }}>Clear</button>
+          </div>
+          <div className="grid gap-2 border rounded-xl p-3 bg-slate-50" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))" }}>
+            {list.map(item => {
+              const k = keyOf(item);
+              return (
+                <label key={k} className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" className="mt-0.5" checked={systems.includes(k)} onChange={() => toggle(k)} />
+                  <span>{item[1]}</span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="flex gap-2 mt-2 flex-wrap items-center">
+            <input value={typed} onChange={e => setTyped(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTyped(); } }}
+              placeholder="Not in the list? Type a system name and press Add" maxLength={80}
+              className="border rounded-lg px-3 py-1.5 text-sm flex-1" style={{ minWidth: 220 }} />
+            <button type="button" onClick={addTyped} className="text-sm font-semibold border rounded-lg px-3 py-1.5 hover:bg-slate-50">Add</button>
+          </div>
+          {custom.length > 0 && (
+            <div className="flex gap-1.5 flex-wrap mt-2">
+              {custom.map(c => (
+                <span key={c} className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-blue-50 text-blue-800 border border-blue-200">
+                  {c}
+                  <button type="button" aria-label={`Remove ${c}`} onClick={() => setCustom(custom.filter(x => x !== c))} className="text-blue-500">×</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {discipline && (
+        <div>
+          <div className="text-xs font-semibold text-slate-600 mb-1">3. What kind of sheet is it?</div>
+          <select className="border rounded-lg px-3 py-2 text-sm" style={{ maxWidth: 320, width: "100%" }} value={sheetType} onChange={e => setSheetType(e.target.value)}>
+            {SHEET_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <span className="text-[11px] text-slate-500 ml-2">{(SHEET_TYPES.find(t => t[0] === sheetType) || [])[2]}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const BOQ_FILTER_SYSTEMS = [...ALL_SYSTEMS, ...CIVIL_SYSTEMS];
 
 // The system-brief question bank: what the platform asks before it designs a
@@ -9326,6 +9561,10 @@ function DrawingsTab({ project }) {
   // out-of-scope guard reads, so a default that is wrong is worse than no
   // default at all.
   const [discipline, setDiscipline] = useState("");
+  const [scopeSystems, setScopeSystems] = useState([]);   // 'category|Label' ticked on upload
+  const [scopeCustom, setScopeCustom] = useState([]);     // typed in by hand
+  const [sheetType, setSheetType] = useState("floor_plan");
+  const [editScopeId, setEditScopeId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]); // [{file, floorLabel}] -- staged before actual upload, see selectFiles()
   const [uploading, setUploading] = useState(false);
   const [stdStatus, setStdStatus] = useState("");     // live "Checking…/Cleaning…" line while files are brought to standard
@@ -9487,6 +9726,7 @@ function DrawingsTab({ project }) {
         const { error: insErr } = await sb.from("drawings").insert({
           project_id: project.id, file_name: file.name, storage_path: path, file_type: fileType,
           discipline, floor_label: (floorLabel || "").trim() || null, uploaded_by: user.id, file_hash: fileHash,
+          takeoff_systems: scopeSystems, takeoff_custom: scopeCustom, sheet_type: sheetType || null,
         });
         if (insErr) throw insErr;
       }
@@ -9844,34 +10084,17 @@ function DrawingsTab({ project }) {
       <div className="bg-white border rounded-xl p-5">
         <h3 className="font-semibold mb-3">Upload Drawings</h3>
         {err && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2 mb-3">{err}</div>}
+        <div className="mb-3">
+          <DrawingScopePicker discipline={discipline} setDiscipline={setDiscipline}
+            systems={scopeSystems} setSystems={setScopeSystems} custom={scopeCustom} setCustom={setScopeCustom}
+            sheetType={sheetType} setSheetType={setSheetType} projectSystems={project.required_systems || []} />
+          <p className="text-[11px] text-slate-500 mt-3">
+            <strong>Drawings only.</strong> Specifications, requirement documents and material lists go on the
+            <strong> Specification</strong> page, where they are read clause by clause.
+            {isCivilDiscipline(discipline) && " Civil and architectural sheets are measured with the dimensions and working shown on every line."}
+          </p>
+        </div>
         <div className="grid md:grid-cols-3 gap-3 mb-3">
-          <div>
-            <label className="text-xs font-semibold text-slate-600">Discipline / Document Type</label>
-            <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={discipline} onChange={e=>setDiscipline(e.target.value)}>
-              <option value="">Choose what this drawing shows…</option>
-              <optgroup label="MEP & ELV — devices and runs are counted">
-                {["electrical","elv","mechanical","plumbing","fire_protection"].map(d=>
-                  <option key={d} value={d}>{SYSTEM_LABEL(d)}</option>)}
-              </optgroup>
-              <optgroup label="Civil works — measured in m, m², m³, kg">
-                <option value="architectural">Architectural / finishes</option>
-                <option value="structural">Structural</option>
-                <option value="civil">Civil / infrastructure</option>
-              </optgroup>
-            </select>
-            <p className="text-[11px] text-slate-500 mt-1">
-              <strong>Drawings only.</strong> Specifications, requirement documents, schedules and material lists go on
-              the <strong>Specification</strong> page, where they are read clause by clause and turned into specified
-              items the take-off is checked against. A specification uploaded here would just sit as a file — it is not
-              read.
-            </p>
-            <p className="text-[11px] text-slate-500 mt-1">
-              <strong>Architectural, Structural and Civil</strong> drawings are measured for civil works: excavation,
-              concrete, formwork, steel, blockwork, plaster, floor and wall finishes, skirting, doors, windows and
-              external works, each with its dimensions and working shown. If your architectural plan carries the
-              lighting or small-power layout and you want those counted, upload it as <strong>Electrical</strong>.
-            </p>
-          </div>
           <div className="flex items-end">
             <input ref={fileRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.dwg,.dxf,.rvt,.ifc" onChange={selectFiles} disabled={uploading} className="text-sm" />
           </div>
@@ -9938,6 +10161,17 @@ function DrawingsTab({ project }) {
                   )}
                   <span>· {d.floor_label || "No floor label"} · {d.file_type.toUpperCase()}</span>
                 </div>
+                {d.discipline !== "specification" && (
+                  <button type="button" onClick={() => setEditScopeId(editScopeId === d.id ? null : d.id)}
+                    className="text-[11px] mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700"
+                    title="Systems to take off and the kind of sheet">
+                    <b>Systems:</b> {scopeSummary(d)} <span className="text-blue-600 font-semibold ml-1">Edit</span>
+                  </button>
+                )}
+                {editScopeId === d.id && (
+                  <DrawingScopeEditor d={d} project={project} onClose={() => setEditScopeId(null)}
+                    onSaved={() => { setEditScopeId(null); load(); }} />
+                )}
                 {d.file_type === "dxf" && (
                   <div className="text-[10px] text-teal-700 bg-teal-50 inline-block px-2 py-0.5 rounded-full mt-1">AI reads the real CAD exchange data — no markup positions available</div>
                 )}
