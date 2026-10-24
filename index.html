@@ -5923,10 +5923,98 @@ function StagePill({ stage }) {
   return <span className="qpill" style={{ color: colour, background: bg, borderColor: bd }}>{label}</span>;
 }
 
+// ---------------------------------------------------------------------------
+// PROJECT TABLE (2026-10-25). One project list for the whole platform: a
+// sortable register like any engineering software, one row per project, the
+// stage in its own column and every number in a column of its own so nothing
+// is truncated. Used on All projects (full) and the Overview (compact).
+// ---------------------------------------------------------------------------
+function ptAgo(iso) {
+  if (!iso) return null;
+  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (d <= 0) return "Today";
+  if (d === 1) return "Yesterday";
+  if (d < 30) return `${d} days ago`;
+  return new Date(iso).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+}
+const PT_STAGE_ORDER = { priced: 0, taken_off: 1, drawings: 2, new: 3 };
+function ProjectTable({ projects, metrics, onOpen, compact, limit, stageFilter }) {
+  const [sort, setSort] = useState(["activity", -1]);
+  const m = (p) => metrics[p.id] || {};
+  const activity = (p) => m(p).lastRun || p.updated_at || p.created_at;
+  const cols = compact
+    ? [["name", "Project"], ["stage", "Stage"], ["drawings", "Drawings", "r"], ["boq", "BOQ", "r"], ["activity", "Activity"]]
+    : [["name", "Project"], ["stage", "Stage"], ["drawings", "Drawings", "r"], ["boq", "BOQ lines", "r"],
+       ["approvals", "Approvals"], ["activity", "Last activity"]];
+  const key = {
+    name: p => String(p.project_name || "").toLowerCase(),
+    location: p => `${p.country || ""} ${p.city || ""}`.toLowerCase(),
+    stage: p => PT_STAGE_ORDER[stageOf(m(p))],
+    drawings: p => m(p).drawings || 0,
+    boq: p => m(p).boq || 0,
+    approvals: p => (m(p).approvals?.pending || 0) * 100 + (m(p).approvals?.total || 0),
+    activity: p => new Date(activity(p) || 0).getTime(),
+  };
+  let rows = stageFilter ? projects.filter(p => stageOf(m(p)) === stageFilter) : [...projects];
+  rows.sort((a, b) => { const x = key[sort[0]](a), y = key[sort[0]](b); return (x > y ? 1 : x < y ? -1 : 0) * sort[1]; });
+  if (limit) rows = rows.slice(0, limit);
+  const click = (k) => setSort(sort[0] === k ? [k, -sort[1]] : [k, k === "name" || k === "location" || k === "stage" ? 1 : -1]);
+  return (
+    <div className={`qpt ${compact ? "compact" : ""}`}>
+      <table>
+        <thead><tr>
+          {cols.map(([k, l, al]) => (
+            <th key={k} className={`${al || ""} c-${k}`} aria-sort={sort[0] === k ? (sort[1] > 0 ? "ascending" : "descending") : "none"}>
+              <button type="button" onClick={() => click(k)}>{l}<i>{sort[0] === k ? (sort[1] > 0 ? "▲" : "▼") : ""}</i></button>
+            </th>
+          ))}
+          <th className="go" aria-label="Open" />
+        </tr></thead>
+        <tbody>
+          {rows.map(p => {
+            const mm = m(p); const st = stageOf(mm);
+            const colour = (PROJECT_STAGES.find(x => x[0] === st) || PROJECT_STAGES[3])[2];
+            const ap = mm.approvals;
+            return (
+              <tr key={p.id} tabIndex={0} onClick={() => onOpen(p)} onKeyDown={e => { if (e.key === "Enter") onOpen(p); }} style={{ "--st": colour }}>
+                <td className="nm">
+                  <div className="pt-n">
+                    <i className="pt-dot" />
+                    <span className="pt-t" title={p.project_name}>{p.project_name}</span>
+                    {p.project_ref && <span className="pt-ref">{p.project_ref}</span>}
+                  </div>
+                  <div className="pt-s">
+                    {[p.city, p.country].filter(Boolean).join(", ")}
+                    {" · "}
+                    {buildingTypeLabel(p.building_type)}
+                    {p.number_of_floors ? ` · ${p.number_of_floors} floor${Number(p.number_of_floors) === 1 ? "" : "s"}` : ""}
+                    {p.area_size ? ` · ${Number(p.area_size).toLocaleString()} ${p.area_unit || "sqm"}` : ""}
+                  </div>
+                </td>
+                <td><StagePill stage={st} /></td>
+                <td className="r num c-drawings">{mm.drawings ?? 0}</td>
+                <td className="r num c-boq">{(mm.boq ?? 0).toLocaleString()}</td>
+                {!compact && <td className="c-approvals"><span className="pt-ap" style={{ color: approvalTone(ap) }}>{approvalWord(ap)}</span></td>}
+                <td className="act c-activity">{compact ? <b>{ptAgo(mm.lastRun || p.created_at) || "—"}</b>
+                  : mm.lastRun ? <>Analysed<br /><b>{ptAgo(mm.lastRun)}</b></> : <>Created<br /><b>{ptAgo(p.created_at) || "—"}</b></>}</td>
+                <td className="go"><span aria-hidden="true">›</span></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {rows.length === 0 && <div className="pt-empty">No projects at this stage.</div>}
+    </div>
+  );
+}
+
 function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
   const [projects, setProjects] = useState([]);
   const [metrics, setMetrics] = useState({});
   const [query, setQuery] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
+  const [view, setView] = useState(() => { try { return localStorage.getItem("q.projView") || "list"; } catch (e) { return "list"; } });
+  const pickView = (v) => { setView(v); try { localStorage.setItem("q.projView", v); } catch (e) {} };
   const [drawings, setDrawings] = useState([]);
   const [stats, setStats] = useState({ projects: 0, boq: 0, drawings: 0, revisions: 0 });
   // Total of every project's selling price, computed the same way the
@@ -6075,7 +6163,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
   // them would make the summary quietly disagree with itself.
   const q = query.trim().toLowerCase();
   const shownProjects = !q ? projects : projects.filter(p =>
-    [p.project_name, p.city, p.country].filter(Boolean).join(" ").toLowerCase().includes(q));
+    [p.project_name, p.project_ref, p.city, p.country].filter(Boolean).join(" ").toLowerCase().includes(q));
 
   // Estimators search for the sheet they were just working on far more often
   // than for the project name, so drawings are searchable too. Capped, because
@@ -6159,17 +6247,19 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
               new: "nothing uploaded yet",
             }[key];
             return (
-              <div key={key} className="st">
+              <button type="button" key={key} className={`st ${stageFilter === key ? "on" : ""}`} style={{ "--st": colour }}
+                aria-pressed={stageFilter === key} onClick={() => setStageFilter(stageFilter === key ? "" : key)}
+                title={stageFilter === key ? "Show all projects" : `Show only: ${label}`}>
                 <b style={{ color: n ? colour : "var(--q-text-dimmer,#94a3b8)" }}>{n}</b>
                 <span>{label}</span>
                 <em>{help}</em>
-              </div>
+              </button>
             );
           })}
         </div>
       )}
 
-      <div className="qdash-grid">
+      <div className={`qdash-grid ${view === "list" ? "listmode" : ""}`}>
       <div className="qdash-rail">
 
       {trialUsage && (
@@ -6236,9 +6326,16 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
       <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
         <h2 className="text-lg font-semibold">
           Your projects
-          {q && <span className="text-sm font-normal text-slate-400"> — {shownProjects.length} of {projects.length}</span>}
+          {(q || stageFilter) && <span className="text-sm font-normal text-slate-400"> — {shownProjects.filter(p => !stageFilter || stageOf(metrics[p.id]) === stageFilter).length} of {projects.length}</span>}
+          {stageFilter && <button type="button" className="pt-clear" onClick={() => setStageFilter("")}>{(PROJECT_STAGES.find(x => x[0] === stageFilter) || [])[1]} ✕</button>}
         </h2>
-        <SearchBox placeholder="Search name, city, country…" />
+        <div className="flex items-center gap-2">
+          <SearchBox placeholder="Search name, ref, city, country…" />
+          <div className="pt-view" role="group" aria-label="Layout">
+            <button type="button" aria-pressed={view === "list"} className={view === "list" ? "on" : ""} onClick={() => pickView("list")} title="List">☰ List</button>
+            <button type="button" aria-pressed={view === "cards"} className={view === "cards" ? "on" : ""} onClick={() => pickView("cards")} title="Cards">▦ Cards</button>
+          </div>
+        </div>
       </div>
       {loading ? <div className="text-slate-400 text-sm">Loading…</div> :
         projects.length === 0 ? (
@@ -6252,9 +6349,11 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
               : `Nothing matches “${query}”.`}{" "}
             <button onClick={() => setQuery("")} className="underline font-semibold">Clear the search</button>
           </div>
+        ) : view === "list" ? (
+          <ProjectTable projects={shownProjects} metrics={metrics} onOpen={onOpenProject} stageFilter={stageFilter} />
         ) : (
         <div className="qdash-projs">
-          {shownProjects.map(p => (
+          {shownProjects.filter(p => !stageFilter || stageOf(metrics[p.id]) === stageFilter).map(p => (
             <div key={p.id} onClick={() => onOpenProject(p)} className="qdash-proj"
               style={{ "--q-stage": (PROJECT_STAGES.find(x => x[0] === stageOf(metrics[p.id])) || PROJECT_STAGES[3])[2] }}>
               <div className="flex items-start justify-between gap-3">
@@ -16961,7 +17060,7 @@ function AdminAssistPanel() {
           <select className="w-full border rounded-lg p-2 text-sm" value={projectId} onChange={e => setProjectId(e.target.value)} disabled={!companyId}>
             <option value="">Select a project…</option>
             {projects.map(p => (
-              <option key={p.id} value={p.id}>{p.project_name} — {p.city}, {p.country}</option>
+              <option key={p.id} value={p.id}>{p.project_ref ? `${p.project_ref} · ` : ""}{p.project_name} — {[p.city, p.country].filter(Boolean).join(", ")}</option>
             ))}
           </select>
         </div>
@@ -20614,26 +20713,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
            : recent.length === 0 ? (
             <div className="qh-empty">No projects yet. <button className="lnk" onClick={onNewProject}>Create your first one →</button></div>
            ) : (
-            <div className="qh-tbl">
-              <table>
-                <thead><tr><th>Project</th><th>Location</th><th className="r">Drawings</th><th className="r">BOQ</th><th>Last run</th><th>Status</th></tr></thead>
-                <tbody>
-                  {recent.slice(0, 5).map(p => {
-                    const m = metrics[p.id] || {}; const [label, cls] = STATUS(p);
-                    return (
-                      <tr key={p.id} onClick={() => onOpenProject(p)}>
-                        <td className="nm">{p.project_name}</td>
-                        <td>{[p.city, p.country].filter(Boolean).join(", ") || "—"}</td>
-                        <td className="r">{m.drawings || 0}</td>
-                        <td className="r">{m.boq || 0}</td>
-                        <td>{m.lastRun ? new Date(m.lastRun).toLocaleDateString() : "—"}</td>
-                        <td><span className={`qh-pill ${cls}`}>{label}</span></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ProjectTable projects={recent} metrics={metrics} onOpen={onOpenProject} compact limit={5} />
           )}
           {recent.length > 0 && <button className="qh-viewall" onClick={() => onNavigate("dashboard")}>View all projects →</button>}
         </div>
@@ -20730,7 +20810,7 @@ function ProjectChooser({ value, onChange, projects, label = "Project" }) {
       >
         <option value="">Choose a project…</option>
         {projects.map(p => (
-          <option key={p.id} value={p.id}>{p.project_name} — {p.city}, {p.country}</option>
+          <option key={p.id} value={p.id}>{p.project_ref ? `${p.project_ref} · ` : ""}{p.project_name} — {[p.city, p.country].filter(Boolean).join(", ")}</option>
         ))}
       </select>
     </div>
@@ -31122,6 +31202,10 @@ select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102
 @media (min-width:1100px){.qdash-grid{grid-template-columns:minmax(0,1fr) 320px}}
 .qdash-main{order:1;min-width:0}
 .qdash-rail{order:2;display:flex;flex-direction:column;gap:14px}
+/* List view: the project register takes the full width; plan, approvals and team sit in a row beneath it. */
+@media (min-width:1100px){.qdash-grid.listmode{grid-template-columns:minmax(0,1fr)}
+  .qdash-grid.listmode .qdash-rail{position:static;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start}
+  .qdash-grid.listmode .qdash-rail > *{margin:0!important}}
 @media (min-width:1100px){.qdash-rail{position:sticky;top:16px}}
 
 .qdash-card{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);
@@ -31137,6 +31221,56 @@ select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102
 .qdash-bar.warn i{background:#f59e0b}
 .qdash-bar.over i{background:#f43f5e}
 
+/* Project table: one register for every project list */
+.qpt{background:var(--q-panel,#fff);border:1px solid var(--q-border,#e2e8f0);border-radius:14px;overflow:auto;container-type:inline-size}
+.qpt table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+.qpt.compact table{min-width:0}
+.qpt.compact tbody td{padding:9px 10px}
+.qpt.compact thead th button{padding:9px 10px}
+.qpt.compact .pt-t{max-width:170px}
+.qpt.compact .pt-s{max-width:230px}
+.qpt thead th{position:sticky;top:0;z-index:1;background:linear-gradient(180deg,#f7f9fd,#eff3fa);text-align:left;padding:0;border-bottom:1px solid var(--q-border,#e2e8f0);white-space:nowrap}
+.qpt thead th button{all:unset;cursor:pointer;display:flex;gap:5px;align-items:center;padding:10px 12px;font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#5a6b82;width:100%;box-sizing:border-box}
+.qpt thead th.r button{justify-content:flex-end}
+.qpt thead th button:hover{color:#1c6ce6}
+.qpt thead th i{font-style:normal;font-size:8px;color:#1c6ce6}
+.qpt tbody td{padding:11px 12px;border-bottom:1px solid #eef2f7;vertical-align:middle;color:#334155}
+.qpt tbody tr:last-child td{border-bottom:0}
+.qpt tbody tr{cursor:pointer;transition:background .12s}
+.qpt tbody tr:hover td{background:#f5f9ff}
+.qpt tbody tr:focus-visible{outline:2px solid #1c6ce6;outline-offset:-2px}
+.qpt tbody tr td:first-child{box-shadow:inset 3px 0 0 var(--st)}
+.qpt td.r,.qpt th.r{text-align:right}
+.qpt td.num{font-variant-numeric:tabular-nums;font-weight:700;color:#0f2140}
+.qpt .pt-n{display:flex;align-items:center;gap:8px;min-width:0}
+.qpt .pt-dot{flex:0 0 8px;height:8px;border-radius:50%;background:var(--st);box-shadow:0 0 0 3px color-mix(in srgb,var(--st) 18%,transparent)}
+.qpt .pt-t{font-weight:700;color:#0f2140;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
+.qpt .pt-ref{flex-shrink:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10.5px;font-weight:700;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:1px 6px}
+.qpt .pt-s{font-size:11.5px;color:#64748b;margin:3px 0 0 16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}
+.qpt td.loc{white-space:nowrap;color:#475569}
+.qpt td.act{font-size:11px;color:#94a3b8;white-space:nowrap;line-height:1.35}
+.qpt td.act b{font-size:12.5px;color:#334155;font-weight:600}
+.qpt .pt-ap{font-weight:700;font-size:12.5px}
+.qpt th.go{width:1%}
+.qpt td.go{text-align:right;white-space:nowrap}
+.qpt td.go{padding-left:4px!important;padding-right:12px!important}
+.qpt td.go span{font-size:20px;line-height:1;font-weight:400;color:#1c6ce6;opacity:.45;transition:opacity .12s,transform .12s;display:inline-block}
+.qpt tbody tr:hover td.go span{transform:translateX(2px)}
+.qpt tbody tr:hover td.go span{opacity:1}
+.qpt .qpill{white-space:nowrap}
+.qpt .pt-empty{padding:22px;text-align:center;color:#94a3b8;font-size:13px}
+.pt-view{display:inline-flex;border:1px solid var(--q-border,#e2e8f0);border-radius:10px;overflow:hidden;background:#fff;flex-shrink:0}
+.pt-view button{font-size:12px;font-weight:700;padding:7px 11px;color:#64748b}
+.pt-view button.on{background:#1c6ce6;color:#fff}
+.pt-clear{margin-left:10px;font-size:11.5px;font-weight:700;color:#1c6ce6;background:#eef4ff;border:1px solid #c8dafc;border-radius:999px;padding:2px 10px;vertical-align:middle}
+.qstage .st{cursor:pointer;text-align:left;font:inherit}
+.qstage .st:hover{border-color:color-mix(in srgb,var(--st) 50%,#e2e8f0)!important}
+.qstage .st.on{border-color:var(--st)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--st) 18%,transparent)}
+/* Narrow screens drop the least important columns instead of scrolling sideways. */
+@container (max-width:820px){.qpt .c-approvals{display:none}}
+@container (max-width:700px){.qpt .c-activity{display:none}.qpt .pt-t{max-width:190px}.qpt .pt-s{max-width:220px}.qpt tbody td,.qpt thead th button{padding-left:10px;padding-right:10px}}
+@container (max-width:640px){.qpt .c-drawings{display:none}.qpt .qpill{font-size:8.5px;padding:3px 7px}}
+@container (max-width:460px){.qpt .c-boq{display:none}.qpt .pt-ref{display:none}}
 .qdash-projs{display:grid;grid-template-columns:1fr;gap:14px}
 @media (min-width:640px){.qdash-projs{grid-template-columns:repeat(2,1fr)}}
 @media (min-width:1800px){.qdash-projs{grid-template-columns:repeat(3,1fr)}}
