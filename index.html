@@ -341,7 +341,9 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   <p>Electrical, ELV and ICT, mechanical and HVAC, fire alarm and fire fighting,
      plumbing and drainage &mdash; 33 systems in all, including CCTV, access
      control, structured cabling, lighting, power distribution, containment,
-     chillers, ducting, ventilation, sprinklers and pumps.</p>
+     chillers, ducting, ventilation, sprinklers and pumps &mdash; plus
+     architectural, structural and civil works measured to the project
+     country's method of measurement.</p>
 
   <h2>Where it applies</h2>
   <p>Authority requirements are held for the Middle East (United Arab Emirates,
@@ -3353,6 +3355,9 @@ const QUANTORA_LANDING_CSS = `
      first screen should still know what they are being sold. */
   .qx-row-label{font-size:11.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#6b7490;margin:-14px 0 10px;}
   .qtr-divrow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 30px;}
+  .qtr-divrow-5{grid-template-columns:repeat(6,1fr);}
+  .qtr-divrow-5 > .qtr-div{grid-column:span 2;}
+  .qtr-divrow-5 > .qtr-div:nth-child(n+4){grid-column:span 3;}
   .qtr-div{display:block;text-decoration:none;padding:11px 13px;border-radius:12px;
     background:var(--panel-solid);border:1px solid var(--border);border-top:2px solid var(--qtr-a,#6366f1);
     transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;}
@@ -3360,7 +3365,7 @@ const QUANTORA_LANDING_CSS = `
     border-color:var(--qtr-a,#6366f1);border-top-color:var(--qtr-a,#6366f1);}
   .qtr-div b{display:block;font-size:13.5px;color:var(--text);letter-spacing:-.01em;}
   .qtr-div span{display:block;font-size:11px;color:var(--text-dimmer);margin-top:2px;}
-  @media (max-width:860px){.qtr-divrow{grid-template-columns:repeat(2,1fr);}}
+  @media (max-width:860px){.qtr-divrow{grid-template-columns:repeat(2,1fr);}.qtr-divrow-5 > .qtr-div,.qtr-divrow-5 > .qtr-div:nth-child(n+4){grid-column:auto;}}
   .qtr-accent{position:relative;overflow:hidden;}
   .qtr-accent::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;
     background:linear-gradient(90deg,var(--qtr-a,#6366f1),transparent);}
@@ -3681,17 +3686,18 @@ const QUANTORA_LANDING_HTML = `
       <span class="pill"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg> One AI Platform. From Engineering Design to Project Delivery.</span>
       <h1>From Drawings to <span class="grad-text">Design, BOQ, Pricing &amp; 3D</span> &mdash; All in One AI Platform.</h1>
       <div class="hero-poweredby">Powered by Quantora AI</div>
-      <p class="sub">Transform architectural plans, MEP/ELV drawings and project specifications into traceable quantity take-offs, Design BOQs, priced estimates, detailed shop drawings and 3D coordination models. Then connect your engineering work with tender estimation, commercial management and project operations.</p>
+      <p class="sub">Transform architectural, structural and civil drawings, MEP/ELV drawings and project specifications into traceable quantity take-offs, Design BOQs, priced estimates, detailed shop drawings and 3D coordination models &mdash; civil works measured to your country's method (POMI, NRM2, IS 1200). Then connect your engineering work with tender estimation, commercial management and project operations.</p>
       <div class="hero-global">Built for MEP contractors and estimators across the Middle East, Asia, the UK and Europe &mdash; compliance follows each project's country.</div>
       <div class="hero-ctas">
         <a class="btn btn-lg btn-grad" href="?auth=signup">Start Free Trial →</a>
         <a class="btn btn-lg btn-outline-lg" href="#works"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z" fill="currentColor" stroke="none"/></svg> Watch How It Works</a>
       </div>
-      <div class="qtr-divrow">
+      <div class="qtr-divrow qtr-divrow-5">
         <a class="qtr-div" style="--qtr-a:#3987e5;" href="#works"><b>Take-off BOQ</b><span>AI counts every item from your drawings</span></a>
         <a class="qtr-div" style="--qtr-a:#22c55e;" href="#capabilities"><b>Design BOQ</b><span>No drawings? AI designs the systems</span></a>
         <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#capabilities"><b>Pricing BOQ</b><span>Live supplier prices, source shown</span></a>
         <a class="qtr-div" style="--qtr-a:#818cf8;" href="#model3d"><b>Shop drawings + 3D</b><span>AI draftsman, issued drawings</span></a>
+        <a class="qtr-div" style="--qtr-a:#a8a29e;" href="#works"><b>Civil take-off</b><span>Walls, floors, skirting, measured by method of measurement</span></a>
       </div>
       <div class="qx-row-label">Four dashboards, one project</div>
       <div class="qtr-divrow">
