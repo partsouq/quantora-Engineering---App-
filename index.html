@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-21.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-24.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -492,6 +492,7 @@ const CIVIL_SYSTEMS = [
   "masonry","waterproofing","insulation","plaster_render","screed",
   "floor_finishes","wall_finishes","ceiling_finishes","skirting","painting",
   "doors","windows","joinery","metalwork","external_works",
+  "partitions","glazing","cladding","mouldings_trims","roofing","stairs_ramps","pools_water_features",
 ];
 const CIVIL_DISCIPLINES = ["civil", "structural", "architectural"];
 const isCivilDiscipline = (d) => CIVIL_DISCIPLINES.includes(String(d || "").toLowerCase());
@@ -1309,6 +1310,13 @@ function consolidateBoqItems(items, drawingsById) {
       subsystem: r.subsystem || null, building: r.building || null,
       fromLocation: r.from_location || null, toLocation: r.to_location || null,
       optimizationStatus: r.optimization_status || null, optimizationNote: r.optimization_note || null,
+      // Civil & architectural estimator (2026-10-24): the measured quantities kept apart.
+      validationStatus: r.validation_status || null, validationNotes: r.validation_notes || null,
+      grossQuantity: r.gross_quantity ?? null, deductionQuantity: r.deduction_quantity ?? null,
+      deductions: Array.isArray(r.deductions) ? r.deductions : null, calcFormula: r.calc_formula || null,
+      measurementStandard: r.measurement_standard || null, measurementRuleCode: r.measurement_rule_code || null,
+      drawingRevision: r.drawing_revision || null, dimensions: r.dimensions || null,
+      materialQuantity: r.material_quantity ?? null, procurementQuantity: r.procurement_quantity ?? null,
     }));
 
     // Schedule-quantity discrepancy check (sections 4, 9, 14, 18): compare
@@ -1588,10 +1596,44 @@ function simpleBoqImportanceRank(row) {
   });
   return bestTier;
 }
+// Civil & architectural validation statuses (ai-engine civil_rules.ts).
+const CIVIL_VALIDATION = {
+  verified: ["Verified", "bg-emerald-100 text-emerald-700"],
+  calculated_review_required: ["Calculated — Review Required", "bg-sky-100 text-sky-700"],
+  assumption_based: ["Assumption-Based", "bg-amber-100 text-amber-700"],
+  information_required: ["Information Required", "bg-orange-100 text-orange-700"],
+  rule_not_configured: ["Rule Not Configured", "bg-violet-100 text-violet-700"],
+  drawing_discrepancy: ["Drawing Discrepancy", "bg-rose-100 text-rose-700"],
+};
+const civilValidationLabel = (s) => (CIVIL_VALIDATION[s] || [s || ""])[0];
+function CivilMeasureDetail({ ev, unit }) {
+  if (!ev || (!ev.validationStatus && ev.grossQuantity == null)) return null;
+  const [label, cls] = CIVIL_VALIDATION[ev.validationStatus] || [ev.validationStatus || "", "bg-slate-100 text-slate-600"];
+  const u = unit || "";
+  return (
+    <div className="mt-1 text-[10px] text-slate-500 space-y-0.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {label && <span className={`font-semibold px-1.5 py-0.5 rounded ${cls}`}>{label}</span>}
+        {ev.measurementStandard && <span>{ev.measurementStandard}{ev.measurementRuleCode ? ` · rule ${ev.measurementRuleCode}` : " · no rule configured"}</span>}
+        {ev.drawingRevision && <span>· {ev.drawingRevision}</span>}
+      </div>
+      {ev.grossQuantity != null && (
+        <div>Gross {ev.grossQuantity} {u}{ev.deductionQuantity ? ` − deductions ${ev.deductionQuantity} ${u}` : ""} = net {ev.quantity} {u}
+          {ev.calcFormula ? <span className="text-slate-400"> ({ev.calcFormula})</span> : null}</div>
+      )}
+      {(ev.deductions || []).length > 0 && (
+        <div>{ev.deductions.map((d, i) => <span key={i} className={d.applied ? "" : "line-through text-slate-400"} title={d.reason}>{i ? "; " : ""}{d.description} {d.qty ?? "?"}</span>)}</div>
+      )}
+      {ev.validationNotes && <div className="text-slate-500">{ev.validationNotes}</div>}
+    </div>
+  );
+}
 function simpleBoqRemarksFor(row) {
   // A discrepancy outranks everything else: it is the one remark an estimator
   // must not miss, and it is already short.
   if (row.discrepancy) return `Check: ${row.discrepancy.physicalTotal} counted vs ${row.discrepancy.scheduleTotal} in schedule`;
+  const civ = row.rawItems.find(r => r.validation_status && r.validation_status !== "verified");
+  if (civ) return shortRemark(`${civilValidationLabel(civ.validation_status)}: ${civ.validation_notes || ""}`, 120);
   const optNote = row.rawItems.find(r => r.optimization_note)?.optimization_note;
   if (optNote) return shortRemark(optNote, 120);
   const basisNote = row.rawItems.find(r => r.quantity_basis_notes)?.quantity_basis_notes;
@@ -5860,6 +5902,10 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     has_roof: existingProject.has_roof !== false,
     project_type: existingProject.project_type || "new_build",
     required_systems: existingProject.required_systems || [],
+    region: existingProject.region || "",
+    measurement_standard: existingProject.measurement_standard || "",
+    measurement_edition: existingProject.measurement_edition || "",
+    boq_preambles: existingProject.boq_preambles || "",
   } : {
     project_name: "", client_name: "", consultant_name: "", contractor_name: "",
     // Blank, not UAE/Dubai. See LocationFields: a pre-filled location is never
@@ -5867,6 +5913,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     country: "", city: "", building_type: "",
     number_of_floors: "", area_size: "", area_unit: "sqm", project_scope: "",
     basement_levels: "", has_roof: true, project_type: "new_build", required_systems: [],
+    region: "", measurement_standard: "", measurement_edition: "", boq_preambles: "",
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -5988,6 +6035,10 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
         // constraint would reject.
         building_type: form.building_type ? form.building_type : null,
         project_scope: form.project_scope ? form.project_scope : null,
+        region: String(form.region || "").trim() || null,
+        measurement_standard: String(form.measurement_standard || "").trim() || null,
+        measurement_edition: String(form.measurement_edition || "").trim() || null,
+        boq_preambles: String(form.boq_preambles || "").trim() || null,
       };
       if (isEdit) {
         const { data, error } = await sb.from("projects").update(payload).eq("id", existingProject.id).select().single();
@@ -6179,12 +6230,89 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
             </button>
           )}
         </div>
+        <CivilMeasurementFields form={form} setForm={setForm} />
         {err && <div ref={errBottomRef} role="alert" className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{err}</div>}
         <div className="flex gap-3 pt-2">
           <button disabled={busy} className="bg-slate-900 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">{busy ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save Changes" : "Create Project")}</button>
           <button type="button" onClick={onCancel} className="px-5 py-2.5 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-100">Cancel</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+// Civil & architectural take-off: the contract's method of measurement, held
+// once on the project (2026-10-24). Optional -- left empty, the take-off uses the
+// country's usual method and says on every BOQ line that it was assumed.
+const MEASUREMENT_STANDARDS = [
+  ["", "Not stated — use the country's usual method"],
+  ["POMI", "POMI — Principles of Measurement International"],
+  ["NRM2", "RICS NRM2 — New Rules of Measurement"],
+  ["IS1200", "IS 1200 — Indian Standard method of measurement"],
+  ["CESMM4", "CESMM4 — civil engineering works"],
+  ["SMM7", "SMM7"],
+  ["ASMM", "ASMM — Australia / New Zealand"],
+  ["SMM2", "SMM2 — Malaysia"],
+  ["HKSMM4", "HKSMM4 — Hong Kong"],
+  ["ASAQS", "ASAQS — South Africa"],
+];
+const COUNTRY_DEFAULT_STANDARD = (country) => {
+  const c = String(country || "").trim().toLowerCase();
+  if (["uae", "united arab emirates", "ksa", "saudi arabia", "qatar", "kuwait", "bahrain", "oman", "philippines"].includes(c)) return "POMI";
+  if (c === "india") return "IS 1200";
+  if (["uk", "united kingdom", "ireland", "pakistan"].includes(c)) return "NRM2";
+  if (["australia", "new zealand"].includes(c)) return "ASMM";
+  if (c === "malaysia") return "SMM2";
+  if (c === "hong kong") return "HKSMM4";
+  if (c === "south africa") return "ASAQS";
+  return "POMI";
+};
+function CivilMeasurementFields({ form, setForm }) {
+  const [open, setOpen] = useState(!!(form.measurement_standard || form.boq_preambles || form.region));
+  const [other, setOther] = useState(!MEASUREMENT_STANDARDS.some(([k]) => k === (form.measurement_standard || "")));
+  return (
+    <div className="border rounded-xl p-4" style={{ background: "var(--q-panel-2,#f8fafc)" }}>
+      <button type="button" onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between text-left">
+        <span>
+          <span className="text-sm font-semibold">Civil &amp; architectural measurement</span>
+          <span className="text-xs text-slate-500 block">
+            {form.measurement_standard
+              ? `Measured to ${form.measurement_standard}${form.measurement_edition ? " " + form.measurement_edition : ""}`
+              : `Not stated — ${COUNTRY_DEFAULT_STANDARD(form.country)} will be assumed from the country and every line will say so`}
+          </span>
+        </span>
+        <span className="text-xs text-slate-500">{open ? "Hide" : "Set"}</span>
+      </button>
+      {open && (
+        <div className="grid md:grid-cols-2 gap-4 mt-4">
+          <label className="block">
+            <span className="text-xs font-semibold text-slate-600">Method of measurement in the contract</span>
+            <select value={other ? "__other" : (form.measurement_standard || "")} className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-white"
+              onChange={e => {
+                const v = e.target.value;
+                if (v === "__other") { setOther(true); setForm(f => ({ ...f, measurement_standard: "" })); }
+                else { setOther(false); setForm(f => ({ ...f, measurement_standard: v })); }
+              }}>
+              {MEASUREMENT_STANDARDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              <option value="__other">Other (type it)</option>
+            </select>
+            {other && (
+              <input value={form.measurement_standard} placeholder="e.g. Client's method of measurement, CPWD"
+                onChange={e => setForm(f => ({ ...f, measurement_standard: e.target.value }))}
+                className="mt-2 w-full border rounded-lg px-3 py-2 text-sm" />
+            )}
+          </label>
+          <Field label="Edition / revision" value={form.measurement_edition} onChange={v => setForm(f => ({ ...f, measurement_edition: v }))} />
+          <Field label="State / province / emirate" value={form.region} onChange={v => setForm(f => ({ ...f, region: v }))} />
+          <div className="md:col-span-2">
+            <span className="text-xs font-semibold text-slate-600">BOQ preambles / measurement notes</span>
+            <textarea rows={4} value={form.boq_preambles} onChange={e => setForm(f => ({ ...f, boq_preambles: e.target.value }))}
+              placeholder="Paste the contract's measurement preambles here, e.g. 'Openings not exceeding 1.00 m2 shall not be deducted.' They take precedence over the general rules in the take-off."
+              className="mt-1 w-full border rounded-lg px-3 py-2 text-sm" />
+            <span className="text-[11px] text-slate-500">Used by the civil and architectural take-off only. MEP and ELV take-off are not affected.</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -13069,6 +13197,7 @@ function BoqTab({ project, onGoToEstimation }) {
               </span>
             </div>
             {ev.quantityBasisNotes && <div className="mt-0.5 text-[10px] text-slate-400 italic">{ev.quantityBasisNotes}</div>}
+            <CivilMeasureDetail ev={ev} unit={(rawItems.find(r => r.id === ev.id) || {}).unit} />
           </td>
           <td className="px-3 py-1.5 text-slate-500">{ev.floor_label || "—"}</td>
           <td className="px-3 py-1.5 text-slate-500">{ev.zone || "—"}</td>
@@ -15138,6 +15267,32 @@ function ExportTab({ project }) {
         ...simpleLines.map(l => [l.line, l.system, l.description, l.location, l.qty, l.unit, l.status, l.remarks]),
       ], "Simple BOQ");
 
+      // 2d. Civil measurement detail (2026-10-24) -- one row per measured civil /
+      // architectural line with everything a QS needs to check it: drawing and
+      // revision, method of measurement and rule, dimensions, gross, each
+      // deduction, net, and the validation status with its reason. A last
+      // column checks the detail adds up to the BOQ total of its item.
+      const civilRows = consolidated.flatMap(r => r.evidence.filter(ev => ev.validationStatus || ev.measurementStandard).map(ev => ({ r, ev })));
+      if (civilRows.length) {
+        const sumByItem = {};
+        civilRows.forEach(({ r, ev }) => { if (ev.countedTowardTotal) sumByItem[r.itemCode] = (sumByItem[r.itemCode] || 0) + Number(ev.quantity || 0); });
+        addSheet([
+          ...trialRow, [disclaimer], [],
+          ["Gross = before deductions. Net = the measured BOQ quantity under the method of measurement shown. Material and procurement quantities are kept separate and are never added to the BOQ quantity."], [],
+          ["Item Code","Category","Description","Building","Floor","Zone","Room","Drawing","Drawing Rev","Method of Measurement","Rule","Dimensions","Formula","Gross","Deductions","Deducted","Net (BOQ)","Unit","Material Qty","Procurement Qty","Validation Status","Notes","Item total reconciles"],
+          ...civilRows.map(({ r, ev }) => [
+            r.itemCode, SYSTEM_LABEL(r.systemCategory), r.description, ev.building || "", ev.floor_label || "", ev.zone || "", ev.room || "",
+            ev.drawing_name, ev.drawingRevision || "", ev.measurementStandard || "", ev.measurementRuleCode || "Not configured",
+            ev.dimensions ? Object.entries(ev.dimensions).map(([k, v]) => `${k} ${v}`).join(", ") : "",
+            ev.calcFormula || "", ev.grossQuantity ?? "",
+            (ev.deductions || []).map(d => `${d.description} ${d.qty ?? "?"}${d.applied ? "" : " (not deducted: " + d.reason + ")"}`).join("; "),
+            ev.deductionQuantity ?? "", ev.quantity, r.unit, ev.materialQuantity ?? "", ev.procurementQuantity ?? "",
+            civilValidationLabel(ev.validationStatus), ev.validationNotes || "",
+            Math.abs((sumByItem[r.itemCode] || 0) - Number(r.totalQuantity || 0)) <= 0.01 ? "Yes" : `No: lines ${(sumByItem[r.itemCode] || 0).toFixed(2)} vs BOQ ${r.totalQuantity}`,
+          ]),
+        ], "Civil Measurement Detail");
+      }
+
       // 3. System BOQ -- rollup per system, matching section 7/8's summary view.
       const bySystem = {};
       consolidated.forEach(r => { bySystem[r.systemCategory] = bySystem[r.systemCategory] || []; bySystem[r.systemCategory].push(r); });
@@ -16380,6 +16535,102 @@ const QICONS = {
   reports: <QIcon paths={<><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></>} />,
 };
 
+// Civil measurement rule library (2026-10-24). A QS reviews each rule against the
+// standard it names and marks it verified; only verified rules can make a BOQ
+// line "Verified". Units and thresholds are edited here, not in the AI prompt.
+function QMeasurementRules() {
+  const [rules, setRules] = useState([]);
+  const [std, setStd] = useState("POMI");
+  const [busy, setBusy] = useState(null);
+  const [err, setErr] = useState("");
+  const [edit, setEdit] = useState({});
+  const load = async () => {
+    setErr("");
+    const { data, error } = await sb.from("civil_measurement_rules").select("*").eq("active", true).order("standard").order("work_category").order("unit");
+    if (error) setErr(error.message); else setRules(data || []);
+  };
+  useEffect(() => { load(); }, []);
+  const standards = [...new Set(rules.map(r => r.standard))];
+  const shown = rules.filter(r => r.standard === std);
+  const verified = shown.filter(r => r.verification_status === "verified").length;
+  const save = async (r, patch) => {
+    setBusy(r.id); setErr("");
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const extra = patch.verification_status === "verified" ? { verified_by: user?.email || user?.id || "admin", verified_at: new Date().toISOString() }
+        : patch.verification_status === "unverified" ? { verified_by: null, verified_at: null } : {};
+      const { error } = await sb.from("civil_measurement_rules").update({ ...patch, ...extra, updated_at: new Date().toISOString() }).eq("id", r.id);
+      if (error) throw error;
+      setEdit(e => ({ ...e, [r.id]: undefined }));
+      await load();
+    } catch (e) { setErr(e.message || String(e)); } finally { setBusy(null); }
+  };
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-slate-600 max-w-3xl">
+        Every civil and architectural BOQ line is measured to one of these rules. A line can only show <b>Verified</b> when its rule has been checked
+        by a quantity surveyor against the standard it names, the project states that standard, and its dimensions were read from the drawing.
+        POMI, NRM2 and IS 1200 start as unverified copies of the Quantora base rules.
+      </div>
+      {err && <div className="text-sm text-rose-600">{err}</div>}
+      <div className="flex flex-wrap gap-2 items-center">
+        {standards.map(k => (
+          <button key={k} onClick={() => setStd(k)} className={"text-xs px-3 py-1.5 rounded-lg border " + (k === std ? "bg-slate-900 text-white" : "bg-white")}>{k}</button>
+        ))}
+        <span className="text-xs text-slate-500 ml-2">{verified} of {shown.length} verified</span>
+      </div>
+      <div className="overflow-x-auto bg-white border rounded-xl">
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-slate-500 border-b">
+            <th className="px-3 py-2">Rule</th><th className="px-3 py-2">Work</th><th className="px-3 py-2">Unit</th>
+            <th className="px-3 py-2">Basis</th><th className="px-3 py-2">Openings</th><th className="px-3 py-2">Status</th><th className="px-3 py-2"></th>
+          </tr></thead>
+          <tbody>
+            {shown.map(r => {
+              const e = edit[r.id];
+              return (
+                <tr key={r.id} className="border-b align-top">
+                  <td className="px-3 py-2 font-mono">{r.rule_code}</td>
+                  <td className="px-3 py-2">{SYSTEM_LABEL(r.work_category)}</td>
+                  <td className="px-3 py-2">{r.unit}</td>
+                  <td className="px-3 py-2 max-w-md">{r.measurement_basis}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {e ? (
+                      <span className="flex items-center gap-1">
+                        <input type="checkbox" checked={!!e.deduct_openings} onChange={ev => setEdit(x => ({ ...x, [r.id]: { ...e, deduct_openings: ev.target.checked } }))} />
+                        over <input type="number" step="0.01" value={e.deduction_threshold ?? ""} className="w-16 border rounded px-1"
+                          onChange={ev => setEdit(x => ({ ...x, [r.id]: { ...e, deduction_threshold: ev.target.value === "" ? null : Number(ev.target.value) } }))} /> {r.unit === "m" ? "m" : "m2"}
+                      </span>
+                    ) : r.deduct_openings ? `deducted over ${r.deduction_threshold ?? 0} ${r.deduction_unit || ""}` : "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={"px-2 py-0.5 rounded-full font-semibold " + (r.verification_status === "verified" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
+                      {r.verification_status === "verified" ? "Verified" : "Unverified"}
+                    </span>
+                    {r.verified_by && <div className="text-[10px] text-slate-400 mt-1">{r.verified_by}</div>}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap space-x-2">
+                    {e ? (<>
+                      <button disabled={busy === r.id} onClick={() => save(r, { deduct_openings: !!e.deduct_openings, deduction_threshold: e.deduction_threshold, verification_status: "unverified" })} className="underline">Save</button>
+                      <button onClick={() => setEdit(x => ({ ...x, [r.id]: undefined }))} className="underline text-slate-400" style={{ marginLeft: 10 }}>Cancel</button>
+                    </>) : (<>
+                      <button onClick={() => setEdit(x => ({ ...x, [r.id]: { deduct_openings: r.deduct_openings, deduction_threshold: r.deduction_threshold } }))} className="underline">Edit</button>
+                      {r.standard !== "BASE" && (r.verification_status === "verified"
+                        ? <button disabled={busy === r.id} onClick={() => save(r, { verification_status: "unverified" })} className="underline text-slate-500" style={{ marginLeft: 10 }}>Unverify</button>
+                        : <button disabled={busy === r.id} onClick={() => save(r, { verification_status: "verified" })} className="underline text-emerald-700" style={{ marginLeft: 10 }}>Mark verified</button>)}
+                    </>)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-[11px] text-slate-500">Changing a threshold sets the rule back to unverified until it is checked again. Lines already in a BOQ keep the rule they were measured with; re-run the drawing to apply a change.</div>
+    </div>
+  );
+}
+
 const QADMIN_NAV = [
   { group: "Overview", key: "exec", label: "Executive Dashboard", sub: "Platform-wide, real-time overview" },
   { group: "Overview", key: "execdash", label: "Project Execution Dashboard", sub: "Cost & revenue analytics, admin assist" },
@@ -16398,6 +16649,7 @@ const QADMIN_NAV = [
   { group: "Platform", key: "health", label: "System Health", sub: "Live status of core platform services" },
   { group: "Platform", key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
   { group: "Platform", key: "compliance", label: "Compliance Rules", sub: "The authority library, by country and city" },
+  { group: "Platform", key: "measurement", label: "Measurement Rules", sub: "Civil & architectural rules per method of measurement; QS verification" },
   { group: "Platform", key: "draftsman", label: "Draftsman Controls", sub: "Switch drawing generation on or off per discipline" },
   { group: "Platform", key: "settings", label: "Settings", sub: "Your account details and sign-in" },
 ];
@@ -17097,6 +17349,9 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "compliance" && (
               <QAdminOwnProjects render={projects => <CompliancePage projects={projects} bare />} onOpen={p => setOpenProject(p)} />
+            )}
+            {activeView === "measurement" && (
+              <QMeasurementRules />
             )}
             {activeView === "settings" && (
               <QAdminSettings />
