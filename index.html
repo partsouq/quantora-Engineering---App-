@@ -5500,95 +5500,347 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
 // (no such service is configured for this platform) -- the admin copies a
 // generated link and shares it themselves, same "no new paid dependency"
 // design already used for the DWG/RVT "attach export" flow.
-function TeamPanel() {
-  const [team, setTeam] = useState(null);
-  const [error, setError] = useState("");
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviting, setInviting] = useState(false);
-  const [lastInviteLink, setLastInviteLink] = useState(null);
+// ---------------------------------------------------------------------------
+// TEAM ACCESS (2026-10-24). A company's projects are shared with its members
+// by role; each member can be limited to some workspaces and to selected
+// projects. The database enforces all of it; this page only manages it.
+// ---------------------------------------------------------------------------
+const TEAM_ROLES = [
+  ["owner",      "Owner",               "#7c3aed", "Everything, including billing and the plan"],
+  ["admin",      "Admin",               "#1c6ce6", "Everything except billing ownership; manages the team"],
+  ["estimator",  "Estimator / Engineer","#0284c7", "Projects, drawings, take-off, BOQ, draftsman; logs site issues"],
+  ["commercial", "Commercial",          "#16a34a", "Contracts, claims, collection and sales; views projects"],
+  ["viewer",     "Viewer",              "#64748b", "Sees and exports everything, changes nothing"],
+];
+const TEAM_ROLE = Object.fromEntries(TEAM_ROLES.map(r => [r[0], r]));
+const TEAM_WS = [["projects", "Projects"], ["commercial", "Commercial"], ["operations", "Operations"], ["draftsman", "Draftsman"]];
+const SEAT_PRICE_USD = 8;
 
-  useEffect(() => { load(); }, []);
-  async function load() {
-    setError("");
-    try {
-      const r = await callBilling("list_team", {});
-      setTeam(r);
-    } catch (e) { setError(e.message || "Could not load team info."); }
-  }
+function teamWhen(d) {
+  if (!d) return "Never";
+  const ms = Date.now() - new Date(d).getTime();
+  const m = Math.round(ms / 60000);
+  if (m < 2) return "Just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  const dd = Math.round(h / 24);
+  return dd < 30 ? `${dd} day${dd === 1 ? "" : "s"} ago` : new Date(d).toLocaleDateString();
+}
+function TeamRoleChip({ role }) {
+  const r = TEAM_ROLE[role] || TEAM_ROLE.estimator;
+  return <span className="qteam-chip" style={{ "--c": r[2] }}>{r[1]}</span>;
+}
 
-  async function sendInvite(e) {
-    e.preventDefault();
-    if (!inviteEmail.trim()) return;
-    setInviting(true); setError(""); setLastInviteLink(null);
-    try {
-      const r = await callBilling("create_invite", { email: inviteEmail.trim() });
-      setLastInviteLink(r.invite_link);
-      setInviteEmail("");
-      await load();
-    } catch (e) { setError(e.message); } finally { setInviting(false); }
-  }
-
-  if (error && !team) {
-    return (
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-6 flex items-center justify-between">
-        <div className="text-xs text-amber-700">Couldn't load team info: {error}</div>
-        <button onClick={load} className="text-xs font-semibold bg-amber-600 text-white px-3 py-1.5 rounded-lg">Retry</button>
+// Role, workspaces and projects for a member or an invite.
+function TeamAccessEditor({ value, onChange, projects, canPickAdmin, lockRole }) {
+  const ws = value.workspace_access || TEAM_WS.map(w => w[0]);
+  const setWs = (k) => {
+    const next = ws.includes(k) ? ws.filter(x => x !== k) : [...ws, k];
+    onChange({ ...value, workspace_access: next.length === TEAM_WS.length ? null : next });
+  };
+  const ids = value.project_ids || [];
+  return (
+    <div className="qteam-edit">
+      <div>
+        <div className="qteam-lbl">Role</div>
+        <div className="qteam-roles">
+          {TEAM_ROLES.filter(r => r[0] !== "owner" || value.role === "owner").map(([k, l, c, d]) => {
+            const disabled = lockRole || (k === "admin" && !canPickAdmin && value.role !== "admin");
+            return (
+              <button type="button" key={k} disabled={disabled} aria-pressed={value.role === k}
+                className={`qteam-role ${value.role === k ? "on" : ""}`} style={{ "--c": c }}
+                onClick={() => onChange({ ...value, role: k })}>
+                <b>{l}</b><span>{d}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
-    );
-  }
-  if (!team) return null;
+      <div>
+        <div className="qteam-lbl">Workspaces</div>
+        <div className="flex gap-2 flex-wrap">
+          {TEAM_WS.map(([k, l]) => (
+            <label key={k} className={`qteam-ws ${ws.includes(k) ? "on" : ""}`} style={{ "--c": (WORKSPACE_META[k] || {}).colour || "#1c6ce6" }}>
+              <input type="checkbox" checked={ws.includes(k)} onChange={() => setWs(k)} /> {l}
+            </label>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="qteam-lbl">Projects</div>
+        <div className="flex gap-4 flex-wrap text-sm">
+          <label className="flex items-center gap-2"><input type="radio" checked={value.project_scope !== "selected"}
+            onChange={() => onChange({ ...value, project_scope: "all" })} /> All company projects</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={value.project_scope === "selected"}
+            onChange={() => onChange({ ...value, project_scope: "selected" })} /> Only selected projects</label>
+        </div>
+        {value.project_scope === "selected" && (
+          <div className="qteam-projects">
+            {(projects || []).length === 0 && <div className="text-xs text-slate-500">No projects yet.</div>}
+            {(projects || []).map(p => (
+              <label key={p.id} className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={ids.includes(p.id)}
+                  onChange={() => onChange({ ...value, project_ids: ids.includes(p.id) ? ids.filter(x => x !== p.id) : [...ids, p.id] })} />
+                <span className="font-mono text-[11px] text-slate-500">{p.ref}</span> {p.name}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-  const atSeatLimit = team.max_users != null && (team.members.length) >= team.max_users;
+// Small team card for the dashboard rail; the full manager is on the Team page.
+function TeamSummary({ onOpen }) {
+  const [d, setD] = useState(null);
+  useEffect(() => { sb.rpc("team_list").then(({ data }) => setD(data || null)); }, []);
+  if (!d || !d.members) return null;
+  const seats = d.seats || {};
+  const used = Number(seats.used || 0) + Number(seats.pending || 0);
+  return (
+    <div className="qp-card qteam-sum">
+      <div className="flex items-center justify-between mb-2">
+        <b className="text-sm">Team</b>
+        <span className="text-xs text-slate-500">{used} / {seats.max ?? "∞"} seats</span>
+      </div>
+      <div className="flex items-center gap-1 mb-3 flex-wrap">
+        {d.members.slice(0, 6).map(m => {
+          const r = TEAM_ROLE[m.role] || TEAM_ROLE.estimator;
+          const ini = (m.full_name || m.email || "?").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map(x => x[0].toUpperCase()).join("");
+          return <span key={m.id} className="qteam-av" title={`${m.full_name || m.email} · ${r[1]}`} style={{ "--c": r[2], width: 30, height: 30, fontSize: 11 }}>{ini}</span>;
+        })}
+        {d.members.length > 6 && <span className="text-xs text-slate-500 ml-1">+{d.members.length - 6}</span>}
+      </div>
+      {onOpen && <button type="button" className="qp-btn" style={{ width: "100%" }} onClick={onOpen}>Manage team and access</button>}
+    </div>
+  );
+}
+
+function TeamPanel() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [editing, setEditing] = useState(null);      // member id
+  const [draft, setDraft] = useState(null);
+  const [confirmRemove, setConfirmRemove] = useState(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [invite, setInvite] = useState({ email: "", role: "estimator", workspace_access: null, project_scope: "all", project_ids: [] });
+  const [lastLink, setLastLink] = useState("");
+
+  async function load() {
+    setErr("");
+    const { data: d, error } = await sb.rpc("team_list");
+    if (error) { setErr(error.message); return; }
+    setData(d);
+  }
+  useEffect(() => { load(); }, []);
+
+  const me = data?.me || {};
+  const manager = ["owner", "admin"].includes(me.role);
+  const seats = data?.seats || {};
+  const used = Number(seats.used || 0) + Number(seats.pending || 0);
+  const full = seats.max != null && used >= seats.max;
+  const linkFor = (tok) => `${window.location.origin}${window.location.pathname}?invite=${tok}`;
+
+  async function copy(text, label) {
+    try { await navigator.clipboard.writeText(text); setMsg({ ok: true, text: `${label} copied.` }); }
+    catch (e) { setMsg({ ok: true, text: `Copy this link: ${text}` }); }
+  }
+  async function saveMember(id) {
+    setBusy(id); setMsg(null);
+    const { error } = await sb.rpc("team_update_member", {
+      p_user: id, p_role: draft.role, p_workspaces: draft.workspace_access,
+      p_scope: draft.project_scope, p_projects: draft.project_scope === "selected" ? draft.project_ids : null,
+    });
+    setBusy("");
+    if (error) { setMsg({ ok: false, text: error.message }); return; }
+    setEditing(null); setMsg({ ok: true, text: "Saved. The change applies the next time they open a page." }); load();
+  }
+  async function remove(id) {
+    setBusy(id); setMsg(null);
+    const { error } = await sb.rpc("team_remove_member", { p_user: id });
+    setBusy(""); setConfirmRemove(null);
+    if (error) { setMsg({ ok: false, text: error.message }); return; }
+    setMsg({ ok: true, text: "Removed from the team. Their work stays in the company's projects." }); load();
+  }
+  async function sendInvite(e) {
+    e.preventDefault(); setBusy("invite"); setMsg(null);
+    const { data: r, error } = await sb.rpc("team_invite", {
+      p_email: invite.email, p_role: invite.role, p_workspaces: invite.workspace_access,
+      p_scope: invite.project_scope, p_projects: invite.project_scope === "selected" ? invite.project_ids : null,
+    });
+    setBusy("");
+    if (error) { setMsg({ ok: false, text: error.message }); return; }
+    setLastLink(linkFor(r.token));
+    setInvite({ email: "", role: "estimator", workspace_access: null, project_scope: "all", project_ids: [] });
+    setInviteOpen(false); load();
+  }
+  async function cancelInvite(id) {
+    setBusy(id);
+    const { error } = await sb.rpc("team_cancel_invite", { p_invite: id });
+    setBusy("");
+    if (error) setMsg({ ok: false, text: error.message }); else load();
+  }
+
+  if (err) return <div className="text-sm text-rose-600">{err}</div>;
+  if (!data) return <div className="qp-empty">Loading your team…</div>;
 
   return (
-    <div className="bg-white border rounded-xl p-4 mb-8">
-      <div className="flex items-center justify-between mb-3">
-        <div className="font-semibold text-sm">Team{team.max_users != null ? ` (${team.members.length} / ${team.max_users} seats)` : ` (${team.members.length})`}</div>
+    <div className="qteam">
+      <div className="qteam-head">
+        <div>
+          <div className="qteam-h">Members</div>
+          <div className="text-xs text-slate-500">Everyone here shares the company's projects, according to their role.</div>
+        </div>
+        <div className="qteam-seats">
+          <div className="text-xs text-slate-500">Seats on {seats.plan_name || "your plan"}</div>
+          <div className="text-lg font-bold">{used}<span className="text-slate-400 text-sm font-semibold"> / {seats.max ?? "∞"}</span></div>
+          {seats.max != null && <div className="qteam-bar"><i style={{ width: `${Math.min(100, (used / Math.max(1, seats.max)) * 100)}%` }} /></div>}
+          {manager && (
+            <button type="button" className="text-[11px] font-semibold text-blue-600 hover:underline mt-1"
+              onClick={() => setMsg({ ok: false, text: CARD_OFF_MSG })}>Add a seat · ${SEAT_PRICE_USD}/month</button>
+          )}
+        </div>
       </div>
-      {error && <div className="text-xs text-rose-600 bg-rose-50 rounded-lg px-3 py-2 mb-3">{error}</div>}
-      <div className="space-y-1 mb-3">
-        {team.members.map(m => (
-          <div key={m.id} className="flex items-center justify-between text-xs border-b last:border-b-0 py-1.5">
-            <span>{m.full_name || "(no name set)"}</span>
-            <span className="text-slate-400 capitalize">{m.role}</span>
+
+      {msg && <div className={`text-sm rounded-lg px-3 py-2 ${msg.ok ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>{msg.text}</div>}
+      {lastLink && (
+        <div className="qteam-link">
+          <div><b>Invite link ready.</b> Send it to your teammate. It works once and expires in 7 days.</div>
+          <div className="flex gap-2 items-center">
+            <input readOnly value={lastLink} className="border rounded-lg px-2 py-1.5 text-xs flex-1" onFocus={e => e.target.select()} />
+            <button type="button" className="qp-btn pri" onClick={() => copy(lastLink, "Invite link")}>Copy link</button>
           </div>
-        ))}
+        </div>
+      )}
+
+      <div className="qteam-list">
+        {(data.members || []).map(m => {
+          const r = TEAM_ROLE[m.role] || TEAM_ROLE.estimator;
+          const ws = m.workspace_access || TEAM_WS.map(w => w[0]);
+          const canEdit = manager && m.role !== "owner" && !(me.role === "admin" && m.role === "admin" && m.id !== me.id);
+          const initials = (m.full_name || m.email || "?").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map(x => x[0].toUpperCase()).join("");
+          return (
+            <div key={m.id} className="qteam-row">
+              <div className="qteam-av" style={{ "--c": r[2] }}>{initials}</div>
+              <div className="qteam-who">
+                <b>{m.full_name || m.email}{m.id === me.id && <span className="text-slate-400 font-normal"> (you)</span>}</b>
+                <span>{m.email}</span>
+              </div>
+              <TeamRoleChip role={m.role} />
+              <div className="qteam-wss">
+                {TEAM_WS.map(([k, l]) => (
+                  <span key={k} className={`qteam-dot ${ws.includes(k) ? "on" : ""}`} title={`${l}: ${ws.includes(k) ? "yes" : "no"}`}
+                    style={{ "--c": (WORKSPACE_META[k] || {}).colour || "#1c6ce6" }}>{l}</span>
+                ))}
+              </div>
+              <div className="qteam-meta">
+                <span>{m.project_scope === "selected" ? `${(m.project_ids || []).length} project${(m.project_ids || []).length === 1 ? "" : "s"}` : "All projects"}</span>
+                <span>Active {teamWhen(m.last_seen)}</span>
+              </div>
+              <div className="qteam-actions">
+                {canEdit && (confirmRemove === m.id ? (
+                  <>
+                    <button type="button" className="qp-btn" style={{ color: "#be123c" }} disabled={busy === m.id} onClick={() => remove(m.id)}>{busy === m.id ? "Removing…" : "Yes, remove"}</button>
+                    <button type="button" className="qp-btn" onClick={() => setConfirmRemove(null)}>Keep</button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="qp-btn" onClick={() => { setEditing(editing === m.id ? null : m.id); setDraft({ role: m.role, workspace_access: m.workspace_access, project_scope: m.project_scope, project_ids: m.project_ids || [] }); }}>
+                      {editing === m.id ? "Close" : "Edit access"}
+                    </button>
+                    <button type="button" className="qp-btn" style={{ color: "#be123c" }} onClick={() => setConfirmRemove(m.id)}>Remove</button>
+                  </>
+                ))}
+              </div>
+              {editing === m.id && draft && (
+                <div className="qteam-editwrap">
+                  <TeamAccessEditor value={draft} onChange={setDraft} projects={data.projects} canPickAdmin={me.role === "owner"} />
+                  <div className="flex gap-2 mt-3">
+                    <button type="button" className="qp-btn pri" disabled={busy === m.id} onClick={() => saveMember(m.id)}>{busy === m.id ? "Saving…" : "Save access"}</button>
+                    <button type="button" className="qp-btn" onClick={() => setEditing(null)}>Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
-      {team.pending_invites.length > 0 && (
-        <div className="mb-3">
-          <div className="text-xs font-semibold text-slate-500 uppercase mb-1">Pending invites</div>
-          {team.pending_invites.map(inv => (
-            <div key={inv.id} className="text-xs text-slate-500 flex items-center justify-between py-1">
-              <span>{inv.email}</span>
-              <span>expires {new Date(inv.expires_at).toLocaleDateString()}</span>
+
+      {manager && (data.invites || []).length > 0 && (
+        <div>
+          <div className="qteam-sub">Waiting to join</div>
+          {(data.invites || []).map(i => (
+            <div key={i.id} className="qteam-inv">
+              <span className="font-medium">{i.email}</span>
+              <TeamRoleChip role={i.role} />
+              <span className="text-xs text-slate-500">Link expires {new Date(i.expires_at).toLocaleDateString()}</span>
+              <span className="ml-auto flex gap-2">
+                <button type="button" className="qp-btn" onClick={() => copy(linkFor(i.token), "Invite link")}>Copy link</button>
+                <button type="button" className="qp-btn" disabled={busy === i.id} onClick={() => cancelInvite(i.id)}>Cancel invite</button>
+              </span>
             </div>
           ))}
         </div>
       )}
-      {atSeatLimit ? (
-        <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">Your plan's user limit is reached — upgrade your plan to invite more teammates.</div>
+
+      {manager ? (
+        inviteOpen ? (
+          <form onSubmit={sendInvite} className="qteam-invite">
+            <div className="qteam-sub" style={{ marginTop: 0 }}>Invite a teammate</div>
+            <input type="email" required placeholder="teammate@company.com" value={invite.email}
+              onChange={e => setInvite({ ...invite, email: e.target.value })} className="border rounded-lg px-3 py-2 text-sm w-full" />
+            <TeamAccessEditor value={invite} onChange={setInvite} projects={data.projects} canPickAdmin={me.role === "owner"} />
+            <div className="flex gap-2">
+              <button type="submit" className="qp-btn pri" disabled={busy === "invite" || full}>{busy === "invite" ? "Creating…" : "Create invite link"}</button>
+              <button type="button" className="qp-btn" onClick={() => setInviteOpen(false)}>Cancel</button>
+            </div>
+          </form>
+        ) : (
+          <div className="flex items-center gap-3 flex-wrap">
+            <button type="button" className="qp-btn pri" disabled={full} onClick={() => setInviteOpen(true)}>+ Invite a teammate</button>
+            {full && <span className="text-xs text-amber-700">All seats are in use. Upgrade your plan or add a seat to invite someone else.</span>}
+          </div>
+        )
       ) : (
-        <form onSubmit={sendInvite} className="flex gap-2">
-          <input type="email" required placeholder="teammate@company.com" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)}
-            className="flex-1 border rounded-lg px-3 py-2 text-xs" />
-          <button disabled={inviting} className="bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
-            {inviting ? "Creating…" : "Invite"}
-          </button>
-        </form>
+        <div className="text-xs text-slate-500">Only the owner or an admin can invite people or change access.</div>
       )}
-      {lastInviteLink && (
-        <div className="mt-3 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-lg px-3 py-2 break-all">
-          Invite created — Quantora doesn't email this for you, copy and send it yourself:<br />
-          <span className="font-mono">{lastInviteLink}</span>
+
+      <div>
+        <div className="qteam-sub">What each role can do</div>
+        <div className="qteam-legend">
+          {TEAM_ROLES.map(([k, l, c, d]) => (
+            <div key={k} style={{ "--c": c }}><TeamRoleChip role={k} /><span>{d}</span></div>
+          ))}
+        </div>
+      </div>
+
+      {manager && (data.activity || []).length > 0 && (
+        <div>
+          <div className="qteam-sub">Recent team changes</div>
+          <div className="qteam-log">
+            {(data.activity || []).map((a, i) => (
+              <div key={i}>
+                <span className="text-slate-400 text-xs" style={{ minWidth: 92 }}>{teamWhen(a.at)}</span>
+                <span>
+                  {a.action !== "joined" && <><b>{a.by || "Someone"}</b>{" "}</>}
+                  {a.action === "invited" ? `invited ${a.email} as ${(TEAM_ROLE[a.detail?.role] || [])[1] || a.detail?.role}`
+                    : a.action === "joined" ? `${a.email} joined as ${(TEAM_ROLE[a.detail?.role] || [])[1] || a.detail?.role}`
+                    : a.action === "changed" ? `changed ${a.email}'s access to ${(TEAM_ROLE[a.detail?.role] || [])[1] || a.detail?.role}`
+                    : a.action === "removed" ? `removed ${a.email}`
+                    : a.action === "invite_cancelled" ? `cancelled the invite for ${a.email}` : a.action}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
   );
 }
-
-// Where a project has actually got to, worked out from its own data rather than
-// stored anywhere. Derived means it cannot drift: a project with drawings and no
-// BOQ rows IS at "drawings uploaded", whatever anyone remembers setting.
 const PROJECT_STAGES = [
   ["priced",   "Priced",            "#10b981", "rgba(16,185,129,.14)", "rgba(16,185,129,.45)"],
   ["taken_off","Taken off",         "#3b82f6", "rgba(59,130,246,.14)", "rgba(59,130,246,.45)"],
@@ -5622,7 +5874,7 @@ function StagePill({ stage }) {
   return <span className="qpill" style={{ color: colour, background: bg, borderColor: bd }}>{label}</span>;
 }
 
-function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
+function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
   const [projects, setProjects] = useState([]);
   const [metrics, setMetrics] = useState({});
   const [query, setQuery] = useState("");
@@ -5926,7 +6178,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling }) {
         </div>
       )}
 
-      <TeamPanel />
+      <TeamSummary onOpen={onOpenTeam} />
 
       </div>{/* /rail */}
 
@@ -20537,7 +20789,7 @@ function EstimaPage({ projects, onOpenProject, bare }) {
 function TeamPage() {
   return (
     <div>
-      <PageHead title="Team" sub="Who can reach your projects, and how many seats your plan allows." />
+      <PageHead title="Team" sub="Invite people, choose what each person can do, and limit them to the workspaces and projects they need." />
       <div className="qp-card"><TeamPanel /></div>
     </div>
   );
@@ -29116,7 +29368,7 @@ function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) 
         return <HomePage onNavigate={go} onOpenProject={openProject}
           onNewProject={()=>go("new")} onUpgrade={onOpenBilling} email={email} isPlatformAdmin={isPlatformAdmin} />;
       case "dashboard":
-        return <Dashboard onOpenProject={openProject} onNewProject={()=>go("new")} onOpenBilling={onOpenBilling} />;
+        return <Dashboard onOpenProject={openProject} onNewProject={()=>go("new")} onOpenBilling={onOpenBilling} onOpenTeam={()=>go("team")} />;
       case "new":
         return <NewProjectForm onCreated={openProject} onCancel={()=>go("dashboard")} />;
       case "edit":
@@ -30878,6 +31130,57 @@ html:has(.qx),html:has(.qx) body{background:
 .qx .qup input[type=file]{border:1.5px dashed #9fbbe6;border-radius:12px;padding:14px;background:#f5f9ff;width:100%}
 .qx .qjump{background:linear-gradient(120deg,#eef4fe,#fff 60%) !important;border-left:4px solid #1c6ce6 !important}
 .qx .qjump:hover{border-color:#1c6ce6 !important}
+
+/* Team access */
+.qteam{display:flex;flex-direction:column;gap:16px}
+.qteam-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;padding:16px 18px;border-radius:14px;
+  background:linear-gradient(120deg,#e6f6fa 0%,#eef2fe 60%,#f3eefe 100%);border:1px solid #dbe6f2}
+.qteam-h{font-size:18px;font-weight:800;color:#0f2140}
+.qteam-seats{min-width:170px;text-align:right}
+.qteam-bar{height:6px;border-radius:9px;background:#dbe4ef;overflow:hidden;margin-top:4px}
+.qteam-bar i{display:block;height:100%;background:linear-gradient(90deg,#0891b2,#1c6ce6);border-radius:9px}
+.qteam-list{display:flex;flex-direction:column;border:1px solid #e3e9f1;border-radius:14px;background:#fff;overflow:hidden}
+.qteam-row{display:grid;grid-template-columns:40px minmax(150px,1.3fr) 150px minmax(190px,1.4fr) 120px 230px;gap:12px;align-items:center;padding:12px 16px;border-top:1px solid #eef2f7}
+.qteam-row:first-child{border-top:0}
+.qteam-row:hover{background:#f8fbff}
+.qteam-av{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;color:#fff;background:linear-gradient(135deg,var(--c),color-mix(in srgb,var(--c) 60%,#0f2140))}
+.qteam-who{display:flex;flex-direction:column;min-width:0}
+.qteam-who b{font-size:14px;color:#0f2140;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qteam-who span{font-size:12px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qteam-chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:700;color:var(--c);background:color-mix(in srgb,var(--c) 12%,#fff);border:1px solid color-mix(in srgb,var(--c) 30%,#fff);white-space:nowrap}
+.qteam-wss{display:flex;gap:4px;flex-wrap:wrap}
+.qteam-dot{font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:6px;color:#94a3b8;background:#f1f5f9;text-decoration:line-through}
+.qteam-dot.on{color:var(--c);background:color-mix(in srgb,var(--c) 11%,#fff);text-decoration:none}
+.qteam-meta{display:flex;flex-direction:column;font-size:12px;color:#64748b}
+.qteam-meta span:first-child{color:#334155;font-weight:600}
+.qteam-actions{display:flex;gap:6px;justify-content:flex-end;white-space:nowrap}
+.qteam-editwrap{grid-column:1/-1;margin:4px 0 4px 52px;padding:14px;border-radius:12px;background:#f7faff;border:1px solid #e0e9f6}
+.qteam-edit{display:flex;flex-direction:column;gap:14px}
+.qteam-lbl{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#5a6b82;margin-bottom:6px}
+.qteam-roles{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+.qteam-role{text-align:left;padding:9px 11px;border-radius:10px;border:1.5px solid #e3e9f1;background:#fff;display:flex;flex-direction:column;gap:2px;cursor:pointer}
+.qteam-role b{font-size:13px;color:#0f2140}
+.qteam-role span{font-size:11.5px;color:#64748b;line-height:1.35}
+.qteam-role:hover:not(:disabled){border-color:color-mix(in srgb,var(--c) 45%,#fff)}
+.qteam-role.on{border-color:var(--c);background:color-mix(in srgb,var(--c) 8%,#fff);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 14%,transparent)}
+.qteam-role.on b{color:var(--c)}
+.qteam-role:disabled{opacity:.45;cursor:not-allowed}
+.qteam-ws{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:9px;border:1.5px solid #e3e9f1;background:#fff;font-size:13px;font-weight:600;color:#475569;cursor:pointer}
+.qteam-ws.on{border-color:var(--c);color:var(--c);background:color-mix(in srgb,var(--c) 8%,#fff)}
+.qteam-ws input{accent-color:var(--c)}
+.qteam-projects{margin-top:8px;max-height:180px;overflow:auto;display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid #e3e9f1;border-radius:10px;background:#fff}
+.qteam-sub{font-size:13px;font-weight:800;color:#0f2140;margin:4px 0 8px}
+.qteam-inv{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;border:1px dashed #cbd8e8;border-radius:12px;background:#fbfdff;margin-bottom:6px;font-size:13px}
+.qteam-link{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-radius:12px;background:#ecfdf5;border:1px solid #a7f3d0;font-size:13px;color:#065f46}
+.qteam-invite{display:flex;flex-direction:column;gap:14px;padding:16px;border-radius:14px;background:#fff;border:1px solid #e3e9f1;border-top:3px solid #0891b2}
+.qteam-legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:8px}
+.qteam-legend .qteam-chip{flex-shrink:0;min-width:136px;text-align:center}
+.qteam-row > .qteam-chip{justify-self:start}
+.qteam-legend > div{display:flex;gap:10px;align-items:center;padding:9px 12px;border-radius:10px;background:#fff;border:1px solid #e3e9f1;border-left:3px solid var(--c);font-size:12.5px;color:#475569}
+.qteam-log{display:flex;flex-direction:column;border:1px solid #e3e9f1;border-radius:12px;background:#fff}
+.qteam-log > div{display:flex;gap:10px;padding:8px 14px;border-top:1px solid #eef2f7;font-size:13px;color:#334155}
+.qteam-log > div:first-child{border-top:0}
+@media (max-width:900px){.qteam-row{grid-template-columns:40px 1fr auto}.qteam-wss,.qteam-meta{grid-column:2/-1}.qteam-actions{grid-column:1/-1;justify-content:flex-start}.qteam-editwrap{margin-left:0}}
 </style>
 </body>
 </html>

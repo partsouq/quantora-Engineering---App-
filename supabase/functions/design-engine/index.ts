@@ -116,9 +116,14 @@ Deno.serve(async (req) => {
     const projectId = String(body.project_id ?? "");
     if (!projectId) return json({ error: "project_id is required." }, 400);
 
-    const { data: project } = await admin.from("projects").select("*")
-      .eq("id", projectId).eq("owner_id", userId).maybeSingle();
-    if (!project) return json({ error: "Project not found, or not yours." }, 404);
+    const { data: project } = await admin.from("projects").select("*").eq("id", projectId).maybeSingle();
+    const { data: access } = project
+      ? await admin.rpc("project_access_for", { p_user: userId, p_project: project.id })
+      : { data: null };
+    if (!project || !access) return json({ error: "Project not found, or not on your team." }, 404);
+    if (access !== "edit" && action !== "preview") {
+      return json({ error: "Your role on this team can view this project but not design on it. Ask an admin to change your role." }, 403);
+    }
 
     const selected: string[] = Array.isArray(body.systems) && body.systems.length
       ? body.systems : ALL_SYSTEMS.map(s => s.key);

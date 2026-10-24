@@ -2395,14 +2395,21 @@ Deno.serve(async (req: Request) => {
         }, 403);
       }
 
+      // Team access (2026-10-24): the creator, or a member of the project's
+      // company whose role may work on projects. Chat only needs to read.
       const { data: proj, error: projErr } = await admin
         .from("projects")
         .select("*")
         .eq("id", body.project_id)
-        .eq("owner_id", userId)
         .maybeSingle();
-      if (projErr || !proj) {
+      const { data: access } = proj
+        ? await admin.rpc("project_access_for", { p_user: userId, p_project: proj.id })
+        : { data: null };
+      if (projErr || !proj || !access) {
         return jsonResponse({ error: "Project not found or access denied." }, 404);
+      }
+      if (access !== "edit" && action !== "chat") {
+        return jsonResponse({ error: "Your role on this team can view this project but not run AI on it. Ask an admin to change your role." }, 403);
       }
       project = proj;
     }
