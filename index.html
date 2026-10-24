@@ -19312,11 +19312,55 @@ function QDonut({ pct, colour }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// STORAGE BY PLAN (2026-10-24)
+// Every plan includes some storage (plans.storage_gb) plus any add-ons the
+// company has bought (companies.storage_addon_gb). All files count: drawings,
+// tender documents, quotations and support uploads. The database blocks new
+// uploads at 100%; nothing is ever deleted.
+// ---------------------------------------------------------------------------
+function fmtGB(bytes) {
+  if (bytes == null) return "—";
+  const gb = bytes / 1073741824;
+  if (gb >= 10) return `${Math.round(gb)} GB`;
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  return `${Math.max(0, Math.round(bytes / 1048576))} MB`;
+}
+function useStorageUsage() {
+  const [st, setSt] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    sb.rpc("my_storage_usage").then(({ data, error }) => {
+      if (alive && !error && data && typeof data === "object") setSt(data);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  return st;
+}
+function StorageMeter({ st, onBuy }) {
+  if (!st || st.quota_bytes == null) return null;
+  const used = Number(st.used_bytes || 0), quota = Number(st.quota_bytes || 0);
+  const pct = quota > 0 ? Math.min(100, (used / quota) * 100) : 100;
+  const left = Math.max(0, quota - used);
+  const tone = pct >= 100 ? "#dc2626" : pct >= 80 ? "#d97706" : null;
+  return (
+    <div className="mtr">
+      <div className="r"><span>Storage</span><b>{fmtGB(used)} / {fmtGB(quota)}</b></div>
+      <div className="bar"><i style={{ width: `${Math.max(pct, 2)}%`, background: tone || "linear-gradient(90deg,#fbbf24,#f97316)" }} /></div>
+      <div style={{ fontSize: 11, marginTop: 4, color: tone || "var(--q-muted,#64748b)", display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <span>{pct >= 100 ? "Full: new uploads are paused. Nothing has been deleted." : `${fmtGB(left)} left`}</span>
+        {pct >= 80 && onBuy && <button onClick={onBuy} style={{ color: tone, fontWeight: 700, textDecoration: "underline" }}>Add storage</button>}
+      </div>
+    </div>
+  );
+}
+
 function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, isPlatformAdmin }) {
   const [fullName, setFullName] = useState("");
   const [projects, setProjects] = useState([]);
   const [metrics, setMetrics] = useState({});
   const [usage, setUsage] = useState(null);
+  const storage = useStorageUsage();
   const [extra, setExtra] = useState({ drawingRows: [], boqRows: [], runs: [], findings: 0, review: 0 });
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
@@ -19615,6 +19659,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
                   <div className="bar"><i style={{ width: limit ? `${Math.min(100, (used / limit) * 100)}%` : "6%", background: grad }} /></div>
                 </div>
               ))}
+              <StorageMeter st={storage} onBuy={onUpgrade} />
               {usage?.trial_days_remaining != null && usage.trial_days_remaining <= 3650 && (
                 <div className="ends">Trial ends in {usage.trial_days_remaining} day{usage.trial_days_remaining === 1 ? "" : "s"}</div>
               )}
@@ -20227,7 +20272,51 @@ function BillingPage({ onUpgrade }) {
           </>
          )}
       </div>
+      <StorageCard />
       <PagePacksCard />
+    </div>
+  );
+}
+
+// Billing page: storage used, what is included, and the monthly add-ons.
+const STORAGE_ADDONS = [
+  { gb: 25,  usd: 10, note: "For a few more large projects" },
+  { gb: 100, usd: 30, note: "Most popular for active teams" },
+  { gb: 250, usd: 60, note: "For tender archives and big drawing sets" },
+];
+function StorageCard() {
+  const st = useStorageUsage();
+  if (!st || st.quota_bytes == null) return null;
+  const used = Number(st.used_bytes || 0), quota = Number(st.quota_bytes || 0);
+  const pct = quota > 0 ? Math.min(100, (used / quota) * 100) : 100;
+  const tone = pct >= 100 ? "#dc2626" : pct >= 80 ? "#d97706" : "#f97316";
+  return (
+    <div className="qp-card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>Storage</div>
+        <div style={{ fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+          <b>{fmtGB(used)}</b> used of {fmtGB(quota)} &middot; <b style={{ color: pct >= 80 ? tone : undefined }}>{fmtGB(Math.max(0, quota - used))} left</b>
+        </div>
+      </div>
+      <div style={{ height: 10, borderRadius: 99, background: "var(--q-border,#e2e8f0)", marginTop: 10, overflow: "hidden" }}>
+        <div style={{ width: `${Math.max(pct, 1.5)}%`, height: "100%", background: tone, borderRadius: 99 }} />
+      </div>
+      <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 8 }}>
+        {fmtGB(st.plan_bytes)} included in your plan{Number(st.addon_gb || 0) > 0 ? ` + ${st.addon_gb} GB add-on` : ""}.
+        Counts every file in Projects and Commercial: drawings, tender documents, quotations and support uploads.
+        {pct >= 100 ? " Storage is full, so new uploads are paused. Nothing has been deleted." : ""}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10, marginTop: 14 }}>
+        {STORAGE_ADDONS.map(a => (
+          <div key={a.gb} style={{ border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 10, padding: 12 }}>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>+{a.gb} GB</div>
+            <div style={{ fontSize: 13, marginTop: 2 }}><b>${a.usd}</b> / month</div>
+            <div style={{ fontSize: 11.5, color: "var(--q-text-dim,#64748b)", marginTop: 4 }}>{a.note}</div>
+            <button className="qp-btn" disabled style={{ marginTop: 10, width: "100%", opacity: 0.6, cursor: "not-allowed" }}
+              title="Online payment for add-ons is being set up">Available soon</button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
