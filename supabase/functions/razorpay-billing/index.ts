@@ -29,7 +29,7 @@ const describe = (e: unknown) => (e instanceof Error ? e.message : typeof e === 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const admin = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 
-const NOT_OPEN = "Online payment opens soon. Contact support@quantoraengineering.com and we will set up your plan or storage by hand.";
+const NOT_OPEN = "Card payment is not switched on for this account yet.";
 
 /** Razorpay plan id for an item at a price, creating the Razorpay plan the first time. */
 async function razorpayPlanFor(keys: RzKeys, item: string, name: string, amountMajor: number): Promise<string> {

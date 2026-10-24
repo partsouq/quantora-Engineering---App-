@@ -2620,9 +2620,8 @@ function PagePacksCard({ compact }) {
   async function buy() {
     setBusy(true); setMsg(null);
     try {
-      const res = await callPagePacks("create_checkout", { boq: qty.boq_page, draftsman: qty.draftsman_page, spec: qty.spec_page });
-      if (res?.url) window.location.href = res.url;
-      else setMsg({ ok: false, text: "Checkout did not return a payment link." });
+      // Paddle checkout is off; page packs move to Razorpay in a later step.
+      setMsg({ ok: false, text: CARD_OFF_MSG });
     } catch (e) { setMsg({ ok: false, text: e.message }); }
     finally { setBusy(false); }
   }
@@ -2672,7 +2671,7 @@ function PagePacksCard({ compact }) {
         </div>
       </div>
       {total > 0 && total < minOrder && <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>Add ${(minOrder - total).toFixed(2)} more to reach the ${minOrder} minimum.</div>}
-      {(data.offline || !allAvailable) && <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 6 }}>Online purchase of pages opens soon. Contact us and we will add pages for you.</div>}
+      {(data.offline || !allAvailable) && <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 6 }}>Card payment is not switched on for this account yet.</div>}
       {msg && <div style={{ fontSize: 12.5, marginTop: 8, color: msg.ok ? "#059669" : "#e11d48" }}>{msg.text}</div>}
     </div>
   );
@@ -2728,7 +2727,11 @@ function loadRazorpayCheckout() {
 }
 // Starts a subscription and opens Razorpay's window. Resolves true once the
 // payment is verified, false if the customer closed the window.
+const CARD_OFF_MSG = "Card payment is not switched on for this account yet.";
 async function razorpaySubscribe(action, payload, description) {
+  // Until Razorpay is switched on (keys entered, engine deployed) say one short thing.
+  const cfg = await callRazorpay("config", {}).catch(() => null);
+  if (!cfg || !cfg.enabled) throw new Error(CARD_OFF_MSG);
   const start = await callRazorpay(action, payload);
   if (start.changed) return true;                      // existing subscription switched plan
   await loadRazorpayCheckout();
@@ -5076,7 +5079,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
   async function buyCredits(packId) {
     setBusyPackId(packId); setErr("");
     try {
-      throw new Error("Credit top-ups open soon. Email support@quantoraengineering.com and we will add credit for you.");
+      throw new Error(CARD_OFF_MSG);
     } catch (ex) { setErr(ex.message); setBusyPackId(null); }
   }
 
