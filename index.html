@@ -662,15 +662,18 @@ function DrawingScopePicker({ discipline, setDiscipline, systems, setSystems, cu
         {groups.map(([g, gl]) => (
           <div key={g} className="mb-2">
             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">{gl}</div>
-            <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))" }}>
+            <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(205px,1fr))" }}>
               {TAKEOFF_DISCIPLINES.filter(d => d[2] === g).map(([v, title, , colour, hint]) => {
                 const on = discipline === v;
                 return (
                   <button type="button" key={v} onClick={() => pick(v)} aria-pressed={on}
-                    className="text-left rounded-xl border px-3 py-2.5 transition-shadow"
-                    style={on ? { borderColor: colour, boxShadow: `inset 0 0 0 1.5px ${colour}`, background: `${colour}0f` } : {}}>
-                    <div className="text-sm font-semibold" style={on ? { color: colour } : {}}>{title}</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">{hint}</div>
+                    className={`qdisc ${on ? "on" : ""}`} style={{ "--c": colour }}>
+                    <span className="qdisc-dot" aria-hidden="true">{({ elv: "ELV", electrical: "EL", mechanical: "ME", plumbing: "PL", fire_protection: "FP", architectural: "AR", structural: "ST", civil: "CV" })[v] || title.slice(0, 2)}</span>
+                    <span style={{ minWidth: 0 }}>
+                      <span className="qdisc-t">{title}</span>
+                      <span className="qdisc-h">{hint}</span>
+                    </span>
+                    {on && <span className="qdisc-tick" aria-hidden="true">✓</span>}
                   </button>
                 );
               })}
@@ -687,11 +690,11 @@ function DrawingScopePicker({ discipline, setDiscipline, systems, setSystems, cu
             <button type="button" className="text-[11px] font-semibold text-blue-600 hover:underline" onClick={() => setSystems(list.map(keyOf))}>Select all</button>
             <button type="button" className="text-[11px] font-semibold text-slate-500 hover:underline" onClick={() => { setSystems([]); setCustom([]); }}>Clear</button>
           </div>
-          <div className="grid gap-2 border rounded-xl p-3 bg-slate-50" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))" }}>
+          <div className="grid gap-2 border rounded-xl p-3 qsys" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))", "--c": (TAKEOFF_DISCIPLINES.find(x => x[0] === discipline) || [])[3] || "#1c6ce6" }}>
             {list.map(item => {
               const k = keyOf(item);
               return (
-                <label key={k} className="flex items-start gap-2 text-sm cursor-pointer">
+                <label key={k} className={`flex items-start gap-2 text-sm cursor-pointer qsys-i ${systems.includes(k) ? "on" : ""}`}>
                   <input type="checkbox" className="mt-0.5" checked={systems.includes(k)} onChange={() => toggle(k)} />
                   <span>{item[1]}</span>
                 </label>
@@ -9342,11 +9345,12 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
   const NavList = () => (
     <nav className="text-sm">
       {NAV.map(([group, items]) => (
-        <div key={group} className="mb-1">
-          <div className="px-4 pt-4 pb-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">{group}</div>
+        <div key={group} className="mb-1 qws-grp" style={{ "--g": QX_GROUP_COLOUR[group] || "#1c6ce6" }}>
+          <div className="px-4 pt-4 pb-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 qws-gh">{group}</div>
           {items.map(([k, l]) => (
             <button
               key={k}
+              data-on={tab === k ? "1" : undefined}
               onClick={() => { setTab(k); setNavOpen(false); }}
               className={`w-full text-left px-4 py-2 border-l-[3px] transition-colors ${
                 tab === k
@@ -19386,6 +19390,15 @@ const WORKSPACES = [
   ["draftsman",  "Draftsman",  "⚙", "#14b8a6",
    "Design 33 MEP, fire and ELV systems from requirements, with no drawings at all."],
 ];
+// One colour per menu destination, used for its icon tile and active state.
+const QX_NAV_COLOUR = {
+  home: "#1c6ce6", dashboard: "#4f46e5", drawings: "#0284c7", boq: "#7c3aed", markup: "#db2777",
+  compliance: "#059669", approvals: "#0d9488", reports: "#d97706", estima: "#9333ea",
+  revenue: "#16a34a", sales: "#059669", operations: "#ea580c", draftsman: "#0d9488",
+  team: "#0891b2", billing: "#ca8a04", settings: "#64748b", help: "#2563eb",
+};
+// Project sections: one colour per group.
+const QX_GROUP_COLOUR = { Home: "#1c6ce6", Tender: "#7c3aed", Estimating: "#0284c7", Procurement: "#0d9488", Analysis: "#d97706", Output: "#db2777" };
 const WORKSPACE_META = Object.fromEntries(
   WORKSPACES.map(([k, label, icon, colour, blurb]) => [k, { label, icon, colour, blurb }]));
 
@@ -19459,7 +19472,8 @@ function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, isPla
   const ws = WORKSPACE_OF[current] || workspace || "projects";
   const groups = (WORKSPACE_NAV[ws] || WORKSPACE_NAV.projects).concat([ACCOUNT_NAV]);
   const Item = ([key, label, icon]) => (
-    <button key={key} className={`qp-item ${current === key ? "on" : ""}`} onClick={() => onNavigate(key)}>
+    <button key={key} className={`qp-item ${current === key ? "on" : ""}`} onClick={() => onNavigate(key)}
+      style={{ "--c": QX_NAV_COLOUR[key] || "#1c6ce6" }}>
       <span className="ic" aria-hidden="true">{QX_NAV_ICON[key] || icon}</span>
       <span className="lb">{label}</span>
     </button>
@@ -19967,7 +19981,9 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
           <div className="qh-ph">Quick access</div>
           {[["compliance", "Compliance rules"], ["approvals", "Approval tracking"], ["reports", "Reports & exports"],
             ["team", "Team members"], ["billing", "Billing & invoices"], ["help", "Help & support"]].map(([k, l]) => (
-            <button key={k} onClick={() => onNavigate(k)}>{l}<span>&rsaquo;</span></button>
+            <button key={k} onClick={() => onNavigate(k)} style={{ "--c": QX_NAV_COLOUR[k] || "#1c6ce6" }}>
+              <i className="qh-qi" aria-hidden="true">{QX_NAV_ICON[k]}</i>{l}<span>&rsaquo;</span>
+            </button>
           ))}
         </div>
       </div>
@@ -24203,12 +24219,12 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 items-stretch">
         {WORKSPACES.map(([key, label, icon, colour, blurb], idx) => (
           <button key={key} onClick={() => onPick(key)}
-            className="bg-white border rounded-2xl p-6 text-left flex flex-col h-full hover:shadow-lg transition-shadow"
-            style={{ borderTop: `3px solid ${colour}`, ...(idx === 0 ? { borderColor: colour } : null) }}>
-            <span style={{
-              width: 42, height: 42, borderRadius: 12, display: "flex", alignItems: "center",
-              justifyContent: "center", fontSize: 19, color: colour, background: `${colour}22`,
-            }} aria-hidden="true">{icon}</span>
+            className="qws-card bg-white border rounded-2xl text-left flex flex-col h-full hover:shadow-lg transition-shadow"
+            style={{ "--c": colour, overflow: "hidden", padding: 0 }}>
+            <div className="qws-band" aria-hidden="true">
+              <span className="qws-icon">{icon}</span>
+            </div>
+            <div className="flex flex-col flex-1" style={{ padding: "18px 22px 22px" }}>
             <div className="flex items-center gap-2 flex-wrap mt-4">
               <div className="text-lg font-bold">{label}</div>
               <WorkspaceAccessChip a={access && access[key]} />
@@ -24225,12 +24241,13 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
               </div>
             )}
             <div className="mt-auto pt-5">
-              <div className="text-sm font-semibold text-center py-2.5 rounded-lg"
-                style={idx === 0
-                  ? { background: colour, color: "#fff" }
-                  : { border: "1px solid var(--q-border-strong,#cbd5e1)" }}>
+              <div className="text-sm font-semibold text-center py-2.5 rounded-lg qws-go"
+                style={access && access[key] && access[key].mode === "locked"
+                  ? { border: `1px solid ${colour}`, color: colour, background: "#fff" }
+                  : { background: colour, color: "#fff" }}>
                 {access && access[key] && access[key].mode === "locked" ? `View ${label.toLowerCase()} (read-only)` : `Open ${label.toLowerCase()}`}
               </div>
+            </div>
             </div>
           </button>
         ))}
@@ -30760,6 +30777,61 @@ html:has(.qx),html:has(.qx) body{background:#f5f8fc !important}
 .qx .qws-side button:hover{background:rgba(255,255,255,.08) !important;color:#fff !important}
 .qx .qws-side button.bg-blue-50{background:linear-gradient(90deg,#2a73ea,#1c62d6) !important;color:#fff !important;
   box-shadow:0 8px 18px -10px #1c6ce6}
+</style>
+<style id="quantora-colour-v1">
+/* Colour pass (2026-10-24): every menu destination, workspace and discipline
+   carries its own colour, set as --c on the element. Loaded after the light theme. */
+.qx .qp-item .ic{width:30px;height:30px;border-radius:9px;background:color-mix(in srgb,var(--c) 30%,transparent);color:#fff;flex:none}
+.qx .qp-item .ic svg{width:17px;height:17px}
+.qx .qp-item:hover .ic{background:color-mix(in srgb,var(--c) 50%,transparent)}
+.qx .qp-item.on{background:linear-gradient(90deg,var(--c),color-mix(in srgb,var(--c) 72%,#0f2a52));box-shadow:0 8px 18px -10px var(--c)}
+.qx .qp-item.on .ic{background:rgba(255,255,255,.22)}
+
+.qx .qws-gh{display:flex;align-items:center;gap:7px;color:#c9d6ea !important}
+.qx .qws-gh:before{content:"";width:8px;height:8px;border-radius:3px;background:var(--g)}
+.qx .qws-grp button{position:relative;padding-left:30px !important}
+.qx .qws-grp button:before{content:"";position:absolute;left:14px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--g)}
+.qx .qws-grp button[data-on]{background:linear-gradient(90deg,var(--g),color-mix(in srgb,var(--g) 70%,#0f2a52)) !important;color:#fff !important;box-shadow:0 8px 18px -12px var(--g)}
+.qx .qws-grp button[data-on]:before{background:#fff}
+
+.qx .qws-card{border-color:color-mix(in srgb,var(--c) 22%,#e3e9f1) !important}
+.qx .qws-card:hover{border-color:var(--c) !important}
+.qx .qws-band{height:78px;position:relative;background:
+  radial-gradient(120px 80px at 85% 0%,rgba(255,255,255,.28),transparent 70%),
+  linear-gradient(120deg,var(--c),color-mix(in srgb,var(--c) 62%,#0f2a52))}
+.qx .qws-icon{position:absolute;left:22px;bottom:-22px;width:48px;height:48px;border-radius:14px;background:#fff;color:var(--c);
+  display:flex;align-items:center;justify-content:center;font-size:22px;box-shadow:0 8px 18px -10px rgba(15,42,82,.45)}
+.qx .qws-card .text-lg{margin-top:18px !important;color:#0f2140}
+.qx .qws-go{box-shadow:0 8px 18px -12px var(--c)}
+
+.qx .qh-res button{display:flex;align-items:center;gap:10px}
+.qx .qh-res button span{margin-left:auto}
+.qx .qh-qi{width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:color-mix(in srgb,var(--c) 14%,#fff);color:var(--c);font-style:normal}
+.qx .qh-qi svg{width:15px;height:15px}
+.qx .qh-grid4 .qh-kpi{border-top:3px solid transparent}
+.qx .qh-grid4 .qh-kpi:nth-child(1){border-top-color:#7c3aed}
+.qx .qh-grid4 .qh-kpi:nth-child(2){border-top-color:#0284c7}
+.qx .qh-grid4 .qh-kpi:nth-child(3){border-top-color:#059669}
+.qx .qh-grid4 .qh-kpi:nth-child(4){border-top-color:#f59e0b}
+.qx .qh-trial{border-top:3px solid #1c6ce6}
+.qx .qh-res{border-top:3px solid #0d9488}
+
+.qdisc{display:flex;align-items:center;gap:10px;text-align:left;border:1px solid color-mix(in srgb,var(--c) 30%,#e3e9f1);
+  border-radius:14px;padding:10px 12px;background:color-mix(in srgb,var(--c) 6%,#fff);position:relative;transition:box-shadow .15s,transform .15s}
+.qdisc:hover{box-shadow:0 10px 22px -16px var(--c);transform:translateY(-1px)}
+.qdisc.on{background:linear-gradient(120deg,var(--c),color-mix(in srgb,var(--c) 70%,#0f2a52));border-color:var(--c);color:#fff;box-shadow:0 12px 24px -14px var(--c)}
+.qdisc-dot{width:36px;height:36px;flex:none;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;
+  background:var(--c);color:#fff;font-size:11.5px;letter-spacing:.02em}
+.qdisc.on .qdisc-dot{background:rgba(255,255,255,.22)}
+.qdisc-t{display:block;font-size:14px;font-weight:700;color:#14233a}
+.qdisc-h{display:block;font-size:11px;color:#5a6b82;margin-top:1px}
+.qdisc.on .qdisc-t,.qdisc.on .qdisc-h{color:#fff}
+.qdisc-tick{position:absolute;top:6px;right:9px;font-size:12px;font-weight:800}
+.qsys{background:color-mix(in srgb,var(--c) 5%,#fff) !important;border-color:color-mix(in srgb,var(--c) 30%,#e3e9f1) !important;border-left:4px solid var(--c) !important}
+.qsys input[type=checkbox]{accent-color:var(--c);width:15px;height:15px}
+.qsys-i{border-radius:8px;padding:3px 6px}
+.qsys-i.on{background:color-mix(in srgb,var(--c) 13%,#fff);color:#0f2140;font-weight:600}
 </style>
 </body>
 </html>
