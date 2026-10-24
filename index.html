@@ -6178,6 +6178,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
         </div>
       )}
 
+      <ApprovalsWaitingCard onOpen={(a) => { const p = projects.find(x => x.id === a.project_id); if (p) onOpenProject(p, "approvals"); }} />
       <TeamSummary onOpen={onOpenTeam} />
 
       </div>{/* /rail */}
@@ -9240,220 +9241,491 @@ const APPROVAL_STATUS_STYLE = {
   rejected: "bg-rose-100 text-rose-700", changes_requested: "bg-amber-100 text-amber-700",
   cancelled: "bg-slate-100 text-slate-500", expired: "bg-slate-100 text-slate-500",
 };
-function ApprovalsTab({ project }) {
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState(null);
-  const [tender, setTender]   = useState(null);
-  const [rows, setRows]       = useState([]);
-  const [actions, setActions] = useState({});
-  const [draft, setDraft]     = useState(null);
-  const [open, setOpen]       = useState(null);
-  const [comment, setComment] = useState({});
+// ---------------------------------------------------------------------------
+// APPROVALS (2026-10-24). What is sent (a type plus the exact items), and a
+// flow: the approver on the current step approves (moves on), requests
+// changes (back to the sender, with a comment) or rejects. The sender
+// resubmits as a new revision, which returns to the approver who asked.
+// Every change goes through the approval_* database functions.
+// ---------------------------------------------------------------------------
+const APPROVAL_TYPES = [
+  ["project",   "Complete project file", "Drawings, take-off, BOQ and designs together", "#7c3aed", "PF"],
+  ["boq",       "BOQ",                   "The whole BOQ or selected systems",            "#0284c7", "BQ"],
+  ["drawings",  "Drawings",              "Selected drawing sheets",                      "#16a34a", "DW"],
+  ["draftsman", "Draftsman drawings",    "Designs made in Draftsman",                    "#0d9488", "DF"],
+  ["takeoff",   "Take-off BOQ",          "Quantities from a take-off run",               "#d97706", "TO"],
+  ["other",     "Other",                 "Anything else; type what it is",               "#64748b", "OT"],
+];
+const APPROVAL_TYPE = Object.fromEntries(APPROVAL_TYPES.map(t => [t[0], t]));
+// Where in a project each kind of item lives.
+const APPROVAL_TAB = { project: "overview", boq: "boq", takeoff: "boq", drawings: "drawings", draftsman: "design", other: "approvals" };
 
-  useEffect(() => { load(); }, [project.id]);
+function apStepRole(a, n) {
+  const s = (a.chain || []).find(c => Number(c.step) === Number(n));
+  return s ? (s.name ? `${s.role} (${s.name})` : s.role) : "the approver";
+}
+function apStatus(a) {
+  switch (a.status) {
+    case "pending":           return { text: `Waiting for ${apStepRole(a, a.current_step)}`, c: "#d97706" };
+    case "changes_requested": return { text: `Changes requested by ${apStepRole(a, a.current_step)}`, c: "#e11d48" };
+    case "approved":          return { text: "Fully approved", c: "#059669" };
+    case "rejected":          return { text: `Rejected by ${apStepRole(a, a.current_step)}`, c: "#be123c" };
+    case "cancelled":         return { text: "Withdrawn", c: "#64748b" };
+    default:                  return { text: String(a.status || "").replace(/_/g, " "), c: "#64748b" };
+  }
+}
+// State of each step for the progress line.
+function apStepState(a, step) {
+  const n = Number(step.step), cur = Number(a.current_step);
+  const last = (a.actions || []).filter(x => Number(x.step) === n && ["approved", "changes_requested", "rejected"].includes(x.action)).slice(-1)[0];
+  if (n < cur || (n === cur && a.status === "approved")) return { k: "done", at: last?.at };
+  if (n === cur && a.status === "pending") return { k: "wait" };
+  if (n === cur && a.status === "changes_requested") return { k: "back", at: last?.at };
+  if (n === cur && a.status === "rejected") return { k: "rej", at: last?.at };
+  return { k: "next" };
+}
+const AP_ACTION_TEXT = {
+  submitted: "sent it for approval", approved: "approved", changes_requested: "requested changes",
+  rejected: "rejected", resubmitted: "resubmitted", cancelled: "withdrew it",
+};
+
+function ApprovalTypeChip({ type }) {
+  const t = APPROVAL_TYPE[type] || APPROVAL_TYPE.other;
+  return <span className="qap-type" style={{ "--c": t[3] }}><b>{t[4]}</b>{t[1]}</span>;
+}
+
+function ApprovalRequestForm({ project, onDone, onCancel }) {
+  const [opt, setOpt] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [type, setType] = useState("");
+  const [picked, setPicked] = useState([]);
+  const [title, setTitle] = useState(""); const [titleTouched, setTitleTouched] = useState(false);
+  const [amount, setAmount] = useState(""); const [amountTouched, setAmountTouched] = useState(false);
+  const [currency, setCurrency] = useState("AED");
+  const [note, setNote] = useState("");
+  const [chain, setChain] = useState([
+    { role: "Estimator", user_id: "", name: "", email: "" },
+    { role: "Senior Estimator", user_id: "", name: "", email: "" },
+    { role: "Commercial Manager", user_id: "", name: "", email: "" },
+  ]);
+
+  useEffect(() => {
+    sb.rpc("approval_options", { p_project: project.id }).then(({ data, error }) => {
+      if (error) setErr(error.message); else setOpt(data);
+    });
+  }, [project.id]);
+
+  const list = !opt ? [] : type === "boq" ? opt.boq : type === "drawings" ? opt.drawings
+    : type === "takeoff" ? opt.takeoff : type === "draftsman" ? opt.draftsman : [];
+  const labelOf = (x) => type === "takeoff" ? `${x.name} · Rev ${x.revision ?? "–"}`
+    : type === "draftsman" ? `${x.name}${x.systems?.length ? ` · ${x.systems.length} system${x.systems.length === 1 ? "" : "s"}` : ""}` : x.name;
+  const sel = list.filter(x => picked.includes(String(x.id)));
+
+  // Title and amount follow the selection until the user types their own.
+  useEffect(() => {
+    if (!type || !opt) return;
+    const t = APPROVAL_TYPE[type][1];
+    const what = type === "project" ? "" : sel.length && sel.length <= 3 ? ` – ${sel.map(labelOf).join(", ")}` : sel.length > 3 ? ` – ${sel.length} items` : type === "boq" ? " – all systems" : "";
+    if (!titleTouched) setTitle(type === "other" ? "" : `${t} – ${opt.project?.name || project.project_name}${what}`);
+    if (!amountTouched) {
+      const cents = type === "project" ? Number(opt.project?.cents || 0)
+        : type === "boq" ? (sel.length ? sel : opt.boq).reduce((s, x) => s + Number(x.cents || 0), 0)
+        : type === "takeoff" ? sel.reduce((s, x) => s + Number(x.cents || 0), 0) : 0;
+      setAmount(cents ? (cents / 100).toFixed(2) : "");
+    }
+  }, [type, picked.join(","), opt]);
+
+  async function send() {
+    setErr("");
+    if (!type) { setErr("Choose what you are sending."); return; }
+    if (["drawings", "draftsman", "takeoff"].includes(type) && !sel.length) { setErr("Tick at least one item to send."); return; }
+    setBusy(true);
+    const refs = sel.map(x => ({ id: String(x.id), label: labelOf(x) }));
+    const { error } = await sb.rpc("approval_create", {
+      p_project: project.id, p_type: type, p_refs: refs, p_title: title,
+      p_amount_cents: parseMoneyInput(amount) || 0, p_currency: currency,
+      p_chain: chain.map(c => ({ role: c.role, user_id: c.user_id || null, name: c.name, email: c.email })), p_note: note,
+    });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onDone();
+  }
+
+  const setRow = (i, patch) => setChain(chain.map((x, j) => j === i ? { ...x, ...patch } : x));
+
+  return (
+    <div className="qap-form">
+      <div className="qap-form-h">New approval request<span>Choose what you are sending, pick the items, then the approvers in order.</span></div>
+      {err && <div className="text-sm rounded-lg px-3 py-2 bg-rose-50 text-rose-700">{err}</div>}
+
+      <div>
+        <div className="qap-lbl">1 · What are you sending?</div>
+        <div className="qap-types">
+          {APPROVAL_TYPES.map(([k, l, d, c, ab]) => (
+            <button type="button" key={k} className={`qap-tcard ${type === k ? "on" : ""}`} style={{ "--c": c }}
+              aria-pressed={type === k} onClick={() => { setType(k); setPicked([]); }}>
+              <span className="qap-tbadge">{ab}</span><b>{l}</b><span>{d}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {type && type !== "other" && (
+        <div>
+          <div className="qap-lbl">2 · {type === "project" ? "What goes with it" : type === "boq" ? "Which systems (none ticked = the whole BOQ)" : "Which items"}</div>
+          {!opt ? <div className="text-sm text-slate-500">Loading…</div>
+           : type === "project" ? (
+            <div className="qap-sum">
+              <span><b>{opt.project?.drawings || 0}</b> drawings</span>
+              <span><b>{opt.project?.items || 0}</b> BOQ lines</span>
+              <span><b>{(opt.takeoff || []).length}</b> take-off runs</span>
+              <span><b>{(opt.draftsman || []).length}</b> Draftsman designs</span>
+              <span>Priced value <b>{fmtMoney(opt.project?.cents || 0)}</b></span>
+            </div>
+          ) : list.length === 0 ? (
+            <div className="qap-none">Nothing of this kind in the project yet.</div>
+          ) : (
+            <div className="qap-items">
+              {list.length > 1 && (
+                <div className="flex gap-3 text-xs mb-1">
+                  <button type="button" className="font-semibold text-blue-600 hover:underline" onClick={() => setPicked(list.map(x => String(x.id)))}>Select all</button>
+                  <button type="button" className="font-semibold text-slate-500 hover:underline" onClick={() => setPicked([])}>Clear</button>
+                  <span className="text-slate-500 ml-auto">{sel.length} of {list.length} ticked</span>
+                </div>
+              )}
+              {list.map(x => (
+                <label key={x.id} className={`qap-item ${picked.includes(String(x.id)) ? "on" : ""}`}>
+                  <input type="checkbox" checked={picked.includes(String(x.id))}
+                    onChange={() => setPicked(picked.includes(String(x.id)) ? picked.filter(p => p !== String(x.id)) : [...picked, String(x.id)])} />
+                  <span className="flex-1 min-w-0 truncate">{labelOf(x)}</span>
+                  <span className="text-xs text-slate-500 shrink-0">
+                    {type === "boq" || type === "takeoff" ? `${x.items} lines${x.cents ? ` · ${fmtMoney(x.cents)}` : ""}`
+                      : type === "drawings" ? [x.discipline, x.sheet, x.floor].filter(Boolean).join(" · ")
+                      : x.at ? fmtDay(x.at) : ""}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {type && (
+        <>
+          <div>
+            <div className="qap-lbl">{type === "other" ? "2" : "3"} · Details</div>
+            <div className="grid md:grid-cols-4 gap-3">
+              <div className="md:col-span-2">
+                <label className="text-xs font-semibold text-slate-600">Title</label>
+                <input className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={title} placeholder={type === "other" ? "What is being approved" : ""}
+                  onChange={e => { setTitle(e.target.value); setTitleTouched(true); }} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-600">Amount</label>
+                <input className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={amount} placeholder="0.00"
+                  onChange={e => { setAmount(e.target.value); setAmountTouched(true); }} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-600">Currency</label>
+                <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={currency} onChange={e => setCurrency(e.target.value)}>
+                  {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+            <label className="text-xs font-semibold text-slate-600 block mt-3">Message to the approvers (optional)</label>
+            <textarea rows={2} className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={note}
+              placeholder="What should they check? Anything they need to know?" onChange={e => setNote(e.target.value)} />
+          </div>
+
+          <div>
+            <div className="qap-lbl">{type === "other" ? "3" : "4"} · Approvers, in order</div>
+            <div className="qap-chain">
+              {chain.map((c, i) => (
+                <div key={i} className="qap-crow">
+                  <span className="qap-cnum">{i + 1}</span>
+                  <input className="border rounded-lg px-2 py-1.5 text-sm" placeholder="Role, e.g. Project Manager" value={c.role}
+                    onChange={e => setRow(i, { role: e.target.value })} />
+                  <select className="border rounded-lg px-2 py-1.5 text-sm" value={c.user_id || (c.ext ? "__ext" : "")}
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (v === "__ext") setRow(i, { user_id: "", ext: true, name: "", email: "" });
+                      else { const m = (opt?.people || []).find(p => p.id === v); setRow(i, { user_id: v, ext: false, name: m?.name || "", email: m?.email || "" }); }
+                    }}>
+                    <option value="">Choose who approves…</option>
+                    {(opt?.people || []).map(p => <option key={p.id} value={p.id}>{p.name} · {(TEAM_ROLE[p.role] || [])[1] || p.role}</option>)}
+                    <option value="__ext">Someone outside the team…</option>
+                  </select>
+                  {c.ext ? (
+                    <span className="flex gap-2 min-w-0">
+                      <input className="border rounded-lg px-2 py-1.5 text-sm flex-1 min-w-0" placeholder="Name" value={c.name} onChange={e => setRow(i, { name: e.target.value })} />
+                      <input className="border rounded-lg px-2 py-1.5 text-sm flex-1 min-w-0" placeholder="Email" value={c.email} onChange={e => setRow(i, { email: e.target.value })} />
+                    </span>
+                  ) : <span className="text-xs text-slate-500">{c.user_id ? "Decides in Quantora" : ""}</span>}
+                  <button type="button" className="text-xs text-slate-400 hover:text-rose-600" onClick={() => setChain(chain.filter((_, j) => j !== i))}>Remove</button>
+                </div>
+              ))}
+            </div>
+            <div className="text-xs text-slate-500 mt-2">Approvers outside the team can't log in yet: the owner or an admin records their decision for them. Empty rows are skipped.</div>
+          </div>
+        </>
+      )}
+
+      <div className="flex gap-2 flex-wrap">
+        {type && <button type="button" className="qp-btn" onClick={() => setChain([...chain, { role: "", user_id: "", name: "", email: "" }])}>+ Add approver</button>}
+        <button type="button" className="qp-btn pri" disabled={busy || !type} onClick={send}>{busy ? "Sending…" : "Send for approval"}</button>
+        <button type="button" className="qp-btn" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function ApprovalCard({ a, onChanged, onOpenItem, showProject, startOpen }) {
+  const [open, setOpen] = useState(!!startOpen);
+  const [comment, setComment] = useState("");
+  const [item, setItem] = useState("");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [confirmWithdraw, setConfirmWithdraw] = useState(false);
+  const st = apStatus(a);
+  const chain = a.chain || [];
+  const cur = chain.find(c => Number(c.step) === Number(a.current_step));
+  const lastBack = (a.actions || []).filter(x => x.action === "changes_requested").slice(-1)[0];
+  const refs = a.item_refs || [];
+
+  async function run(fn, args, key) {
+    setBusy(key); setErr("");
+    const { error } = await sb.rpc(fn, args);
+    setBusy("");
+    if (error) { setErr(error.message); return; }
+    setComment(""); setItem(""); onChanged();
+  }
+
+  return (
+    <div className={`qap-card ${a.waiting_for_me || (a.can_resubmit && a.is_mine) ? "mine" : ""}`} style={{ "--c": st.c }}>
+      <div className="qap-top">
+        <ApprovalTypeChip type={a.item_type} />
+        <div className="flex-1 min-w-0">
+          <div className="qap-title">{a.title}{a.revision > 1 && <span className="qap-rev">Rev {a.revision}</span>}</div>
+          <div className="text-xs text-slate-500">
+            {showProject && <>{a.project_ref ? `${a.project_ref} · ` : ""}{a.project_name} · </>}
+            Sent by {a.requested_by_name} · {fmtDay(a.created_at)}
+          </div>
+        </div>
+        {a.amount_cents > 0 && <div className="text-right shrink-0"><div className="text-sm font-bold tabular-nums">{fmtMoney(a.amount_cents)}</div><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{a.currency}</div></div>}
+        <span className="qap-status">{st.text}</span>
+        <button type="button" className="qp-btn" onClick={() => setOpen(!open)}>{open ? "Close" : "Open"}</button>
+      </div>
+
+      <div className="qap-steps">
+        <span className="qap-step done"><i>✓</i>Sent</span>
+        {chain.map(s => {
+          const ss = apStepState(a, s);
+          return (
+            <span key={s.step} className={`qap-step ${ss.k}`} title={s.email || ""}>
+              <i>{ss.k === "done" ? "✓" : ss.k === "back" ? "↩" : ss.k === "rej" ? "✕" : s.step}</i>
+              {s.role}{s.name ? ` · ${s.name}` : ""}
+              <em>{ss.k === "done" ? `Approved${ss.at ? `, ${fmtDay(ss.at)}` : ""}` : ss.k === "wait" ? "Waiting" : ss.k === "back" ? "Changes requested" : ss.k === "rej" ? "Rejected" : "Next"}</em>
+            </span>
+          );
+        })}
+      </div>
+
+      {a.changed && <div className="qap-warn">Changed since it was sent for approval. The approvers are looking at an older version: resubmit or tell them.</div>}
+      {a.waiting_for_me && !open && <div className="qap-you">Waiting for your decision. <button type="button" className="font-semibold underline" onClick={() => setOpen(true)}>Review now</button></div>}
+      {a.status === "changes_requested" && a.can_resubmit && !open && <div className="qap-you back">Sent back to you: {lastBack?.comment} <button type="button" className="font-semibold underline" onClick={() => setOpen(true)}>Fix and resubmit</button></div>}
+
+      {open && (
+        <div className="qap-body">
+          <div className="qap-cols">
+            <div>
+              <div className="qap-lbl">What was sent</div>
+              {a.item_type === "project" ? <div className="text-sm">The complete project file.</div>
+               : refs.length ? (
+                <div className="flex flex-wrap gap-2">{refs.map(r => <span key={r.id} className="qap-ref">{r.label}</span>)}</div>
+               ) : <div className="text-sm">{a.item_type === "boq" ? "The whole BOQ, all systems." : a.title}</div>}
+              {a.item_type !== "other" && onOpenItem && (
+                <button type="button" className="qp-btn mt-3" onClick={() => onOpenItem(a)}>Open {(APPROVAL_TYPE[a.item_type] || [])[1]} →</button>
+              )}
+              {a.note && <div className="qap-note"><b>Message from {a.requested_by_name}:</b> {a.note}</div>}
+            </div>
+            <div>
+              <div className="qap-lbl">History</div>
+              <div className="qap-hist">
+                {(a.actions || []).map((x, i) => (
+                  <div key={i} className={`qap-h ${x.action}`}>
+                    <i />
+                    <div>
+                      <div><b>{x.name}</b> {AP_ACTION_TEXT[x.action] || x.action}
+                        {x.revision > 1 && <span className="qap-rev">Rev {x.revision}</span>}
+                        <span className="text-slate-400 text-xs"> · {fmtDay(x.at)}</span></div>
+                      {x.item && <div className="text-xs text-slate-500">On: {x.item}</div>}
+                      {x.comment && <div className="qap-cmt">{x.comment}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {err && <div className="text-sm rounded-lg px-3 py-2 bg-rose-50 text-rose-700">{err}</div>}
+
+          {a.can_act && (
+            <div className="qap-act">
+              <div className="qap-lbl">Your decision · step {a.current_step}: {cur?.role}{cur?.name ? ` (${cur.name})` : ""}</div>
+              {!a.waiting_for_me && <div className="text-xs text-amber-700 mb-2">You are recording this decision for {cur?.name || cur?.role}, as {cur?.user_id ? "an admin" : "they are outside the team"}.</div>}
+              <textarea rows={3} className="w-full border rounded-lg px-3 py-2 text-sm" value={comment} onChange={e => setComment(e.target.value)}
+                placeholder="Comment. Required when you request changes or reject: say what needs to change." />
+              <div className="flex gap-2 flex-wrap items-center mt-2">
+                <input className="border rounded-lg px-2 py-1.5 text-sm" style={{ minWidth: 240 }} list={`ap-items-${a.id}`} value={item}
+                  onChange={e => setItem(e.target.value)} placeholder="Applies to (optional): item, sheet or line" />
+                <datalist id={`ap-items-${a.id}`}>{refs.map(r => <option key={r.id} value={r.label} />)}</datalist>
+                <span className="flex-1" />
+                <button type="button" className="qap-b ok" disabled={!!busy} onClick={() => run("approval_act", { p_approval: a.id, p_action: "approved", p_comment: comment, p_item: item }, "ok")}>
+                  {busy === "ok" ? "Saving…" : Number(a.current_step) >= chain.length ? "Approve (final)" : "Approve, send to next"}</button>
+                <button type="button" className="qap-b back" disabled={!!busy} onClick={() => run("approval_act", { p_approval: a.id, p_action: "changes_requested", p_comment: comment, p_item: item }, "back")}>
+                  {busy === "back" ? "Saving…" : "Request changes"}</button>
+                <button type="button" className="qap-b rej" disabled={!!busy} onClick={() => run("approval_act", { p_approval: a.id, p_action: "rejected", p_comment: comment, p_item: item }, "rej")}>
+                  {busy === "rej" ? "Saving…" : "Reject"}</button>
+              </div>
+            </div>
+          )}
+
+          {a.can_resubmit && (
+            <div className="qap-act back">
+              <div className="qap-lbl">Changes requested by {cur?.role}{cur?.name ? ` (${cur.name})` : ""}</div>
+              {lastBack && <div className="qap-cmt mb-2">{lastBack.item && <b>{lastBack.item}: </b>}{lastBack.comment}</div>}
+              <textarea rows={2} className="w-full border rounded-lg px-3 py-2 text-sm" value={comment} onChange={e => setComment(e.target.value)}
+                placeholder={`What did you change? This goes back to the same approver as revision ${a.revision + 1}.`} />
+              <div className="flex gap-2 mt-2">
+                <button type="button" className="qp-btn pri" disabled={!!busy} onClick={() => run("approval_resubmit", { p_approval: a.id, p_note: comment }, "re")}>
+                  {busy === "re" ? "Sending…" : `Resubmit as Rev ${a.revision + 1}`}</button>
+              </div>
+            </div>
+          )}
+
+          {(a.is_mine || a.can_resubmit) && ["pending", "changes_requested"].includes(a.status) && (
+            <div className="text-xs">
+              {confirmWithdraw ? (
+                <span className="flex gap-2 items-center">Withdraw this request?
+                  <button type="button" className="qp-btn" style={{ color: "#be123c" }} onClick={() => run("approval_cancel", { p_approval: a.id }, "w")}>Yes, withdraw</button>
+                  <button type="button" className="qp-btn" onClick={() => setConfirmWithdraw(false)}>Keep</button>
+                </span>
+              ) : <button type="button" className="text-slate-500 hover:text-rose-600 font-semibold" onClick={() => setConfirmWithdraw(true)}>Withdraw request</button>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const AP_FILTERS = [
+  ["open", "Open", a => ["pending", "changes_requested"].includes(a.status)],
+  ["me", "Waiting for me", a => a.waiting_for_me || (a.can_resubmit && a.is_mine)],
+  ["back", "Sent back", a => a.status === "changes_requested"],
+  ["approved", "Approved", a => a.status === "approved"],
+  ["rejected", "Rejected", a => a.status === "rejected"],
+  ["all", "All", () => true],
+];
+
+function ApprovalBoard({ project, projects, onOpenItem, showProject, bare }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  const [filter, setFilter] = useState("open");
+  const [type, setType] = useState("");
+  const [creating, setCreating] = useState(false);
+
   async function load() {
-    setLoading(true); setError(null);
-    try {
-      const t = await ensureTender(project);
-      setTender(t);
-      const { data: ap } = await sb.from("approvals").select("*").eq("tender_id", t.id).order("created_at", { ascending: false });
-      setRows(ap || []);
-      if (ap && ap.length) {
-        const { data: ac } = await sb.from("approval_actions").select("*").in("approval_id", ap.map(a => a.id)).order("step");
-        const m = {}; (ac || []).forEach(x => { (m[x.approval_id] = m[x.approval_id] || []).push(x); });
-        setActions(m);
-      }
-    } catch (e) {
-      console.error("ApprovalsTab.load failed:", e);
-      setError(e.message || "Could not load approvals.");
-    } finally { setLoading(false); }
+    setErr("");
+    const { data, error } = await sb.rpc("approval_list", { p_project: project ? project.id : null });
+    if (error) { setErr(error.message); setRows([]); return; }
+    setRows(data || []);
   }
+  useEffect(() => { load(); }, [project?.id]);
 
-  async function createApproval() {
-    if (!draft?.title) { setError("Give the approval a title."); return; }
-    const chain = (draft.chain || []).filter(c => c.name || c.email);
-    if (!chain.length) { setError("Add at least one approver."); return; }
-    try {
-      const { data: { user } } = await sb.auth.getUser();
-      const { data, error: e } = await sb.from("approvals").insert({
-        tender_id: tender.id, title: draft.title,
-        amount_cents: parseMoneyInput(draft.amount) || 0,
-        currency: draft.currency || "AED",
-        status: "pending", current_step: 1,
-        chain: chain.map((c, i) => ({ step: i + 1, role: c.role || "Approver", name: c.name || "", email: c.email || "" })),
-        requested_by: user.id,
-      }).select().single();
-      if (e) throw e;
-      setRows(cur => [data, ...cur]);
-      setDraft(null);
-    } catch (e) { console.error("createApproval failed:", e); setError(e.message); }
-  }
+  const all = rows || [];
+  const f = AP_FILTERS.find(x => x[0] === filter) || AP_FILTERS[0];
+  const shown = all.filter(f[2]).filter(a => !type || a.item_type === type);
+  const mine = all.filter(AP_FILTERS[1][2]).length;
 
-  async function act(ap, step, action) {
-    const c = comment[`${ap.id}:${step.step}`] || "";
-    try {
-      const { data, error: e } = await sb.from("approval_actions").insert({
-        approval_id: ap.id, step: step.step, approver_name: step.name || step.role,
-        approver_email: step.email || null, action, comment: c || null,
-        acted_at: new Date().toISOString(),
-      }).select().single();
-      if (e) throw e;
-      setActions(cur => ({ ...cur, [ap.id]: [...(cur[ap.id] || []), data] }));
+  return (
+    <div className="qap">
+      <div className="qap-kpis">
+        <div style={{ "--c": "#d97706" }}><b>{all.filter(a => a.status === "pending").length}</b><span>Waiting for a decision</span></div>
+        <div style={{ "--c": "#4f46e5" }}><b>{mine}</b><span>Waiting for me</span></div>
+        <div style={{ "--c": "#e11d48" }}><b>{all.filter(a => a.status === "changes_requested").length}</b><span>Sent back for changes</span></div>
+        <div style={{ "--c": "#059669" }}><b>{all.filter(a => a.status === "approved").length}</b><span>Fully approved</span></div>
+      </div>
 
-      const last = ap.current_step >= (ap.chain || []).length;
-      const patch = action === "approved"
-        ? (last ? { status: "approved", completed_at: new Date().toISOString() } : { current_step: ap.current_step + 1 })
-        : { status: action === "rejected" ? "rejected" : "changes_requested" };
-      await sb.from("approvals").update(patch).eq("id", ap.id);
-      setRows(cur => cur.map(r => r.id === ap.id ? { ...r, ...patch } : r));
-      setComment(cur => ({ ...cur, [`${ap.id}:${step.step}`]: "" }));
-    } catch (e) { console.error("act failed:", e); setError(e.message); }
-  }
+      {creating && project ? (
+        <ApprovalRequestForm project={project} onCancel={() => setCreating(false)} onDone={() => { setCreating(false); setFilter("open"); load(); }} />
+      ) : project ? (
+        <div><button type="button" className="qp-btn pri" onClick={() => setCreating(true)}>+ New approval request</button></div>
+      ) : null}
 
-  if (loading) return <div className="text-slate-400 text-sm">Loading approvals…</div>;
+      <div className="qap-filters">
+        {AP_FILTERS.map(([k, l, fn]) => (
+          <button type="button" key={k} className={`qap-f ${filter === k ? "on" : ""}`} onClick={() => setFilter(k)}>
+            {l} <span>{all.filter(fn).length}</span>
+          </button>
+        ))}
+        <select className="border rounded-lg px-2 py-1.5 text-sm ml-auto" value={type} onChange={e => setType(e.target.value)}>
+          <option value="">All types</option>
+          {APPROVAL_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+      </div>
 
+      {err && <div className="text-sm rounded-lg px-3 py-2 bg-rose-50 text-rose-700">{err}</div>}
+      {rows === null ? <div className="qp-empty">Loading approvals…</div>
+       : shown.length === 0 ? (
+        <div className="qp-empty">{all.length === 0
+          ? (project ? "Nothing has been sent for approval on this project yet." : "No approvals yet. Open a project and send a BOQ, drawings or the complete file for approval.")
+          : "Nothing here."}</div>
+      ) : shown.map(a => (
+        <ApprovalCard key={a.id} a={a} showProject={showProject} onChanged={load}
+          onOpenItem={onOpenItem ? (x) => onOpenItem(x, (projects || []).find(p => p.id === x.project_id)) : null} />
+      ))}
+    </div>
+  );
+}
+
+function ApprovalsTab({ project, onOpenTab }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-500 max-w-3xl leading-relaxed">
-        An award goes up a chain of people before it is committed. Build the chain yourself — the roles, the names
-        and the email addresses are all yours to set — and every step keeps the comment that came with it, so the
-        reason for a decision survives long after the people have moved on.
+        Send the complete project file, the BOQ, drawings, Draftsman designs or a take-off for approval. Each approver
+        in turn approves it on to the next, or sends it back with comments; you fix it and resubmit, and it returns to
+        the person who asked for the changes. Every decision and comment is kept.
       </p>
-      <ErrBar error={error} onRetry={load} />
+      <ApprovalBoard project={project} onOpenItem={onOpenTab ? (a) => onOpenTab(APPROVAL_TAB[a.item_type] || "overview") : null} />
+    </div>
+  );
+}
 
-      <div className="flex gap-3 flex-wrap">
-        <Kpi label="Awaiting a decision" value={rows.filter(r => r.status === "pending").length} sub="in the chain now" accent="blue" />
-        <Kpi label="Approved" value={rows.filter(r => r.status === "approved").length} sub="fully signed off" accent="green" />
-        <Kpi label="Sent back" value={rows.filter(r => r.status === "changes_requested" || r.status === "rejected").length} sub="need rework" accent="rose" />
-        <Kpi label="Value pending" value={fmtMoney(rows.filter(r => r.status === "pending").reduce((a, r) => a + Number(r.amount_cents || 0), 0))} sub="awaiting approval" accent="amber" />
+// Dashboard card: what is waiting for this user.
+function ApprovalsWaitingCard({ onOpen }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    sb.rpc("approval_list", { p_project: null }).then(({ data }) =>
+      setRows((data || []).filter(a => a.waiting_for_me || (a.can_resubmit && a.is_mine))));
+  }, []);
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div className="qp-card qap-wait">
+      <div className="flex items-center justify-between mb-2">
+        <b className="text-sm">Waiting for you</b>
+        <span className="qap-count">{rows.length}</span>
       </div>
-
-      {draft ? (
-        <div className="bg-white border rounded-2xl p-5">
-          <div className="font-bold text-sm mb-3">New approval request</div>
-          <div className="grid md:grid-cols-3 gap-3">
-            <Field label="What is being approved" value={draft.title || ""} onChange={v => setDraft({ ...draft, title: v })} required />
-            <Field label="Amount" value={draft.amount || ""} onChange={v => setDraft({ ...draft, amount: v })} />
-            <div>
-              <label className="text-xs font-semibold text-slate-600">Currency</label>
-              <select className="w-full border rounded-lg px-3 py-2 text-sm mt-1" value={draft.currency || "AED"} onChange={e => setDraft({ ...draft, currency: e.target.value })}>
-                {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-          </div>
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-4 mb-2">Approval chain</div>
-          <table className="w-full text-sm mb-2">
-            <thead>
-              <tr className="text-[10px] uppercase tracking-wider text-slate-400 border-b">
-                <th className="text-left font-bold py-1.5 pr-3">Step</th>
-                <th className="text-left font-bold py-1.5 px-3">Role</th>
-                <th className="text-left font-bold py-1.5 px-3">Name</th>
-                <th className="text-left font-bold py-1.5 px-3">Email</th>
-                <th className="py-1.5 pl-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(draft.chain || []).map((c, i) => (
-                <tr key={i} className="border-b last:border-0">
-                  <td className="py-1.5 pr-3 font-bold">{i + 1}</td>
-                  <td className="py-1.5 px-3"><input className="w-full border rounded-md px-2 py-1 text-sm" value={c.role || ""} placeholder="Estimator"
-                    onChange={e => setDraft({ ...draft, chain: draft.chain.map((x, j) => j === i ? { ...x, role: e.target.value } : x) })} /></td>
-                  <td className="py-1.5 px-3"><input className="w-full border rounded-md px-2 py-1 text-sm" value={c.name || ""}
-                    onChange={e => setDraft({ ...draft, chain: draft.chain.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} /></td>
-                  <td className="py-1.5 px-3"><input className="w-full border rounded-md px-2 py-1 text-sm" value={c.email || ""}
-                    onChange={e => setDraft({ ...draft, chain: draft.chain.map((x, j) => j === i ? { ...x, email: e.target.value } : x) })} /></td>
-                  <td className="py-1.5 pl-3 text-right">
-                    <button onClick={() => setDraft({ ...draft, chain: draft.chain.filter((_, j) => j !== i) })} className="text-xs text-slate-400 hover:text-rose-600">Remove</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="flex gap-2 flex-wrap">
-            <button onClick={() => setDraft({ ...draft, chain: [...(draft.chain || []), { role: "", name: "", email: "" }] })}
-              className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">+ Add approver</button>
-            <button onClick={createApproval} className="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-lg">Send for approval</button>
-            <button onClick={() => setDraft(null)} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Cancel</button>
-          </div>
-        </div>
-      ) : (
-        <button onClick={() => setDraft({ currency: "AED", chain: [
-          { role: "Estimator", name: "", email: "" },
-          { role: "Senior Estimator", name: "", email: "" },
-          { role: "Commercial Manager", name: "", email: "" },
-        ] })} className="text-sm font-semibold bg-slate-900 text-white px-4 py-2 rounded-lg">+ New approval request</button>
-      )}
-
-      {rows.length === 0 ? (
-        <Empty>Nothing has been sent for approval on this project yet.</Empty>
-      ) : rows.map(ap => {
-        const chain = ap.chain || [];
-        const acts = actions[ap.id] || [];
-        const isOpen = open === ap.id;
-        return (
-          <div key={ap.id} className="bg-white border rounded-2xl overflow-hidden">
-            <div className="px-5 py-4 flex items-center gap-3 flex-wrap">
-              <div className="flex-1 min-w-0">
-                <div className="font-bold text-sm">{ap.title}</div>
-                <div className="text-xs text-slate-500 mt-0.5">
-                  Step {Math.min(ap.current_step, chain.length)} of {chain.length} · raised {fmtDay(ap.created_at)}
-                </div>
-              </div>
-              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${APPROVAL_STATUS_STYLE[ap.status] || APPROVAL_STATUS_STYLE.pending}`}>
-                {SYSTEM_LABEL(ap.status)}
-              </span>
-              <div className="text-right shrink-0">
-                <div className="text-sm font-bold tabular-nums">{fmtMoney(ap.amount_cents)}</div>
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{ap.currency}</div>
-              </div>
-              <button onClick={() => setOpen(isOpen ? null : ap.id)} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">
-                {isOpen ? "Close" : "Open"}
-              </button>
-            </div>
-            {isOpen && (
-              <div className="border-t px-5 py-4">
-                {chain.map(st => {
-                  const done = acts.find(a => a.step === st.step);
-                  const isCurrent = ap.status === "pending" && ap.current_step === st.step;
-                  return (
-                    <div key={st.step} className="flex gap-3 py-3 border-b last:border-0">
-                      <div className={`w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${
-                        done ? (done.action === "approved" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700")
-                             : isCurrent ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-400"}`}>
-                        {done ? (done.action === "approved" ? "✓" : "✗") : st.step}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-semibold">{st.role}{st.name ? ` — ${st.name}` : ""}</div>
-                        <div className="text-xs text-slate-500">{st.email || "no email set"}</div>
-                        {done ? (
-                          <div className="text-sm text-slate-600 mt-1.5">
-                            <b>{SYSTEM_LABEL(done.action)}</b> {done.acted_at ? `· ${fmtDay(done.acted_at)}` : ""}
-                            {done.comment && <div className="mt-1 bg-slate-50 border rounded-lg px-3 py-2 leading-relaxed">{done.comment}</div>}
-                          </div>
-                        ) : isCurrent ? (
-                          <div className="mt-2">
-                            <textarea rows={3} className="w-full border rounded-lg px-3 py-2 text-sm"
-                              placeholder="Explain the recommendation, note any condition of approval, or record why a cheaper bidder was excluded. This is stored with the approval."
-                              value={comment[`${ap.id}:${st.step}`] || ""}
-                              onChange={e => setComment(cur => ({ ...cur, [`${ap.id}:${st.step}`]: e.target.value }))} />
-                            <div className="flex gap-2 mt-2 flex-wrap">
-                              <button onClick={() => act(ap, st, "approved")} className="text-xs font-semibold bg-slate-900 text-white px-3 py-1.5 rounded-lg">Approve</button>
-                              <button onClick={() => act(ap, st, "changes_requested")} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-slate-50">Request changes</button>
-                              <button onClick={() => act(ap, st, "rejected")} className="text-xs font-semibold border px-3 py-1.5 rounded-lg hover:bg-rose-50">Reject</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-xs text-slate-400 mt-1">Waiting for the step before this one.</div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {rows.slice(0, 4).map(a => (
+        <button type="button" key={a.id} className="qap-wrow" onClick={() => onOpen && onOpen(a)}>
+          <ApprovalTypeChip type={a.item_type} />
+          <span className="flex-1 min-w-0 text-left">
+            <b className="block truncate">{a.title}</b>
+            <span className="text-xs text-slate-500">{a.status === "changes_requested" ? "Sent back to you" : "Your approval"} · {a.project_name}</span>
+          </span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -9547,8 +9819,8 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
   );
 }
 
-function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
-  const [tab, setTab] = useState("overview");
+function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialTab }) {
+  const [tab, setTab] = useState(initialTab || "overview");
   const [navOpen, setNavOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 2026-08-12: the flat nine-tab bar was replaced with the grouped navigation
@@ -9707,7 +9979,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted }) {
           {tab === "vendors"       && <VendorsTab project={project} />}
           {tab === "rfq"           && <RfqPackagesTab project={project} />}
           {tab === "comparison"    && <ComparisonTab project={project} />}
-          {tab === "approvals"     && <ApprovalsTab project={project} />}
+          {tab === "approvals"     && <ApprovalsTab project={project} onOpenTab={setTab} />}
           {tab === "drawings"      && <DrawingsTab project={project} />}
           {tab === "design"        && <DesignTab project={project} />}
           {tab === "boq"           && <BoqTab project={project} onGoToEstimation={() => setTab("estimation")} />}
@@ -20458,108 +20730,12 @@ function CompliancePage({ projects, bare }) {
 // APPROVAL TRACKING — every approval, every project, one list
 // ---------------------------------------------------------------------------
 function ApprovalTrackingPage({ projects, onOpenProject, bare }) {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
-  const [filter, setFilter] = useState("open");
-
-  useEffect(() => { load(); }, [projects.length]);
-
-  async function load() {
-    setLoading(true); setErr(null);
-    try {
-      const [{ data: tenders }, { data: aps }] = await Promise.all([
-        sb.from("tenders").select("id, project_id"),
-        sb.from("approvals").select("*").order("created_at", { ascending: false }),
-      ]);
-      const projectOfTender = Object.fromEntries((tenders || []).map(t => [t.id, t.project_id]));
-      const byId = Object.fromEntries(projects.map(p => [p.id, p]));
-      setRows((aps || []).map(a => ({ ...a, project: byId[projectOfTender[a.tender_id]] || null })));
-    } catch (e) {
-      console.error("ApprovalTrackingPage.load failed:", e);
-      setErr(e.message || "Could not load approvals.");
-    } finally { setLoading(false); }
-  }
-
-  const isOpen = a => a.status !== "approved" && a.status !== "rejected";
-  const counts = {
-    all: rows.length,
-    open: rows.filter(isOpen).length,
-    approved: rows.filter(a => a.status === "approved").length,
-    rejected: rows.filter(a => a.status === "rejected" || a.status === "changes_requested").length,
-  };
-  const shown = filter === "all" ? rows
-    : filter === "open" ? rows.filter(isOpen)
-    : filter === "approved" ? rows.filter(a => a.status === "approved")
-    : rows.filter(a => a.status === "rejected" || a.status === "changes_requested");
-
-  const tone = st => st === "approved" ? "#10b981"
-    : st === "rejected" || st === "changes_requested" ? "#f43f5e"
-    : "#f59e0b";
-
-  function waitingOn(a) {
-    const chain = Array.isArray(a.chain) ? a.chain : [];
-    const step = chain.find(c => c.step === a.current_step);
-    if (a.status === "approved") return "Complete";
-    if (a.status === "rejected") return "Returned";
-    if (!step) return "—";
-    return step.name || step.email || step.role || `Step ${a.current_step}`;
-  }
-
   return (
     <div>
-      <PageHead
-        bare={bare}
-        title="Approval Tracking"
-        sub="Every approval you have raised, across every project, with who it is currently sitting with."
-      />
-
-      <div className="qp-card" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {[["open", "Waiting"], ["approved", "Approved"], ["rejected", "Returned"], ["all", "All"]].map(([k, l]) => (
-          <button key={k} onClick={() => setFilter(k)}
-            className="qp-btn" style={filter === k ? { background: "#4f46e5", borderColor: "#4f46e5", color: "#fff" } : {}}>
-            {l} ({counts[k]})
-          </button>
-        ))}
-      </div>
-
-      {loading ? <div className="qp-empty">Loading…</div>
-       : err ? <div className="qp-empty" style={{ color: "#f43f5e", borderColor: "#f43f5e" }}>{err}</div>
-       : shown.length === 0 ? (
-        <div className="qp-empty">
-          {rows.length === 0
-            ? "No approvals raised yet. Open a project, run a supplier comparison, and send the recommendation for approval."
-            : "Nothing in this state."}
-        </div>
-       ) : (
-        <div className="qp-card">
-          <div className="qp-wrap">
-            <table className="qp-table">
-              <thead>
-                <tr><th>Approval</th><th>Project</th><th>Value</th><th>Waiting on</th><th>Raised</th><th>Status</th><th></th></tr>
-              </thead>
-              <tbody>
-                {shown.map(a => (
-                  <tr key={a.id}>
-                    <td className="nm">{a.title}</td>
-                    <td>{a.project ? a.project.project_name : "—"}</td>
-                    <td>{a.amount_cents ? `${a.currency || ""} ${(a.amount_cents / 100).toLocaleString()}` : "—"}</td>
-                    <td>{waitingOn(a)}</td>
-                    <td>{a.created_at ? new Date(a.created_at).toLocaleDateString() : "—"}</td>
-                    <td><span className="qp-badge" style={{ color: tone(a.status), borderColor: tone(a.status) }}>{String(a.status || "pending").replace(/_/g, " ")}</span></td>
-                    <td>
-                      {a.project && (
-                        <button className="qp-btn" style={{ padding: "5px 12px", fontSize: 12 }}
-                          onClick={() => onOpenProject(a.project)}>Open</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-       )}
+      <PageHead bare={bare} title="Approval Tracking"
+        sub="Everything sent for approval, across every project: who it is waiting for, what was sent back and why." />
+      <ApprovalBoard projects={projects} showProject
+        onOpenItem={(a, p) => p && onOpenProject && onOpenProject(p, "approvals")} />
     </div>
   );
 }
@@ -29339,14 +29515,14 @@ function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) 
     // Long enough to read as feedback, short enough not to feel like a wait.
     setTimeout(() => setRefreshing(false), 650);
   }
-  const openProject = p => setView({ name: "project", project: p });
+  const openProject = (p, tab) => setView({ name: "project", project: p, tab: typeof tab === "string" ? tab : undefined });
   const go = name => setView({ name });
 
   // A project workspace and the admin portal each own the whole width: both
   // already carry their own navigation, and stacking a second one beside them
   // leaves the actual work too narrow to use.
   if (view.name === "project") {
-    return <ProjectWorkspace project={view.project}
+    return <ProjectWorkspace project={view.project} initialTab={view.tab}
       onBack={()=>go("dashboard")} onHome={()=>go("home")}
       onEdit={()=>setView({name:"edit", project:view.project})} onDeleted={()=>go("dashboard")} />;
   }
@@ -31180,6 +31356,85 @@ html:has(.qx),html:has(.qx) body{background:
 .qteam-log{display:flex;flex-direction:column;border:1px solid #e3e9f1;border-radius:12px;background:#fff}
 .qteam-log > div{display:flex;gap:10px;padding:8px 14px;border-top:1px solid #eef2f7;font-size:13px;color:#334155}
 .qteam-log > div:first-child{border-top:0}
+/* Approvals */
+.qap{display:flex;flex-direction:column;gap:14px}
+.qap-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.qap-kpis > div{padding:14px 16px;border-radius:14px;background:linear-gradient(135deg,#fff 55%,color-mix(in srgb,var(--c) 10%,#fff));border:1px solid color-mix(in srgb,var(--c) 22%,#e3e9f1);border-left:4px solid var(--c);display:flex;flex-direction:column}
+.qap-kpis b{font-size:24px;font-weight:800;color:var(--c);line-height:1.1}
+.qap-kpis span{font-size:12px;color:#5a6b82;font-weight:600}
+.qap-filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.qap-f{padding:6px 12px;border-radius:999px;border:1px solid #dbe4ef;background:#fff;font-size:13px;font-weight:600;color:#475569;display:inline-flex;gap:6px;align-items:center}
+.qap-f span{font-size:11px;background:#eef2f7;border-radius:999px;padding:1px 7px;color:#64748b}
+.qap-f.on{background:#4f46e5;border-color:#4f46e5;color:#fff}
+.qap-f.on span{background:rgba(255,255,255,.22);color:#fff}
+.qap-type{display:inline-flex;align-items:center;gap:6px;padding:3px 9px 3px 3px;border-radius:999px;font-size:11.5px;font-weight:700;color:var(--c);background:color-mix(in srgb,var(--c) 10%,#fff);border:1px solid color-mix(in srgb,var(--c) 28%,#fff);white-space:nowrap;flex-shrink:0}
+.qap-type b{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--c);color:#fff;font-size:9.5px}
+.qap-card{background:#fff;border:1px solid #e3e9f1;border-left:4px solid var(--c);border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.qap-card.mine{box-shadow:0 0 0 3px color-mix(in srgb,#4f46e5 14%,transparent);border-color:#c7d2fe;border-left-color:var(--c)}
+.qap-top{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.qap-title{font-size:14.5px;font-weight:800;color:#0f2140;display:flex;gap:8px;align-items:center}
+.qap-rev{font-size:10.5px;font-weight:700;color:#4f46e5;background:#eef2ff;border-radius:6px;padding:1px 6px;margin-left:6px}
+.qap-status{font-size:12px;font-weight:700;color:var(--c);background:color-mix(in srgb,var(--c) 10%,#fff);border:1px solid color-mix(in srgb,var(--c) 30%,#fff);padding:4px 10px;border-radius:999px;white-space:nowrap}
+.qap-steps{display:flex;flex-wrap:wrap;gap:6px;align-items:stretch}
+.qap-step{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#475569;padding:5px 10px 5px 5px;border-radius:10px;background:#f6f8fb;border:1px solid #e6ecf3;position:relative}
+.qap-step + .qap-step::before{content:"";position:absolute;left:-7px;top:50%;width:8px;height:2px;background:#cbd5e1}
+.qap-step i{font-style:normal;display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#e2e8f0;color:#64748b;font-size:11px;font-weight:800}
+.qap-step em{font-style:normal;font-weight:500;color:#64748b;font-size:11px;margin-left:2px}
+.qap-step.done{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}.qap-step.done i{background:#10b981;color:#fff}
+.qap-step.wait{background:#fff7ed;border-color:#fdba74;color:#9a3412}.qap-step.wait i{background:#f59e0b;color:#fff}
+.qap-step.back{background:#fff1f2;border-color:#fda4af;color:#9f1239}.qap-step.back i{background:#e11d48;color:#fff}
+.qap-step.rej{background:#fff1f2;border-color:#fda4af;color:#9f1239}.qap-step.rej i{background:#be123c;color:#fff}
+.qap-warn{font-size:12.5px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:8px 12px}
+.qap-you{font-size:12.5px;color:#3730a3;background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:8px 12px}
+.qap-you.back{color:#9f1239;background:#fff1f2;border-color:#fecdd3}
+.qap-body{border-top:1px solid #eef2f7;padding-top:12px;display:flex;flex-direction:column;gap:14px}
+.qap-cols{display:grid;grid-template-columns:1fr 1.2fr;gap:18px}
+@media (max-width:900px){.qap-cols{grid-template-columns:1fr}}
+.qap-lbl{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#5a6b82;margin-bottom:8px}
+.qap-ref{font-size:12.5px;padding:4px 10px;border-radius:8px;background:#f1f5f9;border:1px solid #e2e8f0;color:#334155}
+.qap-note{margin-top:12px;font-size:13px;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px 12px}
+.qap-hist{display:flex;flex-direction:column}
+.qap-h{display:flex;gap:10px;font-size:13px;color:#334155;padding-bottom:10px;position:relative}
+.qap-h > i{flex-shrink:0;width:10px;height:10px;border-radius:50%;margin-top:5px;background:#94a3b8;box-shadow:0 0 0 3px #f1f5f9}
+.qap-h:not(:last-child)::after{content:"";position:absolute;left:4px;top:16px;bottom:0;width:2px;background:#e2e8f0}
+.qap-h.approved > i{background:#10b981}.qap-h.changes_requested > i,.qap-h.rejected > i{background:#e11d48}
+.qap-h.resubmitted > i,.qap-h.submitted > i{background:#4f46e5}
+.qap-cmt{margin-top:4px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;font-size:13px;line-height:1.45;color:#1e293b}
+.qap-act{background:#f7faff;border:1px solid #dbe6f5;border-radius:12px;padding:12px 14px}
+.qap-act.back{background:#fff7f8;border-color:#fecdd3}
+.qap-b{font-size:13px;font-weight:700;padding:8px 14px;border-radius:10px;border:1px solid transparent}
+.qap-b.ok{background:#059669;color:#fff}.qap-b.ok:hover{background:#047857}
+.qap-b.back{background:#fff;color:#be123c;border-color:#fda4af}.qap-b.back:hover{background:#fff1f2}
+.qap-b.rej{background:#fff;color:#64748b;border-color:#cbd5e1}.qap-b.rej:hover{color:#be123c;border-color:#be123c}
+.qap-b:disabled{opacity:.55}
+.qap-form{background:#fff;border:1px solid #e3e9f1;border-top:3px solid #4f46e5;border-radius:14px;padding:0 18px 18px;display:flex;flex-direction:column;gap:16px;overflow:hidden}
+.qap-form-h{margin:0 -18px;padding:14px 18px;font-size:16px;font-weight:800;color:#0f2140;display:flex;flex-direction:column;gap:2px;background:linear-gradient(120deg,#eef2ff 0%,#f3eefe 55%,#e8f8f4 100%);border-bottom:1px solid #e3e9f1}
+.qap-form-h span{font-size:12.5px;font-weight:500;color:#5a6b82}
+.qap-types{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.qap-tcard{text-align:left;display:grid;grid-template-columns:34px 1fr;column-gap:10px;row-gap:1px;align-items:center;padding:10px 12px;border-radius:12px;border:1.5px solid #e3e9f1;background:#fff;cursor:pointer}
+.qap-tcard b{font-size:13.5px;color:#0f2140}
+.qap-tcard > span:last-child{grid-column:2;font-size:11.5px;color:#64748b;line-height:1.35}
+.qap-tbadge{grid-row:span 2;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;font-size:11px;font-weight:800;color:var(--c);background:color-mix(in srgb,var(--c) 12%,#fff)}
+.qap-tcard:hover{border-color:color-mix(in srgb,var(--c) 45%,#fff)}
+.qap-tcard.on{border-color:var(--c);background:color-mix(in srgb,var(--c) 7%,#fff);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 14%,transparent)}
+.qap-tcard.on .qap-tbadge{background:var(--c);color:#fff}
+.qap-tcard.on b{color:var(--c)}
+.qap-items{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow:auto;padding:10px;border:1px solid #e3e9f1;border-radius:12px;background:#fbfcfe}
+.qap-item{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid transparent}
+.qap-item:hover{background:#f1f5f9}
+.qap-item.on{background:#eef2ff;border-color:#c7d2fe}
+.qap-sum{display:flex;gap:8px;flex-wrap:wrap}
+.qap-sum span{font-size:13px;padding:7px 12px;border-radius:10px;background:#f5f3ff;border:1px solid #ddd6fe;color:#4c1d95}
+.qap-none{font-size:13px;color:#64748b;padding:12px;border:1px dashed #cbd5e1;border-radius:10px}
+.qap-chain{display:flex;flex-direction:column;gap:6px}
+.qap-crow{display:grid;grid-template-columns:28px minmax(150px,1fr) minmax(200px,1.3fr) minmax(220px,1.6fr) auto;gap:8px;align-items:center}
+@media (max-width:900px){.qap-crow{grid-template-columns:28px 1fr}.qap-crow > *:nth-child(n+3){grid-column:2}}
+.qap-cnum{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:#4f46e5;color:#fff;font-size:12px;font-weight:800}
+.qap-wait{border-top:3px solid #4f46e5}
+.qap-count{background:#4f46e5;color:#fff;font-size:11px;font-weight:800;border-radius:999px;padding:1px 8px}
+.qap-wrow{display:flex;gap:8px;align-items:center;width:100%;padding:8px;border-radius:10px;font-size:13px}
+.qap-wrow:hover{background:#f5f7ff}
+.qap-wrow .qap-type{padding-right:3px}.qap-wrow .qap-type{font-size:0;gap:0}
 @media (max-width:900px){.qteam-row{grid-template-columns:40px 1fr auto}.qteam-wss,.qteam-meta{grid-column:2/-1}.qteam-actions{grid-column:1/-1;justify-content:flex-start}.qteam-editwrap{margin-left:0}}
 </style>
 </body>
