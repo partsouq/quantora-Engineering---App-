@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-25.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -31608,6 +31608,27 @@ html:has(.qx),html:has(.qx) body{background:
 .qap-wrow:hover{background:#f5f7ff}
 .qap-wrow .qap-type{padding-right:3px}.qap-wrow .qap-type{font-size:0;gap:0}
 @media (max-width:900px){.qteam-row{grid-template-columns:40px 1fr auto}.qteam-wss,.qteam-meta{grid-column:2/-1}.qteam-actions{grid-column:1/-1;justify-content:flex-start}.qteam-editwrap{margin-left:0}}
+
+/* ---- Navy theme (2026-10-25, option F) ----
+   The page behind the cards is deep navy #0F1F38, matching the side menu.
+   Cards, tables and pop-ups stay white with dark text. Text that sits
+   straight on the navy (page titles, section labels, hints) turns light.
+   "On a light surface" = inside any white card/panel/table/pop-up. */
+html:root:has(.qx),html:root:has(.qx) body.bg-slate-50,html:root:has(.qx) body{
+  background:radial-gradient(900px 560px at 100% -10%,rgba(28,108,230,.22),transparent 60%),
+             radial-gradient(800px 520px at -10% 40%,rgba(13,148,136,.10),transparent 60%),#0f1f38 !important;
+  background-attachment:fixed !important}
+.qx{--q-bg:#0f1f38}
+.qx .bg-slate-50{background-color:transparent !important}
+.qx :is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed) .bg-slate-50{background-color:#f6f8fb !important}
+.qx :is(h1,h2,h3,h4,.text-slate-900,.text-slate-800,.text-slate-700,.text-gray-900,.text-gray-800):not(:is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed,.qws-side,.qapp-nav,[class*="bg-"]:not(body):not(.bg-slate-50):not(.bg-transparent)) *){color:#eef3fb !important}
+.qx :is(p,span,div,label,a,button).text-slate-500:not(:is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed,[class*="bg-"]:not(body):not(.bg-slate-50):not(.bg-transparent)) *),
+.qx :is(p,span,div,label).text-slate-600:not(:is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed,[class*="bg-"]:not(body):not(.bg-slate-50):not(.bg-transparent)) *),
+.qx :is(p,span,div,label).text-slate-400:not(:is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed,[class*="bg-"]:not(body):not(.bg-slate-50):not(.bg-transparent)) *){color:#a9b8cc !important}
+.qx div.text-sm.font-semibold.mb-3:not(:is(.bg-white,.qp-card,.card) *){color:#dbe5f3 !important}
+.qx button.border:not(.text-rose-600):not(:is(.bg-white,.qp-card,.card,table,[role=dialog],[class*="card"],[class*="hero"],[class*="panel"],[class*="rounded-xl"],[class*="rounded-2xl"],.fixed) *):not([class*="bg-"]:not([class*="hover:bg-"])){background:#fff !important;color:#14233a !important}
+.qx button.border.text-rose-600:not(:is(.bg-white,[class*="card"],[class*="rounded-2xl"],.fixed) *){background:#fff !important;color:#e11d48 !important}
+.qx .qh > p,.qx .qh-hi p{color:#a9b8cc !important}
 </style>
 </body>
 </html>
