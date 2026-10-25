@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-25.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -3808,9 +3808,9 @@ const QUANTORA_LANDING_HTML = `
     <div class="p3d" id="p3d">
       <div class="p3d-pin">
         <div class="p3d-scene">
-          <figure class="p3d-model"><span class="p3d-tag">3D coordination model</span><video class="p3d-vid" autoplay muted loop playsinline preload="metadata" poster="efwe-flythrough.jpg" width="960" height="540" aria-label="Fly-through of a 3D coordination model of every MEP system, built by the AI draftsman from the ground floor plan"><source src="efwe-flythrough.mp4" type="video/mp4"/><source src="efwe-flythrough.webm" type="video/webm"/></video></figure>
+          <figure class="p3d-model"><span class="p3d-tag">AI draftsman output</span><video class="p3d-vid" autoplay muted loop playsinline preload="metadata" poster="drawings-2d-3d.jpg" width="960" height="540" aria-label="2D shop drawings for each system, the 3D model built from them, and every system in 3D"><source src="drawings-2d-3d.mp4" type="video/mp4"/><source src="drawings-2d-3d.webm" type="video/webm"/></video></figure>
         </div>
-        <div class="p3d-caps"><span class="on" data-i="0">Plan read in 3D</span><span data-i="1">Every system, modelled</span></div>
+        <div class="p3d-caps"><span class="on" data-i="0">2D shop drawings</span><span data-i="1">3D model</span><span data-i="2">Every system</span></div>
       </div>
     </div>
     <div class="m3d-grid">
@@ -4919,8 +4919,11 @@ function LandingPage({ onGetStarted }) {
       if (p3d) {
         p3d.classList.add("live");
         const model = p3d.querySelector(".p3d-model"), caps = p3d.querySelectorAll(".p3d-caps span");
-        const tl = gsap.timeline({ scrollTrigger: { trigger: p3d, start: "top top+=84", end: "bottom bottom", scrub: 0.7,
-          onUpdate: self => { const i = self.progress < 0.5 ? 0 : 1; caps.forEach(c => c.classList.toggle("on", Number(c.dataset.i) === i)); } } });
+        const tl = gsap.timeline({ scrollTrigger: { trigger: p3d, start: "top top+=84", end: "bottom bottom", scrub: 0.7 } });
+        // the labels follow the video: 2D drawings, then the 3D model, then every system
+        const vid = model.querySelector("video");
+        if (vid) { const onT = () => { const t = vid.currentTime, i = t < 12 ? 0 : t < 29 ? 1 : 2; caps.forEach(c => c.classList.toggle("on", Number(c.dataset.i) === i)); };
+          vid.addEventListener("timeupdate", onT); kills.push({ kill: () => vid.removeEventListener("timeupdate", onT) }); }
         // the model lies flat like a plan, then stands up and turns to face you
         tl.fromTo(model, { xPercent: -50, yPercent: -40, rotateX: 58, rotateZ: -22, scale: 0.82 },
                          { yPercent: -50, rotateX: 0, rotateZ: 0, scale: 1, ease: "power2.inOut", duration: 0.7 })
