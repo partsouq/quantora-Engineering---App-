@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-25.7"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -3332,8 +3332,8 @@ const QUANTORA_LANDING_CSS = `
   .p3d.live .p3d-scene{height:100%;}
   .p3d.live .p3d-plan,.p3d.live .p3d-model{position:absolute;left:50%;top:50%;width:min(100%,960px);transform-origin:50% 50%;}
   .p3d.live .p3d-plan{transform:translate(-50%,-50%);}
-  .p3d.live .p3d-model{width:min(52%,500px);transform:translate(-50%,-50%);opacity:0;}
-  @media (max-width:860px){.p3d.live{height:200vh;}.p3d.live .p3d-model{width:78%;}}
+  .p3d.live .p3d-model{width:min(82%,800px);transform:none;opacity:0;background:#fff;}
+  @media (max-width:860px){.p3d.live{height:200vh;}.p3d.live .p3d-model{width:96%;}}
   @media (prefers-reduced-motion:reduce){.qsl{overflow-x:auto;-webkit-mask-image:none;mask-image:none;}.qsl-track{animation:none;}.q3t{transition:none;}}
 
   .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;position:relative;}
@@ -3810,7 +3810,7 @@ const QUANTORA_LANDING_HTML = `
       <div class="p3d-pin">
         <div class="p3d-scene">
           <figure class="p3d-plan"><span class="p3d-tag">Ground floor &middot; architecture</span><img src="gf-architecture.jpg" alt="Ground floor architectural drawing with every system marked up" width="1536" height="722" loading="lazy"/></figure>
-          <figure class="p3d-model"><span class="p3d-tag">3D model</span><img src="3d-building.jpg" alt="3D coordination model built from the floor plans" width="1240" height="1290" loading="lazy"/></figure>
+          <figure class="p3d-model"><span class="p3d-tag">3D coordination model</span><img src="efwe-3d.jpg" alt="3D coordination model of every MEP system, built by the AI draftsman from the ground floor plan" width="1600" height="1108" loading="lazy"/></figure>
         </div>
         <div class="p3d-caps"><span class="on" data-i="0">GF architecture drawing</span><span data-i="1">Plan read in 3D</span><span data-i="2">Every system, modelled</span></div>
       </div>
@@ -4926,8 +4926,8 @@ function LandingPage({ onGetStarted }) {
         tl.fromTo(plan, { xPercent: -50, yPercent: -50, rotateX: 0, rotateZ: 0, scale: 1 },
                         { rotateX: 60, rotateZ: -28, scale: 0.86, yPercent: -18, ease: "power2.inOut", duration: 0.45 })
           .fromTo(model, { xPercent: -50, yPercent: 10, opacity: 0, scale: 0.7, rotateX: 18 },
-                         { yPercent: -56, opacity: 1, scale: 0.92, rotateX: 0, ease: "power3.out", duration: 0.4 }, 0.32)
-          .to(plan, { opacity: 0.55, duration: 0.2 }, 0.62)
+                         { yPercent: -50, opacity: 1, scale: 0.94, rotateX: 0, ease: "power3.out", duration: 0.4 }, 0.32)
+          .to(plan, { opacity: 0.25, duration: 0.2 }, 0.62)
           .to(model, { rotateY: -8, scale: 0.96, duration: 0.25 }, 0.75);
         kills.push(tl);
       }
