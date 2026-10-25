@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-25.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4507,7 +4507,7 @@ const QUANTORA_LANDING_HTML = `
       </div>
     </div>
     <p class="secsub qx-local-note" style="margin-top:14px;font-size:12px;display:none;"></p>
-    <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 draftsman drawing pages and 5 AI-processed pages, used once, no expiry &mdash; no credit card required.</p>
+    <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 draftsman drawing pages and 5 AI-processed pages &mdash; no credit card required. Your work is kept for 7 days; choose a plan to keep it.</p>
   </div>
 </section>
 
@@ -5460,7 +5460,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                     {plan.max_overage_cents > 0
                       ? <div className="text-slate-400">Pay-as-you-go credits beyond that, up to ${(plan.max_overage_cents / 100).toLocaleString()}/month.</div>
                       : <div className="text-slate-400">No pay-as-you-go on this plan.</div>}
-                    {plan.is_trial && <div>{(plan.trial_duration_days ?? 2) > 3650 ? "One-time free welcome pack \u2014 no expiry. When it is used, choose a plan." : `${plan.trial_duration_days ?? 2}-day trial window`}</div>}
+                    {plan.is_trial && <div>{(plan.trial_duration_days ?? 2) > 3650 ? "One-time free welcome pack. Your projects and files are kept for 7 days \u2014 choose a plan within 7 days to keep them." : `${plan.trial_duration_days ?? 2}-day trial window`}</div>}
                   </div>
                   {isCurrent ? (
                     <div className="mt-4 text-center text-xs font-semibold text-slate-500 bg-slate-100 rounded-lg py-2">Current plan</div>
@@ -6269,7 +6269,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
             {trialUsage.trial_expired ? (
               <span className="text-xs font-bold text-rose-700">Trial ended {trialUsage.trial_end_date ? new Date(trialUsage.trial_end_date).toLocaleDateString() : ""}</span>
             ) : (
-              <span className="text-xs font-bold text-violet-700">{trialUsage.trial_days_remaining > 3650 ? "One-time pack \u00B7 no expiry" : `Trial Ends: ${trialUsage.trial_days_remaining} Day${trialUsage.trial_days_remaining === 1 ? "" : "s"} Remaining`}</span>
+              <span className="text-xs font-bold text-violet-700">{trialUsage.trial_days_remaining > 3650 ? "One-time pack \u00B7 work kept 7 days" : `Trial Ends: ${trialUsage.trial_days_remaining} Day${trialUsage.trial_days_remaining === 1 ? "" : "s"} Remaining`}</span>
             )}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -17798,6 +17798,63 @@ function qWelcomeInfo(c) {
   const left = Math.min(7, Math.ceil((previewEnd - Date.now()) / 86400000));
   return { previewEnd, left };
 }
+// Welcome Pack 7-day rule (2026-10-25). Projects and files on the Welcome Pack
+// are kept until companies.welcome_delete_at; the daily welcome-cleanup engine
+// deletes them after that unless a paid plan is active. This bar is the
+// customer's countdown. It shows nothing until the clock is set.
+function WelcomeKeepBar({ sessionKey, onChoosePlan }) {
+  const [co, setCo] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) return;
+        const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+        if (!prof?.company_id) return;
+        const { data } = await sb.from("companies")
+          .select("plan, welcome_delete_at, welcome_cleared_at").eq("id", prof.company_id).maybeSingle();
+        if (alive) setCo(data || null);
+      } catch (e) { /* the bar is a convenience; never block the app */ }
+    }
+    load();
+    const again = () => load();
+    window.addEventListener("plan-changed", again);
+    window.addEventListener("profile-updated", again);
+    return () => { alive = false; window.removeEventListener("plan-changed", again); window.removeEventListener("profile-updated", again); };
+  }, [sessionKey]);
+  if (!co || co.plan !== "trial" || !co.welcome_delete_at) return null;
+  const end = Date.parse(co.welcome_delete_at);
+  const ms = end - Date.now();
+  const days = Math.ceil(ms / 86400000);
+  const when = new Date(end).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  let tone, text;
+  if (ms <= 0 && co.welcome_cleared_at) {
+    tone = "gone";
+    text = "Your Welcome Pack projects and files were removed because no plan was chosen within 7 days. Choose a plan to start again and keep your work.";
+  } else if (ms <= 0) {
+    tone = "red";
+    text = "Your 7 Welcome Pack days are over. Your projects and files will be removed tonight unless you choose a plan now.";
+  } else {
+    tone = days <= 2 ? "red" : "blue";
+    text = days <= 1
+      ? `Last day: your Welcome Pack projects and files are removed after ${when}. Choose a plan to keep them.`
+      : `Welcome Pack: your projects and files are kept for ${days} more days (until ${when}). Choose a plan to keep them.`;
+  }
+  const st = tone === "blue"
+    ? { background: "#eef4ff", color: "#1e3a8a", borderBottom: "1px solid #c7d7fe" }
+    : tone === "red"
+      ? { background: "#fff1f2", color: "#9f1239", borderBottom: "1px solid #fecdd3" }
+      : { background: "#f1f5f9", color: "#334155", borderBottom: "1px solid #e2e8f0" };
+  return (
+    <div data-welcome-bar role="status" style={{ ...st, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "9px 24px", fontSize: 13.5, fontWeight: 600 }}>
+      <span>{text}</span>
+      <button onClick={onChoosePlan} style={{ border: 0, borderRadius: 8, padding: "7px 14px", fontWeight: 800, fontSize: 13, cursor: "pointer",
+        background: tone === "red" ? "#e11d48" : "#1c6ce6", color: "#fff", whiteSpace: "nowrap" }}>Choose a plan</button>
+    </div>
+  );
+}
+
 function qDaysLeft(iso) {
   if (!iso) return null;
   const ms = new Date(iso).getTime() - Date.now();
@@ -20107,6 +20164,111 @@ function QHealthView({ systemStatus }) {
         )}
       </div>
       <div style={{ color: "var(--text-dimmer)", fontSize: 11.5 }}>Checked at {s.checked_at || "—"}. Configuration booleans only confirm a secret's presence — values are never read or displayed.</div>
+      <QWelcomeCleanupPanel />
+    </>
+  );
+}
+
+// Welcome Pack 7-day rule: what the daily clean-up will delete next, what it
+// has deleted, and the one-time clean-up of files with no owner.
+const WELCOME_CLEANUP_FN_URL = `${SUPABASE_URL}/functions/v1/welcome-cleanup`;
+async function callWelcomeCleanup(action, payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(WELCOME_CLEANUP_FN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action, ...(payload || {}) }),
+  });
+  let json = {};
+  try { json = await res.json(); } catch (e) { /* not deployed yet */ }
+  if (!res.ok) throw new Error(json.error || "The Welcome Pack clean-up engine is not deployed yet.");
+  return json;
+}
+
+function QWelcomeCleanupPanel() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const [orph, setOrph] = useState(null);
+  async function load() {
+    setErr("");
+    try { setData(await callWelcomeCleanup("status", {})); } catch (e) { setErr(e.message); }
+  }
+  useEffect(() => { load(); }, []);
+  async function preview() {
+    setBusy("preview"); setMsg("");
+    try {
+      const r = await callWelcomeCleanup("run", { dry_run: true });
+      const files = r.results.reduce((a, x) => a + (x.files_deleted || 0), 0);
+      setMsg(r.companies ? `Tonight's run would remove ${r.companies} compan${r.companies === 1 ? "y" : "ies"}' work: ${r.results.reduce((a, x) => a + (x.projects_deleted || 0), 0)} projects, ${files} files. Nothing was deleted.` : "Nothing is due for deletion right now.");
+      await load();
+    } catch (e) { setMsg(e.message); } finally { setBusy(""); }
+  }
+  async function orphans(dry) {
+    setBusy("orph"); setMsg("");
+    try {
+      const r = await callWelcomeCleanup("orphans", { dry_run: dry });
+      if (dry) setOrph(r);
+      else { setOrph(null); setMsg(`Removed ${r.removed} files with no owner (${qBytes(r.bytes)}).`); await load(); }
+    } catch (e) { setMsg(e.message); } finally { setBusy(""); }
+  }
+  const fmt = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—";
+  const live = (data?.upcoming || []).filter(c => !c.welcome_cleared_at || Date.parse(c.welcome_delete_at) > Date.now());
+  return (
+    <>
+      <div className="section-label">Welcome Pack — 7-day keeping period</div>
+      <div className="card panel">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.6 }}>
+            Welcome Pack projects and files are deleted 7 days after sign-up unless a paid plan is active. Paying, hand-granted and admin accounts are never touched.
+          </div>
+          <span className={data?.scheduled ? "pill st-healthy" : "pill st-warning"}>{data ? (data.scheduled ? "Runs daily 02:30" : "Not switched on") : "—"}</span>
+        </div>
+        {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 8 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <button className="btn btn-sm" disabled={busy === "preview"} onClick={preview}>{busy === "preview" ? "Checking…" : "Preview tonight's run"}</button>
+          <button className="btn btn-sm" disabled={busy === "orph"} onClick={() => orphans(true)}>Find files with no owner</button>
+          {orph && orph.files > 0 && (
+            <button className="btn btn-sm" style={{ borderColor: "#f43f5e", color: "#fda4af" }} disabled={busy === "orph"} onClick={() => orphans(false)}>
+              Delete {orph.files} files ({qBytes(orph.bytes)})
+            </button>
+          )}
+          {orph && orph.files === 0 && <span style={{ fontSize: 12, color: "var(--text-dimmer)", alignSelf: "center" }}>No files without an owner.</span>}
+        </div>
+        {msg && <div style={{ fontSize: 12.5, marginBottom: 12, color: "var(--text-dim)" }}>{msg}</div>}
+        {data && (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Welcome Pack company</th><th>Projects</th><th>Work deleted on</th></tr></thead>
+              <tbody>
+                {live.length === 0 ? <tr><td colSpan={3} style={{ color: "var(--text-dimmer)" }}>No Welcome Pack company on the clock.</td></tr>
+                  : live.map(c => {
+                    const left = Math.ceil((Date.parse(c.welcome_delete_at) - Date.now()) / 86400000);
+                    return (
+                      <tr key={c.id}><td style={{ fontWeight: 600 }}>{c.name}</td><td>{c.projects}</td>
+                        <td><span className={left <= 2 ? "pill st-warning" : "pill"}>{fmt(c.welcome_delete_at)}{left > 0 ? ` · ${left}d left` : " · due tonight"}</span></td></tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {data && (data.log || []).length > 0 && (
+          <div className="table-wrap" style={{ marginTop: 14 }}>
+            <table>
+              <thead><tr><th>Run</th><th>Company</th><th>Projects</th><th>Files</th><th>Freed</th><th>Note</th></tr></thead>
+              <tbody>
+                {data.log.map(l => (
+                  <tr key={l.id}><td>{new Date(l.run_at).toLocaleString()}</td><td>{l.company_name || "—"}</td>
+                    <td>{l.projects_deleted}</td><td>{l.files_deleted}</td><td>{qBytes(l.bytes_freed)}</td>
+                    <td style={{ color: "var(--text-dimmer)" }}>{l.note}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </>
   );
 }
@@ -21255,7 +21417,7 @@ function BillingPage({ onUpgrade }) {
             <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{usage.plan?.name || "Free"}</div>
             {usage.plan?.is_trial && usage.trial_days_remaining != null && usage.trial_days_remaining > 3650 && (
               <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
-                One-time free welcome pack {"\u2014"} no expiry. When it is used up, choose a plan to continue.
+                One-time free welcome pack. Your projects and files are kept for 7 days {"\u2014"} choose a plan within 7 days to keep them.
               </p>
             )}
             {usage.plan?.is_trial && usage.trial_days_remaining != null && usage.trial_days_remaining <= 3650 && (
@@ -30501,6 +30663,7 @@ function App() {
           <button onClick={()=>setBillingBanner(null)} className="text-xs underline">Dismiss</button>
         </div>
       )}
+      <WelcomeKeepBar sessionKey={session.user.id} onChoosePlan={()=>setBillingModal({ open: true, reason: "" })} />
       <PortalBody
         view={view}
         setView={setView}
