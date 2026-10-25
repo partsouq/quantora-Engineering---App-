@@ -26,3 +26,22 @@ end $$;
 
 revoke all on function public.project_storage_paths(uuid) from public, anon;
 grant execute on function public.project_storage_paths(uuid) to authenticated, service_role;
+
+-- Same list for welcome-cleanup (service role), for many projects at once.
+create or replace function public.admin_storage_for_projects(p_ids uuid[])
+returns table (bucket text, name text, size bigint)
+language sql stable security definer set search_path = '' as $$
+  select o.bucket_id::text, o.name::text, coalesce((o.metadata->>'size')::bigint, 0)
+    from storage.objects o
+   where o.bucket_id = 'drawings' and split_part(o.name, '/', 1) = any(select x::text from unnest(p_ids) x)
+  union
+  select o.bucket_id::text, o.name::text, coalesce((o.metadata->>'size')::bigint, 0)
+    from storage.objects o join public.drawings d on d.storage_path = o.name
+   where o.bucket_id = 'drawings' and d.project_id = any(p_ids)
+  union
+  select o.bucket_id::text, o.name::text, coalesce((o.metadata->>'size')::bigint, 0)
+    from storage.objects o join public.tenders t on t.id::text = split_part(o.name, '/', 1)
+   where o.bucket_id = 'tenders' and t.project_id = any(p_ids);
+$$;
+revoke all on function public.admin_storage_for_projects(uuid[]) from public, anon, authenticated;
+grant execute on function public.admin_storage_for_projects(uuid[]) to service_role;

@@ -1,5 +1,5 @@
 // ===========================================================================
-// Quantora — welcome-cleanup (25 Oct 2026)
+// Quantora — welcome-cleanup (25 Oct 2026; tender documents too)
 //
 // The Welcome Pack 7-day rule. A Welcome Pack (plan 'trial') company has 7
 // days (companies.welcome_delete_at) to choose a paid plan. After that, this
@@ -36,11 +36,11 @@ const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE
   { auth: { persistSession: false } });
 const BUCKET = "drawings";
 
-async function removeFiles(names: string[]): Promise<number> {
+async function removeFiles(names: string[], bucket = BUCKET): Promise<number> {
   let removed = 0;
   for (let i = 0; i < names.length; i += 100) {
     const batch = names.slice(i, i + 100);
-    const { data, error } = await admin.storage.from(BUCKET).remove(batch);
+    const { data, error } = await admin.storage.from(bucket).remove(batch);
     if (error) throw error;
     removed += (data ?? []).length;
   }
@@ -70,22 +70,26 @@ async function run(dryRun: boolean) {
       const { data: projects } = await admin.from("projects").select("id").eq("company_id", co.id);
       const ids = (projects ?? []).map((p: any) => String(p.id));
       if (!ids.length) continue;                        // nothing left to delete
-      const { data: files, error: fErr } = await admin.rpc("admin_storage_under", { prefixes: ids });
+      // Every file of these projects in every bucket: project folders,
+      // drawings stored elsewhere, and the tender documents of their tenders.
+      const { data: files, error: fErr } = await admin.rpc("admin_storage_for_projects", { p_ids: ids });
       if (fErr) throw fErr;
-      // Drawings stored outside their project's folder, if any.
-      const { data: dr } = await admin.from("drawings").select("storage_path").in("project_id", ids);
-      const names = new Set<string>((files ?? []).map((f: any) => f.name));
-      for (const d of dr ?? []) if (d.storage_path) names.add(d.storage_path);
+      const byBucket: Record<string, string[]> = {};
+      for (const f of files ?? []) (byBucket[f.bucket] ??= []).push(f.name);
+      const total = (files ?? []).length;
       const bytes = (files ?? []).reduce((s: number, f: any) => s + Number(f.size ?? 0), 0);
       let removed = 0;
       if (!dryRun) {
-        removed = await removeFiles([...names]);
+        for (const [bucket, names] of Object.entries(byBucket)) removed += await removeFiles(names, bucket);
+        // Keep the project rows (they say which files are whose) if storage
+        // did not let go of everything; the next run tries again.
+        if (removed < total) throw new Error(`only ${removed} of ${total} files could be removed; projects kept`);
         const { error: pErr } = await admin.from("projects").delete().in("id", ids);
         if (pErr) throw pErr;
         await admin.from("companies").update({ welcome_cleared_at: new Date().toISOString() }).eq("id", co.id);
       }
       const row = { company_id: co.id, company_name: co.name, projects_deleted: ids.length,
-        files_deleted: dryRun ? names.size : removed, bytes_freed: bytes, dry_run: dryRun,
+        files_deleted: dryRun ? total : removed, bytes_freed: bytes, dry_run: dryRun,
         note: "Welcome Pack: no plan chosen within 7 days" };
       if (!dryRun) await admin.from("welcome_cleanup_log").insert(row);   // previews are not logged
       out.push(row);
