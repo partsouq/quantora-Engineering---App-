@@ -1,5 +1,5 @@
 -- ===========================================================================
--- Welcome Pack v2 (25 Oct 2026)
+-- Welcome Pack v2 (25 Oct 2026) -- APPLIED to production on 25 Oct 2026, 20:35 Dubai.
 -- Smaller free pack for NEW sign-ups:
 --   2 drawing pages, 2 documents (tender / specification), 1 draftsman page,
 --   1 rework, 10 AI chat messages, no system design (no drawings).
@@ -51,8 +51,7 @@ begin
   end if;
   return new;
 end $$;
-drop trigger if exists tender_documents_limit on tender_documents;
-create trigger tender_documents_limit before insert on tender_documents
+create or replace trigger tender_documents_limit before insert on tender_documents
   for each row execute function enforce_document_limit();
 
 -- 5. extras end when the plan changes (bonus_drawing_pages already does)
@@ -137,8 +136,7 @@ begin
   end if;
   return new;
 end $$;
-drop trigger if exists analysis_runs_rules on analysis_runs;
-create trigger analysis_runs_rules before insert on analysis_runs
+create or replace trigger analysis_runs_rules before insert on analysis_runs
   for each row execute function enforce_run_rules();
 
 -- 11. remember the e-mails of every existing account, so signing up again
