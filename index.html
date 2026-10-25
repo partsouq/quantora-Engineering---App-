@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-25.9"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -7416,7 +7416,7 @@ function EstimationTab({ project }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-500 max-w-3xl leading-relaxed">
-        Five steps, in order. Every white box is a cell you type into and everything below it re-adds itself, the
+        Five steps, in order. Every input box is a cell you type into and everything below it re-adds itself, the
         way a spreadsheet does. <b>Step 1 is filled in from Take-off &amp; BOQ</b> — it uses the unit rates already
         entered there, and you can type a package price over any system when a supplier quotes you one instead.
       </p>
@@ -31609,26 +31609,391 @@ html:has(.qx),html:has(.qx) body{background:
 .qap-wrow .qap-type{padding-right:3px}.qap-wrow .qap-type{font-size:0;gap:0}
 @media (max-width:900px){.qteam-row{grid-template-columns:40px 1fr auto}.qteam-wss,.qteam-meta{grid-column:2/-1}.qteam-actions{grid-column:1/-1;justify-content:flex-start}.qteam-editwrap{margin-left:0}}
 
-/* ---- Navy theme (2026-10-25, option F) ----
-   The page behind the cards is deep navy #0F1F38, matching the side menu.
-   Cards, tables and pop-ups stay white with dark text. Text that sits
-   straight on the navy (page titles, section labels, hints) turns light.
-   "On a light surface" = inside any white card/panel/table/pop-up. */
-html:root:has(.qx),html:root:has(.qx) body.bg-slate-50,html:root:has(.qx) body{
-  background:radial-gradient(900px 560px at 100% -10%,rgba(28,108,230,.22),transparent 60%),
-             radial-gradient(800px 520px at -10% 40%,rgba(13,148,136,.10),transparent 60%),#0f1f38 !important;
-  background-attachment:fixed !important}
-.qx{--q-bg:#0f1f38}
-.qx .bg-slate-50{background-color:transparent !important}
-.qx :is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed) .bg-slate-50{background-color:#f6f8fb !important}
-.qx :is(h1,h2,h3,h4,.text-slate-900,.text-slate-800,.text-slate-700,.text-gray-900,.text-gray-800):not(:is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed,.qws-side,.qapp-nav,[class*="bg-"]:not(body):not(.bg-slate-50):not(.bg-transparent)) *){color:#eef3fb !important}
-.qx :is(p,span,div,label,a,button).text-slate-500:not(:is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed,[class*="bg-"]:not(body):not(.bg-slate-50):not(.bg-transparent)) *),
-.qx :is(p,span,div,label).text-slate-600:not(:is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed,[class*="bg-"]:not(body):not(.bg-slate-50):not(.bg-transparent)) *),
-.qx :is(p,span,div,label).text-slate-400:not(:is(.bg-white,.qp-card,.card,table,[role=dialog],.qh-tone,.qpt,.qx-surface,[class*="card"],[class*="hero"],[class*="panel"],[class*="modal"],[class*="rounded-xl"],[class*="rounded-2xl"],[class*="rounded-3xl"],.fixed,[class*="bg-"]:not(body):not(.bg-slate-50):not(.bg-transparent)) *){color:#a9b8cc !important}
-.qx div.text-sm.font-semibold.mb-3:not(:is(.bg-white,.qp-card,.card) *){color:#dbe5f3 !important}
-.qx button.border:not(.text-rose-600):not(:is(.bg-white,.qp-card,.card,table,[role=dialog],[class*="card"],[class*="hero"],[class*="panel"],[class*="rounded-xl"],[class*="rounded-2xl"],.fixed) *):not([class*="bg-"]:not([class*="hover:bg-"])){background:#fff !important;color:#14233a !important}
-.qx button.border.text-rose-600:not(:is(.bg-white,[class*="card"],[class*="rounded-2xl"],.fixed) *){background:#fff !important;color:#e11d48 !important}
-.qx .qh > p,.qx .qh-hi p{color:#a9b8cc !important}
+/* ---- Navy dark platform theme (2026-10-25) ----
+   One design system for the signed-in app (.qx):
+   page #0b1628, cards #13243f, inner panels #1a2e50, lines #26406a;
+   text: main #eef3fb, secondary #a9b8cc, hints #7f93b0;
+   5 status colours: done/approved green, in progress/info blue,
+   pending/review amber, failed/rejected red, draft/neutral grey;
+   3 buttons: primary blue, secondary outline, danger red.
+   Part 1 maps Tailwind utilities and inline styles; part 2 is generated
+   from the app's own component CSS (every light background, dark text and
+   light border is mapped to the palette above). */
+html:root:has(.qx),html:root:has(.qx) body{background:radial-gradient(900px 560px at 100% -10%,rgba(28,108,230,.20),transparent 60%),radial-gradient(800px 520px at -10% 40%,rgba(13,148,136,.08),transparent 60%),#0b1628!important;background-attachment:fixed!important;color:#eef3fb}
+html:root:has(.qx) .qx{--q-bg:#0b1628;--q-bg-alt:#0e1b31;--q-panel:#13243f;--q-panel-2:#1a2e50;--q-panel-hover:#20375e;--q-border:#26406a;--q-border-strong:#33507f;--q-text:#eef3fb;--q-text-dim:#a9b8cc;--q-text-dimmer:#7f93b0;background:transparent!important;color:#eef3fb;color-scheme:dark}
+html:root:has(.qx) .qx ::-webkit-scrollbar-thumb{background:#2b4370!important}
+html:root:has(.qx) .qx *{scrollbar-color:#2b4370 transparent}
+/* status chips: one look everywhere */
+html:root:has(.qx) .qx .q-st-ok{color:#6ee7b7!important;background:rgba(52,211,153,.14)!important;border-color:rgba(52,211,153,.38)!important}
+html:root:has(.qx) .qx .bg-white,html:root:has(.qx) .qx .bg-gray-50,html:root:has(.qx) .qx .bg-white\/80,html:root:has(.qx) .qx .bg-white\/90{background-color:#13243f!important}
+html:root:has(.qx) .qx .bg-slate-50{background-color:transparent!important}
+html:root:has(.qx) .qx :is(.bg-white,[class*="card"],[class*="panel"],[role=dialog],.fixed,table) .bg-slate-50,html:root:has(.qx) .qx .bg-slate-100,html:root:has(.qx) .qx .bg-gray-100{background-color:#1a2e50!important}
+html:root:has(.qx) .qx .bg-slate-200,html:root:has(.qx) .qx .bg-gray-200{background-color:#20375e!important}
+html:root:has(.qx) .qx .hover\:bg-slate-50:hover,html:root:has(.qx) .qx .hover\:bg-slate-100:hover,html:root:has(.qx) .qx .hover\:bg-gray-50:hover,html:root:has(.qx) .qx .hover\:bg-blue-50:hover{background-color:#20375e!important}
+html:root:has(.qx) .qx .text-slate-900,html:root:has(.qx) .qx .text-slate-800,html:root:has(.qx) .qx .text-slate-700,html:root:has(.qx) .qx .text-gray-900,html:root:has(.qx) .qx .text-gray-800,html:root:has(.qx) .qx .text-gray-700,html:root:has(.qx) .qx .text-indigo-900,html:root:has(.qx) .qx .text-indigo-800,html:root:has(.qx) .qx .text-violet-900,html:root:has(.qx) .qx h1,html:root:has(.qx) .qx h2,html:root:has(.qx) .qx h3,html:root:has(.qx) .qx h4{color:#eef3fb!important}
+html:root:has(.qx) .qx .text-slate-600,html:root:has(.qx) .qx .text-slate-500,html:root:has(.qx) .qx .text-gray-600,html:root:has(.qx) .qx .text-gray-500,html:root:has(.qx) .qx .text-slate-300{color:#a9b8cc!important}
+html:root:has(.qx) .qx .text-slate-400,html:root:has(.qx) .qx .text-gray-400{color:#7f93b0!important}
+html:root:has(.qx) .qx .hover\:text-slate-900:hover,html:root:has(.qx) .qx .hover\:text-slate-800:hover,html:root:has(.qx) .qx .hover\:text-slate-700:hover{color:#fff!important}
+html:root:has(.qx) .qx .border,html:root:has(.qx) .qx .border-b,html:root:has(.qx) .qx .border-t,html:root:has(.qx) .qx .border-l,html:root:has(.qx) .qx .border-r,html:root:has(.qx) .qx .border-slate-100,html:root:has(.qx) .qx .border-slate-200,html:root:has(.qx) .qx .border-slate-300,html:root:has(.qx) .qx .border-gray-200,html:root:has(.qx) .qx .border-gray-300,html:root:has(.qx) .qx .border-slate-900{border-color:#26406a!important}
+html:root:has(.qx) .qx .divide-slate-100>:not([hidden])~:not([hidden]),html:root:has(.qx) .qx .divide-slate-200>:not([hidden])~:not([hidden]){border-color:#26406a!important}
+html:root:has(.qx) .qx .bg-emerald-50,html:root:has(.qx) .qx .bg-emerald-100,html:root:has(.qx) .qx .bg-green-50,html:root:has(.qx) .qx .bg-green-100,html:root:has(.qx) .qx .bg-teal-50,html:root:has(.qx) .qx .bg-teal-100{background-color:rgba(52,211,153,.14)!important}
+html:root:has(.qx) .qx .bg-emerald-200,html:root:has(.qx) .qx .bg-green-200,html:root:has(.qx) .qx .bg-teal-200{background-color:rgba(52,211,153,.38)!important}
+html:root:has(.qx) .qx .border-emerald-100,html:root:has(.qx) .qx .border-emerald-200,html:root:has(.qx) .qx .border-emerald-300,html:root:has(.qx) .qx .border-green-100,html:root:has(.qx) .qx .border-green-200,html:root:has(.qx) .qx .border-green-300,html:root:has(.qx) .qx .border-teal-100,html:root:has(.qx) .qx .border-teal-200,html:root:has(.qx) .qx .border-teal-300{border-color:rgba(52,211,153,.38)!important}
+html:root:has(.qx) .qx .text-emerald-600,html:root:has(.qx) .qx .text-emerald-700,html:root:has(.qx) .qx .text-emerald-800,html:root:has(.qx) .qx .text-emerald-900,html:root:has(.qx) .qx .text-green-600,html:root:has(.qx) .qx .text-green-700,html:root:has(.qx) .qx .text-green-800,html:root:has(.qx) .qx .text-green-900,html:root:has(.qx) .qx .text-teal-600,html:root:has(.qx) .qx .text-teal-700,html:root:has(.qx) .qx .text-teal-800,html:root:has(.qx) .qx .text-teal-900{color:#6ee7b7!important}
+html:root:has(.qx) .qx .hover\:bg-emerald-50:hover,html:root:has(.qx) .qx .hover\:bg-emerald-100:hover,html:root:has(.qx) .qx .hover\:bg-green-50:hover,html:root:has(.qx) .qx .hover\:bg-green-100:hover,html:root:has(.qx) .qx .hover\:bg-teal-50:hover,html:root:has(.qx) .qx .hover\:bg-teal-100:hover{background-color:rgba(52,211,153,.38)!important}
+html:root:has(.qx) .qx .bg-amber-50,html:root:has(.qx) .qx .bg-amber-100,html:root:has(.qx) .qx .bg-yellow-50,html:root:has(.qx) .qx .bg-yellow-100,html:root:has(.qx) .qx .bg-orange-50,html:root:has(.qx) .qx .bg-orange-100{background-color:rgba(251,191,36,.14)!important}
+html:root:has(.qx) .qx .bg-amber-200,html:root:has(.qx) .qx .bg-yellow-200,html:root:has(.qx) .qx .bg-orange-200{background-color:rgba(251,191,36,.38)!important}
+html:root:has(.qx) .qx .border-amber-100,html:root:has(.qx) .qx .border-amber-200,html:root:has(.qx) .qx .border-amber-300,html:root:has(.qx) .qx .border-yellow-100,html:root:has(.qx) .qx .border-yellow-200,html:root:has(.qx) .qx .border-yellow-300,html:root:has(.qx) .qx .border-orange-100,html:root:has(.qx) .qx .border-orange-200,html:root:has(.qx) .qx .border-orange-300{border-color:rgba(251,191,36,.38)!important}
+html:root:has(.qx) .qx .text-amber-600,html:root:has(.qx) .qx .text-amber-700,html:root:has(.qx) .qx .text-amber-800,html:root:has(.qx) .qx .text-amber-900,html:root:has(.qx) .qx .text-yellow-600,html:root:has(.qx) .qx .text-yellow-700,html:root:has(.qx) .qx .text-yellow-800,html:root:has(.qx) .qx .text-yellow-900,html:root:has(.qx) .qx .text-orange-600,html:root:has(.qx) .qx .text-orange-700,html:root:has(.qx) .qx .text-orange-800,html:root:has(.qx) .qx .text-orange-900{color:#fcd34d!important}
+html:root:has(.qx) .qx .hover\:bg-amber-50:hover,html:root:has(.qx) .qx .hover\:bg-amber-100:hover,html:root:has(.qx) .qx .hover\:bg-yellow-50:hover,html:root:has(.qx) .qx .hover\:bg-yellow-100:hover,html:root:has(.qx) .qx .hover\:bg-orange-50:hover,html:root:has(.qx) .qx .hover\:bg-orange-100:hover{background-color:rgba(251,191,36,.38)!important}
+html:root:has(.qx) .qx .bg-rose-50,html:root:has(.qx) .qx .bg-rose-100,html:root:has(.qx) .qx .bg-red-50,html:root:has(.qx) .qx .bg-red-100,html:root:has(.qx) .qx .bg-pink-50,html:root:has(.qx) .qx .bg-pink-100{background-color:rgba(248,113,113,.14)!important}
+html:root:has(.qx) .qx .bg-rose-200,html:root:has(.qx) .qx .bg-red-200,html:root:has(.qx) .qx .bg-pink-200{background-color:rgba(248,113,113,.38)!important}
+html:root:has(.qx) .qx .border-rose-100,html:root:has(.qx) .qx .border-rose-200,html:root:has(.qx) .qx .border-rose-300,html:root:has(.qx) .qx .border-red-100,html:root:has(.qx) .qx .border-red-200,html:root:has(.qx) .qx .border-red-300,html:root:has(.qx) .qx .border-pink-100,html:root:has(.qx) .qx .border-pink-200,html:root:has(.qx) .qx .border-pink-300{border-color:rgba(248,113,113,.38)!important}
+html:root:has(.qx) .qx .text-rose-600,html:root:has(.qx) .qx .text-rose-700,html:root:has(.qx) .qx .text-rose-800,html:root:has(.qx) .qx .text-rose-900,html:root:has(.qx) .qx .text-red-600,html:root:has(.qx) .qx .text-red-700,html:root:has(.qx) .qx .text-red-800,html:root:has(.qx) .qx .text-red-900,html:root:has(.qx) .qx .text-pink-600,html:root:has(.qx) .qx .text-pink-700,html:root:has(.qx) .qx .text-pink-800,html:root:has(.qx) .qx .text-pink-900{color:#fca5a5!important}
+html:root:has(.qx) .qx .hover\:bg-rose-50:hover,html:root:has(.qx) .qx .hover\:bg-rose-100:hover,html:root:has(.qx) .qx .hover\:bg-red-50:hover,html:root:has(.qx) .qx .hover\:bg-red-100:hover,html:root:has(.qx) .qx .hover\:bg-pink-50:hover,html:root:has(.qx) .qx .hover\:bg-pink-100:hover{background-color:rgba(248,113,113,.38)!important}
+html:root:has(.qx) .qx .bg-blue-50,html:root:has(.qx) .qx .bg-blue-100,html:root:has(.qx) .qx .bg-sky-50,html:root:has(.qx) .qx .bg-sky-100,html:root:has(.qx) .qx .bg-indigo-50,html:root:has(.qx) .qx .bg-indigo-100,html:root:has(.qx) .qx .bg-violet-50,html:root:has(.qx) .qx .bg-violet-100,html:root:has(.qx) .qx .bg-purple-50,html:root:has(.qx) .qx .bg-purple-100,html:root:has(.qx) .qx .bg-cyan-50,html:root:has(.qx) .qx .bg-cyan-100{background-color:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .bg-blue-200,html:root:has(.qx) .qx .bg-sky-200,html:root:has(.qx) .qx .bg-indigo-200,html:root:has(.qx) .qx .bg-violet-200,html:root:has(.qx) .qx .bg-purple-200,html:root:has(.qx) .qx .bg-cyan-200{background-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qx .border-blue-100,html:root:has(.qx) .qx .border-blue-200,html:root:has(.qx) .qx .border-blue-300,html:root:has(.qx) .qx .border-sky-100,html:root:has(.qx) .qx .border-sky-200,html:root:has(.qx) .qx .border-sky-300,html:root:has(.qx) .qx .border-indigo-100,html:root:has(.qx) .qx .border-indigo-200,html:root:has(.qx) .qx .border-indigo-300,html:root:has(.qx) .qx .border-violet-100,html:root:has(.qx) .qx .border-violet-200,html:root:has(.qx) .qx .border-violet-300,html:root:has(.qx) .qx .border-purple-100,html:root:has(.qx) .qx .border-purple-200,html:root:has(.qx) .qx .border-purple-300,html:root:has(.qx) .qx .border-cyan-100,html:root:has(.qx) .qx .border-cyan-200,html:root:has(.qx) .qx .border-cyan-300{border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qx .text-blue-600,html:root:has(.qx) .qx .text-blue-700,html:root:has(.qx) .qx .text-blue-800,html:root:has(.qx) .qx .text-blue-900,html:root:has(.qx) .qx .text-sky-600,html:root:has(.qx) .qx .text-sky-700,html:root:has(.qx) .qx .text-sky-800,html:root:has(.qx) .qx .text-sky-900,html:root:has(.qx) .qx .text-indigo-600,html:root:has(.qx) .qx .text-indigo-700,html:root:has(.qx) .qx .text-indigo-800,html:root:has(.qx) .qx .text-indigo-900,html:root:has(.qx) .qx .text-violet-600,html:root:has(.qx) .qx .text-violet-700,html:root:has(.qx) .qx .text-violet-800,html:root:has(.qx) .qx .text-violet-900,html:root:has(.qx) .qx .text-purple-600,html:root:has(.qx) .qx .text-purple-700,html:root:has(.qx) .qx .text-purple-800,html:root:has(.qx) .qx .text-purple-900,html:root:has(.qx) .qx .text-cyan-600,html:root:has(.qx) .qx .text-cyan-700,html:root:has(.qx) .qx .text-cyan-800,html:root:has(.qx) .qx .text-cyan-900{color:#93c5fd!important}
+html:root:has(.qx) .qx .hover\:bg-blue-50:hover,html:root:has(.qx) .qx .hover\:bg-blue-100:hover,html:root:has(.qx) .qx .hover\:bg-sky-50:hover,html:root:has(.qx) .qx .hover\:bg-sky-100:hover,html:root:has(.qx) .qx .hover\:bg-indigo-50:hover,html:root:has(.qx) .qx .hover\:bg-indigo-100:hover,html:root:has(.qx) .qx .hover\:bg-violet-50:hover,html:root:has(.qx) .qx .hover\:bg-violet-100:hover,html:root:has(.qx) .qx .hover\:bg-purple-50:hover,html:root:has(.qx) .qx .hover\:bg-purple-100:hover,html:root:has(.qx) .qx .hover\:bg-cyan-50:hover,html:root:has(.qx) .qx .hover\:bg-cyan-100:hover{background-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qx .bg-slate-900,html:root:has(.qx) .qx .bg-slate-800,html:root:has(.qx) .qx .bg-blue-600,html:root:has(.qx) .qx .bg-blue-700,html:root:has(.qx) .qx .bg-indigo-600,html:root:has(.qx) .qx .bg-indigo-700{background:linear-gradient(180deg,#2f7bf0,#1c62d6)!important;color:#fff!important;border-color:transparent!important}
+html:root:has(.qx) .qx .hover\:bg-slate-800:hover,html:root:has(.qx) .qx .hover\:bg-slate-700:hover,html:root:has(.qx) .qx .hover\:bg-blue-700:hover{background:#1c62d6!important}
+html:root:has(.qx) .qx button.border:not([class*="bg-"]),html:root:has(.qx) .qx a.border:not([class*="bg-"]),html:root:has(.qx) .qx button.bg-white.border{background:#1a2e50!important;color:#eef3fb!important;border-color:#33507f!important}
+html:root:has(.qx) .qx button.border:not([class*="bg-"]):hover,html:root:has(.qx) .qx button.bg-white.border:hover{background:#20375e!important}
+html:root:has(.qx) .qx button.text-rose-600.border,html:root:has(.qx) .qx button.text-rose-700.border,html:root:has(.qx) .qx button.text-red-600.border{color:#fca5a5!important;border-color:rgba(248,113,113,.38)!important;background:transparent!important}
+html:root:has(.qx) .qx .bg-rose-600,html:root:has(.qx) .qx .bg-rose-700,html:root:has(.qx) .qx .bg-red-600{background:#dc2626!important;color:#fff!important}
+html:root:has(.qx) .qx .bg-emerald-600,html:root:has(.qx) .qx .bg-emerald-700,html:root:has(.qx) .qx .bg-green-600{background:#059669!important;color:#fff!important}
+html:root:has(.qx) .qx input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),html:root:has(.qx) .qx select,html:root:has(.qx) .qx textarea{background-color:#0e1d36!important;border-color:#33507f!important;color:#eef3fb!important;-webkit-text-fill-color:#eef3fb!important}
+html:root:has(.qx) .qx input::placeholder,html:root:has(.qx) .qx textarea::placeholder{color:#7f93b0!important;-webkit-text-fill-color:#7f93b0!important}
+html:root:has(.qx) .qx input:-webkit-autofill,html:root:has(.qx) .qx input:-webkit-autofill:hover,html:root:has(.qx) .qx input:-webkit-autofill:focus{-webkit-box-shadow:0 0 0 1000px #0e1d36 inset!important;-webkit-text-fill-color:#eef3fb!important}
+html:root:has(.qx) .qx option{background:#13243f!important;color:#eef3fb!important}
+html:root:has(.qx) .qx table thead,html:root:has(.qx) .qx table thead tr,html:root:has(.qx) .qx table thead th,html:root:has(.qx) .qx th{background:#1a2e50!important;color:#8fa3c0!important}
+html:root:has(.qx) .qx td,html:root:has(.qx) .qx tr,html:root:has(.qx) .qx th{border-color:#26406a!important}
+html:root:has(.qx) .qx tbody tr:hover td{background-color:rgba(96,165,250,.06)!important}
+html:root:has(.qx) .qx .shadow,html:root:has(.qx) .qx .shadow-sm,html:root:has(.qx) .qx .shadow-md,html:root:has(.qx) .qx .shadow-lg,html:root:has(.qx) .qx .shadow-xl,html:root:has(.qx) .qx .shadow-2xl{box-shadow:0 12px 32px -18px rgba(0,0,0,.65)!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(226, 232, 240)"],html:root:has(.qx) .qx [style*="border-color: rgb(226, 232, 240)"]{border-color:#26406a!important}
+html:root:has(.qx) .qx [style*="background: rgb(241, 245, 249)"],html:root:has(.qx) .qx [style*="background-color: rgb(241, 245, 249)"]{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx [style^="color: rgb(71, 85, 105)"],html:root:has(.qx) .qx [style*=" color: rgb(71, 85, 105)"],html:root:has(.qx) .qx [style*=";color: rgb(71, 85, 105)"]{color:#a9b8cc!important}
+html:root:has(.qx) .qx [style^="color: rgb(100, 116, 139)"],html:root:has(.qx) .qx [style*=" color: rgb(100, 116, 139)"],html:root:has(.qx) .qx [style*=";color: rgb(100, 116, 139)"]{color:#a9b8cc!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(203, 213, 225)"],html:root:has(.qx) .qx [style*="border-color: rgb(203, 213, 225)"]{border-color:#26406a!important}
+html:root:has(.qx) .qx [style^="color: rgb(180, 83, 9)"],html:root:has(.qx) .qx [style*=" color: rgb(180, 83, 9)"],html:root:has(.qx) .qx [style*=";color: rgb(180, 83, 9)"]{color:#fcd34d!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(167, 243, 208)"],html:root:has(.qx) .qx [style*="border-color: rgb(167, 243, 208)"]{border-color:rgba(52,211,153,.38)!important}
+html:root:has(.qx) .qx [style*="background: rgb(236, 253, 245)"],html:root:has(.qx) .qx [style*="background-color: rgb(236, 253, 245)"]{background:rgba(52,211,153,.14)!important}
+html:root:has(.qx) .qx [style^="color: rgb(6, 95, 70)"],html:root:has(.qx) .qx [style*=" color: rgb(6, 95, 70)"],html:root:has(.qx) .qx [style*=";color: rgb(6, 95, 70)"]{color:#6ee7b7!important}
+html:root:has(.qx) .qx [style^="color: rgb(4, 120, 87)"],html:root:has(.qx) .qx [style*=" color: rgb(4, 120, 87)"],html:root:has(.qx) .qx [style*=";color: rgb(4, 120, 87)"]{color:#6ee7b7!important}
+html:root:has(.qx) .qx [style^="color: rgb(190, 18, 60)"],html:root:has(.qx) .qx [style*=" color: rgb(190, 18, 60)"],html:root:has(.qx) .qx [style*=";color: rgb(190, 18, 60)"]{color:#fca5a5!important}
+html:root:has(.qx) .qx [style*="background: rgb(248, 250, 252)"],html:root:has(.qx) .qx [style*="background-color: rgb(248, 250, 252)"]{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx [style*="background: rgb(255, 255, 255)"],html:root:has(.qx) .qx [style*="background-color: rgb(255, 255, 255)"]{background:#13243f!important}
+html:root:has(.qx) .qx [style^="color: rgb(51, 65, 85)"],html:root:has(.qx) .qx [style*=" color: rgb(51, 65, 85)"],html:root:has(.qx) .qx [style*=";color: rgb(51, 65, 85)"]{color:#eef3fb!important}
+html:root:has(.qx) .qx [style^="color: rgb(148, 163, 184)"],html:root:has(.qx) .qx [style*=" color: rgb(148, 163, 184)"],html:root:has(.qx) .qx [style*=";color: rgb(148, 163, 184)"]{color:#7f93b0!important}
+html:root:has(.qx) .qx [style^="color: rgb(15, 23, 42)"],html:root:has(.qx) .qx [style*=" color: rgb(15, 23, 42)"],html:root:has(.qx) .qx [style*=";color: rgb(15, 23, 42)"]{color:#93c5fd!important}
+html:root:has(.qx) .qx [style*="background: rgb(254, 243, 199)"],html:root:has(.qx) .qx [style*="background-color: rgb(254, 243, 199)"]{background:rgba(251,191,36,.14)!important}
+html:root:has(.qx) .qx [style^="color: rgb(146, 64, 14)"],html:root:has(.qx) .qx [style*=" color: rgb(146, 64, 14)"],html:root:has(.qx) .qx [style*=";color: rgb(146, 64, 14)"]{color:#fcd34d!important}
+html:root:has(.qx) .qx [style*="background: rgb(246, 248, 252)"],html:root:has(.qx) .qx [style*="background-color: rgb(246, 248, 252)"]{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx [style^="color: rgb(136, 146, 162)"],html:root:has(.qx) .qx [style*=" color: rgb(136, 146, 162)"],html:root:has(.qx) .qx [style*=";color: rgb(136, 146, 162)"]{color:#7f93b0!important}
+html:root:has(.qx) .qx [style^="color: rgb(92, 102, 118)"],html:root:has(.qx) .qx [style*=" color: rgb(92, 102, 118)"],html:root:has(.qx) .qx [style*=";color: rgb(92, 102, 118)"]{color:#a9b8cc!important}
+html:root:has(.qx) .qx [style*="background: rgb(238, 244, 255)"],html:root:has(.qx) .qx [style*="background-color: rgb(238, 244, 255)"]{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx [style^="color: rgb(30, 58, 138)"],html:root:has(.qx) .qx [style*=" color: rgb(30, 58, 138)"],html:root:has(.qx) .qx [style*=";color: rgb(30, 58, 138)"]{color:#93c5fd!important}
+html:root:has(.qx) .qx [style*="background: rgb(255, 241, 242)"],html:root:has(.qx) .qx [style*="background-color: rgb(255, 241, 242)"]{background:rgba(248,113,113,.14)!important}
+html:root:has(.qx) .qx [style^="color: rgb(159, 18, 57)"],html:root:has(.qx) .qx [style*=" color: rgb(159, 18, 57)"],html:root:has(.qx) .qx [style*=";color: rgb(159, 18, 57)"]{color:#fca5a5!important}
+html:root:has(.qx) .qx [style^="color: rgb(150, 161, 184)"],html:root:has(.qx) .qx [style*=" color: rgb(150, 161, 184)"],html:root:has(.qx) .qx [style*=";color: rgb(150, 161, 184)"]{color:#7f93b0!important}
+html:root:has(.qx) .qx [style^="color: rgb(5, 150, 105)"],html:root:has(.qx) .qx [style*=" color: rgb(5, 150, 105)"],html:root:has(.qx) .qx [style*=";color: rgb(5, 150, 105)"]{color:#6ee7b7!important}
+html:root:has(.qx) .qx [style^="color: rgb(2, 132, 199)"],html:root:has(.qx) .qx [style*=" color: rgb(2, 132, 199)"],html:root:has(.qx) .qx [style*=";color: rgb(2, 132, 199)"]{color:#93c5fd!important}
+html:root:has(.qx) .qx [style*="background: rgb(226, 232, 240)"],html:root:has(.qx) .qx [style*="background-color: rgb(226, 232, 240)"]{background:#1a2e50!important}
+html:root:has(.qx) .qx [style*="background: rgb(255, 251, 235)"],html:root:has(.qx) .qx [style*="background-color: rgb(255, 251, 235)"]{background:rgba(251,191,36,.14)!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(253, 230, 138)"],html:root:has(.qx) .qx [style*="border-color: rgb(253, 230, 138)"]{border-color:rgba(251,191,36,.38)!important}
+html:root:has(.qx) .qx [style^="color: rgb(120, 53, 15)"],html:root:has(.qx) .qx [style*=" color: rgb(120, 53, 15)"],html:root:has(.qx) .qx [style*=";color: rgb(120, 53, 15)"]{color:#fcd34d!important}
+html:root:has(.qx) .qx [style^="color: rgb(21, 128, 61)"],html:root:has(.qx) .qx [style*=" color: rgb(21, 128, 61)"],html:root:has(.qx) .qx [style*=";color: rgb(21, 128, 61)"]{color:#6ee7b7!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(203, 213, 225)"],html:root:has(.qx) .qx [style*="border-color: rgb(203, 213, 225)"]{border-color:#26406a!important}
+html:root:has(.qx) .qx [style^="color: rgb(3, 105, 161)"],html:root:has(.qx) .qx [style*=" color: rgb(3, 105, 161)"],html:root:has(.qx) .qx [style*=";color: rgb(3, 105, 161)"]{color:#93c5fd!important}
+html:root:has(.qx) .qx [style*="background: rgb(220, 252, 231)"],html:root:has(.qx) .qx [style*="background-color: rgb(220, 252, 231)"]{background:rgba(52,211,153,.14)!important}
+html:root:has(.qx) .qx [style^="color: rgb(22, 101, 52)"],html:root:has(.qx) .qx [style*=" color: rgb(22, 101, 52)"],html:root:has(.qx) .qx [style*=";color: rgb(22, 101, 52)"]{color:#6ee7b7!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(188, 217, 195)"],html:root:has(.qx) .qx [style*="border-color: rgb(188, 217, 195)"]{border-color:#26406a!important}
+html:root:has(.qx) .qx [style^="color: rgb(180, 118, 28)"],html:root:has(.qx) .qx [style*=" color: rgb(180, 118, 28)"],html:root:has(.qx) .qx [style*=";color: rgb(180, 118, 28)"]{color:#fcd34d!important}
+html:root:has(.qx) .qx [style*="background: rgb(238, 246, 238)"],html:root:has(.qx) .qx [style*="background-color: rgb(238, 246, 238)"]{background:#1a2e50!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(188, 217, 195)"],html:root:has(.qx) .qx [style*="border-color: rgb(188, 217, 195)"]{border-color:#26406a!important}
+html:root:has(.qx) .qx [style^="color: rgb(31, 81, 48)"],html:root:has(.qx) .qx [style*=" color: rgb(31, 81, 48)"],html:root:has(.qx) .qx [style*=";color: rgb(31, 81, 48)"]{color:#6ee7b7!important}
+html:root:has(.qx) .qx [style*="background: rgb(255, 250, 240)"],html:root:has(.qx) .qx [style*="background-color: rgb(255, 250, 240)"]{background:rgba(251,191,36,.14)!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(230, 207, 154)"],html:root:has(.qx) .qx [style*="border-color: rgb(230, 207, 154)"]{border-color:rgba(251,191,36,.38)!important}
+html:root:has(.qx) .qx [style^="color: rgb(107, 74, 16)"],html:root:has(.qx) .qx [style*=" color: rgb(107, 74, 16)"],html:root:has(.qx) .qx [style*=";color: rgb(107, 74, 16)"]{color:#fcd34d!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(230, 207, 154)"],html:root:has(.qx) .qx [style*="border-color: rgb(230, 207, 154)"]{border-color:rgba(251,191,36,.38)!important}
+html:root:has(.qx) .qx [style^="color: rgb(185, 28, 28)"],html:root:has(.qx) .qx [style*=" color: rgb(185, 28, 28)"],html:root:has(.qx) .qx [style*=";color: rgb(185, 28, 28)"]{color:#fca5a5!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(254, 202, 202)"],html:root:has(.qx) .qx [style*="border-color: rgb(254, 202, 202)"]{border-color:rgba(248,113,113,.38)!important}
+html:root:has(.qx) .qx [style^="color: rgb(107, 116, 144)"],html:root:has(.qx) .qx [style*=" color: rgb(107, 116, 144)"],html:root:has(.qx) .qx [style*=";color: rgb(107, 116, 144)"]{color:#a9b8cc!important}
+html:root:has(.qx) .qx [style*="background: rgb(241, 247, 242)"],html:root:has(.qx) .qx [style*="background-color: rgb(241, 247, 242)"]{background:#1a2e50!important}
+html:root:has(.qx) .qx [style*="background: rgb(255, 250, 242)"],html:root:has(.qx) .qx [style*="background-color: rgb(255, 250, 242)"]{background:rgba(251,191,36,.14)!important}
+html:root:has(.qx) .qx [style^="color: rgb(154, 107, 31)"],html:root:has(.qx) .qx [style*=" color: rgb(154, 107, 31)"],html:root:has(.qx) .qx [style*=";color: rgb(154, 107, 31)"]{color:#fcd34d!important}
+html:root:has(.qx) .qx [style^="color: rgb(90, 107, 130)"],html:root:has(.qx) .qx [style*=" color: rgb(90, 107, 130)"],html:root:has(.qx) .qx [style*=";color: rgb(90, 107, 130)"]{color:#a9b8cc!important}
+html:root:has(.qx) .qx [style^="color: rgb(15, 33, 64)"],html:root:has(.qx) .qx [style*=" color: rgb(15, 33, 64)"],html:root:has(.qx) .qx [style*=";color: rgb(15, 33, 64)"]{color:#93c5fd!important}
+html:root:has(.qx) .qx [style*="background: rgb(238, 245, 255)"],html:root:has(.qx) .qx [style*="background-color: rgb(238, 245, 255)"]{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx [style^="color: rgb(30, 79, 156)"],html:root:has(.qx) .qx [style*=" color: rgb(30, 79, 156)"],html:root:has(.qx) .qx [style*=";color: rgb(30, 79, 156)"]{color:#93c5fd!important}
+html:root:has(.qx) .qx [style*="background: rgb(234, 242, 255)"],html:root:has(.qx) .qx [style*="background-color: rgb(234, 242, 255)"]{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(127, 176, 255)"],html:root:has(.qx) .qx [style*="border-color: rgb(127, 176, 255)"]{border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qx [style^="color: rgb(18, 58, 122)"],html:root:has(.qx) .qx [style*=" color: rgb(18, 58, 122)"],html:root:has(.qx) .qx [style*=";color: rgb(18, 58, 122)"]{color:#93c5fd!important}
+html:root:has(.qx) .qx [style*="background: rgb(245, 248, 255)"],html:root:has(.qx) .qx [style*="background-color: rgb(245, 248, 255)"]{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx [style*="border: 1px solid rgb(219, 230, 255)"],html:root:has(.qx) .qx [style*="border-color: rgb(219, 230, 255)"]{border-color:rgba(96,165,250,.38)!important}
+/* generated from component CSS */
+html:root:has(.qx) .qh-btn{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qh-find{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qh-hits{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qh-hit{border-top-color:#26406a!important}
+html:root:has(.qx) .qh-act{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qh-strip{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qh-strip button{border-right-color:#26406a!important;border-top-color:#26406a!important}
+html:root:has(.qx) .qh-kpi{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qh-card{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qh-tbl th{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qh-tbl td{border-top-color:#26406a!important}
+html:root:has(.qx) .qh-viewall{border-top-color:#26406a!important}
+html:root:has(.qx) .qh-ins{border-top-color:#26406a!important}
+html:root:has(.qx) .qh-trial .mk{color:#93c5fd!important}
+html:root:has(.qx) .qh-res button{border-top-color:#26406a!important}
+html:root:has(.qx) .qp-strip button{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qp-refresh{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qp-ws button{border-color:#26406a!important;background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qp-ws button:hover{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qp-ws-all{border-color:#26406a!important}
+html:root:has(.qx) .qp-item:hover{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qp-hero{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qp-btn{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qp-tile{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qp-flow{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qp-card{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qp-quick{border-bottom-color:#26406a!important}
+html:root:has(.qx) .qp-table th{border-bottom-color:#26406a!important}
+html:root:has(.qx) .qp-table td{border-bottom-color:#26406a!important}
+html:root:has(.qx) .qp-empty{border-color:#26406a!important}
+html:root:has(.qx) .qadmin select.bg-white,html:root:has(.qx) .qp-admin-embed select.bg-white,html:root:has(.qx) .qadmin input.bg-white,html:root:has(.qx) .qp-admin-embed input.bg-white{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qp-admin-embed .bg-white{background:#13243f!important}
+html:root:has(.qx) .qp-admin-embed .border{border-color:#26406a!important}
+html:root:has(.qx) .qp-admin-embed select,html:root:has(.qx) .qp-admin-embed input{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qp-admin-embed .text-slate-600,html:root:has(.qx) .qp-admin-embed .text-slate-500{color:#7f93b0!important}
+html:root:has(.qx) .qp-admin-embed .text-slate-400{color:#a9b8cc!important}
+html:root:has(.qx) .qboq-tab{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qprice-wrap{border-color:#26406a!important}
+html:root:has(.qx) .qprice-table th{border-bottom-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qprice-table td{border-bottom-color:#26406a!important}
+html:root:has(.qx) .qprice-total{border-top-color:#26406a!important;background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qtr-cell{background:#13243f!important;color:#93c5fd!important;border-color:#26406a!important}
+html:root:has(.qx) .qtr-cell-off{background:rgba(96,165,250,.14)!important;color:#7f93b0!important;border-color:#26406a!important}
+html:root:has(.qx) .qws-strip{border-bottom-color:#26406a!important}
+html:root:has(.qx) .qws-strip .qws-chip{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qws-strip .qws-chip:hover{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qdash-kpi{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qdash-card{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qpt{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qpt thead th{background:#1a2e50!important;border-bottom-color:#26406a!important}
+html:root:has(.qx) .qpt thead th button{color:#a9b8cc!important}
+html:root:has(.qx) .qpt tbody td{border-bottom-color:#26406a!important;color:#eef3fb!important}
+html:root:has(.qx) .qpt tbody tr:hover td{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qpt td.num{color:#93c5fd!important}
+html:root:has(.qx) .qpt .pt-t{color:#93c5fd!important}
+html:root:has(.qx) .qpt .pt-ref{color:#a9b8cc!important;background:rgba(96,165,250,.14)!important;border-color:#26406a!important}
+html:root:has(.qx) .qpt .pt-s{color:#a9b8cc!important}
+html:root:has(.qx) .qpt td.loc{color:#a9b8cc!important}
+html:root:has(.qx) .qpt td.act{color:#7f93b0!important}
+html:root:has(.qx) .qpt td.act b{color:#eef3fb!important}
+html:root:has(.qx) .qpt .pt-empty{color:#7f93b0!important}
+html:root:has(.qx) .pt-view{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .pt-view button{color:#a9b8cc!important}
+html:root:has(.qx) .pt-clear{background:rgba(96,165,250,.14)!important;border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qstage .st:hover{border-color:#26406a!important}
+html:root:has(.qx) .qdash-proj{background:#13243f!important;border-color:#26406a!important;border-left-color:#26406a!important}
+html:root:has(.qx) .qdash-proj .pm{border-top-color:#26406a!important}
+html:root:has(.qx) .qapp-brand{border-bottom-color:#26406a!important}
+html:root:has(.qx) .qsearch input{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qstage .st{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qproj-stats{border-top-color:#26406a!important}
+html:root:has(.qx) .qx .bg-white{background:#13243f!important}
+html:root:has(.qx) .qx .bg-slate-100{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .bg-slate-200{background:#1a2e50!important}
+html:root:has(.qx) .qx .bg-slate-50\/70{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .hover\:bg-white:hover{background:#13243f!important}
+html:root:has(.qx) .qx .hover\:bg-slate-50\/60:hover{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .hover\:bg-slate-100:hover{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .hover\:bg-slate-50:hover{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .border-slate-200{border-color:#26406a!important}
+html:root:has(.qx) .qx .border-slate-300{border-color:#26406a!important}
+html:root:has(.qx) .qx .divide-slate-200>:not([hidden])~:not([hidden]){border-color:#26406a!important}
+html:root:has(.qx) .qx .border-amber-200{border-color:rgba(251,191,36,.38)!important}
+html:root:has(.qx) .qx .border-blue-200{border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qx .border-emerald-200{border-color:rgba(52,211,153,.38)!important}
+html:root:has(.qx) .qx .border-rose-200{border-color:rgba(248,113,113,.38)!important}
+html:root:has(.qx) .qx .border-teal-200{border-color:rgba(52,211,153,.38)!important}
+html:root:has(.qx) .qx .border-violet-200{border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qx .bg-amber-50{background:rgba(251,191,36,.14)!important}
+html:root:has(.qx) .qx .bg-amber-100{background:rgba(251,191,36,.14)!important}
+html:root:has(.qx) .qx .bg-blue-50{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .bg-blue-100{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .bg-emerald-50{background:rgba(52,211,153,.14)!important}
+html:root:has(.qx) .qx .bg-emerald-100{background:rgba(52,211,153,.14)!important}
+html:root:has(.qx) .qx .bg-rose-50{background:rgba(248,113,113,.14)!important}
+html:root:has(.qx) .qx .bg-rose-100{background:rgba(248,113,113,.14)!important}
+html:root:has(.qx) .qx .bg-teal-50{background:rgba(52,211,153,.14)!important}
+html:root:has(.qx) .qx .bg-teal-100{background:rgba(52,211,153,.14)!important}
+html:root:has(.qx) .qx .bg-violet-50{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .bg-violet-100{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .bg-indigo-50{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .bg-red-50{background:rgba(248,113,113,.14)!important}
+html:root:has(.qx) .qx .text-slate-900,html:root:has(.qx) .qx .text-slate-800{color:#93c5fd!important}
+html:root:has(.qx) .qx .text-slate-700{color:#eef3fb!important}
+html:root:has(.qx) .qx .text-slate-600{color:#a9b8cc!important}
+html:root:has(.qx) .qx .text-slate-500{color:#a9b8cc!important}
+html:root:has(.qx) .qx .text-slate-400{color:#7f93b0!important}
+html:root:has(.qx) .qx .text-slate-300{color:#7f93b0!important}
+html:root:has(.qx) .qx .text-amber-700{color:#fcd34d!important}
+html:root:has(.qx) .qx .text-amber-800{color:#fcd34d!important}
+html:root:has(.qx) .qx .text-blue-800{color:#93c5fd!important}
+html:root:has(.qx) .qx .text-emerald-600{color:#6ee7b7!important}
+html:root:has(.qx) .qx .text-emerald-700{color:#6ee7b7!important}
+html:root:has(.qx) .qx .text-emerald-800{color:#6ee7b7!important}
+html:root:has(.qx) .qx .text-emerald-900{color:#6ee7b7!important}
+html:root:has(.qx) .qx .text-rose-700{color:#fca5a5!important}
+html:root:has(.qx) .qx .text-rose-800{color:#fca5a5!important}
+html:root:has(.qx) .qx .text-red-700{color:#fca5a5!important}
+html:root:has(.qx) .qx .text-teal-700{color:#93c5fd!important}
+html:root:has(.qx) .qx .text-violet-900{color:#93c5fd!important}
+html:root:has(.qx) .qx .text-indigo-800{color:#93c5fd!important}
+html:root:has(.qx) .qx .text-indigo-900{color:#93c5fd!important}
+html:root:has(.qx) .qx .hover\:text-slate-700:hover,html:root:has(.qx) .qx .hover\:text-slate-800:hover,html:root:has(.qx) .qx .hover\:text-slate-900:hover{color:#93c5fd!important}
+html:root:has(.qx) .qx .bg-white.border,html:root:has(.qx) .qx .qh-card,html:root:has(.qx) .qx .qh-kpi,html:root:has(.qx) .qx .qh-act,html:root:has(.qx) .qx .qh-strip,html:root:has(.qx) .qx .qp-card,html:root:has(.qx) .qx .qp-tile,html:root:has(.qx) .qx .qp-flow,html:root:has(.qx) .qx .qdash-card,html:root:has(.qx) .qx .qdash-kpi,html:root:has(.qx) .qx .qdash-proj,html:root:has(.qx) .qx .qboq-tab,html:root:has(.qx) .qx .qp-hero{border-color:#26406a!important}
+html:root:has(.qx) .qx .text-3xl,html:root:has(.qx) .qx .text-2xl{color:#93c5fd!important}
+html:root:has(.qx) .qx .qtr-topnav{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qx .qp-side::-webkit-scrollbar-thumb{background:#13243f!important}
+html:root:has(.qx) .qx .qp-ws button{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qx .qp-ws button:hover{background:#13243f!important}
+html:root:has(.qx) .qx .qp-ws button.on{background:#13243f!important;border-color:#26406a!important;color:#93c5fd!important}
+html:root:has(.qx) .qx .qp-ws-all{border-color:#26406a!important}
+html:root:has(.qx) .qx .qp-item:hover{background:#13243f!important}
+html:root:has(.qx) .qx .qp-side-foot{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qx .qp-btn,html:root:has(.qx) .qx .qh-btn{border-color:#26406a!important}
+html:root:has(.qx) .qx .qp-table th,html:root:has(.qx) .qx .qprice-table th,html:root:has(.qx) .qx .qh-tbl th{color:#93c5fd!important;background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .qp-card h4,html:root:has(.qx) .qx .qdash-card h4{color:#a9b8cc!important}
+html:root:has(.qx) .qx .qh-hi h1{color:#93c5fd!important}
+html:root:has(.qx) .qx .qh-hero:after{background:#1a2e50!important}
+html:root:has(.qx) .qx .qh-find{background:#13243f!important;border-color:#26406a!important;color:#93c5fd!important}
+html:root:has(.qx) .qx .qh-hero .qh-btn.pri{background:#13243f!important;color:#93c5fd!important;border-color:#26406a!important}
+html:root:has(.qx) .qx .qh-sec{color:#93c5fd!important}
+html:root:has(.qx) .qx .qh-kpi .hd b{color:#93c5fd!important}
+html:root:has(.qx) .qx .qh-kpi .n{color:#93c5fd!important}
+html:root:has(.qx) .qx .qh-grid4 .qh-kpi:nth-child(1){background:#1a2e50!important}
+html:root:has(.qx) .qx .qh-grid4 .qh-kpi:nth-child(2){background:#1a2e50!important}
+html:root:has(.qx) .qx .qh-grid4 .qh-kpi:nth-child(3){background:#1a2e50!important}
+html:root:has(.qx) .qx .qh-grid4 .qh-kpi:nth-child(4){background:#1a2e50!important}
+html:root:has(.qx) .qx .qh-pill.c{background:rgba(52,211,153,.14)!important;color:#6ee7b7!important}
+html:root:has(.qx) .qx .qh-pill.p{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .qh-pill.r{background:rgba(251,191,36,.14)!important;color:#fcd34d!important}
+html:root:has(.qx) .qx .qh-pill.n{background:rgba(96,165,250,.14)!important;color:#a9b8cc!important}
+html:root:has(.qx) .qx .qh-trial .bar,html:root:has(.qx) .qx .qdash-bar{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .qh-ph{color:#93c5fd!important}
+html:root:has(.qx) .qx .qws-side button:hover{background:#13243f!important}
+html:root:has(.qx) .qx .qp-item.on .ic{background:#13243f!important}
+html:root:has(.qx) .qx .qws-grp button[data-on]:before{background:#13243f!important}
+html:root:has(.qx) .qx .qws-card{border-color:#26406a!important}
+html:root:has(.qx) .qx .qws-icon{background:#13243f!important}
+html:root:has(.qx) .qx .qws-card .text-lg{color:#93c5fd!important}
+html:root:has(.qx) .qx .qh-qi{background:#13243f!important}
+html:root:has(.qx) .qdisc{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qdisc.on .qdisc-dot{background:#13243f!important}
+html:root:has(.qx) .qdisc-t{color:#93c5fd!important}
+html:root:has(.qx) .qdisc-h{color:#a9b8cc!important}
+html:root:has(.qx) .qsys{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qsys-i.on{background:#13243f!important;color:#93c5fd!important}
+html:root:has(.qx) .qx .qh-tone{background:#1a2e50!important;border-color:#26406a!important}
+html:root:has(.qx) .qx .qh-tone .tx b{color:#93c5fd!important}
+html:root:has(.qx) .qx .qh-tc{background:#1a2e50!important}
+html:root:has(.qx) .qx .qh-tc .qh-ph{color:#93c5fd!important}
+html:root:has(.qx) .qx .qh-tc .qh-tbl th{background:#13243f!important}
+html:root:has(.qx) .qx .qh-tc .qh-tbl tr:hover td{background:#13243f!important}
+html:root:has(.qx) .qx .qh-ins:hover{background:#13243f!important}
+html:root:has(.qx) .qx .qh-res button:hover{background:#13243f!important}
+html:root:has(.qx) .qx .qws-card{background:#1a2e50!important}
+html:root:has(.qx) .qx .qws-card .border-t{border-color:#26406a!important}
+html:root:has(.qx) .qx .qup-h{color:#93c5fd!important;background:#1a2e50!important;border-bottom-color:#26406a!important}
+html:root:has(.qx) .qx .qup-h span{color:#a9b8cc!important}
+html:root:has(.qx) .qx .qstep{color:#93c5fd!important}
+html:root:has(.qx) .qx .qup select{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qx .qup input[type=file]{border-color:rgba(96,165,250,.38)!important;background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qx .qjump{background:#1a2e50!important}
+html:root:has(.qx) .qteam-head{background:#1a2e50!important;border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qteam-h{color:#93c5fd!important}
+html:root:has(.qx) .qteam-bar{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qteam-list{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qteam-row{border-top-color:#26406a!important}
+html:root:has(.qx) .qteam-row:hover{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qteam-who b{color:#93c5fd!important}
+html:root:has(.qx) .qteam-who span{color:#a9b8cc!important}
+html:root:has(.qx) .qteam-chip{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qteam-dot{color:#7f93b0!important;background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qteam-dot.on{background:#13243f!important}
+html:root:has(.qx) .qteam-meta{color:#a9b8cc!important}
+html:root:has(.qx) .qteam-meta span:first-child{color:#eef3fb!important}
+html:root:has(.qx) .qteam-editwrap{background:rgba(96,165,250,.14)!important;border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qteam-lbl{color:#a9b8cc!important}
+html:root:has(.qx) .qteam-role{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qteam-role b{color:#93c5fd!important}
+html:root:has(.qx) .qteam-role span{color:#a9b8cc!important}
+html:root:has(.qx) .qteam-role:hover:not(:disabled){border-color:#26406a!important}
+html:root:has(.qx) .qteam-role.on{background:#13243f!important}
+html:root:has(.qx) .qteam-ws{border-color:#26406a!important;background:#13243f!important;color:#a9b8cc!important}
+html:root:has(.qx) .qteam-ws.on{background:#13243f!important}
+html:root:has(.qx) .qteam-projects{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qteam-sub{color:#93c5fd!important}
+html:root:has(.qx) .qteam-inv{border-color:#26406a!important;background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qteam-link{background:rgba(52,211,153,.14)!important;border-color:rgba(52,211,153,.38)!important;color:#6ee7b7!important}
+html:root:has(.qx) .qteam-invite{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qteam-legend > div{background:#13243f!important;border-color:#26406a!important;color:#a9b8cc!important}
+html:root:has(.qx) .qteam-log{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qteam-log > div{border-top-color:#26406a!important;color:#eef3fb!important}
+html:root:has(.qx) .qap-kpis > div{background:#1a2e50!important;border-color:#26406a!important}
+html:root:has(.qx) .qap-kpis span{color:#a9b8cc!important}
+html:root:has(.qx) .qap-f{border-color:#26406a!important;background:#13243f!important;color:#a9b8cc!important}
+html:root:has(.qx) .qap-f span{background:rgba(96,165,250,.14)!important;color:#a9b8cc!important}
+html:root:has(.qx) .qap-f.on span{background:#13243f!important}
+html:root:has(.qx) .qap-type{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qap-card{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qap-card.mine{border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qap-title{color:#93c5fd!important}
+html:root:has(.qx) .qap-rev{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qap-status{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qap-step{color:#a9b8cc!important;background:rgba(96,165,250,.14)!important;border-color:#26406a!important}
+html:root:has(.qx) .qap-step i{background:#1a2e50!important;color:#a9b8cc!important}
+html:root:has(.qx) .qap-step em{color:#a9b8cc!important}
+html:root:has(.qx) .qap-step.done{background:rgba(52,211,153,.14)!important;border-color:rgba(52,211,153,.38)!important;color:#6ee7b7!important}
+html:root:has(.qx) .qap-step.wait{background:rgba(251,191,36,.14)!important;border-color:rgba(251,191,36,.38)!important;color:#fca5a5!important}
+html:root:has(.qx) .qap-step.back{background:rgba(248,113,113,.14)!important;border-color:rgba(248,113,113,.38)!important;color:#fca5a5!important}
+html:root:has(.qx) .qap-step.rej{background:rgba(248,113,113,.14)!important;border-color:rgba(248,113,113,.38)!important;color:#fca5a5!important}
+html:root:has(.qx) .qap-warn{color:#fcd34d!important;background:rgba(251,191,36,.14)!important;border-color:rgba(251,191,36,.38)!important}
+html:root:has(.qx) .qap-you{color:#93c5fd!important;background:rgba(96,165,250,.14)!important;border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qap-you.back{color:#fca5a5!important;background:rgba(248,113,113,.14)!important;border-color:rgba(248,113,113,.38)!important}
+html:root:has(.qx) .qap-body{border-top-color:#26406a!important}
+html:root:has(.qx) .qap-lbl{color:#a9b8cc!important}
+html:root:has(.qx) .qap-ref{background:rgba(96,165,250,.14)!important;border-color:#26406a!important;color:#eef3fb!important}
+html:root:has(.qx) .qap-note{color:#eef3fb!important;background:rgba(96,165,250,.14)!important;border-color:#26406a!important}
+html:root:has(.qx) .qap-h{color:#eef3fb!important}
+html:root:has(.qx) .qap-h:not(:last-child)::after{background:#1a2e50!important}
+html:root:has(.qx) .qap-cmt{background:rgba(96,165,250,.14)!important;border-color:#26406a!important;color:#93c5fd!important}
+html:root:has(.qx) .qap-act{background:rgba(96,165,250,.14)!important;border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qap-act.back{background:rgba(248,113,113,.14)!important;border-color:rgba(248,113,113,.38)!important}
+html:root:has(.qx) .qap-b.back{background:#13243f!important;color:#fca5a5!important;border-color:rgba(248,113,113,.38)!important}
+html:root:has(.qx) .qap-b.back:hover{background:rgba(248,113,113,.14)!important}
+html:root:has(.qx) .qap-b.rej{background:#13243f!important;color:#a9b8cc!important;border-color:#26406a!important}
+html:root:has(.qx) .qap-b.rej:hover{color:#fca5a5!important}
+html:root:has(.qx) .qap-form{background:#13243f!important;border-color:#26406a!important}
+html:root:has(.qx) .qap-form-h{color:#93c5fd!important;background:#1a2e50!important;border-bottom-color:#26406a!important}
+html:root:has(.qx) .qap-form-h span{color:#a9b8cc!important}
+html:root:has(.qx) .qap-tcard{border-color:#26406a!important;background:#13243f!important}
+html:root:has(.qx) .qap-tcard b{color:#93c5fd!important}
+html:root:has(.qx) .qap-tcard > span:last-child{color:#a9b8cc!important}
+html:root:has(.qx) .qap-tbadge{background:#13243f!important}
+html:root:has(.qx) .qap-tcard:hover{border-color:#26406a!important}
+html:root:has(.qx) .qap-tcard.on{background:#13243f!important}
+html:root:has(.qx) .qap-items{border-color:#26406a!important;background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qap-item:hover{background:rgba(96,165,250,.14)!important}
+html:root:has(.qx) .qap-item.on{background:rgba(96,165,250,.14)!important;border-color:rgba(96,165,250,.38)!important}
+html:root:has(.qx) .qap-sum span{background:rgba(96,165,250,.14)!important;border-color:rgba(96,165,250,.38)!important;color:#93c5fd!important}
+html:root:has(.qx) .qap-none{color:#a9b8cc!important;border-color:#26406a!important}
+html:root:has(.qx) .qap-wrow:hover{background:rgba(96,165,250,.14)!important}
 </style>
 </body>
 </html>
