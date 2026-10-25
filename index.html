@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-25.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -2800,11 +2800,6 @@ async function callBilling(action, payload) {
 // 403 from the edge function itself (checked server-side against
 // public.platform_admins) — the frontend just surfaces that as a rejected
 // promise so the Admin nav item/view can be conditionally shown.
-// Paddle (merchant of record) checkout + billing portal. Quantora sells
-// through Paddle because it does not require a UAE trade licence, which Stripe
-// does. The older Stripe-backed `billing` actions are left in place untouched
-// so switching back later is a configuration change, not a rewrite.
-const PADDLE_FN_URL = `${SUPABASE_URL}/functions/v1/paddle-billing`;
 // Page packs: pay per page (2026-10-18). Separate function so the working
 // subscription / wallet checkout is untouched.
 const PAGE_PACKS_FN_URL = `${SUPABASE_URL}/functions/v1/page-packs`;
@@ -2862,8 +2857,8 @@ function PagePacksCard({ compact }) {
   async function buy() {
     setBusy(true); setMsg(null);
     try {
-      // Paddle checkout is off; page packs move to Razorpay in a later step.
-      setMsg({ ok: false, text: CARD_OFF_MSG });
+      // Page packs are not on Razorpay yet.
+      setMsg({ ok: false, text: "Buying pages online is coming soon. Until then, write to support and we will add pages to your account." });
     } catch (e) { setMsg({ ok: false, text: e.message }); }
     finally { setBusy(false); }
   }
@@ -2913,7 +2908,7 @@ function PagePacksCard({ compact }) {
         </div>
       </div>
       {total > 0 && total < minOrder && <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>Add ${(minOrder - total).toFixed(2)} more to reach the ${minOrder} minimum.</div>}
-      {(data.offline || !allAvailable) && <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 6 }}>Card payment is not switched on for this account yet.</div>}
+      {(data.offline || !allAvailable) && <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 6 }}>Buying pages online is coming soon. Until then, write to support and we will add pages to your account.</div>}
       {msg && <div style={{ fontSize: 12.5, marginTop: 8, color: msg.ok ? "#059669" : "#e11d48" }}>{msg.text}</div>}
     </div>
   );
@@ -2924,17 +2919,6 @@ function fmtLimit(n) {
   return n == null ? "—" : Number(n).toLocaleString();
 }
 
-async function callPaddleBilling(action, payload) {
-  const { data: { session } } = await sb.auth.getSession();
-  const res = await fetch(PADDLE_FN_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
-    body: JSON.stringify({ action, ...(payload || {}) }),
-  });
-  const json = await res.json();
-  if (!res.ok) throw new Error(json.error || "Billing request failed");
-  return json;
-}
 
 // ---------------------------------------------------------------------------
 // RAZORPAY (2026-10-24). Monthly plans and storage add-ons are Razorpay
@@ -3013,24 +2997,6 @@ async function callAdminPlan(action, payload) {
   return json;
 }
 
-const ADMIN_DISCOUNTS_FN_URL = `${SUPABASE_URL}/functions/v1/admin-discounts`;
-async function callAdminDiscounts(action, payload) {
-  const { data: { session } } = await sb.auth.getSession();
-  const res = await fetch(ADMIN_DISCOUNTS_FN_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
-    body: JSON.stringify({ action, ...(payload || {}) }),
-  });
-  const json = await res.json();
-  if (!res.ok) {
-    const err = new Error(json.error || "Discount request failed");
-    // The server asks for a confirmation rather than refusing outright when a
-    // discount is unbounded; carry that through so the form can offer the tick.
-    err.needsConfirmation = json.needs_confirmation || null;
-    throw err;
-  }
-  return json;
-}
 
 const ADMIN_FN_URL = `${SUPABASE_URL}/functions/v1/admin-analytics`;
 async function callAdminAnalytics(action, payload) {
@@ -4507,7 +4473,7 @@ const QUANTORA_LANDING_HTML = `
       </div>
     </div>
     <p class="secsub qx-local-note" style="margin-top:14px;font-size:12px;display:none;"></p>
-    <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 draftsman drawing pages and 5 AI-processed pages, used once, no expiry &mdash; no credit card required.</p>
+    <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 draftsman drawing pages and 5 AI-processed pages &mdash; no credit card required. Your work is kept for 7 days; choose a plan to keep it.</p>
   </div>
 </section>
 
@@ -5320,10 +5286,12 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
   // Wallet top-ups (2026-08-12). The pricing page promises pay-as-you-go
   // credit for usage beyond a plan's monthly pages, so the purchase path has
   // to exist. Packs come from the credit_packs table rather than a hardcoded
-  // list, so prices can change without a redeploy; a pack with no Paddle price
-  // id yet comes back available:false and renders disabled instead of failing
-  // at checkout.
+  // list, so prices can change without a redeploy. Not on Razorpay yet, so
+  // the list stays empty and the section is hidden.
   const [packs, setPacks] = useState([]);
+  // What Razorpay will actually charge (currency + price per plan), so the
+  // grid never shows a dollar price for an INR charge.
+  const [rzCfg, setRzCfg] = useState(null);
   const [balanceCents, setBalanceCents] = useState(0);
   const [busyPackId, setBusyPackId] = useState(null);
 
@@ -5351,10 +5319,11 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
       }
       setPlans(plansData || []); setCompany(co);
       setBalanceCents(co?.credit_balance_cents ?? 0);
+      try { setRzCfg(await callRazorpay("config", {})); } catch (e) { setRzCfg(null); }
       // Non-fatal: the plan grid is the primary purpose of this modal, so a
       // failure to list top-up packs must not blank the whole thing.
       try {
-        // Pay-as-you-go credit top-ups were Paddle-only; hidden until they move to Razorpay.
+        // Pay-as-you-go credit top-ups are not on Razorpay yet.
         setPacks([]);
       } catch (packErr) {
         console.error("list_credit_packs failed:", packErr);
@@ -5425,15 +5394,15 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                 hide it so the modal only offers real, purchasable options. */}
             {plans.filter(plan => plan.id !== "free").map(plan => {
               const isCurrent = plan.id === currentPlanId;
-              // Paddle is the live provider; the Stripe check is kept as a fallback so
-              // that switching back later (once a UAE freelance permit exists) needs no
-              // frontend change.
+              const rzPrice = rzCfg?.enabled ? ((rzCfg.plans || []).find(x => x.id === plan.id) || {}).price : null;
+              const rzCur = rzCfg?.currency || "USD";
               const selfServe = !plan.is_trial && Number(plan.price_usd) > 0 && plan.id !== "enterprise";
               return (
                 <div key={plan.id} className={`rounded-xl border p-4 flex flex-col ${isCurrent ? "border-slate-900 ring-1 ring-slate-900" : "border-slate-200"}`}>
                   <div className="font-bold">{plan.name}</div>
                   <div className="text-2xl font-bold mt-1">
-                    {plan.price_usd == null ? (plan.id === "enterprise" ? "From $5,000" : "Custom") : plan.price_usd === "0" || Number(plan.price_usd) === 0 ? "$0" : `$${plan.price_usd}`}
+                    {rzPrice > 0 ? (rzCur === "INR" ? `₹${Number(rzPrice).toLocaleString("en-IN")}` : `$${rzPrice}`)
+                      : plan.price_usd == null ? (plan.id === "enterprise" ? "From $5,000" : "Custom") : plan.price_usd === "0" || Number(plan.price_usd) === 0 ? "$0" : `$${plan.price_usd}`}
                     {plan.price_usd != null && Number(plan.price_usd) > 0 && <span className="text-xs font-normal text-slate-400">/mo</span>}
                   </div>
                   <div className="text-xs text-slate-500 mt-2 space-y-1 flex-1">
@@ -5460,7 +5429,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                     {plan.max_overage_cents > 0
                       ? <div className="text-slate-400">Pay-as-you-go credits beyond that, up to ${(plan.max_overage_cents / 100).toLocaleString()}/month.</div>
                       : <div className="text-slate-400">No pay-as-you-go on this plan.</div>}
-                    {plan.is_trial && <div>{(plan.trial_duration_days ?? 2) > 3650 ? "One-time free welcome pack \u2014 no expiry. When it is used, choose a plan." : `${plan.trial_duration_days ?? 2}-day trial window`}</div>}
+                    {plan.is_trial && <div>{(plan.trial_duration_days ?? 2) > 3650 ? "One-time free welcome pack. Your projects and files are kept for 7 days \u2014 choose a plan within 7 days to keep them." : `${plan.trial_duration_days ?? 2}-day trial window`}</div>}
                   </div>
                   {isCurrent ? (
                     <div className="mt-4 text-center text-xs font-semibold text-slate-500 bg-slate-100 rounded-lg py-2">Current plan</div>
@@ -6269,7 +6238,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
             {trialUsage.trial_expired ? (
               <span className="text-xs font-bold text-rose-700">Trial ended {trialUsage.trial_end_date ? new Date(trialUsage.trial_end_date).toLocaleDateString() : ""}</span>
             ) : (
-              <span className="text-xs font-bold text-violet-700">{trialUsage.trial_days_remaining > 3650 ? "One-time pack \u00B7 no expiry" : `Trial Ends: ${trialUsage.trial_days_remaining} Day${trialUsage.trial_days_remaining === 1 ? "" : "s"} Remaining`}</span>
+              <span className="text-xs font-bold text-violet-700">{trialUsage.trial_days_remaining > 3650 ? "One-time pack \u00B7 work kept 7 days" : `Trial Ends: ${trialUsage.trial_days_remaining} Day${trialUsage.trial_days_remaining === 1 ? "" : "s"} Remaining`}</span>
             )}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -17745,8 +17714,8 @@ const QADMIN_NAV = [
   { group: "Work", key: "estima", label: "Estima AI", sub: "Ask about a project's drawings, quantities and rules" },
   { group: "Business", key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
   { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
-  { group: "Business", key: "discounts", label: "Discounts", sub: "Coupon codes, negotiated prices, and who has what" },
-  { group: "Business", key: "payments", label: "Payments", sub: "Whether Paddle will take money yet, and what is missing" },
+  { group: "Business", key: "discounts", label: "Discounts", sub: "Razorpay offers and hand-granted plans" },
+  { group: "Business", key: "payments", label: "Payments", sub: "Razorpay readiness, paying customers and latest payments" },
   { group: "Business", key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
   { group: "Platform", key: "support", label: "Support & Feedback", sub: "What customers report, and what they want next" },
   { group: "Platform", key: "ratings", label: "User Ratings", sub: "1-5 star ratings after each step, per customer" },
@@ -17798,6 +17767,63 @@ function qWelcomeInfo(c) {
   const left = Math.min(7, Math.ceil((previewEnd - Date.now()) / 86400000));
   return { previewEnd, left };
 }
+// Welcome Pack 7-day rule (2026-10-25). Projects and files on the Welcome Pack
+// are kept until companies.welcome_delete_at; the daily welcome-cleanup engine
+// deletes them after that unless a paid plan is active. This bar is the
+// customer's countdown. It shows nothing until the clock is set.
+function WelcomeKeepBar({ sessionKey, onChoosePlan }) {
+  const [co, setCo] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) return;
+        const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+        if (!prof?.company_id) return;
+        const { data } = await sb.from("companies")
+          .select("plan, welcome_delete_at, welcome_cleared_at").eq("id", prof.company_id).maybeSingle();
+        if (alive) setCo(data || null);
+      } catch (e) { /* the bar is a convenience; never block the app */ }
+    }
+    load();
+    const again = () => load();
+    window.addEventListener("plan-changed", again);
+    window.addEventListener("profile-updated", again);
+    return () => { alive = false; window.removeEventListener("plan-changed", again); window.removeEventListener("profile-updated", again); };
+  }, [sessionKey]);
+  if (!co || co.plan !== "trial" || !co.welcome_delete_at) return null;
+  const end = Date.parse(co.welcome_delete_at);
+  const ms = end - Date.now();
+  const days = Math.ceil(ms / 86400000);
+  const when = new Date(end).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  let tone, text;
+  if (ms <= 0 && co.welcome_cleared_at) {
+    tone = "gone";
+    text = "Your Welcome Pack projects and files were removed because no plan was chosen within 7 days. Choose a plan to start again and keep your work.";
+  } else if (ms <= 0) {
+    tone = "red";
+    text = "Your 7 Welcome Pack days are over. Your projects and files will be removed tonight unless you choose a plan now.";
+  } else {
+    tone = days <= 2 ? "red" : "blue";
+    text = days <= 1
+      ? `Last day: your Welcome Pack projects and files are removed after ${when}. Choose a plan to keep them.`
+      : `Welcome Pack: your projects and files are kept for ${days} more days (until ${when}). Choose a plan to keep them.`;
+  }
+  const st = tone === "blue"
+    ? { background: "#eef4ff", color: "#1e3a8a", borderBottom: "1px solid #c7d7fe" }
+    : tone === "red"
+      ? { background: "#fff1f2", color: "#9f1239", borderBottom: "1px solid #fecdd3" }
+      : { background: "#f1f5f9", color: "#334155", borderBottom: "1px solid #e2e8f0" };
+  return (
+    <div data-welcome-bar role="status" style={{ ...st, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "9px 24px", fontSize: 13.5, fontWeight: 600 }}>
+      <span>{text}</span>
+      <button onClick={onChoosePlan} style={{ border: 0, borderRadius: 8, padding: "7px 14px", fontWeight: 800, fontSize: 13, cursor: "pointer",
+        background: tone === "red" ? "#e11d48" : "#1c6ce6", color: "#fff", whiteSpace: "nowrap" }}>Choose a plan</button>
+    </div>
+  );
+}
+
 function qDaysLeft(iso) {
   if (!iso) return null;
   const ms = new Date(iso).getTime() - Date.now();
@@ -18245,10 +18271,10 @@ function AdminPortal({ onBack }) {
     const rows = [
       ["Quantora — Payments Received Report"], [`Generated: ${new Date().toISOString()}`], [],
       ["Total Payments Received (USD)", (reportsData?.total_payments_received_usd ?? 0).toFixed(2)], [],
-      ["Date", "Company", "Type", "Amount (USD)", "Balance After (USD)", "Description", "Stripe Payment Intent", "Stripe Checkout Session"],
-      ...payments.map(p => [p.date, p.company_name, p.type, p.amount_usd, p.balance_after_usd, p.description, p.stripe_payment_intent_id, p.stripe_checkout_session_id]),
+      ["Date", "Company", "Type", "Amount (USD)", "Balance After (USD)", "Description", "Payment reference"],
+      ...payments.map(p => [p.date, p.company_name, p.type, p.amount_usd, p.balance_after_usd, p.description, p.payment_reference || p.stripe_payment_intent_id || ""]),
     ];
-    if (payments.length === 0) rows.push(["No wallet transactions recorded yet — Stripe payments will appear here once configured and processed."]);
+    if (payments.length === 0) rows.push(["No wallet transactions recorded yet. Razorpay subscription payments are listed in Admin → Payments and in the Razorpay dashboard."]);
     return downloadWorkbook([{ name: "Payments Received", rows }], `Quantora_Payments_Received_${new Date().toISOString().slice(0,10)}.xlsx`);
   }
 
@@ -18679,8 +18705,8 @@ function AdminQuotaControls({ company, onChanged }) {
   const [history, setHistory] = useState([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   // Manual plan activation (see the admin-plan edge function). Needed because
-  // a payment can land without a Paddle subscription reaching us -- a failed
-  // webhook, a bank transfer, or a sandbox test that needs undoing.
+  // a payment can land without a Razorpay subscription reaching us -- a failed
+  // webhook, a bank transfer, or a test that needs undoing.
   const [allPlans, setAllPlans] = useState([]);
   const [planChoice, setPlanChoice] = useState("");
   // Why a plan is being granted by hand. The list comes from admin-plan so the
@@ -18811,7 +18837,6 @@ function AdminQuotaControls({ company, onChanged }) {
         + (bonusNow > 0 ? ` ${bonusNow} bonus page(s) were cleared.` : "")
         + (res.audit_recorded ? "" : " (Warning: the audit row could not be written.)") });
       setPlanChoice(""); setReasonCode(""); setGrantDays("30");
-      if (res.paddle_noted) setMsg(m => ({ ...m, text: m.text + " The reason was also recorded on the Paddle customer." }));
       await loadHistory(company.id);
       if (onChanged) await onChanged();
     } catch (e) {
@@ -18855,8 +18880,7 @@ function AdminQuotaControls({ company, onChanged }) {
         {company.billing_provider && (
           <div className="detail-item">
             <span>Activated by</span>
-            <b>{company.billing_provider === "paddle" ? "Paddle (paid online)"
-               : company.billing_provider === "stripe" ? "Stripe (paid online)"
+            <b>{company.billing_provider === "razorpay" ? "Razorpay (paid online)"
                : company.billing_provider === "manual" ? "Admin — activated by hand"
                : company.billing_provider}</b>
           </div>
@@ -18917,7 +18941,7 @@ function AdminQuotaControls({ company, onChanged }) {
           <option value="">Change plan to…</option>
           {allPlans.filter(p => p.id !== company.plan).map(p => (
             <option key={p.id} value={p.id}>
-              {p.name}{p.price_usd != null ? ` — $${p.price_usd}/mo` : ""}{p.paddle_price_id ? "" : " (no online checkout)"}
+              {p.name}{p.price_inr != null ? ` — ₹${Number(p.price_inr).toLocaleString("en-IN")}/mo` : p.price_usd != null ? ` — $${p.price_usd}/mo` : ""}
             </option>
           ))}
         </select>
@@ -18925,17 +18949,21 @@ function AdminQuotaControls({ company, onChanged }) {
           {busy === "plan" ? "Applying…" : "Apply Plan"}
         </button>
       </div>
+      {company.billing_provider === "razorpay" && company.subscription_status === "active" && (
+        <div style={{ fontSize: 11.5, color: "#fcd34d", marginBottom: 8, lineHeight: 1.55 }}>
+          This company pays through Razorpay. Changing the plan here does not change what Razorpay charges them,
+          and their next payment sets the paid plan again. To stop billing, cancel the subscription in the Razorpay dashboard.
+        </div>
+      )}
       <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginBottom: 10, lineHeight: 1.55 }}>
-        Paddle sets the plan automatically when a customer subscribes. This is the route for granting
+        Razorpay sets the plan automatically when a customer subscribes. This is the route for granting
         access without a payment — promotions, pilots, gift cards, beta testers, goodwill. Every reason
-        here is a giveaway, so nothing lands in MRR. Payment is only ever taken through Paddle, which is
-        the merchant of record. Access ends on its own at the date shown and the account drops back to
+        here is a giveaway, so nothing lands in MRR. Payment is only ever taken through Razorpay. Access ends on its own at the date shown and the account drops back to
         whatever it was on before — usually an expired trial, which leaves them blocked until they
         subscribe. The plan's page and chat limits apply throughout, and for a grant they are a single
         allowance covering the whole period rather than resetting each month — grant Individual for 30
         days and that is 30 pages in total, not 30 a month.
-        The reason is written to the audit log and, where a Paddle customer exists, onto their Paddle
-        record as a note.
+        The reason is written to the audit log.
       </div>
 
       <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note (e.g. the campaign, the gift code, or who agreed it)" style={{ width: "100%", marginBottom: 12 }} />
@@ -19378,40 +19406,16 @@ function QMyProjectsView({ onOpen }) {
 }
 
 // ---------------------------------------------------------------------------
-// QDiscountsView (2026-08-13).
-//
-// Paddle holds every discount; this reads and writes them through the
-// admin-discounts edge function. Redemption counts come from Paddle, never
-// from a local tally -- a code can be used on a checkout this system never saw.
+// QPaymentsView (2026-10-25). Live readiness check against Razorpay, plus the
+// payments and webhooks that came in lately. Asks razorpay-billing ("readiness",
+// platform admins only); no key value is ever sent to the browser.
 // ---------------------------------------------------------------------------
-
-// Paddle's published pricing for a merchant-of-record transaction. Approximate
-// on purpose, and labelled as such on screen: the exact figure varies by
-// payment method and country, and a number that pretends to be exact is worse
-// than one that admits it is a guide.
-const PADDLE_FEE_PCT = 5;
-const PADDLE_FEE_FIXED_USD = 0.5;
-
-function qDiscountedPrice(listUsd, d) {
-  if (!Number.isFinite(listUsd)) return null;
-  if (!d) return listUsd;
-  if (d.type === "percentage") return Math.max(0, listUsd * (1 - Number(d.amount) / 100));
-  return Math.max(0, listUsd - Number(d.amount) / 100);
+function qRzMoney(amount, currency) {
+  if (amount == null || !Number.isFinite(Number(amount))) return "—";
+  const n = Number(amount);
+  return currency === "INR" ? `₹${n.toLocaleString("en-IN")}` : `$${n.toLocaleString("en-US")}`;
 }
-function qNetAfterPaddle(paidUsd) {
-  if (!Number.isFinite(paidUsd) || paidUsd <= 0) return 0;
-  return paidUsd - (paidUsd * PADDLE_FEE_PCT / 100) - PADDLE_FEE_FIXED_USD;
-}
-function qUsd(n) { return n == null || !Number.isFinite(n) ? "—" : `$${n.toFixed(2)}`; }
 
-// ---------------------------------------------------------------------------
-// QPaymentsView (2026-08-13). Live readiness check against Paddle.
-//
-// The checkout line is the only one that decides whether money can be taken,
-// and it cannot be answered from our own database -- Paddle has to be asked.
-// The edge function creates a draft transaction to find out and cancels it
-// again straight after; nothing is ever charged.
-// ---------------------------------------------------------------------------
 function QPaymentsView() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
@@ -19422,7 +19426,7 @@ function QPaymentsView() {
   async function run() {
     setBusy(true); setErr("");
     try {
-      const res = await callPaddleBilling("readiness", {});
+      const res = await callRazorpay("readiness", {});
       setData(res);
       setCheckedAt(new Date());
     } catch (e) {
@@ -19432,8 +19436,38 @@ function QPaymentsView() {
     } finally { setBusy(false); }
   }
 
-  const checks = data?.checks || [];
-  const ready = !!data?.ready;
+  const cur = data?.currency || "INR";
+  const missingPlans = (data?.plans || []).filter(p => !(p.price > 0));
+  const missingAddons = (data?.storage_addons || []).filter(a => !(a.price > 0));
+  const checks = data ? [
+    { key: "keys", ok: data.keys_configured && data.api_ok,
+      label: "Razorpay API keys work",
+      detail: !data.keys_configured ? "RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are not set in app_secrets."
+        : data.api_ok ? `Razorpay accepted the ${data.mode === "live" ? "live" : data.mode === "test" ? "test" : ""} keys just now.`
+        : `Razorpay refused the keys: ${data.api_error || "unknown error"}` },
+    { key: "mode", ok: data.mode === "live",
+      label: "Live mode",
+      detail: data.mode === "live" ? "Real cards are charged." : data.mode === "test" ? "Test keys: nothing is charged. Put the live keys in app_secrets to take real payments." : "Key mode not recognised." },
+    { key: "webhook", ok: data.webhook_secret_configured,
+      label: "Webhook secret set",
+      detail: data.webhook_secret_configured
+        ? "Razorpay's calls to razorpay-webhook are checked against it. It must match the secret on the webhook in the Razorpay dashboard."
+        : "RAZORPAY_WEBHOOK_SECRET is not set, so plans will not switch on by themselves after payment." },
+    { key: "plans", ok: missingPlans.length === 0,
+      label: `Every paid plan has a ${cur} price`,
+      detail: missingPlans.length === 0
+        ? (data.plans || []).map(p => `${p.name} ${qRzMoney(p.price, cur)}/mo`).join(" · ")
+        : `Missing: ${missingPlans.map(p => p.name).join(", ")}.` },
+    { key: "addons", ok: missingAddons.length === 0,
+      label: `Every storage add-on has a ${cur} price`,
+      detail: missingAddons.length === 0
+        ? (data.storage_addons || []).map(a => `+${a.gb} GB ${qRzMoney(a.price, cur)}/mo`).join(" · ")
+        : `Missing: ${missingAddons.map(a => `+${a.gb} GB`).join(", ")}.` },
+  ] : [];
+  const ready = data && checks.every(c => c.ok);
+  const blocking = checks.filter(c => !c.ok);
+  const td = { padding: "9px 12px", fontSize: 12.5, borderTop: "1px solid var(--border-soft)" };
+  const th = { padding: "9px 12px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-dimmer)", textAlign: "left" };
 
   return (
     <div>
@@ -19461,10 +19495,11 @@ function QPaymentsView() {
                 {ready ? "Payments are live" : "Not taking payments yet"}
               </div>
               <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 4, lineHeight: 1.6 }}>
-                {data.summary}
+                {ready ? `Customers can subscribe and pay by card, UPI or net banking in ${cur}. Plans switch on by themselves once Razorpay confirms the payment.`
+                  : `${blocking.length} item${blocking.length === 1 ? "" : "s"} still blocking: ${blocking.map(c => c.label).join("; ")}.`}
               </div>
               <div style={{ fontSize: 11, color: "var(--text-dimmer)", marginTop: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                {data.environment === "sandbox" ? "Paddle sandbox" : "Paddle live account"}
+                Razorpay {data.mode === "live" ? "live account" : data.mode === "test" ? "test mode" : ""} · {cur}
               </div>
             </div>
 
@@ -19490,34 +19525,57 @@ function QPaymentsView() {
         )}
       </div>
 
+      {data && (
+        <div className="card panel" style={{ marginBottom: 16 }}>
+          <div className="panel-head"><h3>Paying customers</h3>
+            <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>{(data.paying_companies || []).length} on Razorpay</span></div>
+          {(data.paying_companies || []).length === 0
+            ? <p style={{ padding: "14px 18px", fontSize: 12.5, color: "var(--text-dimmer)" }}>No customer has paid through Razorpay yet.</p>
+            : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={th}>Company</th><th style={th}>Plan</th><th style={th}>Status</th><th style={th}>Paid until</th></tr></thead>
+                <tbody>{data.paying_companies.map(c => (
+                  <tr key={c.id}><td style={{ ...td, fontWeight: 600 }}>{c.name}</td><td style={td}>{((data.plans || []).find(x => x.id === c.plan) || {}).name || c.plan}</td>
+                    <td style={td}>{c.subscription_status || "—"}</td>
+                    <td style={td}>{c.paid_until ? new Date(c.paid_until).toLocaleDateString() : "—"}</td></tr>
+                ))}</tbody></table></div>}
+        </div>
+      )}
+
+      {data && (
+        <div className="card panel" style={{ marginBottom: 16 }}>
+          <div className="panel-head"><h3>Latest Razorpay events</h3>
+            <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>last 10 webhooks received</span></div>
+          {(data.recent_events || []).length === 0
+            ? <p style={{ padding: "14px 18px", fontSize: 12.5, color: "var(--text-dimmer)" }}>No webhook has arrived yet. The first one comes with the first payment.</p>
+            : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={th}>Received</th><th style={th}>Event</th><th style={th}>Company</th><th style={th}>Subscription</th></tr></thead>
+                <tbody>{data.recent_events.map((e, i) => (
+                  <tr key={i}><td style={td}>{new Date(e.received_at).toLocaleString()}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{e.event}</td><td style={td}>{e.company || "—"}</td>
+                    <td style={{ ...td, fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>{e.subscription_id || "—"}{e.status ? ` · ${e.status}` : ""}</td></tr>
+                ))}</tbody></table></div>}
+        </div>
+      )}
+
       <div className="card panel">
         <div className="panel-head"><h3>What only you can do</h3></div>
         <div style={{ padding: "16px 18px", fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.75 }}>
           <p style={{ margin: "0 0 12px" }}>
-            <b style={{ color: "var(--text)" }}>Finish Paddle's verification.</b> Sign in at
-            vendors.paddle.com and complete every outstanding task on the onboarding checklist —
-            business details, payout method and identity documents. Until Paddle marks the account
-            verified it refuses to open any checkout at all, for subscriptions and top-ups alike.
-            Nothing on this side is missing; the checkout line above will turn green on its own
-            once Paddle is done.
+            <b style={{ color: "var(--text)" }}>Refunds and cancellations.</b> Done in the Razorpay dashboard
+            (dashboard.razorpay.com → Subscriptions or Transactions). A cancelled subscription keeps the plan
+            until the paid month ends, then the webhook switches it off by itself.
           </p>
           <p style={{ margin: "0 0 12px" }}>
-            <b style={{ color: "var(--text)" }}>Rotate the API key.</b> The key currently in use was
-            pasted into a chat window and should be treated as compromised. Create a new one in
-            Paddle under Developer tools → Authentication, update
+            <b style={{ color: "var(--text)" }}>Charging in USD.</b> Razorpay takes INR only until International
+            payments is approved (Account &amp; Settings → International payments). After approval, set
             <code style={{ padding: "1px 5px", margin: "0 3px", borderRadius: 4, background: "rgba(255,255,255,0.06)" }}>
-              app_secrets.PADDLE_API_KEY
-            </code>
-            from the Supabase SQL editor, then revoke the old one. Do not paste the new key into a
-            chat.
+              app_secrets.RAZORPAY_CURRENCY = 'USD'
+            </code>.
           </p>
           <p style={{ margin: 0 }}>
-            <b style={{ color: "var(--text)" }}>Optional rehearsal.</b> Setting
-            <code style={{ padding: "1px 5px", margin: "0 3px", borderRadius: 4, background: "rgba(255,255,255,0.06)" }}>
-              app_secrets.PADDLE_ENV = 'sandbox'
-            </code>
-            with a sandbox key lets you walk the whole flow — checkout, webhook, wallet credit —
-            before the live account is approved. Remember to remove it afterwards.
+            <b style={{ color: "var(--text)" }}>Keep the keys private.</b> Change them in Razorpay
+            (Account &amp; Settings → API Keys → Regenerate) and paste the new values into app_secrets
+            yourself. Never paste them into a chat or a screenshot.
           </p>
         </div>
       </div>
@@ -19525,423 +19583,24 @@ function QPaymentsView() {
   );
 }
 
+// Discounts (2026-10-25). Razorpay does not let other software create
+// discounts; they are "Offers" made in the Razorpay dashboard. Until Quantora
+// has its own Razorpay discounts, this page says where to go.
 function QDiscountsView() {
-  const [data, setData] = useState(null);
-  const [companies, setCompanies] = useState([]);
-  const [err, setErr] = useState("");
-  const [msg, setMsg] = useState(null);
-  const [busy, setBusy] = useState("");
-  const [showForm, setShowForm] = useState(false);
-  const [assignFor, setAssignFor] = useState(null);   // discount being given out
-  const [assignCompany, setAssignCompany] = useState("");
-  const [assignNote, setAssignNote] = useState("");
-
-  const [form, setForm] = useState({
-    kind: "coupon",           // coupon = customer types a code; private = we attach it
-    type: "percentage",
-    amount: "20",
-    description: "",
-    code: "",
-    recur: false,
-    intervals: "3",
-    usageLimit: "50",
-    expiresAt: "",
-    restrictTo: "",           // "" = everything
-    confirmForever: false,
-    confirmUnlimited: false,
-  });
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-
-  useEffect(() => { load(); }, []);
-  async function load() {
-    setErr("");
-    try {
-      const [d, c] = await Promise.all([
-        callAdminDiscounts("list", {}),
-        callAdminDiscounts("companies", {}).catch(() => ({ companies: [] })),
-      ]);
-      setData(d);
-      setCompanies(c.companies || []);
-    } catch (e) {
-      console.error("QDiscountsView.load failed:", e);
-      setErr(e.message || "Could not load discounts.");
-      setData({ discounts: [], assignments: [], prices: [] });
-    }
-  }
-
-  const discounts = data?.discounts || [];
-  const assignments = data?.assignments || [];
-  const prices = data?.prices || [];
-  const active = discounts.filter(d => d.status === "active");
-  const redemptions = discounts.reduce((n, d) => n + (d.times_used || 0), 0);
-
-  // What the discount being typed would actually leave behind, on whichever
-  // price it is restricted to -- or on the cheapest plan, which is where a
-  // percentage discount does the most damage.
-  const previewPrice = (() => {
-    if (form.restrictTo) return prices.find(p => p.paddle_price_id === form.restrictTo) || null;
-    return prices.filter(p => p.kind === "plan").sort((a, b) => a.price_usd - b.price_usd)[0] || null;
-  })();
-  const previewDiscount = form.type === "percentage"
-    ? { type: "percentage", amount: Number(form.amount) }
-    : { type: "flat", amount: Math.round(Number(form.amount) * 100) };
-  const previewPaid = previewPrice ? qDiscountedPrice(previewPrice.price_usd, previewDiscount) : null;
-  const previewNet = previewPaid == null ? null : qNetAfterPaddle(previewPaid);
-
-  async function create() {
-    setBusy("create"); setMsg(null);
-    try {
-      const payload = {
-        type: form.type === "percentage" ? "percentage" : "flat",
-        description: form.description.trim(),
-        enable_code: form.kind === "coupon",
-        code: form.code.trim().toUpperCase(),
-        recur: !!form.recur,
-        maximum_recurring_intervals: form.recur && form.intervals !== "" ? Number(form.intervals) : null,
-        usage_limit: form.usageLimit !== "" ? Number(form.usageLimit) : null,
-        expires_at: form.expiresAt ? new Date(form.expiresAt + "T23:59:59").toISOString() : null,
-        restrict_to: form.restrictTo ? [form.restrictTo] : [],
-        confirm_forever: !!form.confirmForever,
-        confirm_unlimited: !!form.confirmUnlimited,
-      };
-      if (form.type === "percentage") payload.amount = Number(form.amount);
-      else payload.amount_cents = Math.round(Number(form.amount) * 100);
-
-      const res = await callAdminDiscounts("create", payload);
-      setMsg({ type: "ok", text: `Created “${res.discount.description}”${res.discount.code ? ` — code ${res.discount.code}` : " — no code; give it to a named account below"}.` });
-      setShowForm(false);
-      setForm(f => ({ ...f, description: "", code: "", confirmForever: false, confirmUnlimited: false }));
-      await load();
-    } catch (e) {
-      setMsg({ type: "err", text: e.message, needs: e.needsConfirmation });
-    } finally { setBusy(""); }
-  }
-
-  async function archive(d, restore) {
-    const what = restore ? "Reactivate" : "Archive";
-    if (!window.confirm(
-      `${what} “${d.description}”?\n\n` +
-      (restore
-        ? "It becomes usable again immediately."
-        : "No new customer will be able to use it. Anyone already subscribed at this discounted price keeps it — Paddle does not take an agreed price away from an existing customer, and neither should we.")
-    )) return;
-    setBusy(d.id); setMsg(null);
-    try {
-      await callAdminDiscounts("archive", { discount_id: d.id, restore: !!restore });
-      setMsg({ type: "ok", text: `“${d.description}” ${restore ? "reactivated" : "archived"}.` });
-      await load();
-    } catch (e) {
-      setMsg({ type: "err", text: e.message });
-    } finally { setBusy(""); }
-  }
-
-  async function assign() {
-    if (!assignCompany) { setMsg({ type: "err", text: "Choose a customer first." }); return; }
-    setBusy("assign"); setMsg(null);
-    try {
-      const res = await callAdminDiscounts("assign_to_company", {
-        discount_id: assignFor.id, company_id: assignCompany, note: assignNote || undefined,
-      });
-      setMsg({ type: "ok", text: `${res.company_name} will now be charged the discounted price at their next checkout.` });
-      setAssignFor(null); setAssignCompany(""); setAssignNote("");
-      await load();
-    } catch (e) {
-      setMsg({ type: "err", text: e.message });
-    } finally { setBusy(""); }
-  }
-
-  async function unassign(a) {
-    if (!window.confirm(
-      `Remove the discount from ${a.company_name}?\n\n` +
-      "Their next checkout will be at full price. An existing subscription already on the discounted price is not changed by this — that has to be done in the Paddle dashboard."
-    )) return;
-    setBusy(a.id); setMsg(null);
-    try {
-      const res = await callAdminDiscounts("unassign", { company_id: a.company_id });
-      setMsg({ type: "ok", text: res.warning || "Removed." });
-      await load();
-    } catch (e) {
-      setMsg({ type: "err", text: e.message });
-    } finally { setBusy(""); }
-  }
-
-  function amountLabel(d) {
-    return d.type === "percentage" ? `${Number(d.amount)}% off` : `${qUsd(Number(d.amount) / 100)} off`;
-  }
-  function appliesLabel(d) {
-    if (!d.restrict_to || !d.restrict_to.length) return "Everything";
-    const names = d.restrict_to.map(id => (prices.find(p => p.paddle_price_id === id) || {}).name).filter(Boolean);
-    return names.length ? names.join(", ") : `${d.restrict_to.length} item(s)`;
-  }
-  function lifetimeLabel(d) {
-    if (!d.recur) return "First payment only";
-    if (d.maximum_recurring_intervals) return `First ${d.maximum_recurring_intervals} payments`;
-    return "Every payment, forever";
-  }
-
   return (
-    <div>
-      <div className="kpi-row">
-        <div className="card kpi"><div className="kpi-icon blue">{QICONS.discounts}</div>
-          <div><div className="lbl">Active discounts</div><div className="v">{active.length}</div></div></div>
-        <div className="card kpi"><div className="kpi-icon blue">{QICONS.customers}</div>
-          <div><div className="lbl">Customers on a deal</div><div className="v">{assignments.length}</div></div></div>
-        <div className="card kpi"><div className="kpi-icon blue">{QICONS.revenue}</div>
-          <div><div className="lbl">Times redeemed</div><div className="v">{redemptions}</div></div></div>
-        <div className="card kpi"><div className="kpi-icon blue">{QICONS.exec}</div>
-          <div><div className="lbl">Public codes live</div><div className="v">{active.filter(d => d.enabled_for_checkout).length}</div></div></div>
-      </div>
-
-      {err && <div className="card panel" style={{ padding: "14px 18px", color: "#fca5a5", fontSize: 13 }}>{err}</div>}
-      {msg && (
-        <div className="card panel" style={{ padding: "12px 18px", marginBottom: 14, fontSize: 12.5, lineHeight: 1.6,
-                                             color: msg.type === "ok" ? "#86efac" : "#fca5a5" }}>
-          {msg.text}
-        </div>
-      )}
-
-      <div className="card panel">
-        <div className="panel-head">
-          <h3>Discounts</h3>
-          <button className="btn btn-primary btn-sm" onClick={() => { setShowForm(v => !v); setMsg(null); }}>
-            {showForm ? "Close" : "New discount"}
-          </button>
-        </div>
-
-        {showForm && (
-          <div style={{ padding: "16px 18px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-            <div className="section-label" style={{ marginTop: 0 }}>Who is this for?</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-              {[["coupon", "Anyone with the code", "A public code customers type at checkout. Use for campaigns."],
-                ["private", "One named customer", "No code at all. You give it to a specific company below, and it is applied automatically. Nothing they can forward on."]].map(([k, label, help]) => (
-                <div key={k} onClick={() => set("kind", k)}
-                  style={{ flex: "1 1 260px", cursor: "pointer", padding: "11px 13px", borderRadius: 10,
-                           border: `1px solid ${form.kind === k ? "rgba(91,140,255,0.7)" : "rgba(255,255,255,0.1)"}`,
-                           background: form.kind === k ? "rgba(91,140,255,0.10)" : "transparent" }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{label}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 3, lineHeight: 1.5 }}>{help}</div>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
-              <div>
-                <div className="section-label" style={{ marginTop: 0 }}>Amount</div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <select value={form.type} onChange={e => set("type", e.target.value)} style={{ minWidth: 120 }}>
-                    <option value="percentage">Percentage</option>
-                    <option value="flat">Fixed amount</option>
-                  </select>
-                  <input type="number" value={form.amount} onChange={e => set("amount", e.target.value)}
-                    style={{ width: 90 }} placeholder={form.type === "percentage" ? "20" : "5.00"} />
-                  <span style={{ alignSelf: "center", fontSize: 12, color: "var(--text-dimmer)" }}>
-                    {form.type === "percentage" ? "%" : "USD"}
-                  </span>
-                </div>
-              </div>
-              <div style={{ flex: "1 1 240px" }}>
-                <div className="section-label" style={{ marginTop: 0 }}>Applies to</div>
-                <select value={form.restrictTo} onChange={e => set("restrictTo", e.target.value)} style={{ width: "100%" }}>
-                  <option value="">Everything we sell</option>
-                  {prices.map(p => (
-                    <option key={p.paddle_price_id} value={p.paddle_price_id}>
-                      {p.name} — ${p.price_usd}{p.kind === "plan" ? "/mo" : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="section-label" style={{ marginTop: 0 }}>What to call it</div>
-            <input type="text" value={form.description} onChange={e => set("description", e.target.value)}
-              placeholder="e.g. Launch offer — 20% off the first 3 months" style={{ width: "100%", marginBottom: 12 }} />
-
-            {form.kind === "coupon" && (
-              <>
-                <div className="section-label" style={{ marginTop: 0 }}>Code the customer types</div>
-                <input type="text" value={form.code} onChange={e => set("code", e.target.value.toUpperCase())}
-                  placeholder="LAUNCH20" style={{ width: 240, marginBottom: 12 }} />
-              </>
-            )}
-
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
-              <div>
-                <div className="section-label" style={{ marginTop: 0 }}>How long it lasts</div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
-                    <input type="checkbox" checked={form.recur} onChange={e => set("recur", e.target.checked)} />
-                    Repeats on renewals
-                  </label>
-                  {form.recur && (
-                    <>
-                      <input type="number" value={form.intervals} onChange={e => set("intervals", e.target.value)}
-                        style={{ width: 80 }} placeholder="3" />
-                      <span style={{ fontSize: 12, color: "var(--text-dimmer)" }}>months</span>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div>
-                <div className="section-label" style={{ marginTop: 0 }}>Max redemptions</div>
-                <input type="number" value={form.usageLimit} onChange={e => set("usageLimit", e.target.value)}
-                  style={{ width: 110 }} placeholder="50" />
-              </div>
-              <div>
-                <div className="section-label" style={{ marginTop: 0 }}>Expires</div>
-                <input type="date" value={form.expiresAt} onChange={e => set("expiresAt", e.target.value)} style={{ width: 170 }} />
-              </div>
-            </div>
-
-            {/* What is actually left after the discount and Paddle's cut. */}
-            {previewPrice && (
-              <div className="detail-list" style={{ marginBottom: 12 }}>
-                <div className="detail-item"><span>{previewPrice.name} list price</span><b>{qUsd(previewPrice.price_usd)}</b></div>
-                <div className="detail-item"><span>Customer pays</span><b>{qUsd(previewPaid)}</b></div>
-                <div className="detail-item">
-                  <span>You keep, after Paddle's ~{PADDLE_FEE_PCT}% + ${PADDLE_FEE_FIXED_USD.toFixed(2)}</span>
-                  <b style={{ color: previewNet <= 0 ? "#fca5a5" : previewNet < 5 ? "#fcd34d" : undefined }}>{qUsd(previewNet)}</b>
-                </div>
-                {previewNet <= 0 && (
-                  <div className="detail-item"><span style={{ color: "#fca5a5" }}>
-                    This discount costs you money before a single drawing is processed.
-                  </span><b>—</b></div>
-                )}
-                {previewNet > 0 && previewNet < 5 && (
-                  <div className="detail-item"><span style={{ color: "#fcd34d" }}>
-                    Under $5 left to cover the AI processing this plan allows. Check it against the AI Usage page.
-                  </span><b>—</b></div>
-                )}
-              </div>
-            )}
-
-            {msg?.needs === "forever" && (
-              <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", marginBottom: 10, color: "#fcd34d" }}>
-                <input type="checkbox" checked={form.confirmForever} onChange={e => set("confirmForever", e.target.checked)} />
-                Yes — this price cut should apply to every renewal, with no end.
-              </label>
-            )}
-            {msg?.needs === "unlimited" && (
-              <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", marginBottom: 10, color: "#fcd34d" }}>
-                <input type="checkbox" checked={form.confirmUnlimited} onChange={e => set("confirmUnlimited", e.target.checked)} />
-                Yes — this code may be redeemed an unlimited number of times.
-              </label>
-            )}
-
-            <button className="btn btn-primary" disabled={busy === "create"} onClick={create}>
-              {busy === "create" ? "Creating…" : "Create in Paddle"}
-            </button>
-            <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 10, lineHeight: 1.55 }}>
-              The discount is created in Paddle, which is the merchant of record — that is what makes the customer's
-              invoice and VAT match the price you agreed. It cannot be created here alone.
-            </div>
-          </div>
-        )}
-
-        <div className="table-wrap">
-          <table>
-            <thead><tr>
-              <th>Discount</th><th>Amount</th><th>Applies to</th><th>Lasts</th>
-              <th className="num">Used</th><th>Expires</th><th>Status</th><th></th>
-            </tr></thead>
-            <tbody>
-              {data === null ? (
-                <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>Loading…</td></tr>
-              ) : discounts.length === 0 ? (
-                <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>
-                  No discounts yet. “New discount” creates one in Paddle.
-                </td></tr>
-              ) : discounts.map(d => (
-                <tr key={d.id}>
-                  <td className="name">
-                    {d.description}
-                    <div style={{ marginTop: 4 }}>
-                      {d.code
-                        ? <span className="pill st-trial" style={{ letterSpacing: "0.04em" }}>{d.code}</span>
-                        : <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-dimmer)" }}>
-                            no code — assigned to named accounts
-                          </span>}
-                    </div>
-                  </td>
-                  <td>{amountLabel(d)}</td>
-                  <td>{appliesLabel(d)}</td>
-                  <td>{lifetimeLabel(d)}</td>
-                  <td className="num">{d.times_used}{d.usage_limit ? ` / ${d.usage_limit}` : ""}</td>
-                  <td>{d.expires_at ? new Date(d.expires_at).toLocaleDateString() : "—"}</td>
-                  <td><span className={`pill ${d.status === "active" ? "st-active" : "st-churned"}`}>{d.status}</span></td>
-                  <td className="num" style={{ whiteSpace: "nowrap" }}>
-                    {d.status === "active" && !d.enabled_for_checkout && (
-                      <button className="btn btn-sm" style={{ marginRight: 6 }}
-                        title="Give this discount to a named customer"
-                        onClick={() => { setAssignFor(d); setAssignCompany(""); setAssignNote(""); setMsg(null); }}>
-                        Assign
-                      </button>
-                    )}
-                    <button className="btn btn-sm" disabled={busy === d.id} onClick={() => archive(d, d.status !== "active")}>
-                      {busy === d.id ? "…" : d.status === "active" ? "Archive" : "Restore"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {assignFor && (
-          <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
-            <div className="section-label" style={{ marginTop: 0 }}>Give “{assignFor.description}” to a customer</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-              <select value={assignCompany} onChange={e => setAssignCompany(e.target.value)} style={{ minWidth: 240 }}>
-                <option value="">Choose a customer…</option>
-                {companies.map(c => (
-                  <option key={c.id} value={c.id}>{c.name} — {c.plan || "free"}</option>
-                ))}
-              </select>
-              <button className="btn btn-primary btn-sm" disabled={busy === "assign"} onClick={assign}>
-                {busy === "assign" ? "Applying…" : "Apply to this customer"}
-              </button>
-              <button className="btn btn-sm" onClick={() => setAssignFor(null)}>Cancel</button>
-            </div>
-            <input type="text" value={assignNote} onChange={e => setAssignNote(e.target.value)}
-              placeholder="Why (e.g. agreed on the call with their commercial manager, 12 Aug)" style={{ width: "100%" }} />
-            <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 8, lineHeight: 1.55 }}>
-              Applies from their next checkout. A customer can hold only one discount at a time.
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="card panel" style={{ marginTop: 16 }}>
-        <div className="panel-head">
-          <h3>Customers on a negotiated price</h3>
-          <span className="tag">{assignments.length}</span>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Customer</th><th>Discount</th><th>Why</th><th>Since</th><th></th></tr></thead>
-            <tbody>
-              {assignments.length === 0 ? (
-                <tr><td colSpan="5" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>
-                  Nobody is on a negotiated price. Create a discount with no code, then use “Give to customer”.
-                </td></tr>
-              ) : assignments.map(a => (
-                <tr key={a.id}>
-                  <td className="name">{a.company_name}</td>
-                  <td>{a.description || "—"}</td>
-                  <td style={{ color: "var(--text-dimmer)" }}>{a.note || "—"}</td>
-                  <td>{a.created_at ? new Date(a.created_at).toLocaleDateString() : "—"}</td>
-                  <td className="num">
-                    <button className="btn btn-sm" disabled={busy === a.id} onClick={() => unassign(a)}>
-                      {busy === a.id ? "…" : "Remove"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p style={{ padding: "12px 18px 16px", color: "var(--text-dimmer)", fontSize: 12, lineHeight: 1.6 }}>
-          Free pages and wallet credit are not discounts and are not managed here — those cost AI processing rather
-          than revenue, and live under Customers so the two never get added together in a report.
+    <div className="card panel">
+      <div className="panel-head"><h3>Discounts</h3></div>
+      <div style={{ padding: "16px 18px", fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.75 }}>
+        <p style={{ margin: "0 0 12px" }}>
+          Payments now go through Razorpay. Razorpay discounts are called <b style={{ color: "var(--text)" }}>Offers</b> and
+          are created in the Razorpay dashboard (dashboard.razorpay.com → Offers), not here.
+        </p>
+        <p style={{ margin: "0 0 12px" }}>
+          To give one customer free or cheaper access, use <b style={{ color: "var(--text)" }}>Customers → open the company → Change plan to…</b>
+          It sets the plan for a fixed number of days, records why, and switches back by itself.
+        </p>
+        <p style={{ margin: 0, color: "var(--text-dimmer)" }}>
+          Discount codes inside Quantora's own checkout will come back in a later update.
         </p>
       </div>
     </div>
@@ -20062,8 +19721,10 @@ function QHealthView({ systemStatus }) {
   const s = systemStatus || {};
   const incidents = [];
   if (!s.anthropic_key_configured) incidents.push({ service: "AI Engine", issue: "ANTHROPIC_API_KEY not configured", status: "warning" });
-  if (!s.stripe_secret_key_configured) incidents.push({ service: "Payment Gateway", issue: "STRIPE_SECRET_KEY not configured", status: "warning" });
-  if (!s.stripe_webhook_secret_configured) incidents.push({ service: "Payment Gateway", issue: "STRIPE_WEBHOOK_SECRET not configured", status: "warning" });
+  const rzOk = !!(s.razorpay_keys_configured && s.razorpay_webhook_secret_configured);
+  if (!s.razorpay_keys_configured) incidents.push({ service: "Payment Gateway", issue: "RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not configured", status: "warning" });
+  if (!s.razorpay_webhook_secret_configured) incidents.push({ service: "Payment Gateway", issue: "RAZORPAY_WEBHOOK_SECRET not configured", status: "warning" });
+  if (s.razorpay_keys_configured && s.razorpay_mode === "test") incidents.push({ service: "Payment Gateway", issue: "Razorpay is on test keys — no real payments are taken", status: "warning" });
 
   return (
     <>
@@ -20086,8 +19747,8 @@ function QHealthView({ systemStatus }) {
         </div>
         <div className="card service-card">
           <div className="stop"><div className="sname"><div className="service-ic">{QICONS.revenue}</div>Payment Gateway</div>
-            <span className={(s.stripe_secret_key_configured && s.stripe_webhook_secret_configured) ? "pill st-healthy" : "pill st-warning"}>{(s.stripe_secret_key_configured && s.stripe_webhook_secret_configured) ? "Configured" : "Not Configured"}</span></div>
-          <div className="smeta">{s.stripe_secret_key_configured ? "Secret key present" : "Stripe keys not yet configured"}</div>
+            <span className={rzOk && s.razorpay_mode === "live" ? "pill st-healthy" : "pill st-warning"}>{!rzOk ? "Not Configured" : s.razorpay_mode === "live" ? "Live" : "Test mode"}</span></div>
+          <div className="smeta">{rzOk ? `Razorpay ${s.razorpay_mode === "live" ? "live" : "test"} keys · webhook secret set · ${s.razorpay_currency || "INR"}` : "Razorpay keys or webhook secret missing"}</div>
         </div>
       </div>
 
@@ -20107,6 +19768,111 @@ function QHealthView({ systemStatus }) {
         )}
       </div>
       <div style={{ color: "var(--text-dimmer)", fontSize: 11.5 }}>Checked at {s.checked_at || "—"}. Configuration booleans only confirm a secret's presence — values are never read or displayed.</div>
+      <QWelcomeCleanupPanel />
+    </>
+  );
+}
+
+// Welcome Pack 7-day rule: what the daily clean-up will delete next, what it
+// has deleted, and the one-time clean-up of files with no owner.
+const WELCOME_CLEANUP_FN_URL = `${SUPABASE_URL}/functions/v1/welcome-cleanup`;
+async function callWelcomeCleanup(action, payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(WELCOME_CLEANUP_FN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action, ...(payload || {}) }),
+  });
+  let json = {};
+  try { json = await res.json(); } catch (e) { /* not deployed yet */ }
+  if (!res.ok) throw new Error(json.error || "The Welcome Pack clean-up engine is not deployed yet.");
+  return json;
+}
+
+function QWelcomeCleanupPanel() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const [orph, setOrph] = useState(null);
+  async function load() {
+    setErr("");
+    try { setData(await callWelcomeCleanup("status", {})); } catch (e) { setErr(e.message); }
+  }
+  useEffect(() => { load(); }, []);
+  async function preview() {
+    setBusy("preview"); setMsg("");
+    try {
+      const r = await callWelcomeCleanup("run", { dry_run: true });
+      const files = r.results.reduce((a, x) => a + (x.files_deleted || 0), 0);
+      setMsg(r.companies ? `Tonight's run would remove ${r.companies} compan${r.companies === 1 ? "y" : "ies"}' work: ${r.results.reduce((a, x) => a + (x.projects_deleted || 0), 0)} projects, ${files} files. Nothing was deleted.` : "Nothing is due for deletion right now.");
+      await load();
+    } catch (e) { setMsg(e.message); } finally { setBusy(""); }
+  }
+  async function orphans(dry) {
+    setBusy("orph"); setMsg("");
+    try {
+      const r = await callWelcomeCleanup("orphans", { dry_run: dry });
+      if (dry) setOrph(r);
+      else { setOrph(null); setMsg(`Removed ${r.removed} files with no owner (${qBytes(r.bytes)}).`); await load(); }
+    } catch (e) { setMsg(e.message); } finally { setBusy(""); }
+  }
+  const fmt = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—";
+  const live = (data?.upcoming || []).filter(c => !c.welcome_cleared_at || Date.parse(c.welcome_delete_at) > Date.now());
+  return (
+    <>
+      <div className="section-label">Welcome Pack — 7-day keeping period</div>
+      <div className="card panel">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.6 }}>
+            Welcome Pack projects and files are deleted 7 days after sign-up unless a paid plan is active. Paying, hand-granted and admin accounts are never touched.
+          </div>
+          <span className={data?.scheduled ? "pill st-healthy" : "pill st-warning"}>{data ? (data.scheduled ? "Runs daily 02:30" : "Not switched on") : "—"}</span>
+        </div>
+        {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 8 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <button className="btn btn-sm" disabled={busy === "preview"} onClick={preview}>{busy === "preview" ? "Checking…" : "Preview tonight's run"}</button>
+          <button className="btn btn-sm" disabled={busy === "orph"} onClick={() => orphans(true)}>Find files with no owner</button>
+          {orph && orph.files > 0 && (
+            <button className="btn btn-sm" style={{ borderColor: "#f43f5e", color: "#fda4af" }} disabled={busy === "orph"} onClick={() => orphans(false)}>
+              Delete {orph.files} files ({qBytes(orph.bytes)})
+            </button>
+          )}
+          {orph && orph.files === 0 && <span style={{ fontSize: 12, color: "var(--text-dimmer)", alignSelf: "center" }}>No files without an owner.</span>}
+        </div>
+        {msg && <div style={{ fontSize: 12.5, marginBottom: 12, color: "var(--text-dim)" }}>{msg}</div>}
+        {data && (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Welcome Pack company</th><th>Projects</th><th>Work deleted on</th></tr></thead>
+              <tbody>
+                {live.length === 0 ? <tr><td colSpan={3} style={{ color: "var(--text-dimmer)" }}>No Welcome Pack company on the clock.</td></tr>
+                  : live.map(c => {
+                    const left = Math.ceil((Date.parse(c.welcome_delete_at) - Date.now()) / 86400000);
+                    return (
+                      <tr key={c.id}><td style={{ fontWeight: 600 }}>{c.name}</td><td>{c.projects}</td>
+                        <td><span className={left <= 2 ? "pill st-warning" : "pill"}>{fmt(c.welcome_delete_at)}{left > 0 ? ` · ${left}d left` : " · due tonight"}</span></td></tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {data && (data.log || []).length > 0 && (
+          <div className="table-wrap" style={{ marginTop: 14 }}>
+            <table>
+              <thead><tr><th>Run</th><th>Company</th><th>Projects</th><th>Files</th><th>Freed</th><th>Note</th></tr></thead>
+              <tbody>
+                {data.log.map(l => (
+                  <tr key={l.id}><td>{new Date(l.run_at).toLocaleString()}</td><td>{l.company_name || "—"}</td>
+                    <td>{l.projects_deleted}</td><td>{l.files_deleted}</td><td>{qBytes(l.bytes_freed)}</td>
+                    <td style={{ color: "var(--text-dimmer)" }}>{l.note}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </>
   );
 }
@@ -21255,7 +21021,7 @@ function BillingPage({ onUpgrade }) {
             <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{usage.plan?.name || "Free"}</div>
             {usage.plan?.is_trial && usage.trial_days_remaining != null && usage.trial_days_remaining > 3650 && (
               <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", marginBottom: 12 }}>
-                One-time free welcome pack {"\u2014"} no expiry. When it is used up, choose a plan to continue.
+                One-time free welcome pack. Your projects and files are kept for 7 days {"\u2014"} choose a plan within 7 days to keep them.
               </p>
             )}
             {usage.plan?.is_trial && usage.trial_days_remaining != null && usage.trial_days_remaining <= 3650 && (
@@ -21458,31 +21224,8 @@ function useSearchCredits() {
 
 function SearchCreditsCard() {
   const [credits, refreshCredits] = useSearchCredits();
-  const [packs, setPacks] = useState([]);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState(null);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data } = await sb.from("credit_packs")
-          .select("id, name, price_usd, search_credits, paddle_price_id, is_active, sort_order")
-          .eq("is_active", true).order("sort_order", { ascending: true });
-        setPacks((data || []).filter(p => Number(p.search_credits ?? 0) > 0));
-      } catch (e) { console.error("credit_packs load failed:", e); }
-    })();
-  }, []);
-
-  async function buy(pack) {
-    setBusy(pack.id); setMsg(null);
-    try {
-      const res = await callPaddleBilling("create_topup_checkout", { pack_id: pack.id });
-      if (res?.url) window.location.href = res.url;
-      else setMsg({ ok: false, text: "Checkout did not return a payment link." });
-    } catch (e) {
-      setMsg({ ok: false, text: e.message });
-    } finally { setBusy(""); }
-  }
 
   async function turnOff() {
     setBusy("off"); setMsg(null);
@@ -21507,9 +21250,8 @@ function SearchCreditsCard() {
       <h4>Pricing BOQ — market search</h4>
       <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", lineHeight: 1.6, marginBottom: 12 }}>
         Looking up live market rates runs a real web search for each group of items, which we are
-        billed for. It is pay as you go: top up, and it switches on by itself as soon as the payment
-        clears. When the balance reaches zero it switches off by itself, so it can never run up a bill
-        you did not agree to.
+        billed for. It uses a balance of searches. When the balance reaches zero it switches off by
+        itself, so it can never run up a bill you did not agree to.
       </p>
 
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
@@ -21539,32 +21281,10 @@ function SearchCreditsCard() {
         </div>
       )}
 
-      {packs.length === 0 ? (
-        <div className="qp-empty" style={{ padding: 16 }}>Search top-ups are not on sale yet.</div>
-      ) : (
-        <>
-          <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", marginBottom: 8 }}>
-            {packs.map(p => (
-              <button key={p.id} className="qp-tile" disabled={!p.paddle_price_id || busy === p.id}
-                onClick={() => buy(p)} style={!p.paddle_price_id ? { opacity: .55, cursor: "not-allowed" } : {}}>
-                <b>{Number(p.search_credits).toLocaleString()} searches</b>
-                <span style={{ fontSize: 15, fontWeight: 800, color: "var(--q-text,#0f172a)", marginTop: 6, display: "block" }}>
-                  ${Number(p.price_usd).toFixed(0)}
-                </span>
-                <span>
-                  {busy === p.id ? "Opening checkout…"
-                    : !p.paddle_price_id ? "Not on sale yet"
-                    : `about ${Math.floor(Number(p.search_credits) / 10)} pricing runs`}
-                </span>
-              </button>
-            ))}
-          </div>
-          <p style={{ fontSize: 11, color: "var(--q-text-dimmer,#94a3b8)", lineHeight: 1.6 }}>
-            Credit is used only when a search actually runs, and a run never spends more than the
-            balance left. Unused credit does not expire.
-          </p>
-        </>
-      )}
+      <div className="qp-empty" style={{ padding: 16 }}>
+        Buying more searches online is coming soon. Until then, write to support and we will add searches to your account.
+        Unused searches do not expire.
+      </div>
     </div>
   );
 }
@@ -30403,8 +30123,8 @@ function App() {
   // Customers page reads to show who is online and when they last signed in.
   useActivityHeartbeat(session);
 
-  // Coming back from Stripe Checkout: show a small banner, then clean the
-  // URL so a refresh doesn't re-trigger it.
+  // Old ?billing=success|cancel return links: show a small banner, then clean
+  // the URL so a refresh doesn't re-trigger it.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const billing = params.get("billing");
@@ -30501,6 +30221,7 @@ function App() {
           <button onClick={()=>setBillingBanner(null)} className="text-xs underline">Dismiss</button>
         </div>
       )}
+      <WelcomeKeepBar sessionKey={session.user.id} onChoosePlan={()=>setBillingModal({ open: true, reason: "" })} />
       <PortalBody
         view={view}
         setView={setView}

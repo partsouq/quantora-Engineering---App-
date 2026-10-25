@@ -65,6 +65,42 @@ Deno.serve(async (req) => {
     const { data: ud } = await admin.auth.getUser(jwt);
     if (!ud?.user) return json({ error: "Not signed in." }, 401);
     const user = ud.user;
+    const peek = await req.clone().json().catch(() => ({}));
+
+    // Platform admins only: is Razorpay ready to take money, and what came in lately.
+    if (String(peek?.action ?? "") === "readiness") {
+      const { data: isAdmin } = await admin.from("platform_admins").select("user_id").eq("user_id", user.id).maybeSingle();
+      if (!isAdmin) return json({ error: "Platform admin access only." }, 403);
+      const k = await loadKeys(admin);
+      const mode = !k ? null : k.keyId.startsWith("rzp_live_") ? "live" : k.keyId.startsWith("rzp_test_") ? "test" : "unknown";
+      let apiOk = false, apiError: string | null = null;
+      if (k) {
+        try { await rz(k, "/plans?count=1"); apiOk = true; } catch (e) { apiError = describe(e); }
+      }
+      const currency = k?.currency ?? "INR";
+      const { data: plans } = await admin.from("plans").select("id, name, price_usd, price_inr, is_trial");
+      const paid = (plans ?? []).filter((p: any) => !p.is_trial && Number(p.price_usd) > 0);
+      const { data: addons } = await admin.from("storage_addons").select("gb, price_usd, price_inr, is_active").eq("is_active", true);
+      const { data: events } = await admin.from("billing_events").select("event, received_at, payload")
+        .eq("provider", "razorpay").order("received_at", { ascending: false }).limit(10);
+      const { data: paying } = await admin.from("companies").select("id, name, plan, subscription_status, paid_until")
+        .eq("billing_provider", "razorpay").order("paid_until", { ascending: false, nullsFirst: false });
+      const coName: Record<string, string> = {};
+      for (const c of paying ?? []) coName[c.id] = c.name;
+      return json({
+        keys_configured: !!k, mode, currency, api_ok: apiOk, api_error: apiError,
+        webhook_secret_configured: !!k?.webhookSecret,
+        plans: paid.map((p: any) => ({ id: p.id, name: p.name, price: priceOf(p, currency) })),
+        storage_addons: (addons ?? []).map((a: any) => ({ gb: a.gb, price: priceOf(a, currency) })),
+        recent_events: (events ?? []).map((e: any) => {
+          const s = e.payload?.payload?.subscription?.entity ?? {};
+          const cid = String(s?.notes?.company_id ?? "");
+          return { event: e.event, received_at: e.received_at, subscription_id: s.id ?? null, status: s.status ?? null,
+                   company: coName[cid] ?? (cid || null) };
+        }),
+        paying_companies: paying ?? [],
+      });
+    }
 
     const { data: prof } = await admin.from("profiles").select("company_id, full_name").eq("id", user.id).maybeSingle();
     if (!prof?.company_id) return json({ error: "No company on this account yet. Reload the page and try again." }, 400);
