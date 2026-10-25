@@ -152,20 +152,26 @@ Deno.serve(async (req) => {
       if (action === "admin_grant") {
         const companyId = String(body.company_id ?? "");
         const add = (k: string) => Math.max(0, Math.min(500, Math.floor(Number(body[k] ?? 0))));
-        const { data: c } = await admin.from("companies").select("bonus_drawing_pages, bonus_chat_requests, bonus_rework, bonus_documents, bonus_draftsman_pages").eq("id", companyId).maybeSingle();
+        const { data: c } = await admin.from("companies").select("bonus_drawing_pages, bonus_documents, bonus_draftsman_pages").eq("id", companyId).maybeSingle();
         if (!c) return json({ error: "Company not found." }, 404);
         const patch = {
           bonus_drawing_pages: Number(c.bonus_drawing_pages || 0) + add("pages"),
-          bonus_chat_requests: Number(c.bonus_chat_requests || 0) + add("chats"),
-          bonus_rework: Number(c.bonus_rework || 0) + add("reworks"),
           bonus_documents: Number(c.bonus_documents || 0) + add("documents"),
           bonus_draftsman_pages: Number(c.bonus_draftsman_pages || 0) + add("draftsman"),
         };
         const { error } = await admin.from("companies").update(patch).eq("id", companyId);
         if (error) throw error;
-        const note = `+${add("pages")} pages, +${add("chats")} chats, +${add("reworks")} reworks, +${add("documents")} documents, +${add("draftsman")} draftsman`;
+        const note = `+${add("pages")} drawing pages, +${add("documents")} documents, +${add("draftsman")} draftsman pages`;
         if (body.request_id) await admin.from("allowance_requests").update({ status: "granted", granted_note: note, decided_at: new Date().toISOString() }).eq("id", body.request_id);
         return json({ ok: true, note });
+      }
+      if (action === "admin_restore_welcome") {
+        // A repeat sign-up that is genuine after all: give it the Welcome Pack.
+        const companyId = String(body.company_id ?? "");
+        const { error } = await admin.from("companies").update({ plan: "trial" }).eq("id", companyId).eq("plan", "free");
+        if (error) throw error;
+        await admin.from("signup_checks").update({ outcome: "welcome_restored" }).eq("company_id", companyId);
+        return json({ ok: true });
       }
       if (action === "admin_decline") {
         await admin.from("allowance_requests").update({ status: "declined", decided_at: new Date().toISOString() }).eq("id", body.request_id);

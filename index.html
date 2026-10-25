@@ -4505,7 +4505,7 @@ const QUANTORA_LANDING_HTML = `
       </div>
     </div>
     <p class="secsub qx-local-note" style="margin-top:14px;font-size:12px;display:none;"></p>
-    <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 AI-processed drawing pages, 1 draftsman page, 2 documents and 10 AI chat messages, plus a ready-made sample project to explore &mdash; no credit card required. See every result on screen; downloads come with a paid plan. Your work is kept for 7 days; choose a plan to keep it.</p>
+    <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 AI-processed drawing pages, 1 draftsman page, 2 documents and 10 AI chat messages &mdash; no credit card required. See every result on screen; downloads come with a paid plan. Your work is kept for 7 days; choose a plan to keep it.</p>
   </div>
 </section>
 
@@ -5404,10 +5404,10 @@ function QAskMore({ reason }) {
   return (
     <div style={box}>
       <div style={{ fontWeight: 700, fontSize: 14 }}>Need a little more to finish trying it? Ask us</div>
-      <div style={{ fontSize: 12.5, opacity: .8, margin: "4px 0 10px" }}>Tell us what you are testing. We often add a few extra pages or messages so you can see a full result before choosing a plan.</div>
+      <div style={{ fontSize: 12.5, opacity: .8, margin: "4px 0 10px" }}>Tell us what you are testing. We often add a few extra pages so you can see a full result before choosing a plan.</div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <select value={what} onChange={e => setWhat(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
-          {["A few more drawing pages", "More AI chat messages", "Another rework", "More documents", "Another draftsman page"].map(x => <option key={x}>{x}</option>)}
+          {["A few more drawing pages", "More documents", "Another draftsman page"].map(x => <option key={x}>{x}</option>)}
         </select>
         <input value={msg} onChange={e => setMsg(e.target.value)} placeholder="What are you working on? (optional)" className="border rounded-lg px-2 py-1.5 text-sm" style={{ flex: 1, minWidth: 200 }} />
         <button onClick={send} disabled={state === "sending"} className="text-sm font-semibold px-3 py-1.5 rounded-lg bg-slate-900 text-white">{state === "sending" ? "Sending…" : "Ask us"}</button>
@@ -20006,7 +20006,7 @@ function qDeviceId() {
 }
 
 const QWG_FLAG = { throwaway_email: "Throw-away e-mail", repeat_email: "Same e-mail as an earlier account", repeat_device: "Same device as an earlier Welcome Pack", busy_connection: "Many sign-ups from one connection today" };
-const QWG_OUTCOME = { welcome: ["Welcome Pack", "st-healthy"], welcome_work_email: ["Welcome Pack + work e-mail bonus", "st-healthy"], free_repeat: ["Moved to Free (repeat)", "st-warning"], pending_email: ["Waiting for e-mail confirmation", "st-warning"], not_checked: ["Not checked (older or paid)", ""] };
+const QWG_OUTCOME = { welcome: ["Welcome Pack", "st-healthy"], welcome_work_email: ["Welcome Pack + work e-mail bonus", "st-healthy"], welcome_restored: ["Welcome Pack (given by admin)", "st-healthy"], free_repeat: ["Moved to Free (repeat)", "st-warning"], pending_email: ["Waiting for e-mail confirmation", "st-warning"], not_checked: ["Not checked (older or paid)", ""] };
 
 function QWelcomeGuardPanel() {
   const [d, setD] = useState(null);
@@ -20025,6 +20025,7 @@ function QWelcomeGuardPanel() {
     try { await callWelcomeGuard("admin_grant", { company_id: r.company_id, request_id: r.id || null, ...amounts }); await load(); }
     catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
+  const restore = async (c) => { setBusy(c.company_id); try { await callWelcomeGuard("admin_restore_welcome", { company_id: c.company_id }); await load(); } catch (e) { setErr(e.message); } finally { setBusy(""); } };
   const decline = async (r) => { setBusy(r.id); try { await callWelcomeGuard("admin_decline", { request_id: r.id }); await load(); } catch (e) { setErr(e.message); } finally { setBusy(""); } };
   const saveSample = async () => { setBusy("sample"); try { await callWelcomeGuard("admin_sample", { project_id: sampleId.trim(), name: sampleName }); await load(); } catch (e) { setErr(e.message); } finally { setBusy(""); } };
   const when = t => t ? new Date(t).toLocaleString() : "";
@@ -20044,10 +20045,9 @@ function QWelcomeGuardPanel() {
                 <td>{when(r.created_at)}</td><td className="name">{r.company || r.company_id}</td><td>{r.what || "—"}</td>
                 <td style={{ maxWidth: 320, whiteSpace: "normal" }}>{r.message || "—"}</td>
                 <td style={{ whiteSpace: "nowrap" }}>
-                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { pages: 2 })}>+2 pages</button>{" "}
-                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { chats: 10 })}>+10 chats</button>{" "}
-                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { reworks: 1 })}>+1 rework</button>{" "}
-                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { documents: 2 })}>+2 docs</button>{" "}
+                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { pages: 2 })}>+2 drawing pages</button>{" "}
+                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { documents: 2 })}>+2 documents</button>{" "}
+                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { draftsman: 1 })}>+1 draftsman page</button>{" "}
                   <button className="btn btn-sm" disabled={!!busy} onClick={() => decline(r)}>Decline</button>
                 </td>
               </tr>))}</tbody>
@@ -20067,8 +20067,8 @@ function QWelcomeGuardPanel() {
                   <td>{when(c.created_at)}</td><td className="name">{c.company || c.company_id}</td><td>{c.email || "—"}</td>
                   <td><span className={"pill " + o[1]}>{o[0]}</span></td>
                   <td>{(c.flags || []).map(f => QWG_FLAG[f] || f).join(", ") || "—"}</td>
-                  <td>{c.outcome === "free_repeat" && <button className="btn btn-sm" disabled={!!busy} title="Give this account a small allowance anyway"
-                    onClick={() => grant(c, { pages: 2, chats: 10 })}>Allow anyway</button>}</td>
+                  <td>{c.outcome === "free_repeat" && <button className="btn btn-sm" disabled={!!busy} title="This sign-up is genuine: give it the Welcome Pack"
+                    onClick={() => restore(c)}>Give Welcome Pack</button>}</td>
                 </tr>);
             })}</tbody>
           </table></div>

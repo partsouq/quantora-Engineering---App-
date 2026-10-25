@@ -1708,11 +1708,8 @@ async function checkPlanLimit(
   projectId: string | null = null
 ): Promise<{ ok: boolean; current: number; limit: number | null; remaining: number; billing?: "wallet"; creditBalanceCents?: number }> {
   if (dimension === "rework") {
-    const planRework = plan?.max_rework_per_project;
-    if (planRework == null) return { ok: true, current: 0, limit: null, remaining: Infinity };
-    // bonus_rework: extra reworks granted to one company (e.g. Welcome Packs
-    // started before the 25 Oct 2026 limits, or a one-off grant from the admin).
-    const maxRework = planRework + Number(company?.bonus_rework || 0);
+    const maxRework = plan?.max_rework_per_project;
+    if (maxRework == null) return { ok: true, current: 0, limit: null, remaining: Infinity };
     const { data: drawingRows } = await admin.from("drawings").select("id").eq("project_id", projectId);
     const ids = (drawingRows ?? []).map((d: any) => d.id);
     let current = 0;
@@ -1726,7 +1723,7 @@ async function checkPlanLimit(
 
   const planMaxValue = dimension === "drawing_page" ? plan?.max_drawing_pages : plan?.max_chat_requests;
   if (planMaxValue == null) return { ok: true, current: 0, limit: null, remaining: Infinity };
-  const bonusPages = dimension === "drawing_page" ? Number(company?.bonus_drawing_pages || 0) : Number(company?.bonus_chat_requests || 0);
+  const bonusPages = dimension === "drawing_page" ? Number(company?.bonus_drawing_pages || 0) : 0;
   const maxValue = planMaxValue + bonusPages;
 
   const windowStart = computeWindowStart(plan, company);
@@ -2414,11 +2411,6 @@ Deno.serve(async (req: Request) => {
       if (access !== "edit" && action !== "chat") {
         return jsonResponse({ error: "Your role on this team can view this project but not run AI on it. Ask an admin to change your role." }, 403);
       }
-      // The sample project is there to explore, already worked through. Running
-      // AI on it would spend the Welcome Pack on drawings that are not theirs.
-      if (proj.is_sample && action !== "chat") {
-        return jsonResponse({ error: "This is the sample project. Everything in it is already worked through, so there is nothing to run. Create your own project and upload your drawings to try it on your work." }, 400);
-      }
       project = proj;
     }
 
@@ -3061,17 +3053,6 @@ Deno.serve(async (req: Request) => {
       const legacyUsage = isAdminOverride ? { ok: true as const, billing: "admin_comp" as const } : await checkUsageLimit(admin, companyId, plan, "analysis");
       if (!legacyUsage.ok) {
         return jsonResponse({ error: planLimitMessage(legacyUsage, "analysis") }, 429);
-      }
-      // Design requests (system design with no drawings) on a plan that caps them,
-      // e.g. the Welcome Pack. Counted over the same window as the other limits.
-      if (!isAdminOverride && plan?.max_design_requests != null) {
-        const maxDesign = Number(plan.max_design_requests) + Number(company?.bonus_design_requests || 0);
-        const { count: usedDesign } = await admin.from("ai_usage").select("id", { count: "exact", head: true })
-          .eq("company_id", companyId).eq("action", "design_system").eq("is_admin_assisted", false)
-          .gte("created_at", computeWindowStart(plan, company).toISOString());
-        if ((usedDesign ?? 0) >= maxDesign) {
-          return jsonResponse({ error: `Your plan includes ${maxDesign} system design request${maxDesign === 1 ? "" : "s"}, and ${usedDesign} ${usedDesign === 1 ? "has" : "have"} been used. Choose a plan to design more systems.` }, 429);
-        }
       }
       const concurrencyCheck = await checkConcurrencyGate(admin, companyId);
       if (!concurrencyCheck.ok) {
