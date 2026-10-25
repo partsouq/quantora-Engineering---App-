@@ -10495,6 +10495,23 @@ function DrawingsTab({ project }) {
       const suffix = n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th";
       return `${n}${suffix} Floor`;
     }
+    // Otherwise look for a floor code anywhere in the name, e.g. "4702-CRC-SDS-CCTV-GF-0001".
+    // "FF" is left out on purpose: in drawing names it is far more often "fire fighting".
+    const toks = base.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+    const words = " " + toks.join(" ") + " ";
+    if (/ (GF|GRD|GROUND) /.test(words) || / GROUND FLOOR /.test(words)) return "Ground Floor";
+    if (/ (RF|ROOF) /.test(words)) return "Roof Floor";
+    if (/ (MF|MEZZ|MEZZANINE) /.test(words)) return "Mezzanine";
+    for (const t of toks) {
+      const bm = t.match(/^B(\d{1,2})$/); if (bm) return `Basement ${parseInt(bm[1], 10)}`;
+      const lm = t.match(/^(?:L|LVL|LEVEL|F)(\d{1,3})$/) || t.match(/^(\d{1,3})F$/);
+      if (lm) {
+        const n = parseInt(lm[1], 10);
+        if (n === 0) return "Ground Floor";
+        const suffix = n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th";
+        return `${n}${suffix} Floor`;
+      }
+    }
     return ""; // no confident guess -- leave blank for the user to fill in, rather than a wrong default
   }
 
@@ -10931,11 +10948,12 @@ function DrawingsTab({ project }) {
               {pendingFiles.map((p, idx) => (
                 <div key={idx} className="flex items-center gap-2">
                   <span className="text-xs flex-1 truncate" title={p.file.name}>{p.file.name}</span>
-                  <input className="border rounded-lg px-2 py-1 text-xs w-40" placeholder="Floor label (blank for specs)" value={p.floorLabel} onChange={e=>updatePendingFloorLabel(idx, e.target.value)} />
+                  <input className="border rounded-lg px-2 py-1 text-xs w-40" list="qfl-floors" placeholder="Floor (e.g. Ground Floor)" value={p.floorLabel} onChange={e=>updatePendingFloorLabel(idx, e.target.value)} />
                   <button onClick={()=>removePendingFile(idx)} className="text-xs text-rose-600 hover:underline">Remove</button>
                 </div>
               ))}
             </div>
+            <datalist id="qfl-floors">{projectFloorNames(project).map(n => <option key={n} value={n} />)}</datalist>
             <button onClick={upload} disabled={uploading} className="mt-3 text-xs bg-slate-900 text-white px-3 py-2 rounded-lg font-semibold hover:bg-slate-800 disabled:opacity-50">
               {uploading ? (stdStatus || "Uploading…") : `Upload ${pendingFiles.length} file(s)`}
             </button>
@@ -10984,7 +11002,11 @@ function DrawingsTab({ project }) {
                       </optgroup>
                     </select>
                   )}
-                  <span>· {d.floor_label || "No floor label"} · {d.file_type.toUpperCase()}</span>
+                  <span>·</span>
+                  {d.discipline === "specification" ? <span>{d.floor_label || "—"}</span> : (
+                    <DrawingFloorPicker d={d} project={project} onSaved={load} onError={setErr} />
+                  )}
+                  <span>· {d.file_type.toUpperCase()}</span>
                 </div>
                 {d.discipline !== "specification" && (
                   <button type="button" onClick={() => setEditScopeId(editScopeId === d.id ? null : d.id)}
@@ -25721,6 +25743,71 @@ function FloorStep({ value, min, max, set }) {
     </div>
     );
 }
+// Floor names a drawing can be tagged with, from the project's floors
+// (basements, ground, floors above, roof), in the same words the BOQ uses.
+function projectFloorNames(project) {
+  const ord = n => n + (n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th");
+  const names = [];
+  const b = Math.max(0, parseInt(project && project.basement_levels, 10) || 0);
+  for (let i = b; i >= 1; i--) names.push(`Basement ${i}`);
+  names.push("Ground Floor");
+  const total = parseInt(project && project.number_of_floors, 10);
+  const up = Number.isFinite(total) && total > 1 ? total - 1 : 0;
+  for (let i = 1; i <= Math.min(up, 199); i++) names.push(`${ord(i)} Floor`);
+  if (!project || project.has_roof !== false) names.push("Roof Floor");
+  return names;
+}
+
+// The floor a drawing belongs to, changeable after upload: pick one of the
+// project's floors, or type another name (mezzanine, typical floor, ...).
+function DrawingFloorPicker({ d, project, onSaved, onError }) {
+  const names = projectFloorNames(project);
+  const raw = (d.floor_label || "").trim();
+  const known = names.find(n => n.toLowerCase() === raw.toLowerCase());
+  const cur = known || raw;
+  const [other, setOther] = useState(!!cur && !known);
+  const [text, setText] = useState(cur && !known ? cur : "");
+  const [busy, setBusy] = useState(false);
+  async function save(v) {
+    const val = (v || "").trim() || null;
+    if (val === (d.floor_label || null)) return;
+    setBusy(true);
+    const { error } = await sb.from("drawings").update({ floor_label: val }).eq("id", d.id);
+    if (error) { setBusy(false); onError && onError(error.message); return; }
+    // BOQ lines already taken off this drawing follow it, unless the AI read a floor of its own.
+    try {
+      let q = sb.from("boq_items").update({ floor_label: val }).eq("drawing_id", d.id);
+      q = d.floor_label ? q.or(`floor_label.is.null,floor_label.eq."${String(d.floor_label).replace(/"/g, "")}"`) : q.is("floor_label", null);
+      await q;
+    } catch (e) { console.error("BOQ floor follow-up failed (non-fatal):", e); }
+    setBusy(false);
+    onSaved && onSaved();
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <select className="border rounded px-1 py-0.5 text-xs" disabled={busy}
+        style={cur ? undefined : { borderColor: "#f59e0b", color: "#fbbf24" }}
+        value={other ? "__other" : cur}
+        title="Floor this drawing shows. The BOQ is split by floor from it."
+        onChange={e => {
+          const v = e.target.value;
+          if (v === "__other") { setOther(true); return; }
+          setOther(false); setText(""); save(v);
+        }}>
+        <option value="">{cur ? "No floor (clear)" : "Choose floor…"}</option>
+        {names.map(n => <option key={n} value={n}>{n}</option>)}
+        <option value="__other">Other…</option>
+      </select>
+      {other && (
+        <input className="border rounded px-1.5 py-0.5 text-xs w-32" placeholder="e.g. Mezzanine" value={text} disabled={busy}
+          onChange={e => setText(e.target.value)}
+          onBlur={() => save(text)}
+          onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+      )}
+    </span>
+  );
+}
+
 function FloorsPicker({ total, basements, roof, onChange }) {
   const up = floorsAboveGF(total);
   const bs = Math.max(0, parseInt(basements, 10) || 0);
