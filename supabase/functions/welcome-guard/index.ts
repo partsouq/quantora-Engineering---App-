@@ -6,10 +6,9 @@
 //                 (throw-away domains, Gmail dot/plus tricks), the device and
 //                 the internet connection. A repeat sign-up is moved to the
 //                 Free plan (no AI allowance) instead of a second Welcome Pack.
-//                 A work e-mail gets 1 extra drawing page. A real first-timer
-//                 also gets the ready-made sample project.
+//                 A work e-mail gets 1 extra drawing page.
 //   request_more  "Need a little more? Ask us" from a signed-in user.
-//   admin_list / admin_grant / admin_decline / admin_sample   platform admins.
+//   admin_list / admin_grant / admin_restore_welcome / admin_decline   platform admins.
 // ===========================================================================
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
@@ -22,7 +21,6 @@ const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), { status: s, headers: { ...cors, "content-type": "application/json" } });
 const describe = (e: unknown) => (e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e).slice(0, 300));
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
-const BUCKET = "drawings";
 
 // Common throw-away e-mail services.
 const DISPOSABLE = new Set(("mailinator.com guerrillamail.com guerrillamail.net guerrillamail.org sharklasers.com grr.la " +
@@ -60,67 +58,6 @@ async function secret(key: string) {
   return String(data?.value ?? "").trim();
 }
 
-// ---------------------------------------------------------------- sample project
-const SAMPLE_TABLES = ["drawings", "analysis_runs", "boq_items", "boq_assumptions", "boq_review_items",
-  "project_specifications", "system_briefs", "draftsman_briefs", "project_base_plans", "draftsman_jobs",
-  "project_estimates", "estimate_labour", "estimate_staff", "system_budgets"];
-
-async function copySample(templateId: string, companyId: string, userId: string) {
-  const { data: tpl } = await admin.from("projects").select("*").eq("id", templateId).maybeSingle();
-  if (!tpl) throw new Error("Sample project not found.");
-  const newId = crypto.randomUUID();
-  const map = new Map<string, string>([[templateId, newId]]);
-  const rowsBy: Record<string, any[]> = {};
-  for (const t of SAMPLE_TABLES) {
-    const { data, error } = await admin.from(t).select("*").eq("project_id", templateId);
-    if (error) continue;                       // table without project rows or not readable: skip
-    rowsBy[t] = data ?? [];
-    for (const r of rowsBy[t]) if (r.id && typeof r.id === "string") map.set(r.id, crypto.randomUUID());
-  }
-  const swap = (v: any) => {
-    let s = JSON.stringify(v);
-    for (const [a, b] of map) s = s.split(a).join(b);
-    return JSON.parse(s);
-  };
-  const owner = (r: any) => {
-    for (const k of ["created_by", "uploaded_by", "user_id", "owner_id"]) if (k in r && r[k]) r[k] = userId;
-    return r;
-  };
-  // project row
-  const p = owner(swap(tpl));
-  p.id = newId; p.company_id = companyId; p.is_sample = true;
-  p.project_name = (await secret("SAMPLE_PROJECT_NAME")) || "Sample project";
-  if ("project_ref" in p) p.project_ref = "SAMPLE";
-  for (const k of ["created_at", "updated_at"]) if (k in p) delete p[k];
-  const { error: pe } = await admin.from("projects").insert(p);
-  if (pe) throw new Error(`sample project: ${describe(pe)}`);
-  // files: everything under the template folder, plus drawings stored elsewhere
-  const { data: files } = await admin.rpc("admin_storage_under", { prefixes: [templateId] });
-  for (const f of files ?? []) {
-    const to = String(f.name).split(templateId).join(newId);
-    await admin.storage.from(BUCKET).copy(f.name, to).catch(() => {});
-  }
-  // rows
-  const report: Record<string, number | string> = {};
-  for (const t of SAMPLE_TABLES) {
-    const src = rowsBy[t] ?? [];
-    if (!src.length) continue;
-    const out = [];
-    for (const r0 of src) {
-      const r = owner(swap(r0));
-      if (t === "drawings" && r.storage_path && !String(r0.storage_path).startsWith(templateId)) {
-        const to = `${newId}/sample/${String(r0.storage_path).split("/").pop()}`;
-        await admin.storage.from(BUCKET).copy(r0.storage_path, to).catch(() => {});
-        r.storage_path = to;
-      }
-      out.push(r);
-    }
-    const { error } = await admin.from(t).insert(out);
-    report[t] = error ? `failed: ${describe(error).slice(0, 120)}` : out.length;
-  }
-  return { project_id: newId, report };
-}
-
 // ---------------------------------------------------------------- handler
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -141,12 +78,9 @@ Deno.serve(async (req) => {
         const ids = [...new Set([...(checks ?? []), ...(reqs ?? [])].map((r: any) => r.company_id).filter(Boolean))];
         const { data: cos } = ids.length ? await admin.from("companies").select("id, name, plan").in("id", ids) : { data: [] as any[] };
         const co: Record<string, any> = {}; for (const c of cos ?? []) co[c.id] = c;
-        const sampleId = await secret("SAMPLE_PROJECT_ID");
-        const { data: sp } = sampleId ? await admin.from("projects").select("id, project_name, project_ref").eq("id", sampleId).maybeSingle() : { data: null };
         return json({
           checks: (checks ?? []).map((c: any) => ({ ...c, company: co[c.company_id]?.name ?? null, plan: co[c.company_id]?.plan ?? null })),
           requests: (reqs ?? []).map((r: any) => ({ ...r, company: co[r.company_id]?.name ?? null, plan: co[r.company_id]?.plan ?? null })),
-          sample: sp ?? null,
         });
       }
       if (action === "admin_grant") {
@@ -175,16 +109,6 @@ Deno.serve(async (req) => {
       }
       if (action === "admin_decline") {
         await admin.from("allowance_requests").update({ status: "declined", decided_at: new Date().toISOString() }).eq("id", body.request_id);
-        return json({ ok: true });
-      }
-      if (action === "admin_sample") {
-        const pid = String(body.project_id ?? "").trim();
-        if (pid) {
-          const { data: p } = await admin.from("projects").select("id").eq("id", pid).maybeSingle();
-          if (!p) return json({ error: "No project with that id." }, 404);
-        }
-        await admin.from("app_secrets").upsert({ key: "SAMPLE_PROJECT_ID", value: pid }, { onConflict: "key" });
-        if (body.name !== undefined) await admin.from("app_secrets").upsert({ key: "SAMPLE_PROJECT_NAME", value: String(body.name || "Sample project").slice(0, 80) }, { onConflict: "key" });
         return json({ ok: true });
       }
       return json({ error: `Unknown action: ${action}` }, 400);
@@ -254,15 +178,7 @@ Deno.serve(async (req) => {
         await admin.from("companies").update({ bonus_drawing_pages: Number(c?.bonus_drawing_pages || 0) + 1 }).eq("id", companyId);
       }
       await admin.from("signup_checks").upsert({ ...base, flags, outcome }, { onConflict: "company_id" });
-      let sample: any = null;
-      if (outcome !== "free_repeat") {
-        const tplId = await secret("SAMPLE_PROJECT_ID");
-        if (tplId) {
-          try { sample = await copySample(tplId, companyId, user.id); }
-          catch (e) { console.error("sample project failed:", describe(e)); sample = { error: describe(e) }; }
-        }
-      }
-      return json({ status: outcome, flags, sample });
+      return json({ status: outcome, flags });
     }
 
     return json({ error: `Unknown action: ${action}` }, 400);

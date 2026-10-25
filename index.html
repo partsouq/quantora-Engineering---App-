@@ -6097,8 +6097,7 @@ function ProjectTable({ projects, metrics, onOpen, compact, limit, stageFilter }
                   <div className="pt-n">
                     <i className="pt-dot" />
                     <span className="pt-t" title={p.project_name}>{p.project_name}</span>
-                    {p.project_ref && !p.is_sample && <span className="pt-ref">{p.project_ref}</span>}
-                    {p.is_sample && <span className="pt-ref" style={{ background: "rgba(52,211,153,.16)", color: "#34d399", borderColor: "rgba(52,211,153,.4)" }} title="A finished example to explore. It does not use your Welcome Pack.">SAMPLE</span>}
+                    {p.project_ref && <span className="pt-ref">{p.project_ref}</span>}
                   </div>
                   <div className="pt-s">
                     {[p.city, p.country].filter(Boolean).join(", ")}
@@ -20012,11 +20011,9 @@ function QWelcomeGuardPanel() {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
-  const [sampleId, setSampleId] = useState("");
-  const [sampleName, setSampleName] = useState("Sample project");
   const load = async () => {
     setErr("");
-    try { const r = await callWelcomeGuard("admin_list"); setD(r); if (r.sample) { setSampleId(r.sample.id); setSampleName(r.sample.project_name || "Sample project"); } }
+    try { setD(await callWelcomeGuard("admin_list")); }
     catch (e) { setErr(e.message); }
   };
   useEffect(() => { load(); }, []);
@@ -20027,7 +20024,6 @@ function QWelcomeGuardPanel() {
   };
   const restore = async (c) => { setBusy(c.company_id); try { await callWelcomeGuard("admin_restore_welcome", { company_id: c.company_id }); await load(); } catch (e) { setErr(e.message); } finally { setBusy(""); } };
   const decline = async (r) => { setBusy(r.id); try { await callWelcomeGuard("admin_decline", { request_id: r.id }); await load(); } catch (e) { setErr(e.message); } finally { setBusy(""); } };
-  const saveSample = async () => { setBusy("sample"); try { await callWelcomeGuard("admin_sample", { project_id: sampleId.trim(), name: sampleName }); await load(); } catch (e) { setErr(e.message); } finally { setBusy(""); } };
   const when = t => t ? new Date(t).toLocaleString() : "";
   const open = (d?.requests || []).filter(r => r.status === "open");
   return (
@@ -20075,18 +20071,6 @@ function QWelcomeGuardPanel() {
         )}
       </div>
 
-      <div className="section-label">Welcome Pack: sample project</div>
-      <div className="card panel">
-        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 8 }}>
-          Every new Welcome Pack gets a copy of this project (drawings, BOQ, draftsman package and 3D model). Use a project with no client name or client drawings in it. Leave empty to give no sample.
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <input style={{ minWidth: 320, padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border,rgba(255,255,255,.12))", background: "var(--bg-alt,#0d1120)", color: "var(--text,#f3f5fb)", fontSize: 13 }} placeholder="Project id to copy" value={sampleId} onChange={e => setSampleId(e.target.value)} />
-          <input style={{ minWidth: 220, padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border,rgba(255,255,255,.12))", background: "var(--bg-alt,#0d1120)", color: "var(--text,#f3f5fb)", fontSize: 13 }} placeholder="Name shown to customers" value={sampleName} onChange={e => setSampleName(e.target.value)} />
-          <button className="btn btn-primary" disabled={busy === "sample"} onClick={saveSample}>Save</button>
-          {d && <span style={{ fontSize: 12, color: "var(--text-dimmer)" }}>{d.sample ? `Now: ${d.sample.project_name}` : "No sample set"}</span>}
-        </div>
-      </div>
     </>
   );
 }
@@ -30430,8 +30414,6 @@ function App() {
           if (r.status === "free_repeat") {
             window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message:
               "A Welcome Pack has already been used from this e-mail or device, so this account starts on the Free plan. You can still look around; choose a plan to analyse drawings." } }));
-          } else if (r.sample && r.sample.project_id) {
-            window.location.reload();
           }
         } catch (e) { console.error("welcome check failed (non-fatal):", e); }
       });

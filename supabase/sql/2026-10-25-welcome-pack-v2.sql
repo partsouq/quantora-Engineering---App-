@@ -77,26 +77,6 @@ $function$;
 -- 6. the Free plan (where a repeat sign-up lands) has no documents or designs
 update plans set max_documents = 0, max_design_requests = 0 where id = 'free';
 
--- 7. sample project: a ready-made project every new Welcome Pack gets, which
---    does not count towards the project limit and cannot run AI
-alter table projects add column if not exists is_sample boolean not null default false;
-create or replace function public.enforce_project_limit()
-returns trigger language plpgsql security definer set search_path to 'public', 'pg_temp' as $function$
-declare v_plan_id text; v_max_projects integer; v_current_count integer;
-begin
-  if new.company_id is null or coalesce(new.is_sample, false) then return new; end if;
-  select plan into v_plan_id from public.companies where id = new.company_id;
-  if v_plan_id is null then return new; end if;
-  select max_projects into v_max_projects from public.plans where id = v_plan_id;
-  if v_max_projects is null then return new; end if;
-  select count(*) into v_current_count from public.projects where company_id = new.company_id and not coalesce(is_sample, false);
-  if v_current_count >= v_max_projects then
-    raise exception 'PROJECT_LIMIT_REACHED: Your % plan allows a maximum of % project(s). Upgrade to create more.', v_plan_id, v_max_projects;
-  end if;
-  return new;
-end;
-$function$;
-
 -- New sign-ups are checked from this moment (older accounts are not).
 insert into app_secrets (key, value) values ('WELCOME_V2_FROM', now()::text)
   on conflict (key) do nothing;
@@ -133,18 +113,15 @@ create table if not exists allowance_requests (
 );
 alter table allowance_requests enable row level security;   -- service role only
 
--- 10. system design (no drawings) and the sample project, enforced where the
---     AI engine records the run, so the engine itself does not change
+-- 10. system design (no drawings) limit, enforced where the AI engine records
+--     the run, so the engine itself does not change
 create or replace function enforce_run_rules() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare v_company uuid; v_sample boolean; v_plan record; v_bonus int; v_used int; v_from timestamptz;
+declare v_company uuid; v_plan record; v_bonus int; v_used int; v_from timestamptz;
 begin
-  if coalesce(new.is_admin_assisted, false) then return new; end if;
-  select company_id, coalesce(is_sample, false) into v_company, v_sample from projects where id = new.project_id;
-  if v_sample then
-    raise exception 'This is the sample project. Everything in it is already worked through, so there is nothing to run. Create your own project and upload your drawings to try it on your work.' using errcode = 'P0001';
-  end if;
-  if new.run_kind is distinct from 'design_system' or v_company is null then return new; end if;
+  if coalesce(new.is_admin_assisted, false) or new.run_kind is distinct from 'design_system' then return new; end if;
+  select company_id into v_company from projects where id = new.project_id;
+  if v_company is null then return new; end if;
   select p.* into v_plan from companies c join plans p on p.id = coalesce(c.plan, 'free') where c.id = v_company;
   if v_plan.max_design_requests is null then return new; end if;
   select coalesce(bonus_design_requests, 0),
