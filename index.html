@@ -3324,6 +3324,12 @@ const QUANTORA_LANDING_CSS = `
   .p3d-model{margin:0;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,0.14);box-shadow:0 40px 90px -40px rgba(0,0,0,0.85);background:#f4f6fa;}
   .p3d-model img,.p3d-model video{display:block;width:100%;height:auto;}
   .p3d-tag{position:absolute;left:14px;top:14px;z-index:3;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:6px 11px;border-radius:999px;background:rgba(11,17,34,0.85);color:#e2e8f0;border:1px solid rgba(255,255,255,0.14);}
+  .p3d-glow{position:absolute;left:50%;top:50%;width:min(104%,1020px);aspect-ratio:16/9;transform:translate(-50%,-50%);pointer-events:none;z-index:0;filter:blur(70px);opacity:.95;
+    background:radial-gradient(40% 55% at 22% 30%,rgba(56,189,248,.55),transparent 70%),radial-gradient(38% 50% at 80% 25%,rgba(251,191,36,.45),transparent 70%),radial-gradient(45% 55% at 60% 85%,rgba(124,58,237,.55),transparent 70%);
+    animation:p3dAurora 9s ease-in-out infinite alternate;}
+  @keyframes p3dAurora{0%{transform:translate(-50%,-50%) scale(1) rotate(0deg);opacity:.8}50%{opacity:1}100%{transform:translate(-50%,-50%) scale(1.1) rotate(6deg);opacity:.85}}
+  .p3d-model{z-index:1;}
+  @media (prefers-reduced-motion:reduce){.p3d-glow{animation:none}}
   .p3d-caps{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;}
   .p3d-caps span{font-size:13px;font-weight:700;padding:7px 13px;border-radius:999px;border:1px solid rgba(255,255,255,0.14);color:var(--text-dim);background:rgba(255,255,255,0.04);transition:all .3s ease;}
   .p3d-caps span.on{color:#fff;background:linear-gradient(90deg,#2563eb,#7c3aed);border-color:transparent;}
@@ -3808,7 +3814,8 @@ const QUANTORA_LANDING_HTML = `
     <div class="p3d" id="p3d">
       <div class="p3d-pin">
         <div class="p3d-scene">
-          <figure class="p3d-model"><span class="p3d-tag">AI draftsman output</span><video class="p3d-vid" autoplay muted loop playsinline preload="metadata" poster="drawings-2d-3d.jpg" width="960" height="540" aria-label="2D shop drawings for each system, the 3D model built from them, and every system in 3D"><source src="drawings-2d-3d.mp4" type="video/mp4"/><source src="drawings-2d-3d.webm" type="video/webm"/></video></figure>
+          <div class="p3d-glow" aria-hidden="true"></div>
+          <figure class="p3d-model"><span class="p3d-tag">AI draftsman output</span><video class="p3d-vid" autoplay muted loop playsinline preload="metadata" poster="drawings-2d-3d-v2.jpg" width="960" height="540" aria-label="2D shop drawings for each system, the 3D model built from them, and every system in 3D"><source src="drawings-2d-3d-v2.mp4" type="video/mp4"/><source src="drawings-2d-3d-v2.webm" type="video/webm"/></video></figure>
         </div>
         <div class="p3d-caps"><span class="on" data-i="0">2D shop drawings</span><span data-i="1">3D model</span><span data-i="2">Every system</span></div>
       </div>
@@ -4922,7 +4929,7 @@ function LandingPage({ onGetStarted }) {
         const tl = gsap.timeline({ scrollTrigger: { trigger: p3d, start: "top top+=84", end: "bottom bottom", scrub: 0.7 } });
         // the labels follow the video: 2D drawings, then the 3D model, then every system
         const vid = model.querySelector("video");
-        if (vid) { const onT = () => { const t = vid.currentTime, i = t < 12 ? 0 : t < 29 ? 1 : 2; caps.forEach(c => c.classList.toggle("on", Number(c.dataset.i) === i)); };
+        if (vid) { const onT = () => { const t = vid.currentTime, i = t < 11.2 ? 0 : t < 28.2 ? 1 : 2; caps.forEach(c => c.classList.toggle("on", Number(c.dataset.i) === i)); };
           vid.addEventListener("timeupdate", onT); kills.push({ kill: () => vid.removeEventListener("timeupdate", onT) }); }
         // the model lies flat like a plan, then stands up and turns to face you
         tl.fromTo(model, { xPercent: -50, yPercent: -40, rotateX: 58, rotateZ: -22, scale: 0.82 },
