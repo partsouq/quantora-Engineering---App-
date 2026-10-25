@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.9"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-25.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -3305,6 +3305,36 @@ const QUANTORA_LANDING_CSS = `
   .m3d-points b{color:#fff;font-weight:700;}
   @media (max-width:860px){.m3d-grid{grid-template-columns:1fr;}}
 
+  /* ---- 3D cards, moving card sliders, GF plan to 3D (2026-10-25) ---- */
+  html:has(.quantora-landing-root),html:has(.quantora-landing-root) body{overflow-x:clip !important;overflow-y:visible !important;}
+  .q3t{position:relative;transform-style:preserve-3d;will-change:transform;transition:transform .35s cubic-bezier(.2,.7,.3,1),box-shadow .35s ease;}
+  .q3t.q3t-on{transition:transform .08s linear,box-shadow .35s ease;box-shadow:0 30px 60px -28px rgba(0,0,0,0.75),0 0 0 1px rgba(147,197,253,0.18);}
+  .q3t-glare{position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity .3s ease;
+    background:radial-gradient(420px circle at var(--gx,50%) var(--gy,0%),rgba(255,255,255,0.13),transparent 45%);}
+  .q3t.q3t-on .q3t-glare{opacity:1;}
+  .qsl{overflow:hidden;padding:14px 0 22px;-webkit-mask-image:linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent);mask-image:linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent);}
+  .qsl-track{display:flex;gap:18px;width:max-content;animation:qslide var(--qdur,48s) linear infinite;}
+  .qsl.rev .qsl-track{animation-direction:reverse;}
+  .qsl:hover .qsl-track,.qsl.hold .qsl-track{animation-play-state:paused;}
+  .qsl-track > *{flex:0 0 var(--qw,300px);max-width:var(--qw,300px);}
+  @keyframes qslide{to{transform:translateX(-50%);}}
+  .p3d{position:relative;margin:0 0 40px;}
+  .p3d-pin{display:grid;grid-template-columns:1fr;gap:18px;}
+  .p3d-scene{position:relative;perspective:1500px;perspective-origin:50% 30%;}
+  .p3d-model{margin:0;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,0.14);box-shadow:0 40px 90px -40px rgba(0,0,0,0.85);background:#f4f6fa;}
+  .p3d-model img,.p3d-model video{display:block;width:100%;height:auto;}
+  .p3d-tag{position:absolute;left:14px;top:14px;z-index:3;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:6px 11px;border-radius:999px;background:rgba(11,17,34,0.85);color:#e2e8f0;border:1px solid rgba(255,255,255,0.14);}
+  .p3d-caps{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;}
+  .p3d-caps span{font-size:13px;font-weight:700;padding:7px 13px;border-radius:999px;border:1px solid rgba(255,255,255,0.14);color:var(--text-dim);background:rgba(255,255,255,0.04);transition:all .3s ease;}
+  .p3d-caps span.on{color:#fff;background:linear-gradient(90deg,#2563eb,#7c3aed);border-color:transparent;}
+  .p3d.live{height:200vh;}
+  .p3d.live .p3d-pin{position:sticky;top:84px;height:calc(100vh - 110px);grid-template-rows:1fr auto;}
+  .p3d.live .p3d-scene{height:100%;}
+  .p3d.live .p3d-model{position:absolute;left:50%;top:50%;transform-origin:50% 50%;}
+  .p3d.live .p3d-model{width:min(90%,880px);transform:none;background:#fff;}
+  @media (max-width:860px){.p3d.live{height:170vh;}.p3d.live .p3d-model{width:96%;}}
+  @media (prefers-reduced-motion:reduce){.qsl{overflow-x:auto;-webkit-mask-image:none;mask-image:none;}.qsl-track{animation:none;}.q3t{transition:none;}}
+
   .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;position:relative;}
   .step{background:var(--panel-solid);border:1px solid var(--border);border-radius:16px;padding:22px;position:relative;min-width:0;
     transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;}
@@ -3775,6 +3805,14 @@ const QUANTORA_LANDING_HTML = `
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>AI Draftsman &middot; Shop Drawings &amp; 3D</div>
     <h2 class="sectitle">Your Plans In. Shop Drawings And A 3D Model Out.</h2>
     <p class="secsub">Upload the architectural plans and the draftsman designs every system you choose &mdash; fire, mechanical, plumbing, electrical and ELV &mdash; then delivers the shop drawings with a 3D coordination model of all systems on every floor.</p>
+    <div class="p3d" id="p3d">
+      <div class="p3d-pin">
+        <div class="p3d-scene">
+          <figure class="p3d-model"><span class="p3d-tag">AI draftsman output</span><video class="p3d-vid" autoplay muted loop playsinline preload="metadata" poster="drawings-2d-3d.jpg" width="960" height="540" aria-label="2D shop drawings for each system, the 3D model built from them, and every system in 3D"><source src="drawings-2d-3d.mp4" type="video/mp4"/><source src="drawings-2d-3d.webm" type="video/webm"/></video></figure>
+        </div>
+        <div class="p3d-caps"><span class="on" data-i="0">2D shop drawings</span><span data-i="1">3D model</span><span data-i="2">Every system</span></div>
+      </div>
+    </div>
     <div class="m3d-grid">
       <figure class="m3d-card"><img src="3d-building.jpg" alt="3D coordination model of a five-storey building with all MEP and ELV systems" width="1240" height="1290" fetchpriority="high"/>
         <figcaption>Whole building &mdash; every floor, every system</figcaption></figure>
@@ -4815,6 +4853,103 @@ function LandingPage({ onGetStarted }) {
       btn.removeEventListener("click", onClick);
       v.removeEventListener("playing", hideBtn);
       v.removeEventListener("error", showBtn);
+    };
+  }, []);
+
+  // 3D cards, moving card sliders and the GF plan turning into the 3D model
+  // (2026-10-25). The page keeps its sections; this only adds motion to them.
+  // Libraries load after first paint; reduced-motion keeps everything still.
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const fine = window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    const offs = [], kills = [];
+    let lenis = null, dead = false;
+
+    // 1. Moving card sliders: the AI team cards and the industry panels glide
+    //    sideways in a loop; hover (or touch) pauses them.
+    [["#capabilities .team-grid", 52, 300, false], ["#industries .wrap > div[style*='grid']", 44, 280, true]].forEach(([sel, dur, w, rev]) => {
+      const grid = root.querySelector(sel);
+      if (!grid || grid.dataset.qsl) return;
+      grid.dataset.qsl = "1";
+      const items = Array.from(grid.children);
+      const box = document.createElement("div"); box.className = "qsl" + (rev ? " rev" : "");
+      box.style.setProperty("--qdur", dur + "s"); box.style.setProperty("--qw", w + "px");
+      const track = document.createElement("div"); track.className = "qsl-track";
+      items.forEach(el => track.appendChild(el));
+      items.forEach(el => { const c = el.cloneNode(true); c.setAttribute("aria-hidden", "true"); track.appendChild(c); });
+      box.appendChild(track);
+      grid.parentNode.insertBefore(box, grid); grid.style.display = "none";
+      const hold = () => box.classList.add("hold"), go = () => box.classList.remove("hold");
+      box.addEventListener("touchstart", hold, { passive: true }); box.addEventListener("touchend", go);
+      offs.push(() => { items.forEach(el => grid.appendChild(el)); box.remove(); grid.style.display = ""; delete grid.dataset.qsl; });
+    });
+
+    // 2. 3D tilt with a soft light on every framed box (mouse only).
+    if (fine && !reduce) {
+      root.querySelectorAll(".team-card, .step, .panel, .m3d-card, .stile, .qtr-div, .mock, .p3d-caps span").forEach(el => {
+        el.classList.add("q3t");
+        const glare = document.createElement("span"); glare.className = "q3t-glare"; el.appendChild(glare);
+        const big = el.classList.contains("mock");
+        const max = big ? 6 : 10;
+        const move = e => {
+          const r = el.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+          el.classList.add("q3t-on");
+          el.style.transform = `perspective(${big ? 1600 : 900}px) rotateX(${((0.5 - y) * max).toFixed(2)}deg) rotateY(${((x - 0.5) * max).toFixed(2)}deg) translateZ(0) scale(${big ? 1.01 : 1.03})`;
+          el.style.setProperty("--gx", (x * 100).toFixed(1) + "%"); el.style.setProperty("--gy", (y * 100).toFixed(1) + "%");
+        };
+        const leave = () => { el.classList.remove("q3t-on"); el.style.transform = ""; };
+        el.addEventListener("pointermove", move); el.addEventListener("pointerleave", leave);
+        offs.push(() => { el.removeEventListener("pointermove", move); el.removeEventListener("pointerleave", leave); el.classList.remove("q3t", "q3t-on"); el.style.transform = ""; glare.remove(); });
+      });
+    }
+
+    if (reduce) return () => offs.forEach(f => f());
+
+    // 3. GSAP-driven pieces: the plan laying down into 3D, cards sliding in from
+    //    the sides, headings rising, smooth scroll.
+    const loadGsap = () => (window.gsap && window.ScrollTrigger) ? Promise.resolve(true) : __loadLib([
+      "https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"], () => !!window.gsap)
+      .then(() => __loadLib(["https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"], () => !!window.ScrollTrigger));
+    loadGsap().then(() => {
+      if (dead || !window.gsap || !window.ScrollTrigger) return;
+      const gsap = window.gsap, ST = window.ScrollTrigger; gsap.registerPlugin(ST);
+      const p3d = root.querySelector("#p3d");
+      if (p3d) {
+        p3d.classList.add("live");
+        const model = p3d.querySelector(".p3d-model"), caps = p3d.querySelectorAll(".p3d-caps span");
+        const tl = gsap.timeline({ scrollTrigger: { trigger: p3d, start: "top top+=84", end: "bottom bottom", scrub: 0.7 } });
+        // the labels follow the video: 2D drawings, then the 3D model, then every system
+        const vid = model.querySelector("video");
+        if (vid) { const onT = () => { const t = vid.currentTime, i = t < 12 ? 0 : t < 29 ? 1 : 2; caps.forEach(c => c.classList.toggle("on", Number(c.dataset.i) === i)); };
+          vid.addEventListener("timeupdate", onT); kills.push({ kill: () => vid.removeEventListener("timeupdate", onT) }); }
+        // the model lies flat like a plan, then stands up and turns to face you
+        tl.fromTo(model, { xPercent: -50, yPercent: -40, rotateX: 58, rotateZ: -22, scale: 0.82 },
+                         { yPercent: -50, rotateX: 0, rotateZ: 0, scale: 1, ease: "power2.inOut", duration: 0.7 })
+          .to(model, { rotateY: -6, scale: 1.03, duration: 0.3 }, 0.7);
+        kills.push(tl);
+      }
+      // cards in the dashboard section slide in from alternate sides with a turn
+      root.querySelectorAll("#workspaces .team-card, .m3d-card").forEach((el, i) => {
+        kills.push(gsap.from(el, { x: i % 2 ? 70 : -70, rotateY: i % 2 ? -14 : 14, duration: 1, ease: "power3.out",
+          scrollTrigger: { trigger: el, start: "top 90%" } }));
+      });
+      root.querySelectorAll(".sectitle").forEach(h => kills.push(gsap.from(h, { y: 30, duration: 0.9, ease: "power3.out", scrollTrigger: { trigger: h, start: "top 90%" } })));
+      __loadLib(["https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"], () => !!window.Lenis).then(() => {
+        if (dead || !window.Lenis) return;
+        lenis = new window.Lenis({ lerp: 0.1 });
+        lenis.on("scroll", ST.update);
+        lenis._t = t => lenis && lenis.raf(t * 1000); gsap.ticker.add(lenis._t); gsap.ticker.lagSmoothing(0);
+      }).catch(() => {});
+      ST.refresh();
+    }).catch(() => {});
+
+    return () => {
+      dead = true;
+      kills.forEach(k => { if (k.scrollTrigger) k.scrollTrigger.kill(); k.kill(); });
+      if (lenis) { if (window.gsap && lenis._t) window.gsap.ticker.remove(lenis._t); lenis.destroy(); }
+      offs.forEach(f => f());
     };
   }, []);
 
