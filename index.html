@@ -2796,6 +2796,23 @@ async function callBilling(action, payload) {
   return json;
 }
 
+// Welcome Pack download rule (2026-10-25). On the free Welcome Pack people see
+// everything on screen, but the files themselves (drawing packages, DXF,
+// markups, schematics) come with a paid plan. The BOQ export stays available as
+// a watermarked sample. The plan is read once per page load.
+let __qPlanP = null;
+function qPlanInfo() {
+  if (!__qPlanP) __qPlanP = callBilling("usage_summary", {}).then(u => (u && u.plan) || null).catch(() => { __qPlanP = null; return null; });
+  return __qPlanP;
+}
+async function qIsWelcomePack() { const p = await qPlanInfo(); return !!(p && p.is_trial); }
+async function qDownloadAllowed(what) {
+  if (!(await qIsWelcomePack())) return true;
+  window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message:
+    `Downloading ${what} is part of a paid plan. On the Welcome Pack you can see everything on screen \u2014 choose a plan to download the files.` } }));
+  return false;
+}
+
 // Platform-admin-only cost/revenue analytics. Any non-admin account gets a
 // 403 from the edge function itself (checked server-side against
 // public.platform_admins) — the frontend just surfaces that as a rejected
@@ -4488,7 +4505,7 @@ const QUANTORA_LANDING_HTML = `
       </div>
     </div>
     <p class="secsub qx-local-note" style="margin-top:14px;font-size:12px;display:none;"></p>
-    <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 draftsman drawing pages and 5 AI-processed pages &mdash; no credit card required. Your work is kept for 7 days; choose a plan to keep it.</p>
+    <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 AI-processed drawing pages, 1 draftsman page, 2 documents and 10 AI chat messages, plus a ready-made sample project to explore &mdash; no credit card required. See every result on screen; downloads come with a paid plan. Your work is kept for 7 days; choose a plan to keep it.</p>
   </div>
 </section>
 
@@ -5370,6 +5387,36 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
 // ---------------------------------------------------------------------------
 // Billing / plan upgrade
 // ---------------------------------------------------------------------------
+// "Need a little more? Ask us" (2026-10-25): a Welcome Pack or Free account
+// that has hit a limit asks for a few more; the admin grants it in one click.
+function QAskMore({ reason }) {
+  const [what, setWhat] = useState("A few more drawing pages");
+  const [msg, setMsg] = useState("");
+  const [state, setState] = useState("");
+  const [err, setErr] = useState("");
+  async function send() {
+    setState("sending"); setErr("");
+    try { await callWelcomeGuard("request_more", { what, message: [msg, reason ? `(Limit shown: ${reason})` : ""].filter(Boolean).join(" ") }); setState("sent"); }
+    catch (e) { setErr(e.message); setState(""); }
+  }
+  const box = { border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 12, padding: "12px 14px", marginBottom: 16, background: "var(--q-panel-2,#f8fafc)" };
+  if (state === "sent") return <div style={box}><b>Request sent.</b> <span style={{ fontSize: 13 }}>We will look at it and reply by e-mail, usually within one business day.</span></div>;
+  return (
+    <div style={box}>
+      <div style={{ fontWeight: 700, fontSize: 14 }}>Need a little more to finish trying it? Ask us</div>
+      <div style={{ fontSize: 12.5, opacity: .8, margin: "4px 0 10px" }}>Tell us what you are testing. We often add a few extra pages or messages so you can see a full result before choosing a plan.</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <select value={what} onChange={e => setWhat(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
+          {["A few more drawing pages", "More AI chat messages", "Another rework", "More documents", "Another draftsman page"].map(x => <option key={x}>{x}</option>)}
+        </select>
+        <input value={msg} onChange={e => setMsg(e.target.value)} placeholder="What are you working on? (optional)" className="border rounded-lg px-2 py-1.5 text-sm" style={{ flex: 1, minWidth: 200 }} />
+        <button onClick={send} disabled={state === "sending"} className="text-sm font-semibold px-3 py-1.5 rounded-lg bg-slate-900 text-white">{state === "sending" ? "Sending…" : "Ask us"}</button>
+      </div>
+      {err && <div style={{ color: "#dc2626", fontSize: 12, marginTop: 6 }}>{err}</div>}
+    </div>
+  );
+}
+
 function UpgradePlanModal({ open, onClose, reason, focus }) {
   // "Pay-as-you-go top-up" in the account menu opens this same modal, so it has
   // to land on the credit packs rather than at the top of the plan list.
@@ -5466,6 +5513,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
         </div>
         {reason && <div className="bg-amber-50 text-amber-800 text-sm rounded-lg p-3 mb-4">{reason}</div>}
         {err && <div className="bg-red-50 text-red-700 text-sm rounded-lg p-3 mb-4">{err}</div>}
+        {(currentPlanId === "trial" || currentPlanId === "free") && !loading && <QAskMore reason={reason} />}
 
         {/* Inline styles rather than utility classes: the stylesheet in this
             file is a pre-purged build, so any class not already used elsewhere
@@ -5512,8 +5560,10 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                     )}
                     <div>{fmtLimit(plan.max_drawing_pages)} AI-processed drawing pages{plan.is_trial ? " (once)" : "/month"}</div>
                     <div>{fmtLimit(plan.max_projects)} projects &middot; {fmtLimit(plan.max_users)} user{plan.max_users === 1 ? "" : "s"}</div>
-                    <div>{fmtLimit(plan.max_chat_requests)} AI chat messages/month</div>
-                    <div>{fmtLimit(plan.max_rework_per_project)} reworks per project</div>
+                    {plan.max_documents != null && <div>{plan.max_documents} tender / specification document{plan.max_documents === 1 ? "" : "s"}{plan.is_trial ? " (once)" : ""}</div>}
+                    <div>{fmtLimit(plan.max_chat_requests)} AI chat messages{plan.is_trial ? " (once)" : "/month"}</div>
+                    <div>{fmtLimit(plan.max_rework_per_project)} rework{plan.max_rework_per_project === 1 ? "" : "s"} per project</div>
+                    {plan.is_trial && <div>See results on screen; downloads with a paid plan</div>}
                     {(() => {
                       const wa = plan.workspace_access;
                       const full = Array.isArray(wa) ? wa.includes("commercial") : (!plan.is_trial && Number(plan.price_usd) > 0);
@@ -6047,7 +6097,8 @@ function ProjectTable({ projects, metrics, onOpen, compact, limit, stageFilter }
                   <div className="pt-n">
                     <i className="pt-dot" />
                     <span className="pt-t" title={p.project_name}>{p.project_name}</span>
-                    {p.project_ref && <span className="pt-ref">{p.project_ref}</span>}
+                    {p.project_ref && !p.is_sample && <span className="pt-ref">{p.project_ref}</span>}
+                    {p.is_sample && <span className="pt-ref" style={{ background: "rgba(52,211,153,.16)", color: "#34d399", borderColor: "rgba(52,211,153,.4)" }} title="A finished example to explore. It does not use your Welcome Pack.">SAMPLE</span>}
                   </div>
                   <div className="pt-s">
                     {[p.city, p.country].filter(Boolean).join(", ")}
@@ -11746,6 +11797,7 @@ function MarkupViewerModal({ drawing, onClose }) {
   // clear message instead of a silent broken download.
   async function downloadMarkup() {
     if (!imgUrl) return;
+    if (!(await qDownloadAllowed("marked-up drawings"))) return;
     setDownloading(true);
     try {
       const img = new Image();
@@ -13324,8 +13376,9 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq, onUseCloud }) {
     } catch (ex) { setErr(ex.message); } finally { setBusy(""); }
   }
 
-  function downloadSvg() {
+  async function downloadSvg() {
     if (!result || !result.svg) return;
+    if (!(await qDownloadAllowed("schematics"))) return;
     const blob = new Blob([result.svg], { type: "image/svg+xml" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -16377,7 +16430,7 @@ function ExportTab({ project }) {
       // available as a fallback. None of the eleven sheets below changes.
       const sheetDefs = [];
       const disclaimer = "AI-generated estimate — provided \"as is,\" for informational purposes only, without warranty of any kind. Not a substitute for review, verification, or certification by a licensed engineer. User assumes full responsibility for independently verifying all quantities, specifications, and costs before tendering, procurement, or construction. Quantora accepts no liability for its use.";
-      const trialRow = isTrial ? [["Generated using Quantora Trial Version"], []] : [];
+      const trialRow = isTrial ? [["WELCOME PACK SAMPLE \u2014 NOT FOR ISSUE. Choose a paid plan at quantoraengineering.com for the clean file."], []] : [];
       const addSheet = (rows, name) => {
         sheetDefs.push({ name, rows });
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name.substring(0,31));
@@ -16960,6 +17013,13 @@ function ExportTab({ project }) {
         doc.setFontSize(7); doc.setTextColor(150);
         doc.text("AI-generated estimate -- provided \"as is,\" without warranty; not a substitute for licensed engineer review or certification. Quantora accepts no liability for its use.", 40, pageH - 20);
         doc.text(`Page ${p} of ${pageCount}`, pageW - 90, pageH - 20);
+        if (isTrial) {
+          // Welcome Pack sample: a large diagonal mark across every page.
+          try { if (doc.GState) doc.setGState(new doc.GState({ opacity: 0.18 })); } catch (e) { /* older jsPDF */ }
+          doc.setFontSize(46); doc.setTextColor(220, 38, 38);
+          doc.text("WELCOME PACK SAMPLE \u2014 NOT FOR ISSUE", pageW / 2, pageH / 2, { align: "center", angle: 28 });
+          try { if (doc.GState) doc.setGState(new doc.GState({ opacity: 1 })); } catch (e) { /* older jsPDF */ }
+        }
       }
 
       doc.save(`${project.project_name.replace(/[^a-z0-9]/gi,"_")}_BOQ_${kind}.pdf`);
@@ -16973,7 +17033,7 @@ function ExportTab({ project }) {
       </div>
       {isTrial && (
         <div className="md:col-span-2 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg px-3 py-2">
-          Trial exports include a "Generated using Quantora Trial Version" watermark on every sheet. Upgrade to remove it.
+          Welcome Pack exports are samples: every sheet and page carries a "Welcome Pack sample \u2014 not for issue" watermark. Choose a paid plan for the clean files.
         </div>
       )}
       {[
@@ -19897,6 +19957,7 @@ function QHealthView({ systemStatus }) {
       </div>
       <div style={{ color: "var(--text-dimmer)", fontSize: 11.5 }}>Checked at {s.checked_at || "—"}. Configuration booleans only confirm a secret's presence — values are never read or displayed.</div>
       <QWelcomeCleanupPanel />
+      <QWelcomeGuardPanel />
     </>
   );
 }
@@ -19915,6 +19976,119 @@ async function callWelcomeCleanup(action, payload) {
   try { json = await res.json(); } catch (e) { /* not deployed yet */ }
   if (!res.ok) throw new Error(json.error || "The Welcome Pack clean-up engine is not deployed yet.");
   return json;
+}
+
+// welcome-guard (2026-10-25): sign-up checks, sample project and "Ask us" requests.
+const WELCOME_GUARD_FN_URL = `${SUPABASE_URL}/functions/v1/welcome-guard`;
+async function callWelcomeGuard(action, payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error("Not signed in.");
+  const res = await fetch(WELCOME_GUARD_FN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action, ...(payload || {}) }),
+  });
+  let json = {};
+  try { json = await res.json(); } catch (e) { /* not deployed yet */ }
+  if (!res.ok) throw new Error(json.error || "The Welcome Pack check is not available yet.");
+  return json;
+}
+// One id per browser, kept in storage and a cookie, so a second Welcome Pack
+// from the same device can be recognised.
+function qDeviceId() {
+  let id = null;
+  try { id = localStorage.getItem("q_device_id"); } catch (e) { /* blocked */ }
+  if (!id) { const m = document.cookie.match(/(?:^|; )q_device_id=([^;]+)/); if (m) id = decodeURIComponent(m[1]); }
+  if (!id) id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+  try { localStorage.setItem("q_device_id", id); } catch (e) { /* blocked */ }
+  try { document.cookie = `q_device_id=${encodeURIComponent(id)}; max-age=${60 * 60 * 24 * 400}; path=/; SameSite=Lax`; } catch (e) { /* blocked */ }
+  return id;
+}
+
+const QWG_FLAG = { throwaway_email: "Throw-away e-mail", repeat_email: "Same e-mail as an earlier account", repeat_device: "Same device as an earlier Welcome Pack", busy_connection: "Many sign-ups from one connection today" };
+const QWG_OUTCOME = { welcome: ["Welcome Pack", "st-healthy"], welcome_work_email: ["Welcome Pack + work e-mail bonus", "st-healthy"], free_repeat: ["Moved to Free (repeat)", "st-warning"], pending_email: ["Waiting for e-mail confirmation", "st-warning"], not_checked: ["Not checked (older or paid)", ""] };
+
+function QWelcomeGuardPanel() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const [sampleId, setSampleId] = useState("");
+  const [sampleName, setSampleName] = useState("Sample project");
+  const load = async () => {
+    setErr("");
+    try { const r = await callWelcomeGuard("admin_list"); setD(r); if (r.sample) { setSampleId(r.sample.id); setSampleName(r.sample.project_name || "Sample project"); } }
+    catch (e) { setErr(e.message); }
+  };
+  useEffect(() => { load(); }, []);
+  const grant = async (r, amounts) => {
+    setBusy(r.id || r.company_id);
+    try { await callWelcomeGuard("admin_grant", { company_id: r.company_id, request_id: r.id || null, ...amounts }); await load(); }
+    catch (e) { setErr(e.message); } finally { setBusy(""); }
+  };
+  const decline = async (r) => { setBusy(r.id); try { await callWelcomeGuard("admin_decline", { request_id: r.id }); await load(); } catch (e) { setErr(e.message); } finally { setBusy(""); } };
+  const saveSample = async () => { setBusy("sample"); try { await callWelcomeGuard("admin_sample", { project_id: sampleId.trim(), name: sampleName }); await load(); } catch (e) { setErr(e.message); } finally { setBusy(""); } };
+  const when = t => t ? new Date(t).toLocaleString() : "";
+  const open = (d?.requests || []).filter(r => r.status === "open");
+  return (
+    <>
+      <div className="section-label">Welcome Pack: requests for more</div>
+      <div className="card panel">
+        {err && <div style={{ color: "var(--red,#f87171)", fontSize: 12, marginBottom: 8 }}>{err}</div>}
+        {!d ? <div style={{ color: "var(--text-dimmer)", fontSize: 12 }}>Loading…</div> : open.length === 0 ? (
+          <div style={{ color: "var(--text-dimmer)", fontSize: 12 }}>No open requests.</div>
+        ) : (
+          <div className="table-wrap"><table>
+            <thead><tr><th>When</th><th>Company</th><th>Asked for</th><th>Message</th><th>Grant</th></tr></thead>
+            <tbody>{open.map(r => (
+              <tr key={r.id}>
+                <td>{when(r.created_at)}</td><td className="name">{r.company || r.company_id}</td><td>{r.what || "—"}</td>
+                <td style={{ maxWidth: 320, whiteSpace: "normal" }}>{r.message || "—"}</td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { pages: 2 })}>+2 pages</button>{" "}
+                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { chats: 10 })}>+10 chats</button>{" "}
+                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { reworks: 1 })}>+1 rework</button>{" "}
+                  <button className="btn btn-sm" disabled={!!busy} onClick={() => grant(r, { documents: 2 })}>+2 docs</button>{" "}
+                  <button className="btn btn-sm" disabled={!!busy} onClick={() => decline(r)}>Decline</button>
+                </td>
+              </tr>))}</tbody>
+          </table></div>
+        )}
+      </div>
+
+      <div className="section-label">Welcome Pack: sign-up checks</div>
+      <div className="card panel">
+        {!d ? null : (d.checks || []).length === 0 ? <div style={{ color: "var(--text-dimmer)", fontSize: 12 }}>No sign-ups checked yet.</div> : (
+          <div className="table-wrap"><table>
+            <thead><tr><th>When</th><th>Company</th><th>E-mail</th><th>Result</th><th>Why</th><th></th></tr></thead>
+            <tbody>{(d.checks || []).slice(0, 60).map(c => {
+              const o = QWG_OUTCOME[c.outcome] || [c.outcome, ""];
+              return (
+                <tr key={c.company_id}>
+                  <td>{when(c.created_at)}</td><td className="name">{c.company || c.company_id}</td><td>{c.email || "—"}</td>
+                  <td><span className={"pill " + o[1]}>{o[0]}</span></td>
+                  <td>{(c.flags || []).map(f => QWG_FLAG[f] || f).join(", ") || "—"}</td>
+                  <td>{c.outcome === "free_repeat" && <button className="btn btn-sm" disabled={!!busy} title="Give this account a small allowance anyway"
+                    onClick={() => grant(c, { pages: 2, chats: 10 })}>Allow anyway</button>}</td>
+                </tr>);
+            })}</tbody>
+          </table></div>
+        )}
+      </div>
+
+      <div className="section-label">Welcome Pack: sample project</div>
+      <div className="card panel">
+        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 8 }}>
+          Every new Welcome Pack gets a copy of this project (drawings, BOQ, draftsman package and 3D model). Use a project with no client name or client drawings in it. Leave empty to give no sample.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input style={{ minWidth: 320, padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border,rgba(255,255,255,.12))", background: "var(--bg-alt,#0d1120)", color: "var(--text,#f3f5fb)", fontSize: 13 }} placeholder="Project id to copy" value={sampleId} onChange={e => setSampleId(e.target.value)} />
+          <input style={{ minWidth: 220, padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border,rgba(255,255,255,.12))", background: "var(--bg-alt,#0d1120)", color: "var(--text,#f3f5fb)", fontSize: 13 }} placeholder="Name shown to customers" value={sampleName} onChange={e => setSampleName(e.target.value)} />
+          <button className="btn btn-primary" disabled={busy === "sample"} onClick={saveSample}>Save</button>
+          {d && <span style={{ fontSize: 12, color: "var(--text-dimmer)" }}>{d.sample ? `Now: ${d.sample.project_name}` : "No sample set"}</span>}
+        </div>
+      </div>
+    </>
+  );
 }
 
 function QWelcomeCleanupPanel() {
@@ -29136,6 +29310,7 @@ function DraftsmanIfcPackage({ project }) {
     if (!error && data) window.open(data.signedUrl, "_blank");
   };
   const download = async (path, name) => {
+    if (!(await qDownloadAllowed("drawing files"))) return;
     const { data, error } = await sb.storage.from("drawings").createSignedUrl(path, 3600, { download: name || true });
     if (error || !data) return;
     const a = document.createElement("a");
@@ -29248,6 +29423,7 @@ function DraftsmanIfcPackage({ project }) {
   };
   // one ZIP of a package, built in the browser: nothing extra is stored
   const downloadZip = async (j) => {
+    if (!(await qDownloadAllowed("the drawing package"))) return;
     setZipping(j.id); setErr("");
     try {
       if (!(await qdLoadZip())) throw new Error("Could not load the ZIP tool \u2014 download the files one by one.");
@@ -29660,14 +29836,16 @@ function DraftsmanDrawings({ project, basePlate, spec, brief, onGoToDesign, onGo
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
-  function downloadDxf() {
+  async function downloadDxf() {
     if (!current || current.kind !== "plan") return;
+    if (!(await qDownloadAllowed("DXF drawings"))) return;
     const f = state.floors.find(x => x.name === current.floor);
     if (!f) return;
     download(`${current.no} ${current.title}.dxf`,
       qdwgPlanDxf(ctx, f, current.discipline, state.rows), "application/dxf");
   }
-  function printSheet() {
+  async function printSheet() {
+    if (!(await qDownloadAllowed("and printing drawings"))) return;
     const w = window.open("", "_blank");
     if (!w) return;
     w.document.write(`<!doctype html><html><head><title>${current.no}</title>
@@ -30240,7 +30418,23 @@ function App() {
   useEffect(() => {
     if (!session) return;
     if (inviteToken) return;
-    callBilling("bootstrap_company", {}).catch((e) => console.error("bootstrap_company failed:", e));
+    callBilling("bootstrap_company", {})
+      .catch((e) => console.error("bootstrap_company failed:", e))
+      .then(async () => {
+        // Welcome Pack check, once per account on this browser (welcome-guard).
+        const key = `qwg_${session.user.id}`;
+        try { if (localStorage.getItem(key)) return; } catch (e) { /* blocked */ }
+        try {
+          const r = await callWelcomeGuard("register", { device_id: qDeviceId() });
+          if (r.status && r.status !== "pending_email" && r.status !== "no_company") { try { localStorage.setItem(key, r.status); } catch (e) { /* blocked */ } }
+          if (r.status === "free_repeat") {
+            window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message:
+              "A Welcome Pack has already been used from this e-mail or device, so this account starts on the Free plan. You can still look around; choose a plan to analyse drawings." } }));
+          } else if (r.sample && r.sample.project_id) {
+            window.location.reload();
+          }
+        } catch (e) { console.error("welcome check failed (non-fatal):", e); }
+      });
   }, [session, inviteToken]);
 
   // Coming back from a confirmation link. Three outcomes are possible and all
