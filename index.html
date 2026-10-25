@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-25.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -9951,15 +9951,23 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
   async function doDelete() {
     setBusy(true); setErr("");
     try {
-      // 1. storage first -- if this fails we stop, rather than deleting the
-      //    rows that tell us which files belonged to this project.
-      const { data: drawings, error: dErr } = await sb.from("drawings")
-        .select("storage_path").eq("project_id", project.id);
-      if (dErr) throw dErr;
-      const paths = (drawings || []).map(d => d.storage_path).filter(Boolean);
-      if (paths.length) {
-        const { error: sErr } = await sb.storage.from("drawings").remove(paths);
-        if (sErr) throw new Error("Could not remove the stored drawing files: " + sErr.message);
+      // 1. storage first -- EVERY file of the project: uploaded drawings,
+      //    page images, Draftsman and design output, civil mark-ups and the
+      //    tender documents of its tenders (project_storage_paths). If any
+      //    file cannot be removed we stop, rather than deleting the rows that
+      //    tell us which files belonged to this project.
+      const { data: files, error: fErr } = await sb.rpc("project_storage_paths", { p_project: project.id });
+      if (fErr) throw fErr;
+      const byBucket = {};
+      for (const f of files || []) (byBucket[f.bucket] = byBucket[f.bucket] || []).push(f.name);
+      for (const [bucket, names] of Object.entries(byBucket)) {
+        for (let i = 0; i < names.length; i += 100) {
+          const batch = names.slice(i, i + 100);
+          const { data: gone, error: sErr } = await sb.storage.from(bucket).remove(batch);
+          if (sErr) throw new Error("Could not remove the project's files: " + sErr.message);
+          if ((gone || []).length < batch.length)
+            throw new Error(`Only ${(gone || []).length} of ${batch.length} files could be removed, so the project was not deleted. Please try again or contact support.`);
+        }
       }
       // 2. the project row -- everything else cascades in the database.
       const { error: pErr } = await sb.from("projects").delete().eq("id", project.id);
@@ -9984,7 +9992,8 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
           {counts === null ? "Checking what this would remove…" : (
             <>Deleting takes with it <b>{counts.drawings}</b> uploaded drawing{counts.drawings === 1 ? "" : "s"} and
             their stored files, <b>{counts.boq}</b> BOQ line{counts.boq === 1 ? "" : "s"}, <b>{counts.runs}</b> AI
-            analysis run{counts.runs === 1 ? "" : "s"}, and the project's estimate, budgets, purchase orders,
+            analysis run{counts.runs === 1 ? "" : "s"}, every generated file (Draftsman drawings, design and civil
+            mark-ups, page images), and the project's estimate, budgets, purchase orders,
             tender documents, requirements, enquiry packages, quotations and approvals.</>
           )}
         </div>
