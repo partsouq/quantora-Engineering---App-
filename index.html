@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-25.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -3305,6 +3305,39 @@ const QUANTORA_LANDING_CSS = `
   .m3d-points b{color:#fff;font-weight:700;}
   @media (max-width:860px){.m3d-grid{grid-template-columns:1fr;}}
 
+  /* ---- 3D drawing story + bold sliding words (2026-10-25) ---- */
+  html:has(.quantora-landing-root),html:has(.quantora-landing-root) body{overflow-x:clip !important;overflow-y:visible !important;}
+  .m3l-marquee{overflow:hidden;margin:6px 0 34px;display:flex;flex-direction:column;gap:6px;user-select:none;}
+  .m3l-row{display:flex;gap:26px;white-space:nowrap;font-weight:900;font-size:clamp(40px,8.5vw,112px);line-height:1;letter-spacing:-0.035em;will-change:transform;}
+  .m3l-row span{color:#f3f5fb;}
+  .m3l-row span.o{color:transparent;-webkit-text-stroke:1.5px rgba(165,180,252,0.75);}
+  .m3l-row i{font-style:normal;color:#3b82f6;}
+  .m3l-row.r2{font-size:clamp(22px,4vw,48px);font-weight:800;letter-spacing:-0.02em;color:#8fa6c8;}
+  .m3l-row.r2 span{color:#8fa6c8;} .m3l-row.r2 span.o{-webkit-text-stroke:1px rgba(143,166,200,0.7);}
+  .m3l{display:grid;grid-template-columns:0.85fr 1.15fr;gap:28px;align-items:start;margin-bottom:46px;}
+  .m3l-steps{display:flex;flex-direction:column;gap:34vh;padding:4vh 0 24vh;}
+  .m3l-step{max-width:420px;opacity:0.4;transition:opacity .35s ease;}
+  .m3l-step.on{opacity:1;}
+  .m3l-step .k{font-size:12px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#a5b4fc;}
+  .m3l-step h3{font-size:clamp(28px,3.4vw,44px);font-weight:900;letter-spacing:-0.03em;line-height:1.02;margin:10px 0 12px;color:#fff;}
+  .m3l-step p{color:var(--text-dim);font-size:15.5px;line-height:1.6;margin:0;}
+  .m3l-step .sw{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;}
+  .m3l-step .sw b{font-size:11.5px;font-weight:700;padding:4px 9px;border-radius:999px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#e2e8f0;}
+  .m3l-step .sw b::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--c);vertical-align:0;}
+  .m3l-stage{position:sticky;top:90px;height:min(76vh,640px);border-radius:22px;overflow:hidden;
+    background:radial-gradient(120% 90% at 70% 0%,rgba(59,130,246,0.22),transparent 60%),linear-gradient(180deg,#121b33,#0b1122);
+    border:1px solid rgba(255,255,255,0.10);box-shadow:0 30px 80px -40px rgba(0,0,0,0.8);}
+  .m3l-stage img.m3l-poster{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;padding:18px;opacity:0.9;transition:opacity .6s ease;}
+  .m3l-stage.live img.m3l-poster{opacity:0;}
+  .m3l-canvas{position:absolute;inset:0;}
+  .m3l-canvas canvas{width:100%;height:100%;display:block;}
+  .m3l-hud{position:absolute;left:16px;right:16px;top:14px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px;color:#cbd5e1;pointer-events:none;}
+  .m3l-hud span{background:rgba(11,17,34,0.75);border:1px solid rgba(255,255,255,0.10);padding:5px 10px;border-radius:999px;}
+  .m3l-bar{position:absolute;left:16px;right:16px;bottom:16px;height:4px;border-radius:2px;background:rgba(255,255,255,0.08);overflow:hidden;pointer-events:none;}
+  .m3l-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#3b82f6,#22d3ee,#34d399);}
+  @media (max-width:860px){.m3l{grid-template-columns:1fr;}.m3l-stage{order:-1;top:70px;height:52vh;}.m3l-steps{gap:18vh;padding-bottom:10vh;}}
+  @media (prefers-reduced-motion:reduce){.m3l-step{opacity:1;}.m3l-steps{gap:28px;padding:0;}.m3l-stage{position:relative;top:0;}}
+
   .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;position:relative;}
   .step{background:var(--panel-solid);border:1px solid var(--border);border-radius:16px;padding:22px;position:relative;min-width:0;
     transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;}
@@ -3775,6 +3808,25 @@ const QUANTORA_LANDING_HTML = `
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>AI Draftsman &middot; Shop Drawings &amp; 3D</div>
     <h2 class="sectitle">Your Plans In. Shop Drawings And A 3D Model Out.</h2>
     <p class="secsub">Upload the architectural plans and the draftsman designs every system you choose &mdash; fire, mechanical, plumbing, electrical and ELV &mdash; then delivers the shop drawings with a 3D coordination model of all systems on every floor.</p>
+    <div class="m3l-marquee" aria-hidden="true">
+      <div class="m3l-row r1" data-dir="-1"><span>TAKE-OFF</span><i>/</i><span class="o">DESIGN BOQ</span><i>/</i><span>SHOP DRAWINGS</span><i>/</i><span class="o">3D MODEL</span><i>/</i><span>TAKE-OFF</span><i>/</i><span class="o">DESIGN BOQ</span><i>/</i><span>SHOP DRAWINGS</span><i>/</i><span class="o">3D MODEL</span><i>/</i><span>TAKE-OFF</span><i>/</i><span class="o">DESIGN BOQ</span><i>/</i><span>SHOP DRAWINGS</span><i>/</i><span class="o">3D MODEL</span><i>/</i></div>
+      <div class="m3l-row r2" data-dir="1"><span class="o">FIRE ALARM</span><span>FIRE FIGHTING</span><span class="o">HVAC</span><span>WATER</span><span class="o">DRAINAGE</span><span>LIGHTING &amp; POWER</span><span class="o">EMERGENCY LIGHTING</span><span>CCTV</span><span class="o">FIRE ALARM</span><span>FIRE FIGHTING</span><span class="o">HVAC</span><span>WATER</span><span class="o">DRAINAGE</span><span>LIGHTING &amp; POWER</span><span class="o">EMERGENCY LIGHTING</span><span>CCTV</span></div>
+    </div>
+    <div class="m3l" id="m3l">
+      <div class="m3l-steps">
+        <div class="m3l-step on" data-step="0"><div class="k">Step 1 &middot; Plans in</div><h3>Floors and rooms, traced.</h3><p>Your architectural sheets become floors and rooms at their real size. Each wall line you see is read from the plan.</p></div>
+        <div class="m3l-step" data-step="1"><div class="k">Step 2 &middot; Fire &amp; life safety</div><h3>Every detector, drawn.</h3><p>Detectors, sounders, call points, hose reels and exit signs are placed room by room and wired back to the panel.</p><div class="sw"><b style="--c:#f43f5e">Fire alarm</b><b style="--c:#fb923c">Fire fighting</b><b style="--c:#facc15">Emergency lighting</b><b style="--c:#a3e635">Life safety</b></div></div>
+        <div class="m3l-step" data-step="2"><div class="k">Step 3 &middot; Plumbing</div><h3>Water in, drainage out.</h3><p>Supply runs, valves and outlets, then drainage falling to the stacks, each at its own level.</p><div class="sw"><b style="--c:#38bdf8">Water supply</b><b style="--c:#a78bfa">Drainage</b></div></div>
+        <div class="m3l-step" data-step="3"><div class="k">Step 4 &middot; HVAC &amp; power</div><h3>Air, light and power.</h3><p>Units, ducts and fans, then lighting and power circuits back to every distribution board.</p><div class="sw"><b style="--c:#2dd4bf">HVAC</b><b style="--c:#60a5fa">Lighting &amp; power</b></div></div>
+        <div class="m3l-step" data-step="4"><div class="k">Step 5 &middot; Coordinated</div><h3>One model. Every system.</h3><p>815 devices and 669 runs from one drawing set, each at its real height. Turn and zoom it in the app, then issue the shop drawings.</p></div>
+      </div>
+      <div class="m3l-stage" id="m3l-stage">
+        <img class="m3l-poster" src="3d-building.jpg" alt="3D coordination model drawn by the Quantora draftsman" loading="lazy"/>
+        <div class="m3l-canvas" id="m3l-canvas"></div>
+        <div class="m3l-hud"><span>Industrial Warehouses G+M &middot; 2 floors</span><span id="m3l-count">815 devices &middot; 669 runs</span></div>
+        <div class="m3l-bar"><i id="m3l-bar"></i></div>
+      </div>
+    </div>
     <div class="m3d-grid">
       <figure class="m3d-card"><img src="3d-building.jpg" alt="3D coordination model of a five-storey building with all MEP and ELV systems" width="1240" height="1290" fetchpriority="high"/>
         <figcaption>Whole building &mdash; every floor, every system</figcaption></figure>
@@ -4815,6 +4867,146 @@ function LandingPage({ onGetStarted }) {
       btn.removeEventListener("click", onClick);
       v.removeEventListener("playing", hideBtn);
       v.removeEventListener("error", showBtn);
+    };
+  }, []);
+
+  // 3D drawing story + bold sliding words (2026-10-25). The real draftsman model
+  // of a sample job (assets/hero-model.json, made by model3d.py) draws itself as
+  // the visitor scrolls: floors first, then each group of systems. Libraries
+  // load only when the section comes near the screen, so the hero is not slowed.
+  // Smooth scrolling (Lenis) lives only while the landing page is mounted.
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+    const stage = root.querySelector("#m3l-stage");
+    const host = root.querySelector("#m3l-canvas");
+    if (!stage || !host) return;
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let dead = false, raf = 0, renderer = null, lenis = null, triggers = [], tweens = [], ro = null, io = null;
+    const COL = { fa: 0xf43f5e, ff: 0xfb923c, el: 0xfacc15, ls: 0xa3e635, water: 0x38bdf8, drainage: 0xa78bfa, hvac: 0x2dd4bf, electrical: 0x60a5fa };
+    const GROUPS = [["fa", "ff", "el", "ls"], ["water", "drainage"], ["hvac", "electrical"]];
+    const loadGsap = () => (window.gsap && window.ScrollTrigger) ? Promise.resolve(true) : __loadLib([
+      "https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"], () => !!window.gsap)
+      .then(() => __loadLib(["https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"], () => !!window.ScrollTrigger));
+    const loadLenis = () => window.Lenis ? Promise.resolve(true) : __loadLib([
+      "https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"], () => !!window.Lenis);
+
+    function build(model) {
+      const T = window.THREE;
+      const S = 1 / 1000, VZ = 1.7;                     // metres; floors a little taller so levels read
+      let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+      model.storeys.forEach(st => st.spaces.forEach(p => { for (let i = 0; i < p.length; i += 2) {
+        minX = Math.min(minX, p[i]); maxX = Math.max(maxX, p[i]); minY = Math.min(minY, p[i + 1]); maxY = Math.max(maxY, p[i + 1]); } }));
+      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+      const V = (x, y, z) => [(x - cx) * S, z * S * VZ, -(y - cy) * S];
+      const scene = new T.Scene();
+      const cam = new T.PerspectiveCamera(34, 1, 0.5, 600);
+      renderer = new T.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      host.appendChild(renderer.domElement);
+      const lines = (arr, color, opacity) => {
+        const g = new T.BufferGeometry(); g.setAttribute("position", new T.Float32BufferAttribute(arr, 3));
+        const m = new T.LineSegments(g, new T.LineBasicMaterial({ color, transparent: true, opacity }));
+        m.userData.n = arr.length / 3; g.setDrawRange(0, 0); scene.add(m); return m;
+      };
+      // floors: slab outline and room outlines per storey
+      const floorObjs = model.storeys.map(st => {
+        const a = [];
+        st.spaces.forEach(p => { for (let i = 0; i < p.length; i += 2) {
+          const j = (i + 2) % p.length; a.push(...V(p[i], p[i + 1], st.z), ...V(p[j], p[j + 1], st.z)); } });
+        st.spaces.forEach(p => { for (let i = 0; i < p.length; i += 2) {      // a few corner posts give the floor height
+          if (i % 8) continue; a.push(...V(p[i], p[i + 1], st.z), ...V(p[i], p[i + 1], st.z + st.h * 0.92)); } });
+        return lines(a, 0x7aa0dc, 0.5);
+      });
+      const grid = new T.GridHelper(110, 44, 0x22345a, 0x18243f); grid.position.y = -0.05; scene.add(grid);
+      // systems: runs as lines, devices as points
+      const sys = {};
+      Object.keys(COL).forEach(k => {
+        const r = (model.routes[k] || []), a = [];
+        r.forEach(rt => { const z = rt[0]; for (let i = 1; i + 3 < rt.length; i += 2) a.push(...V(rt[i], rt[i + 1], z), ...V(rt[i + 2], rt[i + 3], z)); });
+        const d = model.devices[k] || [], pa = [];
+        for (let i = 0; i < d.length; i += 3) pa.push(...V(d[i], d[i + 1], d[i + 2]));
+        const L = a.length ? lines(a, COL[k], 0.95) : null;
+        let P = null;
+        if (pa.length) { const g = new T.BufferGeometry(); g.setAttribute("position", new T.Float32BufferAttribute(pa, 3));
+          P = new T.Points(g, new T.PointsMaterial({ color: COL[k], size: 0.55, sizeAttenuation: true, transparent: true, opacity: 0 }));
+          scene.add(P); }
+        sys[k] = { L, P };
+      });
+      const span = Math.max(maxX - minX, maxY - minY) * S;
+      const fit = () => { const w = host.clientWidth || 600, h = host.clientHeight || 400;
+        renderer.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); };
+      fit(); ro = new ResizeObserver(fit); ro.observe(host);
+      const st = { p: reduce ? 1 : 0, drag: 0, t0: performance.now() };
+      const seg = (p, a, b) => Math.max(0, Math.min(1, (p - a) / (b - a)));
+      const setDraw = (m, f) => { if (m) m.geometry.setDrawRange(0, Math.floor(m.userData.n * f / 2) * 2); };
+      function apply() {
+        const p = st.p;
+        // floors trace themselves as soon as the model appears; systems follow the scroll
+        const intro = Math.min(1, (performance.now() - st.t0) / 2600);
+        floorObjs.forEach((m, i) => setDraw(m, Math.max(seg(p, 0.02 + i * 0.08, 0.16 + i * 0.08), seg(intro, i * 0.35, 0.65 + i * 0.35))));
+        GROUPS.forEach((g, gi) => { const f = seg(p, 0.27 + gi * 0.2, 0.43 + gi * 0.2);
+          g.forEach(k => { const o = sys[k]; if (!o) return; setDraw(o.L, f); if (o.P) o.P.material.opacity = Math.min(1, f * 1.4); }); });
+        const ang = -0.75 + p * 1.5 + st.drag, dist = span * (1.4 - 0.2 * seg(p, 0.85, 1)) * (cam.aspect < 1 ? 1.55 : 1);
+        cam.position.set(Math.sin(ang) * dist, span * 0.62, Math.cos(ang) * dist);
+        cam.lookAt(0, 2.5, 0);
+        const bar = root.querySelector("#m3l-bar"); if (bar) bar.style.width = (p * 100).toFixed(1) + "%";
+        const step = p < 0.22 ? 0 : p < 0.45 ? 1 : p < 0.65 ? 2 : p < 0.85 ? 3 : 4;
+        root.querySelectorAll(".m3l-step").forEach(el => el.classList.toggle("on", reduce || Number(el.dataset.step) === step));
+      }
+      const loop = () => { if (dead) return; apply(); renderer.render(scene, cam); raf = requestAnimationFrame(loop); };
+      stage.classList.add("live");
+      // drag to turn (mouse only, so touch scrolling still scrolls)
+      let down = null;
+      stage.addEventListener("pointerdown", e => { if (e.pointerType === "mouse") down = e.clientX - st.drag * 300; });
+      window.addEventListener("pointerup", () => { down = null; });
+      stage.addEventListener("pointermove", e => { if (down != null) st.drag = (e.clientX - down) / 300; });
+      return { st, loop };
+    }
+
+    function start() {
+      if (dead) return;
+      Promise.all([qd3dLoadThree(), fetch("assets/hero-model.json").then(r => r.json()), reduce ? true : loadGsap()])
+        .then(([, model]) => {
+          if (dead || !window.THREE) return;
+          const g = build(model);
+          if (!reduce && window.gsap && window.ScrollTrigger) {
+            const gsap = window.gsap; gsap.registerPlugin(window.ScrollTrigger);
+            triggers.push(window.ScrollTrigger.create({ trigger: root.querySelector("#m3l .m3l-steps"), start: "top 75%", end: "bottom 70%",
+              scrub: 0.6, onUpdate: self => { g.st.p = self.progress; } }));
+            root.querySelectorAll(".m3l-row").forEach(row => {
+              const dir = Number(row.dataset.dir) || -1;
+              tweens.push(gsap.fromTo(row, { xPercent: dir < 0 ? 0 : -30 }, { xPercent: dir < 0 ? -30 : 0, ease: "none",
+                scrollTrigger: { trigger: root.querySelector(".m3l-marquee"), start: "top bottom", end: "bottom top", scrub: true } }));
+            });
+            // headings across the page rise slightly into place (they start visible)
+            root.querySelectorAll(".sectitle").forEach(h => tweens.push(gsap.from(h, { y: 34, duration: 0.9, ease: "power3.out",
+              scrollTrigger: { trigger: h, start: "top 88%" } })));
+            loadLenis().then(() => {
+              if (dead || !window.Lenis) return;
+              lenis = new window.Lenis({ lerp: 0.1 });
+              lenis.on("scroll", window.ScrollTrigger.update);
+              const tick = t => lenis && lenis.raf(t * 1000);
+              gsap.ticker.add(tick); lenis._qTick = tick; gsap.ticker.lagSmoothing(0);
+            }).catch(() => {});
+          }
+          g.loop();
+        }).catch(err => console.warn("3D story unavailable:", err));
+    }
+    // Only start once the section is close; until then the poster image shows.
+    if (typeof IntersectionObserver === "function") {
+      io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { io.disconnect(); io = null; start(); } }, { rootMargin: "600px 0px" });
+      io.observe(stage);
+    } else start();
+
+    return () => {
+      dead = true;
+      cancelAnimationFrame(raf);
+      if (io) io.disconnect();
+      if (ro) ro.disconnect();
+      triggers.forEach(t => t.kill()); tweens.forEach(t => { if (t.scrollTrigger) t.scrollTrigger.kill(); t.kill(); });
+      if (lenis) { if (window.gsap && lenis._qTick) window.gsap.ticker.remove(lenis._qTick); lenis.destroy(); lenis = null; }
+      if (renderer) { renderer.dispose(); if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement); }
     };
   }, []);
 
