@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-26.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-26.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -26232,6 +26232,12 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
   }
 
   async function uploadFiles(fileList, kind, discipline) {
+    // the project is created on the first upload when the job was not saved yet: same checks as "Save the job"
+    if (!project) {
+      if (!f.job_name.trim()) throw new Error("Give the job a name first \u2014 it prints in the title block.");
+      if (!f.country || !f.city) throw new Error("Set the project location (country and city) first \u2014 it decides which authority rules apply.");
+      if (!f.building_type) throw new Error("Choose the building type first \u2014 it decides the lighting levels, the occupancy and the detector spacing.");
+    }
     const p = project || await ensureProject();
     const { data: { user } } = await sb.auth.getUser();
     for (let file of fileList) {
@@ -26485,7 +26491,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
       <QdSection n="4" title="The specification" done={specDocs.length > 0}
         sub="Upload the specification — or, if there is none, choose whose authority rules the drawings must comply with. With a specification, the drawing matches what was bought.">
         <div className="border rounded-xl p-4 mb-3" style={{ background: "var(--q-panel-2,#f8fafc)", borderStyle: "dashed" }}>
-          <input type="file" multiple accept=".pdf" onChange={onSpecFiles} className="text-sm" />
+          <input type="file" multiple accept=".pdf,.docx,.txt" onChange={onSpecFiles} className="text-sm" />
           {busy === "spec" && <span className="text-xs text-slate-500 ml-2">Uploading…</span>}
           {specDocs.length > 0 && (
             <div className="mt-2 text-xs" style={{ color: "#1f5130" }}>
@@ -29180,6 +29186,63 @@ function DraftsmanIfcPackage({ project }) {
   const [refMsg, setRefMsg] = useState("");
   const [zipping, setZipping] = useState("");
   const [openJobs, setOpenJobs] = useState({});      // generation history: which older packages are expanded
+  // the specification the package is designed to: section 4 of the job (drawings, discipline
+  // "specification") and the project's Specification tab (tender documents) — the worker reads both
+  const [specDocs, setSpecDocs] = useState([]);
+  const [specBusy, setSpecBusy] = useState(false);
+  const [authority, setAuthority] = useState(null);
+  const loadSpecs = async () => {
+    const out = [];
+    try {
+      const { data } = await sb.from("drawings").select("id, file_name, storage_path").eq("project_id", project.id).eq("discipline", "specification");
+      (data || []).forEach(d => out.push({ ...d, where: "job" }));
+    } catch (e) { /* none */ }
+    try {
+      const { data: ts } = await sb.from("tenders").select("id").eq("project_id", project.id);
+      for (const t of ts || []) {
+        const { data } = await sb.from("tender_documents").select("id, file_name, storage_path").eq("tender_id", t.id).eq("doc_type", "specification");
+        (data || []).forEach(d => out.push({ ...d, where: "tab" }));
+      }
+    } catch (e) { /* none */ }
+    const seen = new Set();
+    setSpecDocs(out.filter(d => { const k = (d.file_name || "").toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }));
+    try {
+      const { data: br } = await sb.from("draftsman_briefs").select("authority_region").eq("project_id", project.id).maybeSingle();
+      setAuthority((br && br.authority_region) || null);
+    } catch (e) { /* from the country */ }
+  };
+  useEffect(() => { loadSpecs(); }, [project.id]);
+  const uploadSpecs = async (list) => {
+    const arr = Array.from(list || []);
+    if (!arr.length) return;
+    const bad = arr.find(f => !/\.(pdf|docx|txt)$/i.test(f.name));
+    if (bad) { setErr(`${bad.name}: the specification can be a PDF, Word (.docx) or text file.`); return; }
+    setSpecBusy(true); setErr("");
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      for (const file of arr) {
+        const ext = (file.name.split(".").pop() || "").toLowerCase();
+        const path = `${project.id}/${Date.now()}_${safeStorageName(file.name)}`;
+        const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
+        if (upErr) throw upErr;
+        const { error: insErr } = await sb.from("drawings").insert({ project_id: project.id, file_name: file.name, storage_path: path,
+          file_type: ext === "pdf" ? "pdf" : "scan", discipline: "specification", uploaded_by: user ? user.id : null });
+        if (insErr) throw insErr;
+      }
+      await loadSpecs();
+    } catch (e) { setErr(e.message || String(e)); } finally { setSpecBusy(false); }
+  };
+  const AUTH_NAME = { uae_default: "UAE (Civil Defence / DBC / DEWA / SIRA / TDRA)", ksa_sbc: "Saudi Arabia (SBC / Civil Defence)",
+    uk_bs: "UK (British Standards)", us_nfpa: "USA (NFPA / NEC)", eu_en: "Europe (EN standards)", za_sans: "South Africa (SANS)",
+    in_nbc: "India (NBC)", intl_default: "international practice" };
+  const ctry = String(project.country || "").trim();
+  const authorityText = authority ? (AUTH_NAME[authority] || authority)
+    : (/^(uae|united arab emirates)$/i.test(ctry) ? AUTH_NAME.uae_default : (ctry ? `${ctry} authority rules` : "the project country's authority rules"));
+  const basisText = (b) => {
+    if (!b) return null;
+    const who = AUTH_NAME[b.region] || (b.country ? `${b.country} rules` : b.region || "");
+    return (b.specs || []).length ? `Designed to: specification (${b.specs.join(", ")}) + ${who} as the minimum` : `Designed to: ${who} (no specification uploaded)`;
+  };
   useEffect(() => { getDraftsmanFamilies().then(f => {
     const fm = f || {};
     setFams(fm);
@@ -29236,6 +29299,10 @@ function DraftsmanIfcPackage({ project }) {
   const submit = async () => {
     setErr("");
     if (!elvOn) { setErr("Drawing generation is switched off by the administrator."); return; }
+    if (!String(project.country || "").trim() || !String(project.city || "").trim()) {
+      setErr("Set the project location (country and city) first \u2014 it decides which authority rules apply. Open the job details to add it.");
+      return;
+    }
     const offSel = systems.filter(k => !famOn((IFC_SYSTEMS.find(s => s[0] === k) || [])[2]));
     if (offSel.length) { setErr("These systems are switched off by the administrator: " + offSel.join(", ")); return; }
     if (!files.length) { setErr("Choose the architectural IFC, or the floor plans (PDF / DXF, one sheet per floor)."); return; }
@@ -29551,31 +29618,67 @@ function DraftsmanIfcPackage({ project }) {
             ))}
           </div>
         )}
-        <div className="space-y-1.5">
-          {IFC_FAMILY_ORDER.map(fam => {
-            const items = IFC_SYSTEMS.filter(s => s[2] === fam);
-            const on = famOn(fam);
-            return (
-              <div key={fam} className="flex flex-wrap items-center gap-3">
-                <span className="text-xs font-semibold text-slate-500 w-24">{fam === "ELV" ? "ELV" : fam}</span>
-                {items.map(([k, l]) => {
-                  const sel = on && systems.includes(k);
-                  return (
-                    <label key={k} title={l}
-                      className={"text-sm flex items-center gap-1.5 border rounded-full pl-1.5 pr-3 py-1 cursor-pointer select-none " + (on ? "" : "opacity-50 cursor-not-allowed")}
-                      style={sel ? { background: "#eaf2ff", borderColor: "#7fb0ff", color: "#123a7a" } : { background: "#fff" }}>
-                      <input type="checkbox" className="hidden" disabled={!on} checked={sel}
-                        onChange={e => setSystems(e.target.checked ? systems.concat(k) : systems.filter(x => x !== k))} />
-                      <span className="w-6 h-6 rounded-full flex items-center justify-center text-[13px]"
-                        style={{ background: sel ? "#fff" : "#f1f5f9" }}>{SYS_ICON[k] || "\u25CF"}</span>
-                      {l}{sel && <span className="text-[11px] font-bold">{"\u2713"}</span>}
-                    </label>
-                  );
-                })}
-                {!on && <span className="text-[11px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">Coming soon</span>}
-              </div>
-            );
-          })}
+        <div className="border rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-[10px] uppercase tracking-wide text-slate-500 bg-slate-50">
+              <th className="py-1.5 px-2 w-8"></th><th className="py-1.5 pr-3">System</th><th className="py-1.5 pr-3">You get</th><th className="py-1.5 pr-2 text-right">Status</th></tr></thead>
+            <tbody>
+              {IFC_FAMILY_ORDER.map(fam => {
+                const items = IFC_SYSTEMS.filter(s => s[2] === fam);
+                const on = famOn(fam);
+                const keys = items.map(i => i[0]);
+                const all = on && keys.every(k => systems.includes(k));
+                const some = on && keys.some(k => systems.includes(k));
+                return [
+                  <tr key={"f" + fam} className="border-t bg-slate-50">
+                    <td className="py-1 px-2">
+                      <input type="checkbox" disabled={!on} checked={all} ref={el => { if (el) el.indeterminate = some && !all; }}
+                        onChange={e => setSystems(e.target.checked ? Array.from(new Set(systems.concat(keys))) : systems.filter(x => !keys.includes(x)))}
+                        aria-label={"All " + fam + " systems"} /></td>
+                    <td colSpan={2} className="py-1 pr-3 text-xs font-bold text-slate-600">{fam}{on ? <span className="font-normal text-slate-400"> {"\u00b7"} {keys.filter(k => systems.includes(k)).length} of {keys.length} selected</span> : null}</td>
+                    <td className="py-1 pr-2 text-right">{!on && <span className="text-[11px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">Coming soon</span>}</td>
+                  </tr>,
+                  ...items.map(([k, l]) => {
+                    const sel = on && systems.includes(k);
+                    const gets = ["cctv", "acs", "intercom", "bgm"].includes(k) ? "Layouts + riser schematic (PDF + DXF)"
+                      : k === "ict" ? "Layouts + ICT schematic + Telephone / FTTH schematic"
+                      : ["fa", "ff", "ls", "el"].includes(k) ? "Layouts (PDF + DXF) + Civil Defence set" : "Layouts (PDF + DXF)";
+                    return (
+                      <tr key={k} className={"border-t " + (on ? "cursor-pointer hover:bg-slate-50" : "opacity-50")}
+                        onClick={() => { if (on) setSystems(sel ? systems.filter(x => x !== k) : systems.concat(k)); }}
+                        style={sel ? { background: "rgba(36,116,236,0.16)", boxShadow: "inset 3px 0 0 #2474ec" } : undefined}>
+                        <td className="py-1 px-2"><input type="checkbox" disabled={!on} checked={sel} onClick={e => e.stopPropagation()}
+                          onChange={e => setSystems(e.target.checked ? systems.concat(k) : systems.filter(x => x !== k))} /></td>
+                        <td className="py-1 pr-3"><span className="mr-1.5">{SYS_ICON[k] || "\u25CF"}</span>{l}</td>
+                        <td className="py-1 pr-3 text-xs text-slate-500">{gets}</td>
+                        <td className="py-1 pr-2 text-right text-[11px]">{on ? (sel ? <span className="font-bold" style={{ color: "#1d4ed8" }}>{"\u2713"} Selected</span> : "") : ""}</td>
+                      </tr>
+                    );
+                  }),
+                ];
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="border rounded-lg p-3 space-y-1.5" style={specDocs.length ? { borderColor: "#86c79a" } : undefined}>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-bold">Specification</span>
+            {specDocs.length > 0
+              ? <span className="text-xs font-semibold" style={{ color: "#15803d" }}>{"\u2713"} {specDocs.length} document{specDocs.length > 1 ? "s" : ""} {"\u2014"} used for this package</span>
+              : <span className="text-xs text-slate-500">None uploaded {"\u2014"} the drawings follow {authorityText}</span>}
+            <div className="flex-1" />
+            <label className="text-xs font-semibold border px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-50">
+              {specBusy ? "Uploading\u2026" : (specDocs.length ? "Add another" : "Upload specification")}
+              <input type="file" multiple accept=".pdf,.docx,.txt" className="hidden" disabled={specBusy}
+                onChange={e => { uploadSpecs(e.target.files); e.target.value = ""; }} /></label>
+          </div>
+          {specDocs.length > 0 && (
+            <div className="text-xs text-slate-600 space-y-0.5">
+              {specDocs.map(d => <div key={d.id}>{"\uD83D\uDCC4"} {d.file_name}<span className="text-slate-400">{d.where === "tab" ? " \u2014 from the project's Specification tab" : ""}</span></div>)}
+              <div className="text-[11px] text-slate-500">The design follows the specification; {authorityText} stay the minimum. Any change it makes is listed in the BOQ Specification sheet.</div>
+            </div>
+          )}
+          <div className="text-[11px] text-slate-400">PDF, Word (.docx) or text. Project location: {[project.city, project.country].filter(Boolean).join(", ") || <span className="text-amber-700 font-semibold">not set {"\u2014"} required</span>}</div>
         </div>
         {err && <div className="text-sm text-red-700">{err}</div>}
         <button disabled={busy} onClick={submit}
@@ -29707,6 +29810,7 @@ function DraftsmanIfcPackage({ project }) {
                   {sm.devices} devices · {sm.boq_rows} BOQ lines added to the project BOQ
                   {sm.issues && (sm.issues.FAIL || sm.issues.REVIEW) ? ` · ${sm.issues.FAIL || 0} fail / ${sm.issues.REVIEW || 0} review items — see the compliance report` : " · all checks passed"}
                 </div>
+                {basisText(sm.design_basis) && <div className="text-xs font-semibold text-slate-600">{basisText(sm.design_basis)}</div>}
                 {(sm.input_warnings || []).length > 0 && (
                   <div className="text-xs text-amber-700">{sm.input_warnings.map(w => {
                     const m = /^(.*?): only (\d+) of (\d+) rooms have a name/.exec(w);
