@@ -298,6 +298,62 @@ function fixCountedCableRows(rows: any[]): any[] {
   }
   return out;
 }
+// Every other tagged device (Wi-Fi access points, access-controlled doors, detectors, outlets, speakers,
+// intercom stations, TV outlets) counted the same way: an exact count and position per tag. Each kind
+// replaces only the AI's lines for that same kind of device on the sheet.
+const TAGGED_DEVICE_KINDS: Record<string, { system: string; description: string; ai: RegExp }> = {
+  AP:   { system: "wifi", description: "Wi-Fi access point", ai: /\b(access point|wap|wi-?fi ap|\bap\b)/i },
+  DOOR: { system: "access_control", description: "Access-controlled door, card reader", ai: /\b(card reader|reader|controlled door|access door|door controller)\b/i },
+  SD:   { system: "fire_alarm", description: "Smoke detector", ai: /\bsmoke\b/i },
+  HD:   { system: "fire_alarm", description: "Heat detector", ai: /\bheat\b/i },
+  MCP:  { system: "fire_alarm", description: "Manual call point", ai: /\b(call point|mcp|break glass)\b/i },
+  SB:   { system: "fire_alarm", description: "Sounder / beacon", ai: /\b(sounder|beacon|strobe|bell|horn)\b/i },
+  DO:   { system: "structured_cabling", description: "Data outlet", ai: /\b(data outlet|data point|outlet|socket|faceplate)\b/i },
+  TEL:  { system: "structured_cabling", description: "Telephone outlet", ai: /\b(telephone|tel outlet|voice)\b/i },
+  SPK:  { system: "public_address", description: "Speaker", ai: /\bspeaker\b/i },
+  IC:   { system: "intercom", description: "Intercom station", ai: /\b(intercom|door station|video door|monitor station)\b/i },
+  TV:   { system: "iptv", description: "TV outlet", ai: /\b(tv|television|iptv|catv)\b/i },
+};
+function validateTaggedDevices(raw: any): { kind: string; tag: string; n: number; x: number; y: number }[] {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const d of raw.slice(0, 5000)) {
+    const x = Number(d?.x), y = Number(d?.y), kind = String(d?.kind ?? "");
+    if (!TAGGED_DEVICE_KINDS[kind] || !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) continue;
+    out.push({ kind, tag: String(d?.tag ?? "").slice(0, 60), n: Number(d?.n) || 0, x, y });
+  }
+  const per: Record<string, number> = {};
+  for (const d of out) per[d.kind] = (per[d.kind] || 0) + 1;
+  return out.filter((d) => per[d.kind] >= 3);
+}
+function applyTaggedDevices(rows: any[], devices: ReturnType<typeof validateTaggedDevices>, base: any, pageNo: number): { rows: any[]; replaced: number; counted: Record<string, number> } {
+  if (!devices.length) return { rows, replaced: 0, counted: {} };
+  const byKind = new Map<string, typeof devices>();
+  for (const d of devices) { if (!byKind.has(d.kind)) byKind.set(d.kind, []); byKind.get(d.kind)!.push(d); }
+  let out = rows, replaced = 0;
+  const counted: Record<string, number> = {};
+  for (const [kind, ds] of byKind) {
+    const K = TAGGED_DEVICE_KINDS[kind];
+    const before = out.length;
+    out = out.filter((r: any) => {
+      if (r.system_category !== K.system) return true;
+      if (!/^(nr|no|nos|pcs|ea|each|point|points|set|unit)$/i.test(String(r.unit || "").trim())) return true;
+      if (!["physical_count", null, undefined].includes(r.quantity_source_type)) return true;
+      const subj = String(r.description || "").split(/,| with | for | including /i)[0];
+      return !K.ai.test(subj);
+    });
+    replaced += before - out.length;
+    const [first, ...rest] = ds;
+    const coords = { page: pageNo, x: first.x - 0.006, y: first.y - 0.006, width: 0.012, height: 0.012,
+                     instances: rest.map((d) => ({ x: d.x - 0.006, y: d.y - 0.006 })), numbers: ds.map((d) => d.n), tags: ds.map((d) => d.tag) };
+    counted[kind] = ds.length;
+    out = out.concat([{ ...base, system_category: K.system, description: K.description, quantity: ds.length, unit: "nr",
+      confidence_score: 97, quantity_source_type: "physical_count", coordinates: coords, __coords: coords, optimization_note: null,
+      location: base.floor_label ?? null,
+      quantity_basis_notes: `Counted from the device tags on the plan: ${ds.length} tagged (${ds.slice(0, 6).map((d) => d.tag).join(", ")}${ds.length > 6 ? " …" : ""}). Tags in the title strip, legend and schedules are not counted.` }]);
+  }
+  return { rows: out, replaced, counted };
+}
 // Tray and conduit measured in the browser from the drawing's own lines (a colour named by the legend
 // or by a note with a leader, measured at the sheet's scale). When a sheet has them they replace the
 // AI's estimated containment lengths for that sheet.
@@ -2904,8 +2960,8 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
 
-      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes } = body as {
-        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any; measured_routes?: any;
+      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes, tagged_devices: rawDevices } = body as {
+        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any; measured_routes?: any; tagged_devices?: any;
         confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean;
       };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
@@ -2919,6 +2975,7 @@ Deno.serve(async (req: Request) => {
       const refZones = validateZones(rawZones);
       const taggedCams = validateTaggedCameras(rawTagged);
       const measuredRoutes = validateMeasuredRoutes(rawRoutes);
+      const taggedDevices = validateTaggedDevices(rawDevices);
       let tiles: TileSpec[];
       try {
         tiles = validateTiles(rawTiles);
@@ -3197,6 +3254,13 @@ Deno.serve(async (req: Request) => {
           }, pageNo));
           console.log(`tiled run ${run.id}: ${taggedCams.cams.length} tagged cameras replace ${aiCameraRowsReplaced} AI camera line(s).`);
         }
+        // every other tagged device kind replaces the AI's lines for that kind
+        const td = applyTaggedDevices(promotedRows, taggedDevices, {
+          project_id: project.id, drawing_id, analysis_run_id: run.id, revision_number: nextRevision,
+          floor_label: drawing.floor_label ?? null, source: "ai_drawing_analysis", optimization_status: "drawing_requirement",
+        }, pageNo);
+        promotedRows = td.rows;
+        if (taggedDevices.length) console.log(`tiled run ${run.id}: tagged devices ${JSON.stringify(td.counted)} replace ${td.replaced} AI line(s).`);
         // tray and conduit measured from the drawing replace the AI's estimated lengths on this sheet
         let aiContainmentRowsReplaced = 0;
         if (measuredRoutes.length) {
@@ -3246,6 +3310,7 @@ Deno.serve(async (req: Request) => {
             reference_panels: panels.length,
             reference_zones: refZones.map((z) => z.label || z.kind),
             tagged_cameras: taggedCams ? { counted: taggedCams.cams.length, schedule: taggedCams.schedule, ai_camera_lines_replaced: aiCameraRowsReplaced } : null,
+            tagged_devices: taggedDevices.length ? { counted: td.counted, ai_lines_replaced: td.replaced } : null,
             measured_routes: measuredRoutes.length ? { routes: measuredRoutes, ai_containment_lines_replaced: aiContainmentRowsReplaced } : null,
             positions_discarded_in_panels: panelDropped,
             notes: (safeRows.length === 0
