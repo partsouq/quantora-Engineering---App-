@@ -1163,9 +1163,9 @@ function boqBasisFor(items) {
   if (has.takeoff && has.design) return { both: true, basis: pref && has[pref] ? pref : (newest.design >= newest.takeoff ? "design" : "takeoff") };
   return { both: false, basis: has.design ? "design" : "takeoff" };
 }
-function filterLatestRevisions(items) {
+function filterLatestRevisions(items, forceBasis) {
   const all = (items || []).filter(it => !isOrphanTakeoffLine(it));
-  const { basis } = boqBasisFor(all);
+  const basis = forceBasis || boqBasisFor(all).basis;
   const mine = all.filter(it => boqBasisOf(it) === basis);
   const latestRevByDrawing = {};
   let latestLoose = 0;
@@ -1175,6 +1175,150 @@ function filterLatestRevisions(items) {
   });
   // lines not tied to a drawing keep only their latest revision too -- earlier ones are superseded, not extra
   return mine.filter(it => it.drawing_id ? it.revision_number === latestRevByDrawing[it.drawing_id] : (it.revision_number || 0) === latestLoose);
+}
+
+// ---------------------------------------------------------------------------
+// Complete-system design from the take-off (2026-10-26). The Designed BOQ is the take-off plus
+// everything the counted devices need to work as a system: head-end, network, storage, cable,
+// containment, power, testing. Worked out here from the counts, so it is always in step with the
+// latest take-off and applies to every project at once. Each line says how it was worked out
+// (its remark), and a line the take-off already has (an NVR drawn on the plan, a measured cable
+// run) is not added again. Not stored: the lines are rebuilt from the counts every time.
+// ---------------------------------------------------------------------------
+const SYSDESIGN_COUNT_UNITS = new Set(["nos", "set", "point"]);
+const SYSDESIGN_RUN_M = 45;            // average horizontal cable run per outlet / device, m (TIA limit 90 m)
+const SYSDESIGN_DROP_M = 6;            // conduit drop from the tray to each device, m
+const SYSDESIGN = {
+  cctv: {
+    label: "cameras",
+    count: /\b(camera|ptz|dome|bullet|anpr|lpr)\b/i,
+    not: /\b(licen[cs]e|bracket|pole|housing|cable|patch|point|outlet|switch|recorder|nvr|server|monitor|storage)\b/i,
+    mention: /\b(cctv|camera)/i,
+    systems: ["cctv", "anpr"],
+    lines: (n) => {
+      const nvr = Math.ceil(n / 64), sw = Math.ceil(n * 1.2 / 24), ws = Math.max(1, Math.ceil(n / 64));
+      const mon = Math.max(1, Math.ceil(n / 16));
+      const tb = Math.ceil(n * 4 * 86400 * 31 / 8 / 1e6 * 1.25);          // 4 Mbit/s, 31 days, +25% RAID
+      const kw = nvr * 0.45 + sw * 0.05 + n * 0.013 + ws * 0.35 + mon * 0.15 + 0.6;
+      const kva = Math.ceil(kw / 0.8 * 1.25);
+      const ru = nvr * 2 + sw + 2 + Math.ceil(sw / 2);
+      return [
+        ["Network video recorder / recording server, 64 channels, RAID 6", nvr, "nos", /\b(nvr|recorder|recording server|storage server)\b/i, `1 per 64 cameras (${n} cameras)`],
+        ["Recording storage (enterprise surveillance HDD), 31 days at 4 Mbit/s per camera", tb, "tb", /\b(storage|hdd|hard dis[ck])\b/i, `${n} cameras × 4 Mbit/s × 31 days + 25% RAID (check the retention in the specification)`],
+        ["Video management server with VMS base software", 1, "set", /\b(vms server|management server|vms software)\b/i, "1 per system"],
+        ["Operator workstation with VMS client, dual 27\" monitors", ws, "nos", /\b(workstation|client pc)\b/i, `1 per 64 cameras, minimum 1`],
+        ["Video wall / monitoring display 55\", 16 cameras per screen", mon, "nos", /\b(monitor|display|video wall)\b/i, `1 per 16 cameras (${n} cameras)`],
+        ["PoE+ access switch, 24 ports, managed, 2 SFP uplinks", sw, "nos", /\b(poe|switch)\b/i, `${n} cameras + 20% spare ports ÷ 24`],
+        ["Core / aggregation switch, 24 SFP+, for the CCTV network", 1, "nos", /\b(core switch|aggregation)\b/i, "1 per system"],
+        ["Equipment rack 42U with PDU, fans and cable management", Math.max(1, Math.ceil(ru / 30)), "nos", /\b(rack|cabinet)\b/i, `${ru} U of equipment ÷ 30 U usable`],
+        [`Online UPS ${kva} kVA, 30 minutes backup, for the CCTV head-end`, 1, "nos", /\bups\b/i, `${kw.toFixed(1)} kW load ÷ 0.8 pf + 25%`],
+        ["Cat6A U/FTP LSZH cable, camera to switch", n * SYSDESIGN_RUN_M, "m", /\b(cat ?6a?|utp|ftp|data cable)\b/i, `${n} cameras × ${SYSDESIGN_RUN_M} m average run`],
+        ["Fibre backbone, 12-core OM4, switch to core, with terminations", Math.ceil(sw / 2) * 60, "m", /\bfib(re|er)\b/i, `${Math.ceil(sw / 2)} IDF links × 60 m`],
+        ["GI conduit 20/25 mm drop to each camera, with boxes and fixings", n * SYSDESIGN_DROP_M, "m", /\b(conduit|trunking|containment)\b/i, `${n} cameras × ${SYSDESIGN_DROP_M} m`],
+        ["Testing, commissioning, SIRA approval and as-built documentation", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+      ];
+    },
+  },
+  access_control: {
+    label: "doors",
+    count: /\b(reader|biometric|card reader|controlled door|access door)\b/i,
+    not: /\b(cable|licen[cs]e|software|server|enrol)/i,
+    mention: /\baccess control/i,
+    systems: ["access_control"],
+    lines: (n) => [
+      ["Access control server with software, licensed for the doors shown", 1, "set", /\b(server|software)\b/i, "1 per system"],
+      ["Door licence for the access control software", n, "nos", /\blicen[cs]e\b/i, `1 per door (${n} doors)`],
+      ["Card enrolment desktop reader and printer", 1, "set", /\benrol/i, "1 per system"],
+      ["Operator workstation with access control client", 1, "nos", /\bworkstation\b/i, "1 per system"],
+      ["Cat6 LSZH cable, controller to network", Math.ceil(n / 2) * SYSDESIGN_RUN_M, "m", /\b(cat ?6|utp|data cable)\b/i, `1 per 2-door controller × ${SYSDESIGN_RUN_M} m`],
+      ["Multicore screened cable, controller to reader / lock / exit button / contact", n * 25, "m", /\b(multicore|composite|screened cable)\b/i, `${n} doors × 25 m`],
+      ["GI conduit 20 mm drops at each door, with boxes and fixings", n * 10, "m", /\b(conduit|trunking|containment)\b/i, `${n} doors × 10 m`],
+      ["Testing, commissioning and as-built documentation", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+    ],
+  },
+  fire_alarm: {
+    label: "field devices",
+    count: /\b(detector|call point|mcp|sounder|strobe|beacon|module|bell|horn)\b/i,
+    not: /\b(base|isolator|cable|panel|battery)\b/i,
+    mention: /\bfire alarm/i,
+    systems: ["fire_alarm"],
+    lines: (n) => {
+      const loops = Math.max(1, Math.ceil(n / 100));
+      return [
+        [`Addressable fire alarm control panel, ${loops} loop${loops > 1 ? "s" : ""}, with network card`, 1, "nos", /\b(panel|facp)\b/i, `${n} devices ÷ 100 per loop (125 max, 20% spare)`],
+        ["Standby batteries, 24 h standby + 30 min alarm", 1, "set", /\bbatter/i, "1 per panel"],
+        ["Fire-rated cable 2C 1.5 mm², enhanced (BS 8434-2)", n * 10, "m", /\b(fire.?rated|fp200|cable)\b/i, `${n} devices × 10 m`],
+        ["GI conduit 20 mm with boxes and fixings", n * 8, "m", /\b(conduit|containment)\b/i, `${n} devices × 8 m`],
+        ["Testing, commissioning and Civil Defence approval", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+      ];
+    },
+  },
+  wifi: {
+    label: "access points",
+    count: /\b(access point|wap|\bap\b|wi-?fi)\b/i,
+    not: /\b(bracket|cable|licen[cs]e|controller|switch)\b/i,
+    mention: /\b(wi-?fi|wlan|access point)/i,
+    systems: ["wifi"],
+    lines: (n) => [
+      ["Wireless LAN controller / cloud management", 1, "set", /\bcontroller\b/i, "1 per system"],
+      ["Access point management licence", n, "nos", /\blicen[cs]e\b/i, `1 per access point (${n})`],
+      ["PoE+ access switch, 24 ports, managed", Math.ceil(n * 1.2 / 24), "nos", /\b(poe|switch)\b/i, `${n} APs + 20% spare ports ÷ 24`],
+      ["Cat6A U/FTP LSZH cable, AP to switch", n * SYSDESIGN_RUN_M, "m", /\b(cat ?6a?|utp|ftp|data cable)\b/i, `${n} APs × ${SYSDESIGN_RUN_M} m average run`],
+      ["Site survey, testing and commissioning", 1, "ls", /\b(survey|testing|commissioning)\b/i, "1 per system"],
+    ],
+  },
+  structured_cabling: {
+    label: "outlets",
+    count: /\b(outlet|data point|voice point|socket|telephone point|tel point|faceplate)\b/i,
+    not: /\b(cable|patch|panel|rack|switch)\b/i,
+    mention: /\b(data outlet|structured cabling|telephone outlet)/i,
+    systems: ["structured_cabling", "telephone"],
+    lines: (n) => {
+      const pp = Math.ceil(n / 24), sw = Math.ceil(n * 1.2 / 48);
+      return [
+        ["Cat6A patch panel 24 ports, loaded", pp, "nos", /\bpatch panel\b/i, `${n} outlets ÷ 24`],
+        ["Access switch 48 ports, managed, 4 SFP+ uplinks", sw, "nos", /\bswitch\b/i, `${n} outlets + 20% spare ÷ 48`],
+        ["Equipment rack 42U with PDU, fans and cable management", Math.max(1, Math.ceil((pp + sw + pp) / 30)), "nos", /\b(rack|cabinet)\b/i, "patch panels + switches + managers ÷ 30 U"],
+        ["Cat6A patch cord, 2 m (outlet side and rack side)", n * 2, "nos", /\bpatch cord\b/i, `${n} outlets × 2`],
+        ["Cat6A U/FTP LSZH cable, outlet to rack", n * SYSDESIGN_RUN_M, "m", /\b(cat ?6a?|utp|ftp|data cable)\b/i, `${n} outlets × ${SYSDESIGN_RUN_M} m average run`],
+        ["Testing (permanent link certification) and documentation", 1, "ls", /\b(testing|certification)\b/i, "1 per system"],
+      ];
+    },
+  },
+};
+function designSystemFromTakeoff(items) {
+  const out = [];
+  const real = (items || []).filter(it => it.source !== "engineering_rule");
+  // the device itself, not what it is "for" / "with": "camera with wall bracket" is a camera
+  const subject = (d) => String(d || "").split(/,| with | for | including | c\/w /i)[0];
+  Object.entries(SYSDESIGN).forEach(([key, D]) => {
+    const mine = real.filter(it => D.systems.includes(it.system_category));
+    const counted = mine.filter(it => isCountableSourceType(it.quantity_source_type) && it.quantity_source_type !== "calculated_quantity"
+      && SYSDESIGN_COUNT_UNITS.has(normalizeUnit(it.unit)) && D.count.test(subject(it.description)) && !D.not.test(subject(it.description)));
+    // what the take-off already has for this system, wherever the AI filed it (cable under structured cabling, ...)
+    const pool = real.filter(it => D.systems.includes(it.system_category) || D.mention.test(it.description || ""));
+    const n = Math.round(counted.reduce((s, it) => s + (Number(it.quantity) || 0), 0));
+    if (n < 1) return;
+    const pid = counted[0].project_id;
+    D.lines(n).forEach(([desc, qty, unit, has, basis], i) => {
+      if (!(qty > 0)) return;
+      if (pool.some(it => has.test(subject(it.description)) && !counted.includes(it))) return;   // the take-off has it already
+      out.push({
+        id: `sys:${key}:${i}`, project_id: pid, system_category: D.systems[0], description: desc,
+        quantity: Math.round(qty), unit, source: "engineering_rule", optimization_status: "engineered",
+        quantity_source_type: "calculated_quantity", floor_label: null, location: "Head-end / whole system",
+        drawing_id: null, analysis_run_id: null, revision_number: 0, confidence_score: 100, review_status: "pending",
+        optimization_note: `System design: ${basis}.`, _systemDesign: true, created_at: "",
+      });
+    });
+  });
+  return out;
+}
+// The design is added to whichever BOQ uses the take-off; a draftsman package already designs the
+// whole system itself.
+function withSystemDesign(latest) {
+  if (!latest.length || boqBasisOf(latest.find(it => !it._systemDesign) || {}) === "design") return latest;
+  return latest.concat(designSystemFromTakeoff(latest));
 }
 
 // Duplicate-drawing detection: if two drawing rows share the same non-null
@@ -1927,6 +2071,7 @@ function simpleBoqLocationForEntry(entry) {
   return entry.room ? `${floor} – ${entry.room}` : floor;
 }
 function simpleBoqLocationAggregate(row) {
+  if ((row.rawItems || []).length && row.rawItems.every(r => r._systemDesign)) return "Head-end / whole system";
   const floors = [...new Set((row.floorBreakdown || []).map(f => f.floor_label).filter(Boolean))];
   const prefix = row.building ? `${row.building} – ` : "";
   if (floors.length === 0) return row.building || "—";
@@ -2049,6 +2194,7 @@ function buildSimpleBoqLines(consolidatedAll, opts) {
         key: floorFilter ? `${row.key}::${floorFilter}` : row.key, rowKey: row.key,
         system: SYSTEM_LABEL(sysCat), description: row.description, location: floorFilter || simpleBoqLocationAggregate(row),
         qty: row.totalQuantity, unit: displayUnit(row.unit), status: simpleBoqStatusFor(row), remarks: simpleBoqRemarksFor(row),
+        systemDesign: (row.rawItems || []).length > 0 && row.rawItems.every(r => r._systemDesign),
       });
     });
   });
@@ -14324,9 +14470,11 @@ function BoqTab({ project, onGoToEstimation }) {
   async function deleteBoqLine(rowKey) {
     const row = rowsByKey[rowKey];
     if (!row) return;
-    const ids = underlyingIdsFor(row);
+    const ids = underlyingIdsFor(row).filter(id => !String(id).startsWith("sys:"));
     if (!ids.length) {
-      alert("This line has no underlying records to delete.");
+      alert(row.rawItems && row.rawItems.some(r => r._systemDesign)
+        ? "This line is part of the system design worked out from the counted devices. It updates by itself when the take-off changes."
+        : "This line has no underlying records to delete.");
       return;
     }
     // Say plainly that one visible line is several stored records, so a
@@ -14472,10 +14620,12 @@ function BoqTab({ project, onGoToEstimation }) {
   useEffect(() => { const on = () => setBasisTick(t => t + 1); window.addEventListener("q-boq-basis", on); return () => window.removeEventListener("q-boq-basis", on); }, []);
   const basisInfo = useMemo(() => boqBasisFor(rawItems), [rawItems, basisTick]);
   const orphanLines = useMemo(() => rawItems.filter(isOrphanTakeoffLine).length, [rawItems]);
+  // the Take-off BOQ tab is always the take-off; the Designed BOQ tab is the take-off plus the
+  // complete system worked out from it, or the draftsman package when that is the one chosen
   const eligibleItems = useMemo(() => {
-    const latest = filterLatestRevisions(rawItems);
-    return latest.filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
-  }, [rawItems, excludeDrawingIds, basisTick]);
+    const latest = filterLatestRevisions(rawItems, boqView === "takeoff" ? "takeoff" : undefined);
+    return withSystemDesign(latest.filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
+  }, [rawItems, excludeDrawingIds, basisTick, boqView]);
 
   const consolidatedAll = useMemo(() => consolidateBoqItems(eligibleItems, drawingsById), [eligibleItems, drawingsById]);
   const consolidated = useMemo(() => filterSystem === "all" ? consolidatedAll : consolidatedAll.filter(r => r.systemCategory === filterSystem), [consolidatedAll, filterSystem]);
@@ -14511,7 +14661,7 @@ function BoqTab({ project, onGoToEstimation }) {
       const lines = buildSimpleBoqLines(bucketRows, { ...opts, floorFilter: effectiveGroupBy === "floor" ? bucketName : null })
         .map(l => ({ ...l, line: ++counter }));
       return { groupName: bucketName, lines };
-    });
+    }).filter(g => g.lines.length);
   }, [consolidated, effectiveGroupBy, boqListType]);
   const simpleBoqLines = useMemo(() => groupedSimpleBoq.flatMap(g => g.lines), [groupedSimpleBoq]);
   useEffect(() => { setSimpleBoqPage(0); }, [consolidated, effectiveGroupBy, boqListType]);
@@ -15166,17 +15316,17 @@ function BoqTab({ project, onGoToEstimation }) {
         </div>
       )}
 
-      {basisInfo.both && (
-        <div className="border rounded-xl p-3 mb-4 flex flex-wrap items-center gap-3" style={{ background: "rgba(36,116,236,0.10)", borderColor: "rgba(36,116,236,0.45)" }}>
-          <span className="text-sm font-bold">BOQ source</span>
+      {basisInfo.both && boqView === "designed" && (
+        <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+          <span className="text-slate-500">Built from</span>
           <div className="inline-flex rounded-lg overflow-hidden border">
-            {[["takeoff", "Uploaded drawings (take-off)"], ["design", "Draftsman package (design)"]].map(([k, l]) => (
+            {[["takeoff", "Take-off of your drawings"], ["design", "Draftsman package"]].map(([k, l]) => (
               <button key={k} onClick={() => writeBoqBasisPref(project.id, k)}
-                className="text-sm font-semibold px-3 py-1.5"
+                className="text-xs font-semibold px-2.5 py-1"
                 style={basisInfo.basis === k ? { background: "#2474ec", color: "#fff" } : undefined}>{l}</button>
             ))}
           </div>
-          <span className="text-xs text-slate-500">This project has quantities from both. They describe the same building, so they are never added together {"\u2014"} totals, export and estimate use the source selected.</span>
+          <span className="text-slate-500">One or the other, never added together.</span>
         </div>
       )}
       {orphanLines > 0 && (
@@ -15295,11 +15445,11 @@ function BoqTab({ project, onGoToEstimation }) {
                           <button onClick={()=>{ const next = focusedItemKey === l.rowKey ? null : l.rowKey; setFocusedItemKey(next); setActiveSystemTab("breakdown"); }} className={`text-xs hover:underline ${focusedItemKey === l.rowKey ? "text-blue-700 font-semibold" : "text-blue-600"}`} title="View this item's breakdown/evidence/notes below">
                             👁 {focusedItemKey === l.rowKey ? "Focused" : "View"}
                           </button>
-                          <button onClick={()=>deleteBoqLine(l.rowKey)} disabled={deleting}
+                          {!l.systemDesign && <button onClick={()=>deleteBoqLine(l.rowKey)} disabled={deleting}
                             className="text-xs text-rose-600 hover:underline ml-3 disabled:opacity-40"
                             title="Permanently delete this BOQ line">
                             Delete
-                          </button>
+                          </button>}
                         </td>
                       </tr>
                     ))}
@@ -15388,7 +15538,7 @@ function ProcurementBoqTab({ project }) {
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
   const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
   const consolidated = useMemo(() => {
-    const latest = filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
     return consolidateBoqItems(latest, drawingsById);
   }, [rawItems, excludeDrawingIds, drawingsById]);
 
@@ -15492,7 +15642,7 @@ function EngineeringBoqTab({ project }) {
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
   const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
   const consolidated = useMemo(() => {
-    const latest = filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
     return consolidateBoqItems(latest, drawingsById);
   }, [rawItems, excludeDrawingIds, drawingsById]);
 
@@ -15641,7 +15791,7 @@ function SpecificationTab({ project }) {
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
   const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
   const consolidated = useMemo(() => {
-    const latest = filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
     return consolidateBoqItems(latest, drawingsById);
   }, [rawItems, excludeDrawingIds, drawingsById]);
 
@@ -16623,7 +16773,7 @@ function ExportTab({ project }) {
       ]);
       const drawingsById = {}; (dr||[]).forEach(d => drawingsById[d.id] = d);
       const { excludeDrawingIds, duplicateGroups } = detectDuplicateDrawings(dr || []);
-      const latest = filterLatestRevisions(items || []).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+      const latest = withSystemDesign(filterLatestRevisions(items || []).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
       const consolidatedAll = consolidateBoqItems(latest, drawingsById);
       const consolidated = kind !== "procurement" ? consolidatedAll : consolidatedAll.filter(r => r.reviewBucket === "confirmed");
 
