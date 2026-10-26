@@ -270,6 +270,34 @@ function taggedCameraRows(tagged: NonNullable<ReturnType<typeof validateTaggedCa
   }
   return out;
 }
+// A cable, conduit or route the AI counted instead of measuring ("Cat6A cable, 18 points", "fibre route,
+// 3 nr"). Where the same take-off also measured that cable in metres, the count is the same cable said
+// again and is dropped; otherwise it is kept with an honest unit (points / runs), never as "nr" of cable.
+const CABLE_LIKE = /\b(cable|cabling|wire|wiring|conduit|trunking|tray|ladder|containment|fib(re|er)|route|backbone|duct(ing)?|pipe|pipework)\b/i;
+const COUNT_UNIT = /^(nr|no|nos|pcs|ea|each|point|points|set|item|unit)$/i;
+function fixCountedCableRows(rows: any[]): any[] {
+  const subj = (d: any) => String(d || "").split(/,| with | from | for | including /i)[0];
+  const metred = rows.filter((r) => /^(m|lm)$/i.test(String(r.unit || "").trim()) && CABLE_LIKE.test(subj(r.description)));
+  const family = (d: any) => {
+    const t = String(d || "").toLowerCase();
+    if (/fib(re|er)/.test(t)) return "fibre";
+    if (/cat ?6a?|utp|ftp|data cable/.test(t)) return "cat6";
+    if (/conduit|trunking|tray|containment|ladder/.test(t)) return "containment";
+    return "other";
+  };
+  const out: any[] = [];
+  for (const r of rows) {
+    const s = subj(r.description);
+    if (!(CABLE_LIKE.test(s) && COUNT_UNIT.test(String(r.unit || "").trim()))) { out.push(r); continue; }
+    if (metred.some((m) => m.system_category === r.system_category && family(m.description) === family(r.description) && family(r.description) !== "other")) {
+      console.log(`fixCountedCableRows: dropped "${r.description}" (${r.quantity} ${r.unit}): the same cable is measured in metres.`);
+      continue;
+    }
+    const unit = /route|backbone|\brun\b/i.test(s) ? "run" : "point";
+    out.push({ ...r, unit, quantity_basis_notes: [r.quantity_basis_notes, `Counted as ${unit}s, not measured: the length is not shown on the drawing.`].filter(Boolean).join(" ") });
+  }
+  return out;
+}
 function zoneCoverage(tile: { x0: number; y0: number; x1: number; y1: number }, zones: { x0: number; y0: number; x1: number; y1: number }[]): number {
   const area = (tile.x1 - tile.x0) * (tile.y1 - tile.y0);
   if (!(area > 0)) return 0;
@@ -2791,7 +2819,7 @@ Deno.serve(async (req: Request) => {
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found" lines
+        const safeRows = fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
@@ -3130,12 +3158,13 @@ Deno.serve(async (req: Request) => {
         }
         // a line that says "0 found in this tile" is not a BOQ line
         const keptRows = promotedRows.map(({ __zone, ...r }: any) => r);
-        const safeRows = keptRows.map((r: any) => {
+        let safeRows = keptRows.map((r: any) => {
           const sr = sanitizeBoqRow(r);
           if (sr.__coords) sr.coordinates = sr.__coords;
           delete sr.__coords;
           return sr;
         }).filter((r: any) => Number(r.quantity) > 0);   // no "0 found in this tile" lines
+        safeRows = fixCountedCableRows(safeRows);
         if (zoneRows) console.log(`tiled run ${run.id}: ${zoneRows} row(s) read from reference zones; ${keptRows.length - safeRows.length} zero line(s) dropped.`);
         const synthetic = {
           items: deduped,
@@ -3367,7 +3396,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found" lines
+        const safeRows = fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
@@ -3543,7 +3572,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found" lines
+        const safeRows = fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
@@ -3699,7 +3728,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found" lines
+        const safeRows = fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
