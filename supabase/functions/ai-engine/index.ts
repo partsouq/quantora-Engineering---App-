@@ -1561,7 +1561,7 @@ async function deriveEngineeringItems(admin: any, insertedRows: any[]) {
   }
   const finalDerived = [...byKey.values()];
 
-  if (finalDerived.length) await admin.from("boq_items").insert(finalDerived);
+  if (finalDerived.length) await admin.from("boq_items").insert(finalDerived.map((r) => ({ ...r, system_category: acceptedCategory(r.system_category) })));
   return finalDerived;
 }
 
@@ -1798,10 +1798,34 @@ function normaliseUnit(r: any): any {
   return UNIT_ALIASES[k] ? { ...r, unit: UNIT_ALIASES[k] } : r;
 }
 
+// The categories the boq_items table accepts. A model sometimes invents one ("hvac_controls"); one such
+// line used to fail the whole sheet's insert, so it is mapped to the nearest accepted category instead.
+const DB_SYSTEM_CATEGORIES = new Set(["cctv", "access_control", "structured_cabling", "wifi", "intercom", "iptv", "public_address", "audio_visual", "parking_management", "anpr", "bms", "grms", "pabx", "security_room", "nurse_call", "gate_barrier", "lighting", "power_distribution", "db_panels", "cable_sizing", "containment", "earthing", "lightning_protection", "ups", "generator", "transformer", "lv_panel", "bus_duct", "solar_pv", "hvac", "fcu", "ahu", "chillers", "ducting", "ventilation", "smoke_management", "water_supply", "drainage", "pumps", "fixtures", "hot_water", "fire_alarm", "fire_fighting", "sprinkler", "fire_pump", "gas_suppression", "other", "site_works", "earthworks", "piling", "ground_stabilisation", "concrete", "formwork", "reinforcement", "structural_steel", "masonry", "waterproofing", "insulation", "plaster_render", "screed", "floor_finishes", "wall_finishes", "ceiling_finishes", "skirting", "painting", "doors", "windows", "joinery", "metalwork", "external_works", "partitions", "glazing", "cladding", "mouldings_trims", "roofing", "stairs_ramps", "pools_water_features"]);
+const CATEGORY_ALIASES: Record<string, string> = {
+  hvac_controls: "bms", controls: "bms", bms_controls: "bms", building_management: "bms", thermostat: "hvac",
+  mechanical: "hvac", air_conditioning: "hvac", ac: "hvac", hvac_piping: "chillers", chilled_water: "chillers", refrigerant: "hvac",
+  fire_protection: "fire_fighting", firefighting: "fire_fighting", hose_reel: "fire_fighting", fire_suppression: "gas_suppression",
+  plumbing: "water_supply", sanitary: "fixtures", sewage: "drainage", stormwater: "drainage", gas: "other",
+  electrical: "power_distribution", power: "power_distribution", small_power: "power_distribution", cabling: "cable_sizing",
+  cable_tray: "containment", trunking: "containment", conduit: "containment",
+  security: "cctv", video_surveillance: "cctv", access: "access_control",
+  data: "structured_cabling", telephone: "structured_cabling", telecom: "structured_cabling", ict: "structured_cabling", network: "structured_cabling",
+  tv: "iptv", satellite: "iptv", smatv: "iptv", pa: "public_address", sound: "public_address", voice_evacuation: "public_address",
+  av: "audio_visual", parking: "parking_management", barrier: "gate_barrier",
+  architectural: "other", structural: "other", general: "other", civil: "site_works",
+};
+function acceptedCategory(c: any): string {
+  const k = String(c ?? "other").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (DB_SYSTEM_CATEGORIES.has(k)) return k;
+  if (CATEGORY_ALIASES[k]) return CATEGORY_ALIASES[k];
+  for (const [alias, cat] of Object.entries(CATEGORY_ALIASES)) if (k.includes(alias)) return cat;
+  return "other";
+}
 function sanitizeBoqRow(row: any): any {
   const r = normaliseUnit(rescueDimensionMistakenForQuantity(row));
   return {
     ...r,
+    system_category: acceptedCategory(r.system_category),
     coordinates: sanitizeCoordinates(r.coordinates, r.unit, r.quantity),
     quantity_source_type: coerceQuantitySourceType(r.quantity_source_type),
     quantity: toNumOrNull(r.quantity) ?? 0,
@@ -1825,7 +1849,7 @@ async function insertBoqRowsWithSupportingData(
 ) {
   let inserted: any[] = [];
   if (rows.length) {
-    const { data, error } = await admin.from("boq_items").insert(rows).select();
+    const { data, error } = await admin.from("boq_items").insert(rows.map((r) => ({ ...r, system_category: acceptedCategory(r.system_category) }))).select();
     if (error) throw error;
     inserted = data ?? [];
   }
