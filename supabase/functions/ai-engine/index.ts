@@ -209,6 +209,67 @@ function validateZones(raw: any): { x0: number; y0: number; x1: number; y1: numb
   }
   return out;
 }
+// Cameras counted in the browser from their own tags on the plan (NT-IDF-B1-GF-CAM-022): exact count
+// and position, with the view type read from the camera symbol's colour. When a sheet has them they
+// ARE the camera quantity; the AI's own camera lines for that sheet are replaced, so a camera is never
+// counted twice.
+const TAGGED_CAMERA_TYPES: Record<string, { system: string; description: string }> = {
+  ID:   { system: "cctv", description: "IP CCTV camera, 120% identification view" },
+  REC:  { system: "cctv", description: "IP CCTV camera, 50% recognition view" },
+  OBS:  { system: "cctv", description: "IP CCTV camera, 25% observation view" },
+  DET:  { system: "cctv", description: "IP CCTV camera, 10% detection view" },
+  MON:  { system: "cctv", description: "IP CCTV camera, 5% monitoring view" },
+  ANPR: { system: "anpr", description: "ANPR camera, 20% ANPR view" },
+  "?":  { system: "cctv", description: "IP CCTV camera, view type to confirm on the drawing" },
+};
+function validateTaggedCameras(raw: any): { schedule: number | null; cams: { n: number; tag: string; type: string; x: number; y: number }[] } | null {
+  if (!raw || !Array.isArray(raw.cams)) return null;
+  const cams = [];
+  for (const c of raw.cams.slice(0, 2000)) {
+    const x = Number(c?.x), y = Number(c?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) continue;
+    const type = TAGGED_CAMERA_TYPES[String(c?.type)] ? String(c.type) : "?";
+    cams.push({ n: Number(c?.n) || cams.length + 1, tag: String(c?.tag ?? "").slice(0, 60), type, x, y });
+  }
+  if (cams.length < 3) return null;
+  const sch = Number(raw.schedule);
+  return { schedule: Number.isFinite(sch) && sch > 0 ? sch : null, cams };
+}
+const AI_CAMERA_ROW = /\b(camera|cctv|ptz|dome|bullet|anpr|lpr)\b/i;
+const NOT_A_CAMERA = /\b(licen[cs]e|bracket|pole|cable|patch|point|outlet|switch|nvr|recorder|server|monitor|storage|housing|software|workstation|rack|ups|conduit|containment)\b/i;
+function isAiCameraRow(r: any): boolean {
+  if (!["cctv", "anpr"].includes(String(r.system_category))) return false;
+  const subject = String(r.description || "").split(/,| with | for | including /i)[0];
+  return AI_CAMERA_ROW.test(subject) && !NOT_A_CAMERA.test(subject);
+}
+function taggedCameraRows(tagged: NonNullable<ReturnType<typeof validateTaggedCameras>>, base: any, pageNo: number): any[] {
+  const byType = new Map<string, typeof tagged.cams>();
+  for (const c of tagged.cams) { if (!byType.has(c.type)) byType.set(c.type, []); byType.get(c.type)!.push(c); }
+  const total = tagged.cams.length;
+  const sched = tagged.schedule == null ? "" : tagged.schedule === total
+    ? ` The sheet's camera schedule also says ${tagged.schedule}.`
+    : ` The sheet's camera schedule says ${tagged.schedule} (${total - tagged.schedule > 0 ? "+" : ""}${total - tagged.schedule} against the plan) — check the schedule.`;
+  const out: any[] = [];
+  for (const k of ["ID", "REC", "OBS", "DET", "MON", "ANPR", "?"]) {
+    const cs = byType.get(k);
+    if (!cs || !cs.length) continue;
+    const T = TAGGED_CAMERA_TYPES[k];
+    const [first, ...rest] = cs;
+    const nums = cs.map((c) => c.n);
+    // every camera kept, numbered as on the sheet (the general position clean-up would merge two cameras
+    // mounted side by side); restored after sanitizeBoqRow via __coords
+    const coords = { page: pageNo, x: first.x - 0.006, y: first.y - 0.006, width: 0.012, height: 0.012,
+                     instances: rest.map((c) => ({ x: c.x - 0.006, y: c.y - 0.006 })), numbers: nums, tags: cs.map((c) => c.tag) };
+    out.push({
+      ...base, system_category: T.system, description: T.description, quantity: cs.length, unit: "nr",
+      confidence_score: k === "?" ? 80 : 98, quantity_source_type: "physical_count",
+      coordinates: coords, __coords: coords,
+      quantity_basis_notes: `Counted from the camera tags on the plan: ${cs.length} of the ${total} tagged cameras on this sheet are ${T.description.replace(/^.*?, /, "")} (camera numbers ${nums.slice(0, 40).join(", ")}${nums.length > 40 ? " …" : ""}). Tags in the title strip, legend and schedules are not counted.${sched}`,
+      optimization_note: null, location: base.floor_label ?? null,
+    });
+  }
+  return out;
+}
 function zoneCoverage(tile: { x0: number; y0: number; x1: number; y1: number }, zones: { x0: number; y0: number; x1: number; y1: number }[]): number {
   const area = (tile.x1 - tile.x0) * (tile.y1 - tile.y0);
   if (!(area > 0)) return 0;
@@ -2775,8 +2836,8 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
 
-      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones } = body as {
-        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[];
+      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged } = body as {
+        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any;
         confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean;
       };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
@@ -2788,6 +2849,7 @@ Deno.serve(async (req: Request) => {
       }
 
       const refZones = validateZones(rawZones);
+      const taggedCams = validateTaggedCameras(rawTagged);
       let tiles: TileSpec[];
       try {
         tiles = validateTiles(rawTiles);
@@ -3052,10 +3114,28 @@ Deno.serve(async (req: Request) => {
           __zone: it.__zone === true,
         }));
 
-        const { rows: promotedRows } = promoteSoleSourceScheduleRows(rows);
+        const { rows: promotedRows0 } = promoteSoleSourceScheduleRows(rows);
+        // the cameras' own tags replace the AI's camera lines on this sheet
+        let promotedRows = promotedRows0;
+        let aiCameraRowsReplaced = 0;
+        if (taggedCams) {
+          const before = promotedRows.length;
+          promotedRows = promotedRows.filter((r: any) => !isAiCameraRow(r));
+          aiCameraRowsReplaced = before - promotedRows.length;
+          promotedRows = promotedRows.concat(taggedCameraRows(taggedCams, {
+            project_id: project.id, drawing_id, analysis_run_id: run.id, revision_number: nextRevision,
+            floor_label: drawing.floor_label ?? null, source: "ai_drawing_analysis", optimization_status: "drawing_requirement",
+          }, pageNo));
+          console.log(`tiled run ${run.id}: ${taggedCams.cams.length} tagged cameras replace ${aiCameraRowsReplaced} AI camera line(s).`);
+        }
         // a line that says "0 found in this tile" is not a BOQ line
         const keptRows = promotedRows.map(({ __zone, ...r }: any) => r);
-        const safeRows = keptRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found in this tile" lines
+        const safeRows = keptRows.map((r: any) => {
+          const sr = sanitizeBoqRow(r);
+          if (sr.__coords) sr.coordinates = sr.__coords;
+          delete sr.__coords;
+          return sr;
+        }).filter((r: any) => Number(r.quantity) > 0);   // no "0 found in this tile" lines
         if (zoneRows) console.log(`tiled run ${run.id}: ${zoneRows} row(s) read from reference zones; ${keptRows.length - safeRows.length} zero line(s) dropped.`);
         const synthetic = {
           items: deduped,
@@ -3083,6 +3163,7 @@ Deno.serve(async (req: Request) => {
             found_nothing: safeRows.length === 0,
             reference_panels: panels.length,
             reference_zones: refZones.map((z) => z.label || z.kind),
+            tagged_cameras: taggedCams ? { counted: taggedCams.cams.length, schedule: taggedCams.schedule, ai_camera_lines_replaced: aiCameraRowsReplaced } : null,
             positions_discarded_in_panels: panelDropped,
             notes: (safeRows.length === 0
               ? `No BOQ items were produced from this sheet. Every tile was read and nothing countable for the systems Quantora reads (MEP and ELV) was found. If this is a civil, structural or architectural drawing, set its type to Civil, Structural or Architectural so it is measured as civil works — and if it is a specification or schedule rather than a drawing, upload it on the Specification page instead. Per-tile detail follows.\n\n`
