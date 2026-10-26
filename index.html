@@ -818,7 +818,7 @@ const SYSTEM_LABEL_WORDS = {
   hvac: "HVAC", fcu: "FCU", ahu: "AHU", db: "DB", mep: "MEP", elv: "ELV", lv: "LV",
   mv: "MV", hv: "HV", ups: "UPS", pa: "PA", av: "AV", it: "IT", ict: "ICT",
   vesda: "VESDA", vrf: "VRF", vav: "VAV", crac: "CRAC", pabx: "PABX", sla: "SLA",
-  boq: "BOQ", rfq: "RFQ", nvr: "NVR", vms: "VMS", poe: "PoE", tv: "TV",
+  boq: "BOQ", rfq: "RFQ", nvr: "NVR", vms: "VMS", poe: "PoE", tv: "TV", pv: "PV",
 };
 // Null-safe on purpose: this is called on spec_items.system_category, drawings.
 // discipline, companies.plan and a dozen other nullable columns. The old version
@@ -7571,6 +7571,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     number_of_floors: existingProject.number_of_floors ?? "", area_size: existingProject.area_size ?? "",
     area_unit: existingProject.area_unit || "sqm", project_scope: existingProject.project_scope || "",
     basement_levels: existingProject.basement_levels ?? "",
+    mezzanine_levels: existingProject.mezzanine_levels ?? "",
     has_roof: existingProject.has_roof !== false,
     project_type: existingProject.project_type || "new_build",
     required_systems: existingProject.required_systems || [],
@@ -7584,7 +7585,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
     // validated and is silently wrong for every project outside it.
     country: "", city: "", building_type: "", currency: "",
     number_of_floors: "", area_size: "", area_unit: "sqm", project_scope: "",
-    basement_levels: "", has_roof: true, project_type: "new_build", required_systems: [],
+    basement_levels: "", mezzanine_levels: "", has_roof: true, project_type: "new_build", required_systems: [],
     region: "", measurement_standard: "", measurement_edition: "", boq_preambles: "",
   });
   // The currency follows the country until the person picks one themselves.
@@ -7706,6 +7707,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
         number_of_floors: form.number_of_floors === "" ? null : parseInt(form.number_of_floors),
         area_size: form.area_size ? parseFloat(form.area_size) : null,
         basement_levels: form.basement_levels === "" ? null : parseInt(form.basement_levels),
+        mezzanine_levels: form.mezzanine_levels === "" || form.mezzanine_levels == null ? 0 : parseInt(form.mezzanine_levels),
         has_roof: form.has_roof !== false,
         project_type: form.project_type || null,
         // "" is not a building type. The column is nullable and "not specified"
@@ -7718,14 +7720,18 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
         measurement_edition: String(form.measurement_edition || "").trim() || null,
         boq_preambles: String(form.boq_preambles || "").trim() || null,
       };
+      // mezzanine_levels is a new column (2026-10-26): until its SQL is applied the save goes ahead without it
+      const noMezz = (er) => er && /mezzanine_levels/.test(String(er.message || ""));
       if (isEdit) {
-        const { data, error } = await sb.from("projects").update(payload).eq("id", existingProject.id).select().single();
+        let { data, error } = await sb.from("projects").update(payload).eq("id", existingProject.id).select().single();
+        if (noMezz(error)) { const { mezzanine_levels, ...rest } = payload; ({ data, error } = await sb.from("projects").update(rest).eq("id", existingProject.id).select().single()); }
         if (error) throw error;
         onCreated(data);
       } else {
         const { data: { user } } = await sb.auth.getUser();
         const { data: profile } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
-        const { data, error } = await sb.from("projects").insert({ ...payload, owner_id: user.id, company_id: profile?.company_id ?? null }).select().single();
+        let { data, error } = await sb.from("projects").insert({ ...payload, owner_id: user.id, company_id: profile?.company_id ?? null }).select().single();
+        if (noMezz(error)) { const { mezzanine_levels, ...rest } = payload; ({ data, error } = await sb.from("projects").insert({ ...rest, owner_id: user.id, company_id: profile?.company_id ?? null }).select().single()); }
         if (error) {
           // The enforce_project_limit() DB trigger raises a tagged
           // exception when a plan's project cap is hit — surface it the
@@ -7785,9 +7791,9 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
             platform can read it off those drawings. The one path that cannot
             proceed without them asks at the point it needs them. */}
         <div>
-          <label className="text-xs font-semibold text-slate-600">The building <span className="font-normal text-slate-400">— ground floor is always there; add the floors above it, the roof and any basements</span></label>
+          <label className="text-xs font-semibold text-slate-600">The building <span className="font-normal text-slate-400">— set the floors on the left; the list on the right is every floor plan that will be drawn</span></label>
           <div className="mt-2">
-            <FloorsPicker total={form.number_of_floors} basements={form.basement_levels} roof={form.has_roof}
+            <FloorsPicker total={form.number_of_floors} basements={form.basement_levels} roof={form.has_roof} mezzanines={form.mezzanine_levels}
               onChange={v => setForm(f => ({ ...f, ...v }))} />
           </div>
           <div className="flex gap-3 mt-3 items-center flex-wrap">
@@ -7887,39 +7893,64 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
         </div>
 
         <div>
-          <label className="text-xs font-semibold text-slate-600">Required Systems</label>
-          <p className="text-[11px] text-slate-400 mt-1 mb-2">
-            Tick what this project covers. The AI uses it to know which systems to expect on a drawing — leaving it
-            blank is fine, it will then take whatever it finds.
-          </p>
-          <div className="space-y-3">
-            {Object.entries(SYSTEM_GROUPS).map(([group, systems]) => (
-              <div key={group}>
-                <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">{group}</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {systems.map(sy => {
-                    const on = (form.required_systems || []).includes(sy);
-                    return (
-                      <button
-                        key={sy}
-                        type="button"
-                        onClick={() => toggleSystem(sy)}
-                        className={`text-xs px-2.5 py-1 rounded-full border ${on ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 hover:bg-slate-50"}`}
-                      >
-                        {SYSTEM_LABEL(sy)}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+          <div className="flex items-baseline justify-between gap-3 flex-wrap">
+            <label className="text-xs font-semibold text-slate-600">Required Systems</label>
+            <span className="text-[11px] font-semibold" style={{ color: (form.required_systems || []).length ? "#3987e5" : "#94a3b8" }}>
+              {(form.required_systems || []).length ? `${(form.required_systems || []).length} of ${ALL_SYSTEMS.length} selected` : "None selected — the AI takes whatever it finds"}
+            </span>
           </div>
-          {(form.required_systems || []).length > 0 && (
-            <button type="button" onClick={() => setForm(f => ({ ...f, required_systems: [] }))}
-              className="text-[11px] underline text-slate-500 mt-2">
-              Clear all {(form.required_systems || []).length} selected
+          <p className="text-[11px] text-slate-400 mt-1 mb-3">
+            Pick what this project covers. Use “All” on a discipline, then untick what is not in scope.
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            {Object.entries(SYSTEM_GROUPS).filter(([g]) => g !== "Other").map(([group, systems]) => {
+              const picked = systems.filter(sy => (form.required_systems || []).includes(sy));
+              const all = picked.length === systems.length;
+              const setGroup = on => setForm(f => {
+                const cur = new Set(f.required_systems || []);
+                systems.forEach(sy => on ? cur.add(sy) : cur.delete(sy));
+                return { ...f, required_systems: [...cur] };
+              });
+              return (
+                <div key={group} className="rounded-xl border p-3" style={picked.length ? { borderColor: "rgba(57,135,229,.55)", background: "rgba(57,135,229,.06)" } : undefined}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs font-bold">{group} <span className="font-normal text-slate-400">· {picked.length}/{systems.length}</span></div>
+                    <div className="flex gap-1">
+                      <button type="button" onClick={() => setGroup(true)} disabled={all}
+                        className="text-[11px] font-semibold px-2 py-0.5 rounded border disabled:opacity-40">All</button>
+                      <button type="button" onClick={() => setGroup(false)} disabled={!picked.length}
+                        className="text-[11px] font-semibold px-2 py-0.5 rounded border disabled:opacity-40">None</button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {systems.map(sy => {
+                      const on = (form.required_systems || []).includes(sy);
+                      return (
+                        <button key={sy} type="button" onClick={() => toggleSystem(sy)} aria-pressed={on}
+                          className="text-xs px-2.5 py-1 rounded-full border inline-flex items-center gap-1"
+                          style={on ? { background: "#3987e5", borderColor: "#3987e5", color: "#fff", fontWeight: 600 }
+                                    : { color: "var(--q-text-dim,#475569)" }}>
+                          <span style={{ width: 12, display: "inline-block", textAlign: "center" }}>{on ? "\u2713" : "+"}</span>
+                          {SYSTEM_LABEL(sy)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-3 mt-2">
+            <button type="button" onClick={() => toggleSystem("other")} aria-pressed={(form.required_systems || []).includes("other")}
+              className="text-xs px-2.5 py-1 rounded-full border"
+              style={(form.required_systems || []).includes("other") ? { background: "#3987e5", borderColor: "#3987e5", color: "#fff" } : undefined}>
+              {(form.required_systems || []).includes("other") ? "\u2713 " : "+ "}Other systems
             </button>
-          )}
+            {(form.required_systems || []).length > 0 && (
+              <button type="button" onClick={() => setForm(f => ({ ...f, required_systems: [] }))}
+                className="text-[11px] underline text-slate-500">Clear all</button>
+            )}
+          </div>
         </div>
         <CivilMeasurementFields form={form} setForm={setForm} />
         {err && <div ref={errBottomRef} role="alert" className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{err}</div>}
@@ -26907,11 +26938,13 @@ function floorsAboveGF(total) {
   const n = parseInt(total, 10);
   return Number.isFinite(n) && n >= 1 ? n - 1 : 0;
 }
-function floorTags(total, basements, roof) {
+function floorTags(total, basements, roof, mezzanines) {
   const tags = [];
   const b = Math.max(0, parseInt(basements, 10) || 0);
   for (let i = b; i >= 1; i--) tags.push(["b", `B${i}`]);
   tags.push(["g", "GF"]);
+  const m = Math.max(0, parseInt(mezzanines, 10) || 0);
+  for (let i = 1; i <= m; i++) tags.push(["m", m === 1 ? "M" : `M${i}`]);
   const up = floorsAboveGF(total);
   for (let i = 1; i <= up; i++) tags.push(["l", `L${String(i).padStart(2, "0")}`]);
   if (roof !== false) tags.push(["r", "ROOF"]);
@@ -26938,6 +26971,8 @@ function projectFloorNames(project) {
   const b = Math.max(0, parseInt(project && project.basement_levels, 10) || 0);
   for (let i = b; i >= 1; i--) names.push(`Basement ${i}`);
   names.push("Ground Floor");
+  const mz = Math.max(0, parseInt(project && project.mezzanine_levels, 10) || 0);
+  for (let i = 1; i <= mz; i++) names.push(mz === 1 ? "Mezzanine Floor" : `Mezzanine ${i}`);
   const total = parseInt(project && project.number_of_floors, 10);
   const up = Number.isFinite(total) && total > 1 ? total - 1 : 0;
   for (let i = 1; i <= Math.min(up, 199); i++) names.push(`${ord(i)} Floor`);
@@ -26995,56 +27030,80 @@ function DrawingFloorPicker({ d, project, onSaved, onError }) {
   );
 }
 
-function FloorsPicker({ total, basements, roof, onChange }) {
+// The building as a stack, top to bottom, so what will be drawn is what the person sees (2026-10-26):
+// roof, floors above, mezzanine(s), ground, basements -- each floor named in full.
+const FLOOR_FULL_NAME = (k, t) => k === "b" ? `Basement ${t.slice(1)}` : k === "g" ? "Ground floor" : k === "m" ? (t === "M" ? "Mezzanine" : `Mezzanine ${t.slice(1)}`)
+  : k === "r" ? "Roof" : `Level ${String(parseInt(t.slice(1), 10)).padStart(2, "0")}`;
+function FloorPickerRow({ label, hint, children }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2" style={{ borderBottom: "1px solid var(--q-border,#e2e8f0)" }}>
+      <div>
+        <div className="text-sm font-semibold">{label}</div>
+        <div className="text-[11px] text-slate-400">{hint}</div>
+      </div>
+      <div style={{ width: 150, flex: "0 0 auto" }}>{children}</div>
+    </div>
+  );
+}
+function FloorsPicker({ total, basements, roof, mezzanines, onChange }) {
   const up = floorsAboveGF(total);
   const bs = Math.max(0, parseInt(basements, 10) || 0);
-  const emit = (u, b, r) => onChange({ number_of_floors: String(1 + u), basement_levels: String(b), has_roof: r });
-  const box = { border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 10, padding: 10, background: "var(--q-panel-2,#f8fafc)" };
-  const lab = "block text-[11px] font-bold text-slate-600 mb-1.5";
-  const hint = "text-[11px] text-slate-400 mt-1";
-  const tagStyle = { b: { background: "rgba(148,163,184,.15)", color: "var(--q-text-dim,#475569)", borderColor: "rgba(148,163,184,.4)" },
-                     g: { background: "rgba(34,197,94,.15)", color: "#15803d", borderColor: "rgba(74,222,128,.5)" },
-                     l: { background: "var(--q-panel-2,#fff)", color: "var(--q-text,#0f172a)", borderColor: "var(--q-border-strong,#cbd5e1)" },
-                     r: { background: "rgba(56,189,248,.15)", color: "#0369a1", borderColor: "rgba(125,211,252,.5)" } };
-  const tags = floorTags(1 + up, bs, roof);
+  const mz = Math.max(0, parseInt(mezzanines, 10) || 0);
+  const emit = (u, b, r, m) => onChange({ number_of_floors: String(1 + u), basement_levels: String(b), has_roof: r, mezzanine_levels: String(m) });
+  const tags = floorTags(1 + up, bs, roof, mz);
+  const tone = {
+    r: { bg: "rgba(56,189,248,.14)", bd: "rgba(56,189,248,.55)", fg: "#38bdf8" },
+    l: { bg: "var(--q-panel-2,#f8fafc)", bd: "var(--q-border-strong,#cbd5e1)", fg: "var(--q-text,#0f172a)" },
+    m: { bg: "rgba(168,85,247,.14)", bd: "rgba(168,85,247,.55)", fg: "#a855f7" },
+    g: { bg: "rgba(34,197,94,.15)", bd: "rgba(74,222,128,.55)", fg: "#22c55e" },
+    b: { bg: "rgba(148,163,184,.16)", bd: "rgba(148,163,184,.5)", fg: "var(--q-text-dim,#64748b)" },
+  };
+  // long buildings: show the top floors, a "…" row, and the lowest above-ground floors
+  const stack = tags.slice().reverse();
+  const shown = stack.length > 14 ? [...stack.slice(0, 5), ["gap", `${stack.length - 12} more floors`], ...stack.slice(-7)] : stack;
+  const Row = FloorPickerRow;
   return (
-    <div>
-      <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
-        <div style={box}>
-          <span className={lab}>Ground floor (GF)</span>
-          <div className="text-sm font-bold rounded-lg px-3 py-1.5" style={{ background: "#dcfce7", color: "#166534" }}>&#10003; Included</div>
-          <div className={hint}>Every building has one.</div>
-        </div>
-        <div style={box}>
-          <span className={lab}>Floors above GF</span>
-          <FloorStep value={up} min={0} max={199} set={u => emit(u, bs, roof)} />
-          <div className={hint}>0 = ground floor only.</div>
-        </div>
-        <div style={box}>
-          <span className={lab}>Roof</span>
+    <div className="grid gap-4 md:grid-cols-2">
+      <div className="rounded-xl border p-3" style={{ background: "var(--q-panel-2,#f8fafc)" }}>
+        <Row label="Roof" hint="Roof plant, fans, rainwater">
           <div className="flex rounded-lg overflow-hidden bg-white border">
             {[[true, "Yes"], [false, "No"]].map(([v, l]) => {
               const on = (roof !== false) === v;
-              return <button type="button" key={l} onClick={() => emit(up, bs, v)}
-                className="flex-1 py-1.5 text-sm font-bold"
+              return <button type="button" key={l} onClick={() => emit(up, bs, v, mz)} className="flex-1 py-1.5 text-sm font-bold"
                 style={on ? { background: "#3987e5", color: "#fff" } : { color: "#94a3b8" }}>{l}</button>;
             })}
           </div>
-          <div className={hint}>Roof fans, rainwater, roof plant.</div>
-        </div>
-        <div style={box}>
-          <span className={lab}>Basements</span>
-          <FloorStep value={bs} min={0} max={20} set={b => emit(up, b, roof)} />
-          <div className={hint}>0 = none.</div>
-        </div>
+        </Row>
+        <Row label="Floors above ground" hint="Level 01, Level 02 … (0 = none)">
+          <FloorStep value={up} min={0} max={199} set={u => emit(u, bs, roof, mz)} />
+        </Row>
+        <Row label="Mezzanine floors" hint="Between ground and Level 01">
+          <FloorStep value={mz} min={0} max={3} set={m => emit(up, bs, roof, m)} />
+        </Row>
+        <Row label="Ground floor" hint="Every building has one">
+          <div className="text-sm font-bold rounded-lg px-3 py-1.5 text-center" style={{ background: "rgba(34,197,94,.15)", color: "#22c55e" }}>&#10003; Included</div>
+        </Row>
+        <Row label="Basements" hint="Basement 1, Basement 2 … (0 = none)">
+          <FloorStep value={bs} min={0} max={20} set={b => emit(up, b, roof, mz)} />
+        </Row>
       </div>
-      <div className="flex items-center gap-1.5 flex-wrap mt-3">
-        <span className="text-[11px] font-bold text-slate-600 mr-1">Floors that will be drawn:</span>
-        {tags.map(([k, t]) => (
-          <span key={t} className="text-[11px] font-bold rounded-md px-2 py-0.5"
-            style={{ border: "1px solid", ...tagStyle[k] }}>{t}</span>
-        ))}
-        <span className="text-[11px] text-slate-400 ml-1">{tags.length} floor plan{tags.length === 1 ? "" : "s"}</span>
+      <div>
+        <div className="flex items-baseline justify-between mb-2">
+          <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wide">Floors that will be drawn</span>
+          <span className="text-[11px] text-slate-400">{tags.length} floor plan{tags.length === 1 ? "" : "s"}</span>
+        </div>
+        <div className="space-y-1">
+          {shown.map(([k, t], i) => k === "gap" ? (
+            <div key={"gap" + i} className="text-center text-[11px] text-slate-400 py-0.5">&#8942; {t}</div>
+          ) : (
+            <div key={t} className="flex items-center gap-2 rounded-md px-2.5 py-1"
+              style={{ background: tone[k].bg, border: `1px solid ${tone[k].bd}`, marginLeft: k === "b" ? 0 : 0 }}>
+              <span className="text-[11px] font-extrabold" style={{ color: tone[k].fg, width: 38 }}>{t}</span>
+              <span className="text-xs" style={{ color: "var(--q-text,#0f172a)" }}>{FLOOR_FULL_NAME(k, t)}</span>
+              {k === "g" && <span className="ml-auto text-[10px] text-slate-400">ground level</span>}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
