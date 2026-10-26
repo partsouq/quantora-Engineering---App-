@@ -1188,6 +1188,30 @@ function filterLatestRevisions(items, forceBasis) {
 const SYSDESIGN_COUNT_UNITS = new Set(["nos", "set", "point"]);
 const SYSDESIGN_RUN_M = 45;            // average horizontal cable run per outlet / device, m (TIA limit 90 m)
 const SYSDESIGN_DROP_M = 6;            // conduit drop from the tray to each device, m
+// What changes with the project's country: recording days, who approves, the fire alarm cable standard.
+// Anything not known for a country stays generic and says to check the specification.
+function sysDesignContext(project) {
+  const c = String(project?.country || "").trim().toLowerCase(), t = String(project?.city || "").trim().toLowerCase();
+  const uae = !c || ["uae", "united arab emirates", "ae", "emirates"].includes(c);
+  const C = { days: 30, daysNote: "check the retention in the specification", cctvApproval: "security authority approval where required",
+              fireApproval: "fire authority approval", fireCable: "fire-resistant cable to the local code", core: "2C 1.5 mm²", country: project?.country || "" };
+  if (uae) {
+    C.days = 31; C.daysNote = "check the retention in the specification and the security authority's rules";
+    C.cctvApproval = /abu dhabi|al ain/.test(t) ? "ADMCC approval" : /sharjah/.test(t) ? "Sharjah Police approval" : /dubai/.test(t) || !t ? "SIRA approval" : "security authority approval";
+    C.fireApproval = "Civil Defence approval"; C.fireCable = "enhanced fire-resistant cable (BS 8434-2)";
+  } else if (["ksa", "saudi arabia", "saudi", "kingdom of saudi arabia", "sa"].includes(c)) {
+    C.fireApproval = "Saudi Civil Defence approval"; C.fireCable = "fire-resistant cable (SBC 801 / BS 8434-2)";
+  } else if (["qatar", "qa", "kuwait", "kw", "bahrain", "bh", "oman", "om"].includes(c)) {
+    C.fireApproval = "Civil Defence approval"; C.fireCable = "enhanced fire-resistant cable (BS 8434-2)";
+  } else if (["uk", "united kingdom", "great britain", "gb", "england", "scotland", "wales", "northern ireland", "ireland", "ie"].includes(c)) {
+    C.fireApproval = "Building Control / fire authority sign-off"; C.fireCable = "enhanced fire-resistant cable (BS 8434-2 / BS 7629)";
+  } else if (["us", "usa", "united states", "united states of america", "america", "canada", "ca"].includes(c)) {
+    C.fireApproval = "AHJ (fire marshal) acceptance"; C.fireCable = "FPLR / CI (NFPA 70 Article 760)"; C.core = "2C 16 AWG";
+  } else if (["india", "in", "bharat"].includes(c)) {
+    C.fireApproval = "Fire NOC (State Fire Services)"; C.fireCable = "fire-survival cable (IS 17505 / BS 8434-2)";
+  }
+  return C;
+}
 const SYSDESIGN = {
   cctv: {
     label: "cameras",
@@ -1195,16 +1219,16 @@ const SYSDESIGN = {
     not: /\b(licen[cs]e|bracket|pole|housing|cable|patch|point|outlet|switch|recorder|nvr|server|monitor|storage)\b/i,
     mention: /\b(cctv|camera)/i,
     systems: ["cctv", "anpr"],
-    lines: (n) => {
+    lines: (n, C) => {
       const nvr = Math.ceil(n / 64), sw = Math.ceil(n * 1.2 / 24), ws = Math.max(1, Math.ceil(n / 64));
       const mon = Math.max(1, Math.ceil(n / 16));
-      const tb = Math.ceil(n * 4 * 86400 * 31 / 8 / 1e6 * 1.25);          // 4 Mbit/s, 31 days, +25% RAID
+      const tb = Math.ceil(n * 4 * 86400 * C.days / 8 / 1e6 * 1.25);          // 4 Mbit/s, C.days days, +25% RAID
       const kw = nvr * 0.45 + sw * 0.05 + n * 0.013 + ws * 0.35 + mon * 0.15 + 0.6;
       const kva = Math.ceil(kw / 0.8 * 1.25);
       const ru = nvr * 2 + sw + 2 + Math.ceil(sw / 2);
       return [
         ["Network video recorder / recording server, 64 channels, RAID 6", nvr, "nos", /\b(nvr|recorder|recording server|storage server)\b/i, `1 per 64 cameras (${n} cameras)`],
-        ["Recording storage (enterprise surveillance HDD), 31 days at 4 Mbit/s per camera", tb, "tb", /\b(storage|hdd|hard dis[ck])\b/i, `${n} cameras × 4 Mbit/s × 31 days + 25% RAID (check the retention in the specification)`],
+        [`Recording storage (enterprise surveillance HDD), ${C.days} days at 4 Mbit/s per camera`, tb, "tb", /\b(storage|hdd|hard dis[ck])\b/i, `${n} cameras × 4 Mbit/s × ${C.days} days + 25% RAID (${C.daysNote})`],
         ["Video management server with VMS base software", 1, "set", /\b(vms server|management server|vms software)\b/i, "1 per system"],
         ["Operator workstation with VMS client, dual 27\" monitors", ws, "nos", /\b(workstation|client pc)\b/i, `1 per 64 cameras, minimum 1`],
         ["Video wall / monitoring display 55\", 16 cameras per screen", mon, "nos", /\b(monitor|display|video wall)\b/i, `1 per 16 cameras (${n} cameras)`],
@@ -1215,7 +1239,7 @@ const SYSDESIGN = {
         ["Cat6A U/FTP LSZH cable, camera to switch", n * SYSDESIGN_RUN_M, "m", /\b(cat ?6a?|utp|ftp|data cable)\b/i, `${n} cameras × ${SYSDESIGN_RUN_M} m average run`],
         ["Fibre backbone, 12-core OM4, switch to core, with terminations", Math.ceil(sw / 2) * 60, "m", /\bfib(re|er)\b/i, `${Math.ceil(sw / 2)} IDF links × 60 m`],
         ["GI conduit 20/25 mm drop to each camera, with boxes and fixings", n * SYSDESIGN_DROP_M, "m", /\b(conduit|trunking|containment)\b/i, `${n} cameras × ${SYSDESIGN_DROP_M} m`],
-        ["Testing, commissioning, SIRA approval and as-built documentation", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+        [`Testing, commissioning, ${C.cctvApproval} and as-built documentation`, 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
       ];
     },
   },
@@ -1225,7 +1249,7 @@ const SYSDESIGN = {
     not: /\b(cable|licen[cs]e|software|server|enrol)/i,
     mention: /\baccess control/i,
     systems: ["access_control"],
-    lines: (n) => [
+    lines: (n, C) => [
       ["Access control server with software, licensed for the doors shown", 1, "set", /\b(server|software)\b/i, "1 per system"],
       ["Door licence for the access control software", n, "nos", /\blicen[cs]e\b/i, `1 per door (${n} doors)`],
       ["Card enrolment desktop reader and printer", 1, "set", /\benrol/i, "1 per system"],
@@ -1242,14 +1266,14 @@ const SYSDESIGN = {
     not: /\b(base|isolator|cable|panel|battery)\b/i,
     mention: /\bfire alarm/i,
     systems: ["fire_alarm"],
-    lines: (n) => {
+    lines: (n, C) => {
       const loops = Math.max(1, Math.ceil(n / 100));
       return [
         [`Addressable fire alarm control panel, ${loops} loop${loops > 1 ? "s" : ""}, with network card`, 1, "nos", /\b(panel|facp)\b/i, `${n} devices ÷ 100 per loop (125 max, 20% spare)`],
         ["Standby batteries, 24 h standby + 30 min alarm", 1, "set", /\bbatter/i, "1 per panel"],
-        ["Fire-rated cable 2C 1.5 mm², enhanced (BS 8434-2)", n * 10, "m", /\b(fire.?rated|fp200|cable)\b/i, `${n} devices × 10 m`],
+        [`Fire alarm cable ${C.core}, ${C.fireCable}`, n * 10, "m", /\b(fire.?rated|fp200|cable)\b/i, `${n} devices × 10 m`],
         ["GI conduit 20 mm with boxes and fixings", n * 8, "m", /\b(conduit|containment)\b/i, `${n} devices × 8 m`],
-        ["Testing, commissioning and Civil Defence approval", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+        [`Testing, commissioning and ${C.fireApproval}`, 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
       ];
     },
   },
@@ -1259,7 +1283,7 @@ const SYSDESIGN = {
     not: /\b(bracket|cable|licen[cs]e|controller|switch)\b/i,
     mention: /\b(wi-?fi|wlan|access point)/i,
     systems: ["wifi"],
-    lines: (n) => [
+    lines: (n, C) => [
       ["Wireless LAN controller / cloud management", 1, "set", /\bcontroller\b/i, "1 per system"],
       ["Access point management licence", n, "nos", /\blicen[cs]e\b/i, `1 per access point (${n})`],
       ["PoE+ access switch, 24 ports, managed", Math.ceil(n * 1.2 / 24), "nos", /\b(poe|switch)\b/i, `${n} APs + 20% spare ports ÷ 24`],
@@ -1273,7 +1297,7 @@ const SYSDESIGN = {
     not: /\b(cable|patch|panel|rack|switch)\b/i,
     mention: /\b(data outlet|structured cabling|telephone outlet)/i,
     systems: ["structured_cabling", "telephone"],
-    lines: (n) => {
+    lines: (n, C) => {
       const pp = Math.ceil(n / 24), sw = Math.ceil(n * 1.2 / 48);
       return [
         ["Cat6A patch panel 24 ports, loaded", pp, "nos", /\bpatch panel\b/i, `${n} outlets ÷ 24`],
@@ -1285,8 +1309,66 @@ const SYSDESIGN = {
       ];
     },
   },
+  public_address: {
+    label: "speakers",
+    count: /\b(speaker|loudspeaker|horn speaker)\b/i,
+    not: /\b(cable|amplifier|rack|microphone|bracket|back ?box)\b/i,
+    mention: /\b(public address|voice evacuation|\bpa\b|\bva\b)/i,
+    systems: ["public_address"],
+    lines: (n, C) => {
+      const w = Math.ceil(n * 6 * 1.25);
+      return [
+        [`Amplifier, 4 x 125 W, with standby amplifier switching`, Math.max(1, Math.ceil(w / 500)), "nos", /\bamplifier\b/i, `${n} speakers × 6 W + 25% = ${w} W ÷ 500 W`],
+        ["PA / voice alarm controller with message manager, in rack", 1, "set", /\b(controller|message|matrix|rack)\b/i, "1 per system"],
+        ["Paging microphone station, zone selection", 1, "nos", /\b(microphone|paging)\b/i, "1 per system"],
+        [`Speaker cable ${C.core}, ${C.fireCable}`, n * 15, "m", /\b(speaker cable|cable)\b/i, `${n} speakers × 15 m`],
+        ["Testing, commissioning, sound level and intelligibility test (STI)", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+      ];
+    },
+  },
+  intercom: {
+    label: "stations",
+    count: /\b(intercom|door station|outdoor station|indoor (monitor|station)|video door|vdp)\b/i,
+    not: /\b(cable|server|licen[cs]e|switch|software)\b/i,
+    mention: /\bintercom\b/i,
+    systems: ["intercom"],
+    lines: (n, C) => [
+      ["IP intercom server / management software", 1, "set", /\b(server|software)\b/i, "1 per system"],
+      ["Intercom licence", n, "nos", /\blicen[cs]e\b/i, `1 per station (${n})`],
+      ["PoE switch, 24 ports, managed", Math.ceil(n * 1.2 / 24), "nos", /\b(poe|switch)\b/i, `${n} stations + 20% spare ports ÷ 24`],
+      ["Cat6 U/UTP LSZH cable, station to switch", n * SYSDESIGN_RUN_M, "m", /\b(cat ?6a?|utp|ftp|data cable)\b/i, `${n} stations × ${SYSDESIGN_RUN_M} m average run`],
+      ["Testing and commissioning", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+    ],
+  },
+  iptv: {
+    label: "TV outlets",
+    count: /\b(tv outlet|tv point|iptv|television|catv|tv socket)\b/i,
+    not: /\b(cable|headend|head-end|licen[cs]e|set.?top|server)\b/i,
+    mention: /\b(iptv|smatv|catv)\b/i,
+    systems: ["iptv"],
+    lines: (n, C) => [
+      ["IPTV / SMATV head-end with encoders and middleware", 1, "set", /\b(head.?end|middleware|encoder)\b/i, "1 per system"],
+      ["IPTV licence / set-top box", n, "nos", /\b(licen[cs]e|set.?top|stb)\b/i, `1 per TV outlet (${n})`],
+      ["Cat6 U/UTP LSZH cable, outlet to switch", n * SYSDESIGN_RUN_M, "m", /\b(cat ?6a?|utp|ftp|data cable|coax)\b/i, `${n} outlets × ${SYSDESIGN_RUN_M} m average run`],
+      ["Testing and commissioning, signal level test at every outlet", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+    ],
+  },
+  parking_management: {
+    label: "bay sensors",
+    count: /\b(bay sensor|parking sensor|space sensor|occupancy sensor|bay indicator)\b/i,
+    not: /\b(cable|controller|server|display|sign)\b/i,
+    mention: /\b(parking guidance|car park management|parking management)\b/i,
+    systems: ["parking_management"],
+    lines: (n, C) => [
+      ["Parking guidance zone controller", Math.max(1, Math.ceil(n / 64)), "nos", /\b(controller)\b/i, `1 per 64 bays (${n} bays)`],
+      ["Parking guidance central server and software", 1, "set", /\b(server|software)\b/i, "1 per system"],
+      ["Bus cable (RS-485 / proprietary), sensor to controller", n * 8, "m", /\b(cable)\b/i, `${n} bays × 8 m`],
+      ["Testing and commissioning", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+    ],
+  },
 };
-function designSystemFromTakeoff(items) {
+function designSystemFromTakeoff(items, project) {
+  const C = sysDesignContext(project);
   const out = [];
   const real = (items || []).filter(it => it.source !== "engineering_rule");
   // the device itself, not what it is "for" / "with": "camera with wall bracket" is a camera
@@ -1303,7 +1385,7 @@ function designSystemFromTakeoff(items) {
     const n = Math.round(counted.reduce((s, it) => s + (Number(it.quantity) || 0), 0));
     if (n < 1) return;
     const pid = counted[0].project_id;
-    D.lines(n).forEach(([desc, qty, unit, has, basis], i) => {
+    D.lines(n, C).forEach(([desc, qty, unit, has, basis], i) => {
       if (!(qty > 0)) return;
       // a cable line is matched only by cable, a containment line only by containment ("conduit of Cat6A cable" is conduit)
       const CONT = /\b(conduit|trunking|tray|ladder|basket|containment)\b/i, contLine = CONT.test(desc);
@@ -1329,9 +1411,9 @@ function designSystemFromTakeoff(items) {
 }
 // The design is added to whichever BOQ uses the take-off; a draftsman package already designs the
 // whole system itself.
-function withSystemDesign(latest) {
+function withSystemDesign(latest, project) {
   if (!latest.length || boqBasisOf(latest.find(it => !it._systemDesign) || {}) === "design") return latest;
-  return latest.concat(designSystemFromTakeoff(latest));
+  return latest.concat(designSystemFromTakeoff(latest, project));
 }
 
 // Duplicate-drawing detection: if two drawing rows share the same non-null
@@ -2591,7 +2673,7 @@ async function detectReferenceZones(page, OPS) {
     const [px, py] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
     texts.push({ s, x: px / W, y: py / H });
   }
-  const KEY = /\b(LEGEND|SCHEDULE|SYMBOLS?|KEY\s*PLAN|NOTES?|DRAWING\s*(TITLE|NO|REFERENCE)|CHECKED|SCALE|REV(ISION)?|CLIENT|CONSULTANT|CONTRACTOR|PROJECT)\b/i;
+  const KEY = /\b(LEGEND|SCHEDULE|SYMBOLS?|KEY\s*PLAN|NOTES?|DRAWING\s*(TITLE|NO|REFERENCE)|CHECKED|SCALE|REV(ISION)?|CLIENT|CONSULTANT|CONTRACTOR|PROJECT|L[ÉE]GENDE|[ÉE]CHELLE|MA[IÎ]TRE D'OUVRAGE|LEYENDA|ESCALA|PROYECTO)\b|مفتاح|جدول|ملاحظات|المقياس|المشروع|المالك|الاستشاري|المقاول/i;
   const zones = [];
   // 1. title strip: a long straight line, near the right (or bottom) edge, with title-block words beyond it
   const vert = segs.filter(([a, b]) => Math.abs(a[0] - b[0]) < 1 && Math.abs(a[1] - b[1]) > 0.6 * H)
@@ -2659,7 +2741,7 @@ async function detectReferenceZones(page, OPS) {
   // 4. legend / schedule / notes boxes with a heading: the smallest box around the heading
   const boxes = rects.map(r => [r[0] / W, r[1] / H, r[2] / W, r[3] / H])
                      .filter(b => (b[2] - b[0]) * (b[3] - b[1]) < 0.2 && b[2] - b[0] > 0.02 && b[3] - b[1] > 0.02);
-  const HEAD = /\b(LEGEND|SCHEDULE|SYMBOLS?|KEY\s*PLAN|GENERAL\s*NOTES|NOTES|TYPICAL|DETAIL|INSTALLATION)\b/i;
+  const HEAD = /\b(LEGEND|SCHEDULE|SYMBOLS?|KEY\s*PLAN|GENERAL\s*NOTES|NOTES|TYPICAL|DETAIL|INSTALLATION|L[ÉE]GENDE|NOMENCLATURE|D[ÉE]TAIL|LEYENDA|DETALLE)\b|مفتاح الرموز|جدول|ملاحظات|تفاصيل/i;
   for (const t of texts) {
     if (!HEAD.test(t.s) || inZone(t.x, t.y)) continue;
     const box = boxes.filter(b => t.x >= b[0] && t.x <= b[2] && t.y >= b[1] - 0.01 && t.y <= b[3] + 0.015)
@@ -2684,7 +2766,40 @@ function detectReferenceZonesSafe(page) {
 // position, and the colour of that symbol gives its view (identification, detection ...). Tags inside
 // the title strip, legend and schedules are not counted. Returns
 // { cams: [{ n, tag, x, y, type }], schedule: number|null } in page fractions (y down), or null.
-const CAM_TAG_RE = /(^|[-_\s])CAM[-_\s]?\d{1,4}[A-Z]?$/i;
+// Device codes a tag can end in, for every ELV system. A tag is "<prefix parts>-<CODE>-<number>"
+// (NT-IDF-B1-GF-CAM-022, L2-SD-014, AP-07). Short or ambiguous codes count only inside a long tag.
+const DEVICE_CODES = {
+  CAM:  { kind: "CAM",  system: "cctv" },  CCTV: { kind: "CAM", system: "cctv" },  PTZ: { kind: "CAM", system: "cctv" },
+  ANPR: { kind: "CAM",  system: "anpr" },  LPR:  { kind: "CAM", system: "anpr" },
+  AP:   { kind: "AP",   system: "wifi" },  WAP:  { kind: "AP",  system: "wifi" },  WP: { kind: "AP", system: "wifi", long: true },
+  CR:   { kind: "DOOR", system: "access_control" }, RDR: { kind: "DOOR", system: "access_control" },
+  ACS:  { kind: "DOOR", system: "access_control", long: true }, AC: { kind: "DOOR", system: "access_control", long: true },
+  DR:   { kind: "DOOR", system: "access_control", long: true }, BIO: { kind: "DOOR", system: "access_control" },
+  SD:   { kind: "SD",   system: "fire_alarm" }, HD: { kind: "HD", system: "fire_alarm" }, MCP: { kind: "MCP", system: "fire_alarm" },
+  SB:   { kind: "SB",   system: "fire_alarm", long: true }, SS: { kind: "SB", system: "fire_alarm", long: true },
+  DO:   { kind: "DO",   system: "structured_cabling" }, TO: { kind: "DO", system: "structured_cabling", long: true },
+  DP:   { kind: "DO",   system: "structured_cabling", long: true }, DATA: { kind: "DO", system: "structured_cabling" },
+  D:    { kind: "DO",   system: "structured_cabling", long: true }, TEL: { kind: "TEL", system: "structured_cabling", long: true },
+  SPK:  { kind: "SPK",  system: "public_address" }, LS: { kind: "SPK", system: "public_address", long: true },
+  PA:   { kind: "SPK",  system: "public_address", long: true },
+  IC:   { kind: "IC",   system: "intercom", long: true }, INT: { kind: "IC", system: "intercom", long: true },
+  VDP:  { kind: "IC",   system: "intercom" }, DS: { kind: "IC", system: "intercom", long: true },
+  TV:   { kind: "TV",   system: "iptv", long: true }, IPTV: { kind: "TV", system: "iptv" }, CATV: { kind: "TV", system: "iptv" },
+};
+const DEVICE_KINDS = {
+  CAM: "Camera", AP: "Wi-Fi access point", DOOR: "Access-controlled door / reader", SD: "Smoke detector", HD: "Heat detector",
+  MCP: "Manual call point", SB: "Sounder / beacon", DO: "Data outlet", TEL: "Telephone outlet", SPK: "Speaker",
+  IC: "Intercom station", TV: "TV outlet",
+};
+const DEVICE_TAG_RE = /^((?:[A-Z0-9]{1,8}[-_.\/])*)([A-Z]{1,5})[-_.\s]?(\d{1,4})[A-Z]?$/;
+function deviceCodeOf(s) {
+  const m = DEVICE_TAG_RE.exec(String(s).toUpperCase().replace(/\s+/g, " ").trim());
+  if (!m) return null;
+  const c = DEVICE_CODES[m[2]];
+  if (!c) return null;
+  if (c.long && !m[1]) return null;      // a short code alone (D-1, AC 2) is too ambiguous
+  return c;
+}
 const CAM_TYPES = {
   ID:   { name: "120% identification view", colour: "#dc2626", system: "cctv" },
   REC:  { name: "50% recognition view",      colour: "#2563eb", system: "cctv" },
@@ -2703,7 +2818,7 @@ async function readCameraTags(page, OPS, zones) {
   const W = vp.width, H = vp.height;
   const tc = await page.getTextContent();
   const inZone = (x, y) => (zones || []).some(z => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1);
-  const tags = [];
+  const tags = [], seenTag = new Set();
   let scheduleTotal = null;
   const texts = [];
   for (const it of tc.items) {
@@ -2715,7 +2830,8 @@ async function readCameraTags(page, OPS, zones) {
     const t = { s, x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
     t.cx = (t.x0 + t.x1) / 2; t.cy = (t.y0 + t.y1) / 2;
     texts.push(t);
-    if (CAM_TAG_RE.test(s) && !inZone(t.cx, t.cy)) tags.push(t);
+    const code = deviceCodeOf(s);
+    if (code && !inZone(t.cx, t.cy) && !seenTag.has(s.toUpperCase())) { t.code = code; tags.push(t); seenTag.add(s.toUpperCase()); }
   }
   // the sheet's own "OVER ALL CAMERA  161", for the check
   const ov = texts.find(t => /OVER\s*ALL\s*CAMERA|TOTAL\s*CAMERAS?/i.test(t.s));
@@ -2725,7 +2841,11 @@ async function readCameraTags(page, OPS, zones) {
       .sort((a, b) => a.cx - b.cx);
     if (nums.length) scheduleTotal = Number(nums[nums.length - 1].s);
   }
-  if (tags.length < 3) return { cams: [], schedule: scheduleTotal };
+  // a system counts from its tags when it has at least three on the sheet
+  const perSys = {};
+  for (const t of tags) perSys[t.code.system] = (perSys[t.code.system] || 0) + 1;
+  for (let i = tags.length - 1; i >= 0; i--) if (perSys[tags[i].code.system] < 3) tags.splice(i, 1);
+  if (!tags.length) return { cams: [], devices: [], schedule: scheduleTotal };
   // geometry: black line segments (leaders) and small camera-coloured marks (the symbols)
   const ol = await page.getOperatorList();
   let ctm = [1, 0, 0, 1, 0, 0], fill = "0,0,0", stroke = "0,0,0";
@@ -2734,7 +2854,7 @@ async function readCameraTags(page, OPS, zones) {
   const P = (x, y) => { const u = ctm[0]*x+ctm[2]*y+ctm[4], v = ctm[1]*x+ctm[3]*y+ctm[5]; const p = vp.convertToViewportPoint(u, v); return [p[0] / W, p[1] / H]; };
   const rgb = (a) => Array.from(Object.values(a)).map(v => Math.round(v)).join(",");
   const S = 3370 / Math.max(W, H);     // distances below were set on an A0 sheet
-  const segs = [], marks = [];
+  const allSegs = [], rawMarks = [];
   let pend = null;
   for (let i = 0; i < ol.fnArray.length; i++) {
     const fn = ol.fnArray[i], a = ol.argsArray[i];
@@ -2757,19 +2877,48 @@ async function readCameraTags(page, OPS, zones) {
                         fn === OPS.fillStroke || fn === OPS.closeFillStroke || fn === OPS.eoFillStroke || fn === OPS.closeEOFillStroke)) {
       const filled = fn !== OPS.stroke && fn !== OPS.closeStroke;
       const stroked = fn !== OPS.fill && fn !== OPS.eoFill;
-      if (stroked && stroke === "0,0,0") for (const s of pend.ss) if (Math.hypot(s[0][0]-s[1][0], s[0][1]-s[1][1]) > 0.0005) segs.push(s);
+      // leaders are drawn in a neutral colour (black or a grey); which one is decided below
+      if (stroked && /^(\d+),\1,\1$/.test(stroke) && Number(stroke.split(",")[0]) <= 200)
+        for (const s of pend.ss) if (Math.hypot(s[0][0]-s[1][0], s[0][1]-s[1][1]) > 0.0005) { const q = [s[0], s[1]]; q.col = stroke; allSegs.push(q); }
       if (pend.pts.length) {
         let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
         for (const p of pend.pts) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
         if (Math.max(x1 - x0, y1 - y0) < 0.005 * S) {
           // a filled mark, or a stroked ring (the camera's circles); a short straight coloured stroke is a cable route
-          const ty = (filled && CAM_SYMBOL_COLOURS[fill]) || (!filled && pend.curves && CAM_SYMBOL_COLOURS[stroke]);
-          if (ty) marks.push([(x0 + x1) / 2, (y0 + y1) / 2, ty]);
+          const col = filled ? fill : (pend.curves ? stroke : null);
+          if (col && !/^(\d+),\1,\1$/.test(col)) rawMarks.push([(x0 + x1) / 2, (y0 + y1) / 2, col]);
         }
       }
       pend = null;
     } else if (fn === OPS.endPath) pend = null;
   }
+  // The leader colour: the neutral colour of the lines that leave the tag boxes most often
+  const vote = {};
+  for (const t of tags) {
+    const p = 0.0035 * S, ib = (q) => q[0] >= t.x0 - p && q[0] <= t.x1 + p && q[1] >= t.y0 - p && q[1] <= t.y1 + p;
+    // one vote per tag and colour: a leader leaves its box once; hatching crosses it many times
+    const here = new Set();
+    for (const sg of allSegs) if (ib(sg[0]) !== ib(sg[1]) && Math.hypot(sg[0][0]-sg[1][0], sg[0][1]-sg[1][1]) > 0.002 * S) here.add(sg.col);
+    for (const c of here) vote[c] = (vote[c] || 0) + 1;
+  }
+  // black when most tags have a black line leaving them, else the commonest grey
+  const leaderCol = (vote["0,0,0"] || 0) >= tags.length * 0.5 ? "0,0,0" : (Object.keys(vote).sort((a, b) => vote[b] - vote[a])[0] || "0,0,0");
+  const segs = allSegs.filter(sg => sg.col === leaderCol);
+  // The view colours: from this sheet's own FOV legend when it has one (a coloured sample beside
+  // "120% IDENTIFICATION VIEW" ...), else the UAE house-style colours.
+  const VIEW_WORDS = [["ID", /IDENTIF/i], ["REC", /RECOGNI/i], ["OBS", /OBSERV/i], ["DET", /DETECT/i], ["MON", /MONITOR/i], ["ANPR", /ANPR|LPR|NUMBER\s*PLATE/i]];
+  const legendCol = {};
+  for (const t of texts) {
+    const vw = VIEW_WORDS.find(([, re]) => re.test(t.s));
+    if (!vw || !inZone(t.cx, t.cy) || t.s.length > 60) continue;
+    const h = Math.max(t.y1 - t.y0, 0.004);
+    const near = rawMarks.filter(m => inZone(m[0], m[1]) && Math.abs(m[1] - t.cy) < h * 1.5 && m[0] < t.x0 + 0.002 && m[0] > t.x0 - 0.05);
+    const cnt = {};
+    for (const m of near) cnt[m[2]] = (cnt[m[2]] || 0) + 1;
+    for (const c of Object.keys(cnt)) if (!legendCol[c]) legendCol[c] = vw[0];
+  }
+  const viewOf = (c) => legendCol[c] || CAM_SYMBOL_COLOURS[c] || null;
+  const marks = rawMarks.filter(m => !inZone(m[0], m[1]) && viewOf(m[2])).map(m => [m[0], m[1], viewOf(m[2])]);
   // leader following, on a grid of segment ends
   const tol = 0.0012 * S, key = (p) => Math.round(p[0] / tol) + ":" + Math.round(p[1] / tol);
   const grid = new Map();
@@ -2784,7 +2933,7 @@ async function readCameraTags(page, OPS, zones) {
     return out; };
   const typeOf = (ms) => { const c = {}; ms.forEach(m => c[m[2]] = (c[m[2]] || 0) + 1); let b = null; for (const k in c) if (!b || c[k] > c[b]) b = k; return b; };
   const pad = 0.0035 * S;
-  const cams = [];
+  const cams = [], devices = [];
   for (const t of tags) {
     const bx0 = t.x0 - pad, bx1 = t.x1 + pad, by0 = t.y0 - pad, by1 = t.y1 + pad;
     const inBox = (p) => p[0] >= bx0 && p[0] <= bx1 && p[1] >= by0 && p[1] <= by1;
@@ -2809,7 +2958,13 @@ async function readCameraTags(page, OPS, zones) {
       if (L > 0.002 * S && (!best || sc > best.sc)) best = { end, sc, ms };
     }
     let pt = best ? best.end : [t.cx, t.cy];
+    if (t.code.kind !== "CAM") {
+      // any other device: the end of its leader, else the tag itself (a tag written beside its device)
+      devices.push({ tag: t.s, kind: t.code.kind, system: t.code.system, x: pt[0], y: pt[1] });
+      continue;
+    }
     let type = best && best.ms.length ? typeOf(best.ms) : null;
+    if (t.code.system === "anpr" && !type) type = "ANPR";
     if (!type) {
       // the camera symbol nearest the leader end, or touching the tag box
       const r = 0.008 * S;
@@ -2820,16 +2975,21 @@ async function readCameraTags(page, OPS, zones) {
     }
     cams.push({ tag: t.s, x: pt[0], y: pt[1], type: type || "?" });
   }
-  // numbered top to bottom, left to right, so number 1 is where a reader starts
-  cams.sort((a, b) => (Math.round(a.y * 20) - Math.round(b.y * 20)) || (a.x - b.x));
+  // numbered top to bottom, left to right, so number 1 is where a reader starts; one series per system
+  const order = (a, b) => (Math.round(a.y * 20) - Math.round(b.y * 20)) || (a.x - b.x);
+  cams.sort(order);
   cams.forEach((c, i) => c.n = i + 1);
-  return { cams, schedule: scheduleTotal };
+  devices.sort(order);
+  const nBy = {};
+  devices.forEach(d => { nBy[d.system] = (nBy[d.system] || 0) + 1; d.n = nBy[d.system]; });
+  if (cams.length < 3) cams.length = 0;
+  return { cams, devices, schedule: scheduleTotal };
 }
 function readCameraTagsSafe(page, zones) {
-  if (!window.pdfjsLib || !window.pdfjsLib.OPS) return Promise.resolve({ cams: [], schedule: null });
+  if (!window.pdfjsLib || !window.pdfjsLib.OPS) return Promise.resolve({ cams: [], devices: [], schedule: null });
   return Promise.race([
-    readCameraTags(page, window.pdfjsLib.OPS, zones).catch(e => { console.warn("Camera tags not read:", e); return { cams: [], schedule: null }; }),
-    new Promise(res => setTimeout(() => res({ cams: [], schedule: null }), 45000)),
+    readCameraTags(page, window.pdfjsLib.OPS, zones).catch(e => { console.warn("Device tags not read:", e); return { cams: [], devices: [], schedule: null }; }),
+    new Promise(res => setTimeout(() => res({ cams: [], devices: [], schedule: null }), 45000)),
   ]);
 }
 
@@ -2838,7 +2998,7 @@ function readCameraTagsSafe(page, zones) {
 // with a leader to the line ("300x50 mm SECURITY CABLE TRAY"). Every line of that colour on the plan is
 // then measured; a route drawn as two parallel edges (a tray) is measured once along its centre. The
 // sheet's own scale turns it into metres. Returns [{ description, colour, metres, double }] or [].
-const ROUTE_RE = /\b(CONDUIT|CABLE\s*TRAY|TRAY|TRUNKING|LADDER|BASKET|RACEWAY)\b/i;
+const ROUTE_RE = /\b(CONDUIT|CABLE\s*TRAY|TRAY|TRUNKING|LADDER|BASKET|RACEWAY|BUSBAR|BUSWAY|BUS\s*DUCT|WIREWAY|CHEMIN DE C[AÂ]BLES|GOULOTTE|CANALETA|BANDEJA)\b|حامل كابلات|مجرى كابلات|أنبوب/i;
 const NEUTRAL = (c) => { const [r, g, b] = c.split(",").map(Number); return Math.max(r, g, b) - Math.min(r, g, b) < 25; };
 const PAPER_MM = { A0: 1189, A1: 841, A2: 594, A3: 420, A4: 297 };
 async function measureRoutes(page, OPS, zones) {
@@ -2859,6 +3019,11 @@ async function measureRoutes(page, OPS, zones) {
   let scale = null, paper = null;
   for (const t of texts) {
     const m = /\b1\s*:\s*(\d{2,4})\b/.exec(t.s); if (m && !scale) scale = Number(m[1]);
+    // imperial: 1/8" = 1'-0"  ->  1:96;  1/4" = 1'-0"  ->  1:48;  1" = 20'  ->  1:240
+    const im = /(\d+)\s*\/\s*(\d+)\s*["”]\s*=\s*1\s*['’]\s*-?\s*0?\s*["”]?/.exec(t.s);
+    if (im && !scale) scale = Math.round(12 * Number(im[2]) / Number(im[1]));
+    const im2 = /\b1\s*["”]\s*=\s*(\d{1,3})\s*['’]/.exec(t.s);
+    if (im2 && !scale) scale = 12 * Number(im2[1]);
     const a = /SCALE\s*@\s*(A[0-4])/i.exec(t.s); if (a) paper = a[1].toUpperCase();
   }
   if (!scale) return [];
@@ -11451,6 +11616,8 @@ function DrawingsTab({ project }) {
             ? { schedule: camRead.schedule, cams: camRead.cams.map(c => ({ n: c.n, tag: c.tag, type: c.type, x: +c.x.toFixed(5), y: +c.y.toFixed(5) })) }
             : null;
           if (taggedCameras) console.log(`Sheet ${pageNumber}: ${taggedCameras.cams.length} camera tags on the plan (schedule ${camRead.schedule ?? "not read"})`);
+          const taggedDevices = (camRead.devices || []).map(dv => ({ kind: dv.kind, tag: dv.tag, n: dv.n, x: +dv.x.toFixed(5), y: +dv.y.toFixed(5) }));
+          if (taggedDevices.length) console.log(`Sheet ${pageNumber}: ${taggedDevices.length} other device tags on the plan`);
           // tray and conduit measured from the drawing's own lines, named by its legend / notes
           setTiling(t => ({ ...t, [d.id]: `Measuring tray and conduit${label}…` }));
           const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pageNumber), refZones);
@@ -11465,7 +11632,7 @@ function DrawingsTab({ project }) {
           for (;;) {
             try {
               started = await callEngine("analyze_drawing_tiled", {
-                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, measured_routes: measuredRoutes, ...tileConfirms,
+                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, ...tileConfirms,
               });
               break;
             } catch (ex) {
@@ -12392,7 +12559,7 @@ function MarkupViewerModal({ drawing, onClose }) {
         const pg = await pdf.getPage(n);
         const zones = await detectReferenceZonesSafe(pg);
         const ct = await readCameraTagsSafe(pg, zones);
-        setCamByPage(prev => ({ ...prev, [n]: { zones, cams: ct.cams, schedule: ct.schedule } }));
+        setCamByPage(prev => ({ ...prev, [n]: { zones, cams: ct.cams, devices: ct.devices || [], schedule: ct.schedule } }));
       }
     } catch (e) {
       console.error("renderPage failed:", e);
@@ -12526,7 +12693,7 @@ function MarkupViewerModal({ drawing, onClose }) {
       // The exported sheet is the sheet on screen, down to the fade and the
       // system that was isolated. A download that quietly shows more than the
       // viewer did is a different drawing, and somebody will build off it.
-      if (dimSheet && (symbolItems.length || aiMarkerItems.length || (useTags && matchedTags.length) || camMode)) {
+      if (dimSheet && (symbolItems.length || aiMarkerItems.length || (useTags && matchedTags.length) || tagMode)) {
         ctx.fillStyle = "rgba(255,255,255,0.60)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
@@ -12603,6 +12770,23 @@ function MarkupViewerModal({ drawing, onClose }) {
           ctx.fillStyle = "#ffffff"; ctx.fillText(label, bx + bw / 2, by + bh / 2 + 0.5);
         });
       });
+      if (devMode) {
+        const cw = canvas.width, ch = canvas.height, rr = cw * 0.0055, lw = Math.max(3, cw / 700);
+        ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+        if (!camMode) for (const z of camInfo.zones) {
+          ctx.fillStyle = "rgba(100,116,139,0.30)"; ctx.fillRect(z.x0 * cw, z.y0 * ch, (z.x1 - z.x0) * cw, (z.y1 - z.y0) * ch);
+          ctx.fillStyle = "#334155"; ctx.font = `bold ${Math.round(badge * 0.9)}px Arial, sans-serif`;
+          ctx.fillText(z.kind === "box" || z.kind === "table" ? "NOT COUNTED" : `NOT COUNTED - ${String(z.label || "").toUpperCase()}`, z.x0 * cw + 6, z.y0 * ch + badge);
+        }
+        for (const d of devList) {
+          if (isolate && d.system !== isolate) continue;
+          const col = systemColor(d.system), x = d.x * cw, y = d.y * ch;
+          ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.strokeStyle = "#ffffff"; ctx.lineWidth = lw * 1.8; ctx.stroke();
+          ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.stroke();
+          ctx.font = `bold ${badge}px Arial, sans-serif`; ctx.lineWidth = 4; ctx.strokeStyle = "#ffffff";
+          ctx.strokeText(String(d.n), x + rr + 3, y - rr * 0.4); ctx.fillStyle = col; ctx.fillText(String(d.n), x + rr + 3, y - rr * 0.4);
+        }
+      }
       if (camMode) {
         // the same zones, circles and numbers as the screen
         const cw = canvas.width, ch = canvas.height;
@@ -12760,7 +12944,13 @@ function MarkupViewerModal({ drawing, onClose }) {
   // positions) would be a second mark on the same camera, so it is left off for CCTV / ANPR.
   const camInfo = camByPage[pageNum];
   const camMode = !!(camInfo && camInfo.cams && camInfo.cams.length >= 3);
-  const notCam = sys => !(camMode && (sys === "cctv" || sys === "anpr"));
+  // every other system whose devices are tagged on this page is marked the same way
+  const devList = (camInfo && camInfo.devices) || [];
+  const devMode = devList.length > 0;
+  const tagMode = camMode || devMode;
+  const taggedSystems = new Set(devList.map(d => d.system).concat(camMode ? ["cctv", "anpr"] : []));
+  const notCam = sys => !taggedSystems.has(sys);
+  const devCount = devList.reduce((a, d) => { a[d.kind] = (a[d.kind] || 0) + 1; return a; }, {});
   const camCount = camMode ? camInfo.cams.reduce((a, c) => { a[c.type] = (a[c.type] || 0) + 1; return a; }, {}) : {};
   // ---- symbols -------------------------------------------------------------
   const pageSymbols = symbolsByPage[pageNum];
@@ -12813,7 +13003,7 @@ function MarkupViewerModal({ drawing, onClose }) {
   const pageTags = tagsByPage[pageNum];
   // with the cameras read from their tags, a short tag the reader could not place (part of a camera's long
   // tag, a grid label) is noise on top of the numbered cameras, so only tags of a known system stay
-  const matchedTags = (pageTags && pageTags.length ? matchTagsToItems(pageTags, items) : []).filter(t => notCam(t.system) && (!camMode || t.system));
+  const matchedTags = (pageTags && pageTags.length ? matchTagsToItems(pageTags, items) : []).filter(t => notCam(t.system) && (!tagMode || t.system));
   const useTags = matchedTags.length > 0;
   const tagsPending = pageTags === null || pageTags === undefined;
 
@@ -12840,7 +13030,7 @@ function MarkupViewerModal({ drawing, onClose }) {
   // Fading is only ever right when there is something to fade BEHIND. On a sheet
   // with no markers at all it reads as a failed render, which is exactly the
   // complaint it caused.
-  const anyMarkers = onPage.length > 0 || (useTags && matchedTags.length > 0) || symbolItems.length > 0 || camMode;
+  const anyMarkers = onPage.length > 0 || (useTags && matchedTags.length > 0) || symbolItems.length > 0 || tagMode;
   const dimOn = dimSheet && anyMarkers;
   const markCountBySystem = onPage.reduce((acc, it) => {
     const k = it.system_category || "other";
@@ -13053,7 +13243,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                     </React.Fragment>
                   );
                 })}
-                {camMode && camInfo.zones.map((z, i) => (
+                {tagMode && camInfo.zones.map((z, i) => (
                   <div key={`zone-${i}`} className="absolute pointer-events-none"
                     style={{ left: `${z.x0 * 100}%`, top: `${z.y0 * 100}%`, width: `${(z.x1 - z.x0) * 100}%`, height: `${(z.y1 - z.y0) * 100}%`,
                              background: "rgba(100,116,139,0.30)", outline: "2px solid rgba(71,85,105,0.85)" }}>
@@ -13063,6 +13253,18 @@ function MarkupViewerModal({ drawing, onClose }) {
                     </span>
                   </div>
                 ))}
+                {devMode && devList.map(d => {
+                  const col = systemColor(d.system);
+                  return (
+                    <div key={`dev-${d.system}-${d.n}`} title={`${DEVICE_KINDS[d.kind] || d.kind} ${d.n} — ${d.tag}`}
+                      className={`absolute${mutedBy(d.system) ? " qtr-marker-mute" : ""}`}
+                      style={{ left: `${d.x * 100}%`, top: `${d.y * 100}%`, width: "1.1%", aspectRatio: "1", transform: "translate(-50%,-50%)",
+                               border: `3px solid ${col}`, borderRadius: "50%", boxShadow: "0 0 0 1.5px #fff" }}>
+                      <span style={{ position: "absolute", left: "105%", top: "-55%", fontSize: 11, fontWeight: 800, color: col,
+                                     textShadow: "0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff", whiteSpace: "nowrap" }}>{d.n}</span>
+                    </div>
+                  );
+                })}
                 {camMode && camInfo.cams.map(c => {
                   const T = CAM_TYPES[c.type] || CAM_TYPES["?"];
                   return (
@@ -13076,6 +13278,21 @@ function MarkupViewerModal({ drawing, onClose }) {
                   );
                 })}
                 </div>
+              </div>
+            )}
+            {devMode && (
+              <div className="mb-3 text-xs border rounded-lg px-3 py-2 bg-emerald-50 border-emerald-200">
+                <div className="font-semibold mb-1 text-emerald-700">Devices counted on the plan from their tags</div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-600">
+                  {Object.entries(devCount).map(([k, n]) => {
+                    const sys = (devList.find(d => d.kind === k) || {}).system;
+                    return (
+                      <span key={k}><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 999, border: `2.5px solid ${systemColor(sys)}`, marginRight: 5, verticalAlign: -1 }} />
+                        {DEVICE_KINDS[k] || k}: <b>{n}</b></span>
+                    );
+                  })}
+                </div>
+                <div className="text-slate-400 mt-1">Every tagged device is circled and numbered (one series per system). Shaded areas are not counted.</div>
               </div>
             )}
             {camMode && (
@@ -13119,7 +13336,7 @@ function MarkupViewerModal({ drawing, onClose }) {
             {error2 && (
               <div className="mb-3 text-sm rounded-lg px-3 py-2 bg-amber-50 border border-amber-200 text-amber-800">{error2}</div>
             )}
-            {imgUrl && !camMode && (
+            {imgUrl && !tagMode && (
               <div style={{ marginTop: -8, marginBottom: 14, fontSize: 12, lineHeight: 1.6 }}>
                 {useSymbols ? (
                   <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 inline-block">
@@ -15086,7 +15303,7 @@ function BoqTab({ project, onGoToEstimation }) {
   // complete system worked out from it, or the draftsman package when that is the one chosen
   const eligibleItems = useMemo(() => {
     const latest = filterLatestRevisions(rawItems, boqView === "takeoff" ? "takeoff" : undefined);
-    return withSystemDesign(latest.filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
+    return withSystemDesign(latest.filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)), project);
   }, [rawItems, excludeDrawingIds, basisTick, boqView]);
 
   const consolidatedAll = useMemo(() => consolidateBoqItems(eligibleItems, drawingsById), [eligibleItems, drawingsById]);
@@ -16000,7 +16217,7 @@ function ProcurementBoqTab({ project }) {
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
   const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
   const consolidated = useMemo(() => {
-    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
+    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)), project);
     return consolidateBoqItems(latest, drawingsById);
   }, [rawItems, excludeDrawingIds, drawingsById]);
 
@@ -16104,7 +16321,7 @@ function EngineeringBoqTab({ project }) {
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
   const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
   const consolidated = useMemo(() => {
-    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
+    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)), project);
     return consolidateBoqItems(latest, drawingsById);
   }, [rawItems, excludeDrawingIds, drawingsById]);
 
@@ -16253,7 +16470,7 @@ function SpecificationTab({ project }) {
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
   const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
   const consolidated = useMemo(() => {
-    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
+    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)), project);
     return consolidateBoqItems(latest, drawingsById);
   }, [rawItems, excludeDrawingIds, drawingsById]);
 
@@ -17235,7 +17452,7 @@ function ExportTab({ project }) {
       ]);
       const drawingsById = {}; (dr||[]).forEach(d => drawingsById[d.id] = d);
       const { excludeDrawingIds, duplicateGroups } = detectDuplicateDrawings(dr || []);
-      const latest = withSystemDesign(filterLatestRevisions(items || []).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
+      const latest = withSystemDesign(filterLatestRevisions(items || []).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)), project);
       const consolidatedAll = consolidateBoqItems(latest, drawingsById);
       const consolidated = kind !== "procurement" ? consolidatedAll : consolidatedAll.filter(r => r.reviewBucket === "confirmed");
 
