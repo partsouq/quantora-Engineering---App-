@@ -192,6 +192,34 @@ function panelToPageRect(p: any, tile: TileSpec): { x0: number; y0: number; x1: 
   };
 }
 
+// Reference zones found by the app from the PDF itself (its lines and text): the title strip,
+// header / detail / schedule bands, ruled tables and typical-detail boxes. A symbol inside one is
+// a reference, never an installed device -- it is not counted and not marked (2026-10-26).
+function validateZones(raw: any): { x0: number; y0: number; x1: number; y1: number; kind?: string; label?: string }[] {
+  if (!Array.isArray(raw)) return [];
+  const out: any[] = [];
+  for (const z of raw.slice(0, 40)) {
+    const x0 = Number(z?.x0), y0 = Number(z?.y0), x1 = Number(z?.x1), y1 = Number(z?.y1);
+    if (![x0, y0, x1, y1].every((v) => Number.isFinite(v) && v >= -0.01 && v <= 1.01)) continue;
+    if (!(x1 > x0) || !(y1 > y0)) continue;
+    // a zone covering most of the sheet is not a reference panel -- ignore it rather than lose the plan
+    if ((x1 - x0) * (y1 - y0) > 0.6) continue;
+    out.push({ x0: Math.max(0, x0), y0: Math.max(0, y0), x1: Math.min(1, x1), y1: Math.min(1, y1),
+               kind: String(z?.kind ?? "").slice(0, 20), label: String(z?.label ?? "").slice(0, 60) });
+  }
+  return out;
+}
+function zoneCoverage(tile: { x0: number; y0: number; x1: number; y1: number }, zones: { x0: number; y0: number; x1: number; y1: number }[]): number {
+  const area = (tile.x1 - tile.x0) * (tile.y1 - tile.y0);
+  if (!(area > 0)) return 0;
+  let a = 0;
+  for (const z of zones) {
+    const w = Math.min(tile.x1, z.x1) - Math.max(tile.x0, z.x0), h = Math.min(tile.y1, z.y1) - Math.max(tile.y0, z.y0);
+    if (w > 0 && h > 0) a += w * h;
+  }
+  return Math.min(1, a / area);
+}
+
 function pointInAnyRect(pt: any, rects: { x0: number; y0: number; x1: number; y1: number }[]): boolean {
   const x = Number(pt?.x), y = Number(pt?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
@@ -1220,8 +1248,10 @@ async function supersedePriorNoDrawingRuns(admin: any, projectId: string, runKin
 }
 
 const ENGINEERING_RULE_COUNTABLE_UNITS = new Set([
-  "no", "nos", "ea", "each", "unit", "units", "pc", "pcs", "set", "assembly", "point", "points",
+  "no", "nos", "nr", "ea", "each", "unit", "units", "pc", "pcs", "set", "assembly", "point", "points",
 ]);
+// ANPR cameras are cameras: they take the CCTV per-camera accessories (patch cord, point, licence)
+const RULE_SYSTEM_ALIAS: Record<string, string> = { anpr: "cctv" };
 const ENGINEERING_RULE_EXCLUDED_QTY_SOURCES = new Set([
   "schedule_quantity", "key_plan_reference", "legend_reference", "typical_detail_reference", "note_reference", "duplicate_reference",
   // calculated_quantity added 2026-08-16. An engineered/calculated line is
@@ -1303,14 +1333,14 @@ async function deriveEngineeringItems(admin: any, insertedRows: any[]) {
     if (!(Number(item.quantity) > 0)) continue;
     const itemSubjectText = engineeringRuleSubjectText(item.description).toLowerCase();
     for (const rule of rules) {
-      if (rule.system_category !== item.system_category) continue;
+      if (rule.system_category !== item.system_category && rule.system_category !== RULE_SYSTEM_ALIAS[item.system_category]) continue;
       if (!item.description || !itemSubjectText.includes(rule.trigger_keyword.toLowerCase())) continue;
 
       // A rule exists to fill a gap the drawing left. If the analysis already
       // produced this equipment for the same system, adding the generic version
       // on top is a straight double-count -- and the analysis line is the better
       // one, because it carries the real specification read off the drawing.
-      const covered = ruleAlreadyCoveredBy(rule.derived_description, sameSystemItems.get(item.system_category) ?? []);
+      const covered = ruleAlreadyCoveredBy(rule.derived_description, sameSystemItems.get(rule.system_category) ?? []);
       if (covered) {
         console.log(`engineering rule "${rule.derived_description}" suppressed: already covered by "${covered.description}" (qty ${covered.quantity})`);
         continue;
@@ -1318,7 +1348,7 @@ async function deriveEngineeringItems(admin: any, insertedRows: any[]) {
 
       derived.push({
         project_id: item.project_id, drawing_id: item.drawing_id, analysis_run_id: item.analysis_run_id,
-        revision_number: item.revision_number, system_category: item.system_category,
+        revision_number: item.revision_number, system_category: rule.system_category,
         floor_label: item.floor_label, zone: item.zone, room: item.room, area_label: item.area_label,
         building: item.building ?? null,
         description: rule.derived_description, technical_specification: rule.notes,
@@ -1380,6 +1410,7 @@ function promoteSoleSourceScheduleRows(rows: any[]): { rows: any[]; promoted: nu
   let promoted = 0;
   const out = rows.map((r) => {
     if (r.quantity_source_type !== "schedule_quantity") return r;
+    if (r.__zone) return r;           // a title-block / legend schedule is never promoted to a counted quantity
     const desc = String(r.description ?? "").trim().toLowerCase();
     if (physicalDescriptions.has(desc)) return r; // genuine cross-check, leave excluded
     promoted++;
@@ -1559,8 +1590,31 @@ function rescueDimensionMistakenForQuantity(row: any): any {
   };
 }
 
+// One spelling per unit, so the same item never splits into "no" / "No." / "nos" lines (2026-10-26).
+const UNIT_ALIASES: Record<string, string> = {
+  no: "nr", "no.": "nr", nos: "nr", "nos.": "nr", nr: "nr", "nr.": "nr", number: "nr", each: "nr", ea: "nr",
+  pc: "nr", pcs: "nr", piece: "nr", pieces: "nr", unit: "nr", units: "nr", point: "nr", points: "nr", pts: "nr",
+  m: "m", lm: "m", rm: "m", mtr: "m", mtrs: "m", meter: "m", meters: "m", metre: "m", metres: "m", "lin.m": "m",
+  m2: "m²", "m²": "m²", sqm: "m²", "sq.m": "m²", m3: "m³", "m³": "m³", cum: "m³",
+  set: "set", sets: "set", lot: "lot", lots: "lot", ls: "lot", "l.s.": "lot", item: "item", run: "run", runs: "run",
+  kg: "kg", t: "t", ton: "t", tonne: "t", channel: "channel", port: "port", ports: "port",
+};
+function normaliseUnit(r: any): any {
+  const raw = String(r.unit ?? "").trim();
+  const k = raw.toLowerCase();
+  // a length given in millimetres is a length in metres
+  if (k === "mm") {
+    const q = Number(r.quantity);
+    return Number.isFinite(q)
+      ? { ...r, unit: "m", quantity: Math.round(q) / 1000,
+          quantity_basis_notes: [r.quantity_basis_notes, `Converted from ${q} mm.`].filter(Boolean).join(" ") }
+      : r;
+  }
+  return UNIT_ALIASES[k] ? { ...r, unit: UNIT_ALIASES[k] } : r;
+}
+
 function sanitizeBoqRow(row: any): any {
-  const r = rescueDimensionMistakenForQuantity(row);
+  const r = normaliseUnit(rescueDimensionMistakenForQuantity(row));
   return {
     ...r,
     coordinates: sanitizeCoordinates(r.coordinates, r.unit, r.quantity),
@@ -2676,7 +2730,7 @@ Deno.serve(async (req: Request) => {
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = promotedRows.map(sanitizeBoqRow);
+        const safeRows = promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
@@ -2721,8 +2775,8 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
 
-      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope } = body as {
-        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number };
+      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones } = body as {
+        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[];
         confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean;
       };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
@@ -2733,6 +2787,7 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: "Civil, structural and architectural drawings are measured from the whole sheet, not in tiles. Reload the page and press Analyze again." }, 400);
       }
 
+      const refZones = validateZones(rawZones);
       let tiles: TileSpec[];
       try {
         tiles = validateTiles(rawTiles);
@@ -2887,7 +2942,19 @@ Deno.serve(async (req: Request) => {
             `If this tile contains no countable items at all, return an empty items list -- that is a valid and useful answer, ` +
             `do not invent content to fill it.`;
 
-          const content = [tb.block, { type: "text", text: prompt }];
+          // the app's own reference zones, as fractions of THIS tile
+          const zl = refZones.map((z) => {
+            const tw = t.x1 - t.x0, th = t.y1 - t.y0;
+            const a = Math.max(0, (z.x0 - t.x0) / tw), b = Math.max(0, (z.y0 - t.y0) / th);
+            const c = Math.min(1, (z.x1 - t.x0) / tw), d = Math.min(1, (z.y1 - t.y0) / th);
+            return c > a && d > b ? `${z.label || z.kind || "reference panel"}: x ${pct(a)}-${pct(c)}, y ${pct(b)}-${pct(d)}` : null;
+          }).filter(Boolean);
+          const zoneText = zl.length
+            ? `\n\nREFERENCE AREAS OF THIS IMAGE, measured from the drawing file itself -- title block, legend, schedules, typical details, header band. ` +
+              `NOTHING inside them is an installed device: do not count it, do not give it a position, and do not record their table rows ` +
+              `as quantities.\n- ${zl.join("\n- ")}`
+            : "";
+          const content = [tb.block, { type: "text", text: prompt + zoneText }];
           let out;
           try {
             out = await callClaude(anthropicKey, systemPrompt, content, BOQ_ITEM_TOOL, TILE_MAX_OUTPUT_TOKENS);
@@ -2920,7 +2987,10 @@ Deno.serve(async (req: Request) => {
         const notesParts: string[] = [];
         const panels: { x0: number; y0: number; x1: number; y1: number }[] = [];
         let emptyTiles = 0;
+        for (const z of refZones) panels.push({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1 });
+        let zoneRows = 0;
         for (const tr of tileResults as { tile: TileSpec; result: any }[]) {
+          const inRefZone = refZones.length > 0 && zoneCoverage(tr.tile, refZones) >= 0.6;
           for (const p of (Array.isArray(tr.result?.reference_panels) ? tr.result.reference_panels : [])) {
             const rect = panelToPageRect(p, tr.tile);
             if (rect) panels.push(rect);
@@ -2928,11 +2998,20 @@ Deno.serve(async (req: Request) => {
           const items = Array.isArray(tr.result?.items) ? tr.result.items : [];
           if (!items.length) emptyTiles++;
           for (const it of items) {
-            merged.push({
-              ...it,
-              coordinates: tileToPageCoords(it.coordinates, tr.tile, pageNo),
-              __tile: `${tr.tile.row + 1},${tr.tile.col + 1}`,
-            });
+            const coords = tileToPageCoords(it.coordinates, tr.tile, pageNo);
+            const row: any = { ...it, coordinates: coords, __tile: `${tr.tile.row + 1},${tr.tile.col + 1}` };
+            // a row with no position, read off a tile that is mostly title block / legend / schedule,
+            // is a table row: never a counted quantity, never promoted to one
+            if (inRefZone && !coords) {
+              row.__zone = true;
+              zoneRows++;
+              if ((row.quantity_source_type ?? "physical_count") === "physical_count") {
+                row.quantity_source_type = "legend_reference";
+                row.quantity_basis_notes = [row.quantity_basis_notes,
+                  "Read from the title block / legend / schedule area of the sheet, so it is recorded as a reference and not counted. The devices are counted on the plan."].filter(Boolean).join(" ");
+              }
+            }
+            merged.push(row);
           }
           if (tr.result?.analysis_notes) notesParts.push(`[tile ${tr.tile.row + 1},${tr.tile.col + 1}] ${tr.result.analysis_notes}`);
         }
@@ -2970,10 +3049,14 @@ Deno.serve(async (req: Request) => {
           quantity_source_type: it.quantity_source_type ?? "physical_count",
           schedule_quantity_crosscheck: it.schedule_quantity_crosscheck ?? null,
           quantity_basis_notes: it.quantity_basis_notes ?? null,
+          __zone: it.__zone === true,
         }));
 
         const { rows: promotedRows } = promoteSoleSourceScheduleRows(rows);
-        const safeRows = promotedRows.map(sanitizeBoqRow);
+        // a line that says "0 found in this tile" is not a BOQ line
+        const keptRows = promotedRows.map(({ __zone, ...r }: any) => r);
+        const safeRows = keptRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found in this tile" lines
+        if (zoneRows) console.log(`tiled run ${run.id}: ${zoneRows} row(s) read from reference zones; ${keptRows.length - safeRows.length} zero line(s) dropped.`);
         const synthetic = {
           items: deduped,
           analysis_notes: notesParts.join("\n"),
@@ -2999,6 +3082,7 @@ Deno.serve(async (req: Request) => {
             typical_detail_rows: typicalFixedTiled,
             found_nothing: safeRows.length === 0,
             reference_panels: panels.length,
+            reference_zones: refZones.map((z) => z.label || z.kind),
             positions_discarded_in_panels: panelDropped,
             notes: (safeRows.length === 0
               ? `No BOQ items were produced from this sheet. Every tile was read and nothing countable for the systems Quantora reads (MEP and ELV) was found. If this is a civil, structural or architectural drawing, set its type to Civil, Structural or Architectural so it is measured as civil works — and if it is a specification or schedule rather than a drawing, upload it on the Specification page instead. Per-tile detail follows.\n\n`
@@ -3202,7 +3286,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = promotedRows.map(sanitizeBoqRow);
+        const safeRows = promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
@@ -3378,7 +3462,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = promotedRows.map(sanitizeBoqRow);
+        const safeRows = promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
@@ -3534,7 +3618,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = promotedRows.map(sanitizeBoqRow);
+        const safeRows = promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0);   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 

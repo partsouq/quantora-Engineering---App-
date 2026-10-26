@@ -1135,12 +1135,190 @@ function buildItemIdentity(item) {
 // those). Shared by every consumer (BOQ tab, Procurement, Engineering,
 // Excel/PDF export) so none of them can ever disagree about which revision
 // is "current".
-function filterLatestRevisions(items) {
+// Two BOQs can exist for one project: the TAKE-OFF (read off uploaded drawings) and the DESIGN
+// (made by the draftsman / design engine on the architecture). They describe the same building,
+// so they are never added together: one basis is used, per project (2026-10-26).
+function boqBasisOf(it) {
+  return (!it.drawing_id && it.analysis_run_id && it.source === "engineering_rule") ? "design" : "takeoff";
+}
+// a take-off line linked to no drawing and no analysis run is from an early analysis (before lines
+// were linked to their drawing); the drawings were analysed again since, so it is superseded
+function isOrphanTakeoffLine(it) {
+  return !it.drawing_id && !it.analysis_run_id && ["ai_drawing_analysis", "engineering_rule", "cad_data_analysis"].includes(it.source);
+}
+function readBoqBasisPref(projectId) {
+  try { return JSON.parse(localStorage.getItem("q_boq_basis") || "{}")[projectId] || null; } catch (_) { return null; }
+}
+function writeBoqBasisPref(projectId, basis) {
+  try { const m = JSON.parse(localStorage.getItem("q_boq_basis") || "{}"); m[projectId] = basis; localStorage.setItem("q_boq_basis", JSON.stringify(m)); } catch (_) {}
+  try { window.dispatchEvent(new CustomEvent("q-boq-basis", { detail: { projectId, basis } })); } catch (_) {}
+}
+// which BOQ a project uses when it has both: the one chosen, else the newer one
+function boqBasisFor(items) {
+  const live = (items || []).filter(it => !isOrphanTakeoffLine(it));
+  const has = { takeoff: false, design: false }, newest = { takeoff: "", design: "" };
+  live.forEach(it => { const b = boqBasisOf(it); has[b] = true; if ((it.created_at || "") > newest[b]) newest[b] = it.created_at || ""; });
+  const pid = live[0] && live[0].project_id;
+  const pref = pid ? readBoqBasisPref(pid) : null;
+  if (has.takeoff && has.design) return { both: true, basis: pref && has[pref] ? pref : (newest.design >= newest.takeoff ? "design" : "takeoff") };
+  return { both: false, basis: has.design ? "design" : "takeoff" };
+}
+function filterLatestRevisions(items, forceBasis) {
+  const all = (items || []).filter(it => !isOrphanTakeoffLine(it));
+  const basis = forceBasis || boqBasisFor(all).basis;
+  const mine = all.filter(it => boqBasisOf(it) === basis);
   const latestRevByDrawing = {};
-  (items || []).forEach(it => {
+  let latestLoose = 0;
+  mine.forEach(it => {
     if (it.drawing_id) latestRevByDrawing[it.drawing_id] = Math.max(latestRevByDrawing[it.drawing_id] || 0, it.revision_number);
+    else latestLoose = Math.max(latestLoose, it.revision_number || 0);
   });
-  return (items || []).filter(it => !it.drawing_id || it.revision_number === latestRevByDrawing[it.drawing_id]);
+  // lines not tied to a drawing keep only their latest revision too -- earlier ones are superseded, not extra
+  return mine.filter(it => it.drawing_id ? it.revision_number === latestRevByDrawing[it.drawing_id] : (it.revision_number || 0) === latestLoose);
+}
+
+// ---------------------------------------------------------------------------
+// Complete-system design from the take-off (2026-10-26). The Designed BOQ is the take-off plus
+// everything the counted devices need to work as a system: head-end, network, storage, cable,
+// containment, power, testing. Worked out here from the counts, so it is always in step with the
+// latest take-off and applies to every project at once. Each line says how it was worked out
+// (its remark), and a line the take-off already has (an NVR drawn on the plan, a measured cable
+// run) is not added again. Not stored: the lines are rebuilt from the counts every time.
+// ---------------------------------------------------------------------------
+const SYSDESIGN_COUNT_UNITS = new Set(["nos", "set", "point"]);
+const SYSDESIGN_RUN_M = 45;            // average horizontal cable run per outlet / device, m (TIA limit 90 m)
+const SYSDESIGN_DROP_M = 6;            // conduit drop from the tray to each device, m
+const SYSDESIGN = {
+  cctv: {
+    label: "cameras",
+    count: /\b(camera|ptz|dome|bullet|anpr|lpr)\b/i,
+    not: /\b(licen[cs]e|bracket|pole|housing|cable|patch|point|outlet|switch|recorder|nvr|server|monitor|storage)\b/i,
+    mention: /\b(cctv|camera)/i,
+    systems: ["cctv", "anpr"],
+    lines: (n) => {
+      const nvr = Math.ceil(n / 64), sw = Math.ceil(n * 1.2 / 24), ws = Math.max(1, Math.ceil(n / 64));
+      const mon = Math.max(1, Math.ceil(n / 16));
+      const tb = Math.ceil(n * 4 * 86400 * 31 / 8 / 1e6 * 1.25);          // 4 Mbit/s, 31 days, +25% RAID
+      const kw = nvr * 0.45 + sw * 0.05 + n * 0.013 + ws * 0.35 + mon * 0.15 + 0.6;
+      const kva = Math.ceil(kw / 0.8 * 1.25);
+      const ru = nvr * 2 + sw + 2 + Math.ceil(sw / 2);
+      return [
+        ["Network video recorder / recording server, 64 channels, RAID 6", nvr, "nos", /\b(nvr|recorder|recording server|storage server)\b/i, `1 per 64 cameras (${n} cameras)`],
+        ["Recording storage (enterprise surveillance HDD), 31 days at 4 Mbit/s per camera", tb, "tb", /\b(storage|hdd|hard dis[ck])\b/i, `${n} cameras × 4 Mbit/s × 31 days + 25% RAID (check the retention in the specification)`],
+        ["Video management server with VMS base software", 1, "set", /\b(vms server|management server|vms software)\b/i, "1 per system"],
+        ["Operator workstation with VMS client, dual 27\" monitors", ws, "nos", /\b(workstation|client pc)\b/i, `1 per 64 cameras, minimum 1`],
+        ["Video wall / monitoring display 55\", 16 cameras per screen", mon, "nos", /\b(monitor|display|video wall)\b/i, `1 per 16 cameras (${n} cameras)`],
+        ["PoE+ access switch, 24 ports, managed, 2 SFP uplinks", sw, "nos", /\b(poe|switch)\b/i, `${n} cameras + 20% spare ports ÷ 24`],
+        ["Core / aggregation switch, 24 SFP+, for the CCTV network", 1, "nos", /\b(core switch|aggregation)\b/i, "1 per system"],
+        ["Equipment rack 42U with PDU, fans and cable management", Math.max(1, Math.ceil(ru / 30)), "nos", /\b(rack|cabinet)\b/i, `${ru} U of equipment ÷ 30 U usable`],
+        [`Online UPS ${kva} kVA, 30 minutes backup, for the CCTV head-end`, 1, "nos", /\bups\b/i, `${kw.toFixed(1)} kW load ÷ 0.8 pf + 25%`],
+        ["Cat6A U/FTP LSZH cable, camera to switch", n * SYSDESIGN_RUN_M, "m", /\b(cat ?6a?|utp|ftp|data cable)\b/i, `${n} cameras × ${SYSDESIGN_RUN_M} m average run`],
+        ["Fibre backbone, 12-core OM4, switch to core, with terminations", Math.ceil(sw / 2) * 60, "m", /\bfib(re|er)\b/i, `${Math.ceil(sw / 2)} IDF links × 60 m`],
+        ["GI conduit 20/25 mm drop to each camera, with boxes and fixings", n * SYSDESIGN_DROP_M, "m", /\b(conduit|trunking|containment)\b/i, `${n} cameras × ${SYSDESIGN_DROP_M} m`],
+        ["Testing, commissioning, SIRA approval and as-built documentation", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+      ];
+    },
+  },
+  access_control: {
+    label: "doors",
+    count: /\b(reader|biometric|card reader|controlled door|access door)\b/i,
+    not: /\b(cable|licen[cs]e|software|server|enrol)/i,
+    mention: /\baccess control/i,
+    systems: ["access_control"],
+    lines: (n) => [
+      ["Access control server with software, licensed for the doors shown", 1, "set", /\b(server|software)\b/i, "1 per system"],
+      ["Door licence for the access control software", n, "nos", /\blicen[cs]e\b/i, `1 per door (${n} doors)`],
+      ["Card enrolment desktop reader and printer", 1, "set", /\benrol/i, "1 per system"],
+      ["Operator workstation with access control client", 1, "nos", /\bworkstation\b/i, "1 per system"],
+      ["Cat6 LSZH cable, controller to network", Math.ceil(n / 2) * SYSDESIGN_RUN_M, "m", /\b(cat ?6|utp|data cable)\b/i, `1 per 2-door controller × ${SYSDESIGN_RUN_M} m`],
+      ["Multicore screened cable, controller to reader / lock / exit button / contact", n * 25, "m", /\b(multicore|composite|screened cable)\b/i, `${n} doors × 25 m`],
+      ["GI conduit 20 mm drops at each door, with boxes and fixings", n * 10, "m", /\b(conduit|trunking|containment)\b/i, `${n} doors × 10 m`],
+      ["Testing, commissioning and as-built documentation", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+    ],
+  },
+  fire_alarm: {
+    label: "field devices",
+    count: /\b(detector|call point|mcp|sounder|strobe|beacon|module|bell|horn)\b/i,
+    not: /\b(base|isolator|cable|panel|battery)\b/i,
+    mention: /\bfire alarm/i,
+    systems: ["fire_alarm"],
+    lines: (n) => {
+      const loops = Math.max(1, Math.ceil(n / 100));
+      return [
+        [`Addressable fire alarm control panel, ${loops} loop${loops > 1 ? "s" : ""}, with network card`, 1, "nos", /\b(panel|facp)\b/i, `${n} devices ÷ 100 per loop (125 max, 20% spare)`],
+        ["Standby batteries, 24 h standby + 30 min alarm", 1, "set", /\bbatter/i, "1 per panel"],
+        ["Fire-rated cable 2C 1.5 mm², enhanced (BS 8434-2)", n * 10, "m", /\b(fire.?rated|fp200|cable)\b/i, `${n} devices × 10 m`],
+        ["GI conduit 20 mm with boxes and fixings", n * 8, "m", /\b(conduit|containment)\b/i, `${n} devices × 8 m`],
+        ["Testing, commissioning and Civil Defence approval", 1, "ls", /\b(testing|commissioning)\b/i, "1 per system"],
+      ];
+    },
+  },
+  wifi: {
+    label: "access points",
+    count: /\b(access point|wap|\bap\b|wi-?fi)\b/i,
+    not: /\b(bracket|cable|licen[cs]e|controller|switch)\b/i,
+    mention: /\b(wi-?fi|wlan|access point)/i,
+    systems: ["wifi"],
+    lines: (n) => [
+      ["Wireless LAN controller / cloud management", 1, "set", /\bcontroller\b/i, "1 per system"],
+      ["Access point management licence", n, "nos", /\blicen[cs]e\b/i, `1 per access point (${n})`],
+      ["PoE+ access switch, 24 ports, managed", Math.ceil(n * 1.2 / 24), "nos", /\b(poe|switch)\b/i, `${n} APs + 20% spare ports ÷ 24`],
+      ["Cat6A U/FTP LSZH cable, AP to switch", n * SYSDESIGN_RUN_M, "m", /\b(cat ?6a?|utp|ftp|data cable)\b/i, `${n} APs × ${SYSDESIGN_RUN_M} m average run`],
+      ["Site survey, testing and commissioning", 1, "ls", /\b(survey|testing|commissioning)\b/i, "1 per system"],
+    ],
+  },
+  structured_cabling: {
+    label: "outlets",
+    count: /\b(outlet|data point|voice point|socket|telephone point|tel point|faceplate)\b/i,
+    not: /\b(cable|patch|panel|rack|switch)\b/i,
+    mention: /\b(data outlet|structured cabling|telephone outlet)/i,
+    systems: ["structured_cabling", "telephone"],
+    lines: (n) => {
+      const pp = Math.ceil(n / 24), sw = Math.ceil(n * 1.2 / 48);
+      return [
+        ["Cat6A patch panel 24 ports, loaded", pp, "nos", /\bpatch panel\b/i, `${n} outlets ÷ 24`],
+        ["Access switch 48 ports, managed, 4 SFP+ uplinks", sw, "nos", /\bswitch\b/i, `${n} outlets + 20% spare ÷ 48`],
+        ["Equipment rack 42U with PDU, fans and cable management", Math.max(1, Math.ceil((pp + sw + pp) / 30)), "nos", /\b(rack|cabinet)\b/i, "patch panels + switches + managers ÷ 30 U"],
+        ["Cat6A patch cord, 2 m (outlet side and rack side)", n * 2, "nos", /\bpatch cord\b/i, `${n} outlets × 2`],
+        ["Cat6A U/FTP LSZH cable, outlet to rack", n * SYSDESIGN_RUN_M, "m", /\b(cat ?6a?|utp|ftp|data cable)\b/i, `${n} outlets × ${SYSDESIGN_RUN_M} m average run`],
+        ["Testing (permanent link certification) and documentation", 1, "ls", /\b(testing|certification)\b/i, "1 per system"],
+      ];
+    },
+  },
+};
+function designSystemFromTakeoff(items) {
+  const out = [];
+  const real = (items || []).filter(it => it.source !== "engineering_rule");
+  // the device itself, not what it is "for" / "with": "camera with wall bracket" is a camera
+  const subject = (d) => String(d || "").split(/,| with | for | including | c\/w /i)[0];
+  Object.entries(SYSDESIGN).forEach(([key, D]) => {
+    const mine = real.filter(it => D.systems.includes(it.system_category));
+    const counted = mine.filter(it => isCountableSourceType(it.quantity_source_type) && it.quantity_source_type !== "calculated_quantity"
+      && SYSDESIGN_COUNT_UNITS.has(normalizeUnit(it.unit)) && D.count.test(subject(it.description)) && !D.not.test(subject(it.description)));
+    // what the take-off already has for this system, wherever the AI filed it (cable under structured cabling, ...)
+    const pool = real.filter(it => D.systems.includes(it.system_category) || D.mention.test(it.description || ""));
+    const n = Math.round(counted.reduce((s, it) => s + (Number(it.quantity) || 0), 0));
+    if (n < 1) return;
+    const pid = counted[0].project_id;
+    D.lines(n).forEach(([desc, qty, unit, has, basis], i) => {
+      if (!(qty > 0)) return;
+      if (pool.some(it => has.test(subject(it.description)) && !counted.includes(it))) return;   // the take-off has it already
+      out.push({
+        id: `sys:${key}:${i}`, project_id: pid, system_category: D.systems[0], description: desc,
+        quantity: Math.round(qty), unit, source: "engineering_rule", optimization_status: "engineered",
+        quantity_source_type: "calculated_quantity", floor_label: null, location: "Head-end / whole system",
+        drawing_id: null, analysis_run_id: null, revision_number: 0, confidence_score: 100, review_status: "pending",
+        optimization_note: `System design: ${basis}.`, _systemDesign: true, created_at: "",
+      });
+    });
+  });
+  return out;
+}
+// The design is added to whichever BOQ uses the take-off; a draftsman package already designs the
+// whole system itself.
+function withSystemDesign(latest) {
+  if (!latest.length || boqBasisOf(latest.find(it => !it._systemDesign) || {}) === "design") return latest;
+  return latest.concat(designSystemFromTakeoff(latest));
 }
 
 // Duplicate-drawing detection: if two drawing rows share the same non-null
@@ -1893,6 +2071,7 @@ function simpleBoqLocationForEntry(entry) {
   return entry.room ? `${floor} – ${entry.room}` : floor;
 }
 function simpleBoqLocationAggregate(row) {
+  if ((row.rawItems || []).length && row.rawItems.every(r => r._systemDesign)) return "Head-end / whole system";
   const floors = [...new Set((row.floorBreakdown || []).map(f => f.floor_label).filter(Boolean))];
   const prefix = row.building ? `${row.building} – ` : "";
   if (floors.length === 0) return row.building || "—";
@@ -2015,6 +2194,7 @@ function buildSimpleBoqLines(consolidatedAll, opts) {
         key: floorFilter ? `${row.key}::${floorFilter}` : row.key, rowKey: row.key,
         system: SYSTEM_LABEL(sysCat), description: row.description, location: floorFilter || simpleBoqLocationAggregate(row),
         qty: row.totalQuantity, unit: displayUnit(row.unit), status: simpleBoqStatusFor(row), remarks: simpleBoqRemarksFor(row),
+        systemDesign: (row.rawItems || []).length > 0 && row.rawItems.every(r => r._systemDesign),
       });
     });
   });
@@ -2340,6 +2520,151 @@ function describeStandardReports(reports) {
 // walks the entire page operator list every call -- so per-tile rendering meant
 // twelve full-page renders of a dense A0 sheet. One render per row, then
 // drawImage crops out of that band, cuts it to three.
+// Reference zones of a drawing sheet: the title strip and every legend / schedule / notes
+// table. Symbols inside them are references, not installed devices, so the take-off never
+// counts or marks them. Found from the PDF itself (its lines and text), not guessed by the AI.
+// Returns [{x0, y0, x1, y1, kind, label}] as fractions of the rendered page (y down).
+async function detectReferenceZones(page, OPS) {
+  const vp = page.getViewport({ scale: 1 });
+  const W = vp.width, H = vp.height;
+  const ol = await page.getOperatorList();
+  const segs = [], rects = [];
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const stack = [];
+  const mul = (a, b) => [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3],
+                         a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]];
+  const P = (x, y) => {
+    const u = ctm[0] * x + ctm[2] * y + ctm[4], v = ctm[1] * x + ctm[3] * y + ctm[5];
+    const [px, py] = vp.convertToViewportPoint(u, v);
+    return [px, py];
+  };
+  for (let i = 0; i < ol.fnArray.length; i++) {
+    const fn = ol.fnArray[i], args = ol.argsArray[i];
+    if (fn === OPS.save) stack.push(ctm.slice());
+    else if (fn === OPS.restore) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
+    else if (fn === OPS.transform) ctm = mul(ctm, args);
+    else if (fn === OPS.constructPath) {
+      const ops = args[0], c = args[1];
+      let k = 0, cur = null, start = null, poly = [];
+      const closeBox = () => {
+        // a closed outline of 4 axis-parallel sides is a box (frames drawn as lines, not as 're')
+        if (poly.length >= 4 && poly.length <= 6) {
+          const xs = poly.map(q => q[0]), ys = poly.map(q => q[1]);
+          const ok = poly.every((q, i) => { const r = poly[(i + 1) % poly.length]; return Math.abs(q[0] - r[0]) < 1 || Math.abs(q[1] - r[1]) < 1; });
+          if (ok) rects.push([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+        }
+      };
+      for (const op of ops) {
+        if (op === OPS.moveTo) { closeBox(); cur = P(c[k], c[k + 1]); start = cur; poly = [cur]; k += 2; }
+        else if (op === OPS.lineTo) { const p = P(c[k], c[k + 1]); if (cur) segs.push([cur, p]); cur = p; poly.push(p); k += 2; }
+        else if (op === OPS.rectangle) {
+          const a = P(c[k], c[k + 1]), b = P(c[k] + c[k + 2], c[k + 1] + c[k + 3]);
+          rects.push([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
+          k += 4;
+        }
+        else if (op === OPS.curveTo) { cur = P(c[k + 4], c[k + 5]); k += 6; }
+        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { cur = P(c[k + 2], c[k + 3]); k += 4; }
+        else if (op === OPS.closePath) { if (cur && start) segs.push([cur, start]); cur = start; closeBox(); poly = []; }
+      }
+      closeBox();
+    }
+  }
+  // text, in page fractions
+  const tc = await page.getTextContent();
+  const texts = [];
+  for (const it of tc.items) {
+    const s = String(it.str || "").trim();
+    if (!s) continue;
+    const [px, py] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+    texts.push({ s, x: px / W, y: py / H });
+  }
+  const KEY = /\b(LEGEND|SCHEDULE|SYMBOLS?|KEY\s*PLAN|NOTES?|DRAWING\s*(TITLE|NO|REFERENCE)|CHECKED|SCALE|REV(ISION)?|CLIENT|CONSULTANT|CONTRACTOR|PROJECT)\b/i;
+  const zones = [];
+  // 1. title strip: a long straight line, near the right (or bottom) edge, with title-block words beyond it
+  const vert = segs.filter(([a, b]) => Math.abs(a[0] - b[0]) < 1 && Math.abs(a[1] - b[1]) > 0.6 * H)
+                   .map(([a]) => a[0] / W).filter(x => x > 0.6 && x < 0.97);
+  // a bottom title block runs (almost) the full width, from the left frame
+  const horz = segs.filter(([a, b]) => Math.abs(a[1] - b[1]) < 1 && Math.abs(a[0] - b[0]) > 0.75 * W && Math.min(a[0], b[0]) < 0.1 * W)
+                   .map(([a]) => a[1] / H).filter(y => y > 0.75 && y < 0.97);
+  for (const r of rects) {
+    if (r[3] - r[1] > 0.6 * H) [r[0] / W, r[2] / W].forEach(x => { if (x > 0.6 && x < 0.97) vert.push(x); });
+    if (r[2] - r[0] > 0.75 * W && r[0] < 0.1 * W) [r[1] / H, r[3] / H].forEach(y => { if (y > 0.75 && y < 0.97) horz.push(y); });
+  }
+  const keysIn = (f) => texts.filter(t => f(t) && KEY.test(t.s)).length;
+  const sx = vert.filter(x => keysIn(t => t.x > x) >= 3).sort((a, b) => a - b)[0];
+  if (sx != null) zones.push({ x0: sx, y0: 0, x1: 1, y1: 1, kind: "title_strip", label: "Title strip" });
+  // title-block words below the line and left of any right-hand strip (the strip's own words do not count)
+  const sy = horz.filter(y => keysIn(t => t.y > y && (sx == null || t.x < sx)) >= 3).sort((a, b) => a - b)[0];
+  if (sy != null) zones.push({ x0: 0, y0: sy, x1: 1, y1: 1, kind: "title_strip", label: "Title block" });
+  // 2. bands: full-width lines that split the drawing area (left of the strip) into a header band,
+  //    the plan and a detail / schedule band. The tallest band is the plan; the others are reference.
+  const ax1 = sx != null ? sx : 0.97, by1 = sy != null ? sy : 0.998;
+  const hl = segs.filter(([a, b]) => Math.abs(a[1] - b[1]) < 1).map(([a, b]) => ({
+    x0: Math.min(a[0], b[0]) / W, x1: Math.max(a[0], b[0]) / W, y: a[1] / H }));
+  const div = hl.filter(l => l.x0 < 0.06 && l.x1 > ax1 - 0.03 && l.x1 - l.x0 > 0.75 * ax1 && l.y > 0.005 && l.y < by1 - 0.005)
+                .map(l => l.y).sort((p, q) => p - q);
+  const ys = [];
+  for (const y of div) if (!ys.length || y - ys[ys.length - 1] > 0.01) ys.push(y);
+  if (ys.length >= 2) {
+    const bands = [];
+    for (let k = 0; k + 1 < ys.length; k++) bands.push([ys[k], ys[k + 1]]);
+    const plan = bands.reduce((m, b) => (b[1] - b[0] > m[1] - m[0] ? b : m));
+    if (plan[1] - plan[0] > 0.4) {
+      for (const b of bands) {
+        if (b === plan || b[1] - b[0] < 0.01) continue;
+        zones.push({ x0: 0, y0: b[0], x1: ax1, y1: b[1], kind: "band", label: b[0] < plan[0] ? "Header band" : "Details / schedules band" });
+      }
+    }
+  }
+  const inZone = (x, y) => zones.some(z => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1);
+  // 3. ruled tables: four or more stacked lines of the same length = a table (legend, schedule, notes)
+  const groups = new Map();
+  for (const l of hl) {
+    if (l.x1 - l.x0 < 0.04 || inZone((l.x0 + l.x1) / 2, l.y)) continue;
+    const key = Math.round(l.x0 * 300) + ":" + Math.round(l.x1 * 300);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(l);
+  }
+  for (const g of groups.values()) {
+    g.sort((p, q) => p.y - q.y);
+    const rows = [];
+    for (const l of g) if (!rows.length || l.y - rows[rows.length - 1].y > 0.002) rows.push(l);   // the same line drawn twice is one row
+    let run = [rows[0]];
+    const flush = () => {
+      if (run.length < 4) return;
+      const y0 = run[0].y, y1 = run[run.length - 1].y, x0 = run[0].x0, x1 = run[0].x1;
+      if (y1 - y0 < 0.01 || y1 - y0 > 0.5) return;
+      // a table has text in its rows; stair treads and parking bays are parallel lines with none
+      const inside = texts.filter(t => t.x > x0 && t.x < x1 && t.y > y0 && t.y < y1).length;
+      if (run.length >= 6 && inside >= run.length * 1.5) zones.push({ x0, y0, x1, y1, kind: "table", label: "Table" });
+    };
+    for (let k = 1; k < rows.length; k++) {
+      if (rows[k].y - run[run.length - 1].y < 0.04) run.push(rows[k]); else { flush(); run = [rows[k]]; }
+    }
+    flush();
+  }
+  // 4. legend / schedule / notes boxes with a heading: the smallest box around the heading
+  const boxes = rects.map(r => [r[0] / W, r[1] / H, r[2] / W, r[3] / H])
+                     .filter(b => (b[2] - b[0]) * (b[3] - b[1]) < 0.2 && b[2] - b[0] > 0.02 && b[3] - b[1] > 0.02);
+  const HEAD = /\b(LEGEND|SCHEDULE|SYMBOLS?|KEY\s*PLAN|GENERAL\s*NOTES|NOTES|TYPICAL|DETAIL|INSTALLATION)\b/i;
+  for (const t of texts) {
+    if (!HEAD.test(t.s) || inZone(t.x, t.y)) continue;
+    const box = boxes.filter(b => t.x >= b[0] && t.x <= b[2] && t.y >= b[1] - 0.01 && t.y <= b[3] + 0.015)
+                     .sort((a, b) => (a[2] - a[0]) * (a[3] - a[1]) - (b[2] - b[0]) * (b[3] - b[1]))[0];
+    if (box && !zones.some(z => z.kind === "box" && Math.abs(z.x0 - box[0]) < 0.002 && Math.abs(z.y0 - box[1] + 0.01) < 0.002))
+      zones.push({ x0: box[0], y0: box[1] - 0.01, x1: box[2], y1: Math.min(1, box[3] + 0.015), kind: "box", label: t.s.slice(0, 40) });
+  }
+  return zones;
+}
+// never let the zone finder hold up a take-off: a dense sheet that takes too long is read without it
+function detectReferenceZonesSafe(page) {
+  if (!window.pdfjsLib || !window.pdfjsLib.OPS) return Promise.resolve([]);
+  return Promise.race([
+    detectReferenceZones(page, window.pdfjsLib.OPS).catch(e => { console.warn("Reference zones not found:", e); return []; }),
+    new Promise(res => setTimeout(() => res([]), 60000)),
+  ]);
+}
+
 async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onProgress, opts = {}) {
   const page = await pdf.getPage(pageNumber);
   const base = page.getViewport({ scale: 1 });
@@ -10759,6 +11084,11 @@ function DrawingsTab({ project }) {
           if (kind === "scan") scannedPages++;
           if (blankSkipped) console.log(`Sheet ${pageNumber}: skipped ${blankSkipped} of ${plannedTiles} tiles as blank.`);
           totalBlankSkipped += blankSkipped;
+          // title strip, legend, schedules, typical details: found from the PDF itself, never counted or marked
+          setTiling(t => ({ ...t, [d.id]: `Finding the title block and legend${label}…` }));
+          const refZones = (await detectReferenceZonesSafe(await pdf.getPage(pageNumber)))
+            .map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label }));
+          if (refZones.length) console.log(`Sheet ${pageNumber}: reference zones`, refZones);
           setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
           // The high-resolution path had no confirmation loop at all: a
           // cost-protection gate came back as a flat error and the sheet was
@@ -10769,7 +11099,7 @@ function DrawingsTab({ project }) {
           for (;;) {
             try {
               started = await callEngine("analyze_drawing_tiled", {
-                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, ...tileConfirms,
+                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, ...tileConfirms,
               });
               break;
             } catch (ex) {
@@ -14140,9 +14470,11 @@ function BoqTab({ project, onGoToEstimation }) {
   async function deleteBoqLine(rowKey) {
     const row = rowsByKey[rowKey];
     if (!row) return;
-    const ids = underlyingIdsFor(row);
+    const ids = underlyingIdsFor(row).filter(id => !String(id).startsWith("sys:"));
     if (!ids.length) {
-      alert("This line has no underlying records to delete.");
+      alert(row.rawItems && row.rawItems.some(r => r._systemDesign)
+        ? "This line is part of the system design worked out from the counted devices. It updates by itself when the take-off changes."
+        : "This line has no underlying records to delete.");
       return;
     }
     // Say plainly that one visible line is several stored records, so a
@@ -14284,10 +14616,16 @@ function BoqTab({ project, onGoToEstimation }) {
   // are pure JS over already-loaded data -- no AI call, ever, for any of
   // this, including when the user just changes Group By.
   const { excludeDrawingIds, duplicateGroups } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
+  const [basisTick, setBasisTick] = useState(0);
+  useEffect(() => { const on = () => setBasisTick(t => t + 1); window.addEventListener("q-boq-basis", on); return () => window.removeEventListener("q-boq-basis", on); }, []);
+  const basisInfo = useMemo(() => boqBasisFor(rawItems), [rawItems, basisTick]);
+  const orphanLines = useMemo(() => rawItems.filter(isOrphanTakeoffLine).length, [rawItems]);
+  // the Take-off BOQ tab is always the take-off; the Designed BOQ tab is the take-off plus the
+  // complete system worked out from it, or the draftsman package when that is the one chosen
   const eligibleItems = useMemo(() => {
-    const latest = filterLatestRevisions(rawItems);
-    return latest.filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
-  }, [rawItems, excludeDrawingIds]);
+    const latest = filterLatestRevisions(rawItems, boqView === "takeoff" ? "takeoff" : undefined);
+    return withSystemDesign(latest.filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
+  }, [rawItems, excludeDrawingIds, basisTick, boqView]);
 
   const consolidatedAll = useMemo(() => consolidateBoqItems(eligibleItems, drawingsById), [eligibleItems, drawingsById]);
   const consolidated = useMemo(() => filterSystem === "all" ? consolidatedAll : consolidatedAll.filter(r => r.systemCategory === filterSystem), [consolidatedAll, filterSystem]);
@@ -14323,7 +14661,7 @@ function BoqTab({ project, onGoToEstimation }) {
       const lines = buildSimpleBoqLines(bucketRows, { ...opts, floorFilter: effectiveGroupBy === "floor" ? bucketName : null })
         .map(l => ({ ...l, line: ++counter }));
       return { groupName: bucketName, lines };
-    });
+    }).filter(g => g.lines.length);
   }, [consolidated, effectiveGroupBy, boqListType]);
   const simpleBoqLines = useMemo(() => groupedSimpleBoq.flatMap(g => g.lines), [groupedSimpleBoq]);
   useEffect(() => { setSimpleBoqPage(0); }, [consolidated, effectiveGroupBy, boqListType]);
@@ -14978,6 +15316,22 @@ function BoqTab({ project, onGoToEstimation }) {
         </div>
       )}
 
+      {basisInfo.both && boqView === "designed" && (
+        <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+          <span className="text-slate-500">Built from</span>
+          <div className="inline-flex rounded-lg overflow-hidden border">
+            {[["takeoff", "Take-off of your drawings"], ["design", "Draftsman package"]].map(([k, l]) => (
+              <button key={k} onClick={() => writeBoqBasisPref(project.id, k)}
+                className="text-xs font-semibold px-2.5 py-1"
+                style={basisInfo.basis === k ? { background: "#2474ec", color: "#fff" } : undefined}>{l}</button>
+            ))}
+          </div>
+          <span className="text-slate-500">One or the other, never added together.</span>
+        </div>
+      )}
+      {orphanLines > 0 && (
+        <div className="text-xs text-slate-500 mb-3">{orphanLines} older line{orphanLines > 1 ? "s" : ""} from an early analysis, not linked to any current drawing, {orphanLines > 1 ? "are" : "is"} left out of the totals {"\u2014"} the drawings were analysed again since.</div>
+      )}
       {duplicateGroups.length > 0 && (
         <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-4 text-xs text-rose-700">
           <div className="font-semibold mb-1">Duplicate drawing uploads detected — excluded from this BOQ to avoid double-counting</div>
@@ -15091,11 +15445,11 @@ function BoqTab({ project, onGoToEstimation }) {
                           <button onClick={()=>{ const next = focusedItemKey === l.rowKey ? null : l.rowKey; setFocusedItemKey(next); setActiveSystemTab("breakdown"); }} className={`text-xs hover:underline ${focusedItemKey === l.rowKey ? "text-blue-700 font-semibold" : "text-blue-600"}`} title="View this item's breakdown/evidence/notes below">
                             👁 {focusedItemKey === l.rowKey ? "Focused" : "View"}
                           </button>
-                          <button onClick={()=>deleteBoqLine(l.rowKey)} disabled={deleting}
+                          {!l.systemDesign && <button onClick={()=>deleteBoqLine(l.rowKey)} disabled={deleting}
                             className="text-xs text-rose-600 hover:underline ml-3 disabled:opacity-40"
                             title="Permanently delete this BOQ line">
                             Delete
-                          </button>
+                          </button>}
                         </td>
                       </tr>
                     ))}
@@ -15184,7 +15538,7 @@ function ProcurementBoqTab({ project }) {
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
   const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
   const consolidated = useMemo(() => {
-    const latest = filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
     return consolidateBoqItems(latest, drawingsById);
   }, [rawItems, excludeDrawingIds, drawingsById]);
 
@@ -15288,7 +15642,7 @@ function EngineeringBoqTab({ project }) {
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
   const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
   const consolidated = useMemo(() => {
-    const latest = filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
     return consolidateBoqItems(latest, drawingsById);
   }, [rawItems, excludeDrawingIds, drawingsById]);
 
@@ -15437,7 +15791,7 @@ function SpecificationTab({ project }) {
   const drawingsById = useMemo(() => { const m = {}; drawingRows.forEach(d => m[d.id] = d); return m; }, [drawingRows]);
   const { excludeDrawingIds } = useMemo(() => detectDuplicateDrawings(drawingRows), [drawingRows]);
   const consolidated = useMemo(() => {
-    const latest = filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+    const latest = withSystemDesign(filterLatestRevisions(rawItems).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
     return consolidateBoqItems(latest, drawingsById);
   }, [rawItems, excludeDrawingIds, drawingsById]);
 
@@ -16419,7 +16773,7 @@ function ExportTab({ project }) {
       ]);
       const drawingsById = {}; (dr||[]).forEach(d => drawingsById[d.id] = d);
       const { excludeDrawingIds, duplicateGroups } = detectDuplicateDrawings(dr || []);
-      const latest = filterLatestRevisions(items || []).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id));
+      const latest = withSystemDesign(filterLatestRevisions(items || []).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)));
       const consolidatedAll = consolidateBoqItems(latest, drawingsById);
       const consolidated = kind !== "procurement" ? consolidatedAll : consolidatedAll.filter(r => r.reviewBucket === "confirmed");
 
