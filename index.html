@@ -1296,19 +1296,32 @@ function designSystemFromTakeoff(items) {
     const counted = mine.filter(it => isCountableSourceType(it.quantity_source_type) && it.quantity_source_type !== "calculated_quantity"
       && SYSDESIGN_COUNT_UNITS.has(normalizeUnit(it.unit)) && D.count.test(subject(it.description)) && !D.not.test(subject(it.description)));
     // what the take-off already has for this system, wherever the AI filed it (cable under structured cabling, ...)
-    const pool = real.filter(it => D.systems.includes(it.system_category) || D.mention.test(it.description || ""));
+    // ... and the cable / containment read off the same drawings as the devices (a CCTV sheet's tray is CCTV tray)
+    const sheets = new Set(counted.map(it => it.drawing_id || null));
+    const pool = real.filter(it => D.systems.includes(it.system_category) || D.mention.test(it.description || "") ||
+      (sheets.has(it.drawing_id || null) && ["containment", "structured_cabling", "cable_sizing"].includes(it.system_category)));
     const n = Math.round(counted.reduce((s, it) => s + (Number(it.quantity) || 0), 0));
     if (n < 1) return;
     const pid = counted[0].project_id;
     D.lines(n).forEach(([desc, qty, unit, has, basis], i) => {
       if (!(qty > 0)) return;
-      if (pool.some(it => has.test(subject(it.description)) && !counted.includes(it))) return;   // the take-off has it already
+      // a cable line is matched only by cable, a containment line only by containment ("conduit of Cat6A cable" is conduit)
+      const CONT = /\b(conduit|trunking|tray|ladder|basket|containment)\b/i, contLine = CONT.test(desc);
+      const already = pool.filter(it => has.test(subject(it.description)) && !counted.includes(it) && CONT.test(subject(it.description)) === contLine);
+      let q = qty, d = desc, why = basis;
+      if (unit === "m") {
+        // a length: the take-off's own figure (often the AI's estimate of what is visible) counts towards it,
+        // and only what the design allowance needs on top is added -- the BOQ carries the larger of the two
+        const have = Math.round(already.filter(it => normalizeUnit(it.unit) === "m").reduce((t, it) => t + (Number(it.quantity) || 0), 0));
+        if (have >= qty) return;
+        if (have > 0) { q = qty - have; d = `${desc} (in addition to the ${have} m in the take-off)`; why = `${basis} = ${Math.round(qty)} m; the take-off has ${have} m, so ${Math.round(q)} m is added`; }
+      } else if (already.length) return;   // the take-off has it already
       out.push({
-        id: `sys:${key}:${i}`, project_id: pid, system_category: D.systems[0], description: desc,
-        quantity: Math.round(qty), unit, source: "engineering_rule", optimization_status: "engineered",
+        id: `sys:${key}:${i}`, project_id: pid, system_category: D.systems[0], description: d,
+        quantity: Math.round(q), unit, source: "engineering_rule", optimization_status: "engineered",
         quantity_source_type: "calculated_quantity", floor_label: null, location: "Head-end / whole system",
         drawing_id: null, analysis_run_id: null, revision_number: 0, confidence_score: 100, review_status: "pending",
-        optimization_note: `System design: ${basis}.`, _systemDesign: true, created_at: "",
+        optimization_note: `System design: ${why}.`, _systemDesign: true, created_at: "",
       });
     });
   });
@@ -2817,6 +2830,194 @@ function readCameraTagsSafe(page, zones) {
   return Promise.race([
     readCameraTags(page, window.pdfjsLib.OPS, zones).catch(e => { console.warn("Camera tags not read:", e); return { cams: [], schedule: null }; }),
     new Promise(res => setTimeout(() => res({ cams: [], schedule: null }), 45000)),
+  ]);
+}
+
+// Containment measured from the drawing's own lines (2026-10-26). A layout says what each coloured line
+// is -- in its legend ("25MM CONDUIT OF CAT6A CABLE" beside a magenta sample) or in a note on the plan
+// with a leader to the line ("300x50 mm SECURITY CABLE TRAY"). Every line of that colour on the plan is
+// then measured; a route drawn as two parallel edges (a tray) is measured once along its centre. The
+// sheet's own scale turns it into metres. Returns [{ description, colour, metres, double }] or [].
+const ROUTE_RE = /\b(CONDUIT|CABLE\s*TRAY|TRAY|TRUNKING|LADDER|BASKET|RACEWAY)\b/i;
+const NEUTRAL = (c) => { const [r, g, b] = c.split(",").map(Number); return Math.max(r, g, b) - Math.min(r, g, b) < 25; };
+const PAPER_MM = { A0: 1189, A1: 841, A2: 594, A3: 420, A4: 297 };
+async function measureRoutes(page, OPS, zones) {
+  const vp = page.getViewport({ scale: 1 });
+  const W = vp.width, H = vp.height;
+  const tc = await page.getTextContent();
+  const texts = [];
+  for (const it of tc.items) {
+    const s = String(it.str || "").trim(); if (!s) continue;
+    const tr = it.transform, nl = Math.hypot(tr[0], tr[1]) || 1, ux = tr[0] / nl, uy = tr[1] / nl, hh = it.height || nl;
+    const cs = [[0, 0], [it.width, 0], [it.width, hh], [0, hh]].map(([a, b]) => vp.convertToViewportPoint(tr[4] + ux * a - uy * b, tr[5] + uy * a + ux * b));
+    const xs = cs.map(p => p[0] / W), ys = cs.map(p => p[1] / H);
+    texts.push({ s, x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) });
+  }
+  const notes = texts.filter(t => ROUTE_RE.test(t.s) && t.s.length < 80);
+  if (!notes.length) return [];
+  // scale: "1:200" (and "@ A0" when the scale is for a paper size other than the PDF's)
+  let scale = null, paper = null;
+  for (const t of texts) {
+    const m = /\b1\s*:\s*(\d{2,4})\b/.exec(t.s); if (m && !scale) scale = Number(m[1]);
+    const a = /SCALE\s*@\s*(A[0-4])/i.exec(t.s); if (a) paper = a[1].toUpperCase();
+  }
+  if (!scale) return [];
+  const pageMm = Math.max(W, H) * 25.4 / 72;
+  const ratio = paper && PAPER_MM[paper] ? PAPER_MM[paper] / pageMm : 1;
+  const toM = (frac) => frac * Math.max(W, H) * 25.4 / 72 * ratio * scale / 1000;     // a length in page-width fractions
+  const inZone = (p) => (zones || []).some(z => p[0] >= z.x0 && p[0] <= z.x1 && p[1] >= z.y0 && p[1] <= z.y1);
+  const ol = await page.getOperatorList();
+  let ctm = [1, 0, 0, 1, 0, 0], stroke = "0,0,0", fill = "0,0,0"; const st = [];
+  const mul = (a, b) => [a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1], a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3], a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]];
+  const P = (x, y) => { const u = ctm[0]*x+ctm[2]*y+ctm[4], v = ctm[1]*x+ctm[3]*y+ctm[5]; const p = vp.convertToViewportPoint(u, v); return [p[0] / W, p[1] / H]; };
+  const rgb = (a) => Array.from(Object.values(a)).map(v => Math.round(v)).join(",");
+  const segs = [], fills = []; let pend = null;
+  for (let i = 0; i < ol.fnArray.length; i++) {
+    const fn = ol.fnArray[i], a = ol.argsArray[i];
+    if (fn === OPS.save) st.push([ctm.slice(), stroke, fill]);
+    else if (fn === OPS.restore) { const s = st.pop(); if (s) [ctm, stroke, fill] = s; }
+    else if (fn === OPS.setFillRGBColor) fill = rgb(a);
+    else if (fn === OPS.transform) ctm = mul(ctm, a);
+    else if (fn === OPS.setStrokeRGBColor) stroke = rgb(a);
+    else if (fn === OPS.constructPath) {
+      const ops = a[0], c = a[1]; let k = 0, cur = null, start = null, closed = false, curves = 0; const ss = [];
+      for (const op of ops) {
+        if (op === OPS.moveTo) { cur = P(c[k], c[k+1]); start = cur; k += 2; }
+        else if (op === OPS.closePath) closed = true;
+        else if (op === OPS.lineTo) { const p = P(c[k], c[k+1]); if (cur) ss.push([cur, p]); cur = p; k += 2; }
+        else if (op === OPS.curveTo) { const p = P(c[k+4], c[k+5]); if (cur) ss.push([cur, p]); cur = p; k += 6; curves++; }
+        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { const p = P(c[k+2], c[k+3]); if (cur) ss.push([cur, p]); cur = p; k += 4; curves++; }
+        else if (op === OPS.rectangle) k += 4;
+      }
+      // a closed outline with arcs (a coverage wedge, a camera symbol) is a shape, not a route
+      if (ss.length && start && cur && Math.hypot(cur[0]-start[0], cur[1]-start[1]) < 1e-4 && ss.length > 1) closed = true;
+      pend = ss; pend.closed = closed && curves > 0;     // a closed outline with arcs: a coverage wedge
+    } else if (pend && (fn === OPS.stroke || fn === OPS.closeStroke)) {
+      const closed = pend.closed || fn === OPS.closeStroke;
+      for (const s of pend) segs.push({ a: s[0], b: s[1], col: stroke, closed });
+      pend = null;
+    }
+    else if (pend && (fn === OPS.fill || fn === OPS.eoFill || fn === OPS.fillStroke || fn === OPS.closeFillStroke || fn === OPS.eoFillStroke)) {
+      // a filled shape: an FOV wedge, a symbol. Its colour is not a route colour
+      let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+      for (const sg of pend) for (const p of sg) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+      if (pend.length) fills.push({ col: fill, size: Math.max(x1 - x0, y1 - y0), c: [(x0 + x1) / 2, (y0 + y1) / 2] });
+      pend = null;
+    } else if (fn === OPS.endPath) pend = null;
+  }
+  const len = (s) => Math.hypot((s.a[0]-s.b[0]) * W, (s.a[1]-s.b[1]) * H) / Math.max(W, H);
+  // colours of filled areas on the plan (coverage wedges) are not route colours
+  const areaCols = {};
+  for (const f of fills) if (f.size > 0.01 && !inZone(f.c)) areaCols[f.col] = (areaCols[f.col] || 0) + 1;
+  // and a colour drawn mostly as closed outlines (coverage wedges, symbols) is a shape colour
+  const openL = {}, closedL = {};
+  for (const s of segs) { if (NEUTRAL(s.col) || inZone(s.a)) continue; const L = len(s); if (s.closed) closedL[s.col] = (closedL[s.col] || 0) + L; else openL[s.col] = (openL[s.col] || 0) + L; }
+  const shapeCol = (c) => (closedL[c] || 0) > (openL[c] || 0) || areaCols[c] >= 2;
+  // colours the legend gives to camera views (FOV) are coverage, not routes
+  const fovCols = new Set();
+  for (const t of texts) {
+    if (!/\b(VIEW|FOV|COVERAGE|IDENTIFICATION|RECOGNITION|OBSERVATION|DETECTION|MONITORING|ANPR)\b/i.test(t.s)) continue;
+    const cy = (t.y0 + t.y1) / 2, h = Math.max(t.y1 - t.y0, 0.004);
+    if (!inZone([(t.x0 + t.x1) / 2, cy])) continue;
+    for (const sg of segs) {
+      const my = (sg.a[1] + sg.b[1]) / 2, mx = Math.max(sg.a[0], sg.b[0]);
+      if (!NEUTRAL(sg.col) && Math.abs(my - cy) < h * 1.5 && mx <= t.x0 + 0.002 && mx > t.x0 - 0.06) fovCols.add(sg.col);
+    }
+    for (const f of fills) if (!NEUTRAL(f.col) && Math.abs(f.c[1] - cy) < h * 1.5 && f.c[0] <= t.x0 + 0.002 && f.c[0] > t.x0 - 0.06) fovCols.add(f.col);
+  }
+  const coloured = segs.filter(s => !NEUTRAL(s.col) && !shapeCol(s.col));
+  const black = segs.filter(s => s.col === "0,0,0");
+  // the colour each note names
+  const colourFor = (t) => {
+    const cy = (t.y0 + t.y1) / 2, h = Math.max(t.y1 - t.y0, 0.004);
+    const zt = (zones || []).find(z => (t.x0 + t.x1) / 2 >= z.x0 && (t.x0 + t.x1) / 2 <= z.x1 && cy >= z.y0 && cy <= z.y1);
+    if (zt && zt.kind !== "title_strip" && zt.kind !== "table") return null;     // a typical detail's own notes
+    if (zt) {
+      // legend: the sample line on the same row, just left of the words
+      const c = {};
+      for (const s of coloured) {
+        const my = (s.a[1] + s.b[1]) / 2, mx = Math.max(s.a[0], s.b[0]);
+        if (Math.abs(my - cy) < h * 1.2 && mx <= t.x0 + 0.002 && mx > t.x0 - 0.06) c[s.col] = (c[s.col] || 0) + len(s);
+      }
+      return Object.keys(c).sort((p, q) => c[q] - c[p])[0] || null;
+    }
+    // a note on the plan: follow its black leader to the line it points at
+    const pad = 0.004, inb = (p) => p[0] >= t.x0 - pad && p[0] <= t.x1 + pad && p[1] >= t.y0 - pad && p[1] <= t.y1 + pad;
+    const ends = [];
+    const tol = 0.0015, near = (p, q) => Math.abs(p[0]-q[0]) < tol && Math.abs(p[1]-q[1]) < tol;
+    for (const s0 of black) {
+      const ia = inb(s0.a), ib = inb(s0.b); if (ia === ib) continue;
+      // follow the leader round its bends to the end that touches the line
+      let end = ia ? s0.b : s0.a; const seen = new Set([s0]);
+      for (let step = 0; step < 6; step++) {
+        const nx = black.filter(q => !seen.has(q) && (near(q.a, end) || near(q.b, end)));
+        if (nx.length !== 1) break;
+        seen.add(nx[0]); end = near(nx[0].a, end) ? nx[0].b : nx[0].a;
+      }
+      ends.push(end);
+    }
+    const c = {};
+    for (const e of ends) for (const s of coloured) {
+      const dx = s.b[0] - s.a[0], dy = s.b[1] - s.a[1], l2 = dx * dx + dy * dy || 1e-12;
+      const u = Math.max(0, Math.min(1, ((e[0]-s.a[0])*dx + (e[1]-s.a[1])*dy) / l2));
+      const d = Math.hypot(s.a[0] + u*dx - e[0], s.a[1] + u*dy - e[1]);
+      if (d < 0.004) c[s.col] = (c[s.col] || 0) + 1 / (d + 0.0005);
+    }
+    return Object.keys(c).filter(k => pairedShare(k) >= 0.5).sort((p, q) => c[q] - c[p])[0] || null;
+  };
+  // share of a colour's length drawn as parallel pairs: a tray (two edges) or a bundle of conduits is
+  // high; the straight edges of coverage wedges, radiating from cameras, are low
+  const pairCache = {};
+  const pairedShare = (col) => {
+    if (pairCache[col] != null) return pairCache[col];
+    const S = coloured.filter(s => s.col === col && !inZone(s.a) && !inZone(s.b) && len(s) > 0.0003);
+    let total = 0, paired = 0;
+    for (let i = 0; i < S.length; i++) {
+      const s = S[i], L = len(s); total += L;
+      const ux = (s.b[0]-s.a[0]) * W, uy = (s.b[1]-s.a[1]) * H, n = Math.hypot(ux, uy) || 1;
+      const mx = (s.a[0]+s.b[0]) / 2 * W, my = (s.a[1]+s.b[1]) / 2 * H;
+      for (let j = 0; j < S.length; j++) {
+        if (i === j) continue;
+        const o = S[j], vx = (o.b[0]-o.a[0]) * W, vy = (o.b[1]-o.a[1]) * H, m = Math.hypot(vx, vy);
+        if (m < 1 || Math.abs((ux * vy - uy * vx) / (n * m)) > 0.02) continue;
+        const dp = Math.abs((mx - o.a[0]*W) * vy / m - (my - o.a[1]*H) * vx / m);
+        const tt = ((mx - o.a[0]*W) * vx + (my - o.a[1]*H) * vy) / m;
+        if (dp > 0.3 && dp < 12 && tt > -1 && tt < m + 1) { paired += L; break; }
+      }
+    }
+    return (pairCache[col] = total ? paired / total : 0);
+  };
+  // each note votes for the colour it points at; a colour goes to the description most notes give it
+  const inStrip = (t) => (zones || []).some(z => z.kind === "title_strip" && (t.x0 + t.x1) / 2 >= z.x0 && (t.y0 + t.y1) / 2 >= z.y0 && (t.y0 + t.y1) / 2 <= z.y1);
+  const votes = new Map();     // "DESC|colour" -> { desc, col, n }
+  for (const t of notes) {
+    const col = colourFor(t);
+    if (!col) continue;
+    const desc = t.s.replace(/\s+/g, " ").trim(), k = desc.toUpperCase() + "|" + col;
+    if (!votes.has(k)) votes.set(k, { desc, col, n: 0 });
+    votes.get(k).n += inStrip(t) ? 3 : 1;     // the legend counts more than a note on the plan
+  }
+  const named = new Map(), usedDesc = new Set();
+  for (const v of [...votes.values()].sort((p, q) => q.n - p.n)) {
+    if (named.has(v.col) || usedDesc.has(v.desc.toUpperCase())) continue;
+    named.set(v.col, v.desc); usedDesc.add(v.desc.toUpperCase());
+  }
+  const out = [];
+  for (const [col, description] of named) {
+    const S = coloured.filter(s => s.col === col && !inZone(s.a) && !inZone(s.b) && len(s) > 0.0003);
+    if (!S.length) continue;
+    let total = 0;
+    for (const sg of S) total += len(sg);
+    const double = pairedShare(col) > 0.85;     // a tray drawn as two edges: measured once along its centre
+    out.push({ description, colour: col, metres: Math.round(toM(double ? total / 2 : total)), double, scale: `1:${scale}${paper ? " @ " + paper : ""}` });
+  }
+  return out;
+}
+function measureRoutesSafe(page, zones) {
+  if (!window.pdfjsLib || !window.pdfjsLib.OPS) return Promise.resolve([]);
+  return Promise.race([
+    measureRoutes(page, window.pdfjsLib.OPS, zones).catch(e => { console.warn("Routes not measured:", e); return []; }),
+    new Promise(res => setTimeout(() => res([]), 60000)),
   ]);
 }
 
@@ -11250,6 +11451,10 @@ function DrawingsTab({ project }) {
             ? { schedule: camRead.schedule, cams: camRead.cams.map(c => ({ n: c.n, tag: c.tag, type: c.type, x: +c.x.toFixed(5), y: +c.y.toFixed(5) })) }
             : null;
           if (taggedCameras) console.log(`Sheet ${pageNumber}: ${taggedCameras.cams.length} camera tags on the plan (schedule ${camRead.schedule ?? "not read"})`);
+          // tray and conduit measured from the drawing's own lines, named by its legend / notes
+          setTiling(t => ({ ...t, [d.id]: `Measuring tray and conduit${label}…` }));
+          const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pageNumber), refZones);
+          if (measuredRoutes.length) console.log(`Sheet ${pageNumber}: measured`, measuredRoutes);
           setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
           // The high-resolution path had no confirmation loop at all: a
           // cost-protection gate came back as a flat error and the sheet was
@@ -11260,7 +11465,7 @@ function DrawingsTab({ project }) {
           for (;;) {
             try {
               started = await callEngine("analyze_drawing_tiled", {
-                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, ...tileConfirms,
+                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, measured_routes: measuredRoutes, ...tileConfirms,
               });
               break;
             } catch (ex) {

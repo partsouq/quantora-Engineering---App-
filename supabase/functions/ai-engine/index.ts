@@ -298,6 +298,46 @@ function fixCountedCableRows(rows: any[]): any[] {
   }
   return out;
 }
+// Tray and conduit measured in the browser from the drawing's own lines (a colour named by the legend
+// or by a note with a leader, measured at the sheet's scale). When a sheet has them they replace the
+// AI's estimated containment lengths for that sheet.
+function validateMeasuredRoutes(raw: any): { description: string; metres: number; double: boolean; scale: string; colour: string }[] {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const r of raw.slice(0, 20)) {
+    const m = Number(r?.metres);
+    if (!Number.isFinite(m) || m <= 0 || m > 200000) continue;
+    out.push({ description: String(r?.description ?? "").replace(/\s+/g, " ").trim().slice(0, 120), metres: Math.round(m),
+               double: r?.double === true, scale: String(r?.scale ?? "").slice(0, 20), colour: String(r?.colour ?? "").slice(0, 20) });
+  }
+  return out.filter((r) => r.description);
+}
+const CONTAINMENT_LIKE = /\b(conduit|trunking|tray|ladder|basket|raceway|containment)\b/i;
+function isAiContainmentRow(r: any): boolean {
+  const subj = String(r.description || "").split(/,| with | from | for | including /i)[0];
+  return /^(m|lm)$/i.test(String(r.unit || "").trim()) && CONTAINMENT_LIKE.test(subj);
+}
+function measuredRouteRows(routes: ReturnType<typeof validateMeasuredRoutes>, base: any): any[] {
+  return routes.map((r) => {
+    const kind = /tray|ladder|basket/i.test(r.description) ? "Cable tray" : /trunking/i.test(r.description) ? "Trunking" : "Conduit";
+    const named = r.description.length < 12 ? `${kind}, as marked "${r.description}" on the drawing` : `${kind}: ${r.description}`;
+    return {
+      ...base, system_category: "containment", description: named, quantity: r.metres, unit: "m",
+      confidence_score: 95, quantity_source_type: "physical_count", coordinates: null,
+      quantity_basis_notes: `Measured from the drawing: every line of the colour the drawing names "${r.description}", outside the title strip, legend and details, at the sheet scale ${r.scale}.` +
+        (r.double ? " The route is drawn as two parallel edges, so it is measured once along its centre." : "") +
+        " Fittings, drops and wastage are not included.",
+    };
+  });
+}
+// A lump sum ("1 lot of backbone cabling") is not something counted on the drawing: kept for reference,
+// never in the measured totals.
+function lumpSumsAreNotCounted(rows: any[]): any[] {
+  return rows.map((r) => (/^(lot|ls|item|sum|lump ?sum)$/i.test(String(r.unit || "").trim()) && (r.quantity_source_type ?? "physical_count") === "physical_count")
+    ? { ...r, quantity_source_type: "note_reference",
+        quantity_basis_notes: [r.quantity_basis_notes, "A lump sum, not counted on the drawing: kept for reference, not in the measured totals."].filter(Boolean).join(" ") }
+    : r);
+}
 function zoneCoverage(tile: { x0: number; y0: number; x1: number; y1: number }, zones: { x0: number; y0: number; x1: number; y1: number }[]): number {
   const area = (tile.x1 - tile.x0) * (tile.y1 - tile.y0);
   if (!(area > 0)) return 0;
@@ -2819,7 +2859,7 @@ Deno.serve(async (req: Request) => {
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0));   // no "0 found" lines
+        const safeRows = lumpSumsAreNotCounted(fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0)));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
@@ -2864,8 +2904,8 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
 
-      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged } = body as {
-        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any;
+      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes } = body as {
+        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any; measured_routes?: any;
         confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean;
       };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
@@ -2878,6 +2918,7 @@ Deno.serve(async (req: Request) => {
 
       const refZones = validateZones(rawZones);
       const taggedCams = validateTaggedCameras(rawTagged);
+      const measuredRoutes = validateMeasuredRoutes(rawRoutes);
       let tiles: TileSpec[];
       try {
         tiles = validateTiles(rawTiles);
@@ -3156,6 +3197,18 @@ Deno.serve(async (req: Request) => {
           }, pageNo));
           console.log(`tiled run ${run.id}: ${taggedCams.cams.length} tagged cameras replace ${aiCameraRowsReplaced} AI camera line(s).`);
         }
+        // tray and conduit measured from the drawing replace the AI's estimated lengths on this sheet
+        let aiContainmentRowsReplaced = 0;
+        if (measuredRoutes.length) {
+          const before = promotedRows.length;
+          promotedRows = promotedRows.filter((r: any) => !isAiContainmentRow(r));
+          aiContainmentRowsReplaced = before - promotedRows.length;
+          promotedRows = promotedRows.concat(measuredRouteRows(measuredRoutes, {
+            project_id: project.id, drawing_id, analysis_run_id: run.id, revision_number: nextRevision,
+            floor_label: drawing.floor_label ?? null, source: "ai_drawing_analysis", optimization_status: "drawing_requirement",
+          }));
+          console.log(`tiled run ${run.id}: ${measuredRoutes.length} measured route(s) replace ${aiContainmentRowsReplaced} AI containment line(s).`);
+        }
         // a line that says "0 found in this tile" is not a BOQ line
         const keptRows = promotedRows.map(({ __zone, ...r }: any) => r);
         let safeRows = keptRows.map((r: any) => {
@@ -3164,7 +3217,7 @@ Deno.serve(async (req: Request) => {
           delete sr.__coords;
           return sr;
         }).filter((r: any) => Number(r.quantity) > 0);   // no "0 found in this tile" lines
-        safeRows = fixCountedCableRows(safeRows);
+        safeRows = lumpSumsAreNotCounted(fixCountedCableRows(safeRows));
         if (zoneRows) console.log(`tiled run ${run.id}: ${zoneRows} row(s) read from reference zones; ${keptRows.length - safeRows.length} zero line(s) dropped.`);
         const synthetic = {
           items: deduped,
@@ -3193,6 +3246,7 @@ Deno.serve(async (req: Request) => {
             reference_panels: panels.length,
             reference_zones: refZones.map((z) => z.label || z.kind),
             tagged_cameras: taggedCams ? { counted: taggedCams.cams.length, schedule: taggedCams.schedule, ai_camera_lines_replaced: aiCameraRowsReplaced } : null,
+            measured_routes: measuredRoutes.length ? { routes: measuredRoutes, ai_containment_lines_replaced: aiContainmentRowsReplaced } : null,
             positions_discarded_in_panels: panelDropped,
             notes: (safeRows.length === 0
               ? `No BOQ items were produced from this sheet. Every tile was read and nothing countable for the systems Quantora reads (MEP and ELV) was found. If this is a civil, structural or architectural drawing, set its type to Civil, Structural or Architectural so it is measured as civil works — and if it is a specification or schedule rather than a drawing, upload it on the Specification page instead. Per-tile detail follows.\n\n`
@@ -3396,7 +3450,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0));   // no "0 found" lines
+        const safeRows = lumpSumsAreNotCounted(fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0)));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
@@ -3572,7 +3626,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0));   // no "0 found" lines
+        const safeRows = lumpSumsAreNotCounted(fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0)));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
@@ -3728,7 +3782,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
-        const safeRows = fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0));   // no "0 found" lines
+        const safeRows = lumpSumsAreNotCounted(fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0)));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
 
