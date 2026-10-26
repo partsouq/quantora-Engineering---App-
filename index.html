@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-26.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-26.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -28108,7 +28108,16 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief, initialT
   // Two tabs, not four. The brief already asked for everything; the base plan
   // reader and the specification reader are jobs you RUN, not forms you fill,
   // so they sit inside Design as panels you open when you want them.
-  const [tab, setTab] = useState(initialTab || "design");
+  // Customers get one screen: "Generate drawings" (the draftsman service). The in-browser
+  // Design and Drawings tabs stay in the code for platform admins only (2026-10-26).
+  const [admin, setAdmin] = useState(!!window.__qPlatformAdmin);
+  useEffect(() => {
+    const on = () => setAdmin(!!window.__qPlatformAdmin);
+    window.addEventListener("q-admin", on);
+    return () => window.removeEventListener("q-admin", on);
+  }, []);
+  const [tabSel, setTab] = useState(initialTab || "ifc");
+  const tab = admin ? tabSel : "ifc";
   const [brief, setBrief] = useState(null);
   const [openPanel, setOpenPanel] = useState(null);
 
@@ -28158,13 +28167,13 @@ function DraftsmanStudio({ project, onBack, onOpenProject, onEditBrief, initialT
         <button onClick={() => onOpenProject(project)}
           className="text-sm font-semibold border px-3 py-2 rounded-lg hover:bg-slate-50">Open the full project</button>
       </div>
-      <div className="flex gap-2 border-b">
-        {[["design", "1. Design"], ["drawings", "2. Drawings"], ["ifc", "3. Generate drawings from your plans"]].map(([k, l]) => (
+      {admin && <div className="flex gap-2 border-b">
+        {[["design", "1. Design (admin)"], ["drawings", "2. Drawings (admin)"], ["ifc", "3. Generate drawings from your plans"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px ${
               tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-900"}`}>{l}</button>
         ))}
-      </div>
+      </div>}
       {tab === "design" && (
         <div className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -29185,7 +29194,9 @@ function DraftsmanIfcPackage({ project }) {
   const [refQ, setRefQ] = useState("");
   const [refMsg, setRefMsg] = useState("");
   const [zipping, setZipping] = useState("");
-  const [openJobs, setOpenJobs] = useState({});      // generation history: which older packages are expanded
+  const [openJobs, setOpenJobs] = useState({});
+  const [reviewOpen, setReviewOpen] = useState(null);
+  const [showHist, setShowHist] = useState(false);      // generation history: which older packages are expanded
   // the specification the package is designed to: section 4 of the job (drawings, discipline
   // "specification") and the project's Specification tab (tender documents) — the worker reads both
   const [specDocs, setSpecDocs] = useState([]);
@@ -29495,7 +29506,7 @@ function DraftsmanIfcPackage({ project }) {
     } catch (e) { setErr(e.message || String(e)); } finally { setZipping(""); }
   };
   const reworkForm = (title, onGo) => (
-    <div className="border rounded-lg p-3 space-y-2" style={{ background: "#fffbeb", borderColor: "#fcd34d" }}>
+    <div className="border rounded-lg p-3 space-y-2" style={{ background: "rgba(217,119,6,0.12)", borderColor: "#d97706" }}>
       <div className="text-sm font-bold">{title}</div>
       <div className="text-[11px] text-slate-600 leading-relaxed">Paste the consultant's comments, one per line, and attach their marked-up drawings or
         comment sheet if you have them. The AI reads them against the drawing already on the platform and proposes the changes; you tick them,
@@ -29568,6 +29579,66 @@ function DraftsmanIfcPackage({ project }) {
     "MEP-ELV-devices.ifc": "IFC with all devices", "QA-report.md": "QA report (DBC screen, clash, sheet check)",
     "QA.json": "QA data (JSON)", "CR-CONSULTANT-COMMENTS-RESPONSE.pdf": "Consultant comments — response sheet (PDF)" }[n] || (n.startsWith("comments/") ? "Consultant file: " + n.slice(9) : null) || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
 
+  // the consultant-comment review of one rework (stage "parse" done): tick the changes, apply them
+  const reviewPanel = (j) => {
+    const sm = j.summary || {};
+              const rv = revLabel((j.options || {}).revision || 1);
+              const applied = jobs.some(x => (x.options || {}).rework_stage === "apply" && (x.options || {}).revision === (j.options || {}).revision
+                                            && (x.options || {}).rework_of === (j.options || {}).rework_of
+                                            && ((x.options || {}).drawing_ref || "") === ((j.options || {}).drawing_ref || "") && x.created_at > j.created_at);
+              const opName = { add: "Add", remove: "Remove", move: "Move", replace: "Replace", resize_pipe: "Pipe size", resize_duct: "Duct size", note: "Note", for_engineer: "For engineer" };
+              return (
+                <div className="border rounded-lg p-3 space-y-2" style={{ background: "rgba(217,119,6,0.12)", borderColor: "#d97706" }}>
+                  <div className="text-sm font-bold">Consultant comments read — changes proposed for {(j.options || {}).drawing_ref ? j.options.drawing_ref + " " : ""}{rv}</div>
+                  <div className="text-[11px] text-slate-600">Untick anything you don't want. Items marked "For engineer" can't be drawn automatically; they are listed on the comment response sheet for your engineer.</div>
+                  {(sm.comments || []).map((c, ci) => (
+                    <div key={ci} className="bg-white border rounded p-2 space-y-1">
+                      <div className="text-xs font-semibold text-slate-700">{ci + 1}. {c}</div>
+                      {(sm.proposed || []).map((e, i) => e.comment !== ci + 1 ? null : (
+                        <label key={i} className={"flex items-start gap-2 text-xs " + (e.op === "for_engineer" ? "text-slate-500" : "")}>
+                          <input type="checkbox" disabled={e.op === "for_engineer" || applied}
+                            checked={e.op === "for_engineer" ? false : rwPick[j.id + ":" + i] !== false}
+                            onChange={ev => setRwPick({ ...rwPick, [j.id + ":" + i]: ev.target.checked })} />
+                          <span><b className="mr-1">{opName[e.op] || e.op}:</b>{e.summary}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                  {applied ? <div className="text-xs text-green-700 font-semibold">{"\u2713"} Applied — see {rv} in the drawing register.</div> : (
+                    <button disabled={busy} onClick={() => applyRework(j)}
+                      className="bg-amber-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50">
+                      {busy ? "Starting…" : `Apply the changes — issue ${rv}`}</button>
+                  )}
+                </div>
+              );
+  };
+  // where each drawing's rework stands, from the newest rework job that touches it
+  const reworkState = (d) => {
+    const t0 = new Date((d.job || {}).created_at || 0);
+    const rel = jobs.filter(x => (x.options || {}).rework_of && x.status !== "cancelled" && new Date(x.created_at) > t0 &&
+      ((x.options || {}).drawing_ref ? x.options.drawing_ref === d.ref : (x.systems || []).includes(d.system)));
+    if (!rel.length) return null;
+    const last = rel[0], o = last.options || {}, rv = revLabel(o.revision || 1);
+    const live = last.status === "queued" || last.status === "running";
+    if (o.rework_stage === "parse") {
+      if (live) return { k: "busy", text: `${rv} Reading the comments\u2026` };
+      if (last.status === "failed") return { k: "failed", text: `${rv} Could not read the comments`, job: last };
+      if (last.status === "done") return { k: "review", text: `${rv} Waiting for your review`, job: last };
+    } else {
+      if (live) return { k: "busy", text: `${rv} Drawing the changes\u2026` };
+      if (last.status === "failed") return { k: "failed", text: `${rv} Rework failed`, job: last };
+    }
+    return null;
+  };
+  const latestPkg = jobs.find(x => x.status === "done" && (x.summary || {}).rework_stage !== "parse" && !(x.options || {}).rework_of)
+    || jobs.find(x => x.status === "done" && (x.summary || {}).rework_stage !== "parse");
+  const activeNew = jobs.filter(x => (x.status === "queued" || x.status === "running") && !(x.options || {}).rework_of);
+  const lastFail = jobs.find(x => x.status === "failed" && !(x.options || {}).rework_of);
+  const showFail = lastFail && (!latestPkg || new Date(lastFail.created_at) > new Date(latestPkg.created_at));
+  const warnText = (w) => {
+    const m = /^(.*?): only (\d+) of (\d+) rooms have a name/.exec(w);
+    return m ? `${m[1]}: ${m[3] - m[2]} of ${m[3]} rooms have no name on the plan. Unnamed rooms are treated as corridors / stores \u2014 add room names to the drawing for a better design.` : w;
+  };
   return (
     <div className="space-y-4">
       <div className="bg-white border rounded-xl p-5 space-y-3">
@@ -29686,14 +29757,60 @@ function DraftsmanIfcPackage({ project }) {
           {busy ? "Uploading…" : "Generate the drawing package"}</button>
       </div>
 
+      {activeNew.map(j => {
+        const waitMin = (Date.now() - new Date(j.created_at).getTime()) / 60000;
+        return (
+          <div key={j.id} className="bg-white border rounded-xl px-4 py-3 flex flex-wrap items-center gap-3" style={{ borderColor: "#7fb0ff" }}>
+            <span className="text-[11px] font-bold px-2 py-1 rounded-full" style={{ background: "#dbeafe", color: "#1e40af" }}>{j.status === "queued" ? "Waiting" : "Designing\u2026"}</span>
+            <span className="text-sm font-semibold">New drawing package</span>
+            <span className="text-xs text-slate-500">{(j.systems || []).map(sysLabel).join(", ")} {"\u00b7"} started {new Date(j.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            <div className="flex-1" />
+            {j.status === "queued" && <button onClick={() => cancel(j.id)} className="text-xs border px-2 py-1 rounded">Cancel</button>}
+            {j.status === "queued" && waitMin > 3 && <div className="w-full text-xs text-amber-700">Still waiting after {Math.round(waitMin)} minutes {"\u2014"} the draftsman service may not be running. Ask your administrator to check it.</div>}
+          </div>
+        );
+      })}
+      {showFail && (
+        <div className="bg-white border rounded-xl px-4 py-3 space-y-1" style={{ borderColor: "#fca5a5" }}>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-[11px] font-bold px-2 py-1 rounded-full" style={{ background: "#fee2e2", color: "#991b1b" }}>Failed</span>
+            <span className="text-sm font-semibold">The last generation did not finish</span>
+            <span className="text-xs text-slate-500">{new Date(lastFail.created_at).toLocaleString()}</span>
+          </div>
+          <div className="text-xs text-red-700 whitespace-pre-wrap">{(lastFail.error || "").slice(0, 300)}</div>
+          <div className="text-[11px] text-slate-500">Check the plans and generate again, or contact support with the time above.</div>
+        </div>
+      )}
       {(register.length > 0 || jobs.some(j => j.status === "done")) && (
         <div className="bg-white border rounded-xl p-4 space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <div className="text-sm font-bold">Drawing register</div>
-            <span className="text-[11px] text-slate-500">Every drawing of this project at its latest revision. The reference number is printed in each drawing's title block.</span>
+            <div className="text-sm font-bold">Your drawings</div>
+            <span className="text-[11px] text-slate-500">Every drawing of this project at its latest revision, with its status. The drawing number is printed in each title block.</span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 rounded-lg px-3 py-2" style={{ background: "#f5f8ff", border: "1px solid #dbe6ff" }}>
-            <span className="text-xs font-semibold text-slate-700">Rework by reference number</span>
+          {latestPkg && (() => {
+            const sm = latestPkg.summary || {};
+            const m3 = (latestPkg.outputs || []).find(o => o.name === "model3d.json");
+            const zip = (latestPkg.outputs || []).find(o => o.name === "Drawing-package.zip");
+            return (
+              <div className="space-y-1.5">
+                <div className="text-xs text-slate-600">Latest package {new Date(latestPkg.created_at).toLocaleString()} {"\u00b7"} {sm.devices} devices {"\u00b7"} {sm.boq_rows} BOQ lines
+                  {sm.issues && (sm.issues.FAIL || sm.issues.REVIEW) ? ` \u00b7 ${sm.issues.FAIL || 0} fail / ${sm.issues.REVIEW || 0} review items \u2014 see the compliance report` : " \u00b7 all checks passed"}</div>
+                {basisText(sm.design_basis) && <div className="text-xs font-semibold text-slate-600">{basisText(sm.design_basis)}</div>}
+                {(sm.input_warnings || []).length > 0 && <div className="text-xs text-amber-700">{sm.input_warnings.map(warnText).join(" ")}</div>}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {m3 && <button onClick={() => setModel3d({ path: m3.path, sub: [new Date(latestPkg.created_at).toLocaleString(), sm.devices != null ? `${sm.devices} devices` : null].filter(Boolean).join(" \u00b7 ") })}
+                    className="text-sm font-semibold text-white px-4 py-2 rounded-lg" style={{ background: "linear-gradient(180deg,#2474ec,#1862d8)" }}>&#9651; Open 3D model</button>}
+                  {zip ? <button onClick={() => download(zip.path, `${(project.project_name || "Project").replace(/[^\w-]+/g, "_")}-drawings.zip`)} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">{"\u2B07"} Download everything (ZIP)</button>
+                    : <button disabled={zipping === latestPkg.id} onClick={() => downloadZip(latestPkg)} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">{zipping === latestPkg.id ? "Preparing ZIP\u2026" : "\u2B07 Download everything (ZIP)"}</button>}
+                  <button onClick={() => { setRework("pkg:" + latestPkg.id); setRwText(""); setRwFiles([]); }}
+                    className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-amber-50" style={{ borderColor: "#fcd34d", color: "#92400e" }}>{"\u21BB"} Rework the whole package</button>
+                </div>
+                {rework === "pkg:" + latestPkg.id && reworkForm(`Rework the whole package on consultant comments \u2014 issue ${revLabel(((latestPkg.options || {}).revision || 0) + 1)}`, () => submitRework(latestPkg))}
+              </div>
+            );
+          })()}
+          <div className="flex flex-wrap items-center gap-2 rounded-lg px-3 py-2" style={{ background: "rgba(36,116,236,0.10)", border: "1px solid rgba(36,116,236,0.45)" }}>
+            <span className="text-xs font-semibold">{"\u21BB"} Rework by drawing number</span>
             <input id="qd-ref-input" value={refQ} onChange={e => setRefQ(e.target.value)} onKeyDown={e => { if (e.key === "Enter") findRef(); }}
               placeholder={register[0] ? `e.g. ${register[0].ref} or ${(register[0].sheets || [])[1] || register[0].ref}` : "e.g. 26-0004-FA"}
               className="border rounded px-2 py-1 text-sm w-64 font-mono" />
@@ -29707,18 +29824,28 @@ function DraftsmanIfcPackage({ project }) {
               <table className="w-full text-xs">
                 <thead><tr className="text-left text-slate-500 border-b">
                   <th className="py-1.5 pr-2 w-8">No.</th><th className="pr-2">Reference number</th><th className="pr-2">Drawing</th>
-                  <th className="pr-2">Rev</th><th className="pr-2">Sheets</th><th className="pr-2">Issued</th><th className="text-right">Actions</th>
+                  <th className="pr-2">Rev</th><th className="pr-2">Status</th><th className="pr-2">Sheets</th><th className="pr-2">Issued</th><th className="text-right">Actions</th>
                 </tr></thead>
                 <tbody>
                   {register.map((d, i) => {
                     const nm = `${d.ref}-${revLabel(d.rev)} ${sysLabel(d.system)}`;
                     return (
                       <React.Fragment key={d.ref}>
-                        <tr id={"qd-reg-" + d.ref} className="border-b align-middle" style={rework === "d:" + d.ref ? { background: "#fffbeb" } : null}>
+                        <tr id={"qd-reg-" + d.ref} className="border-b align-middle" style={rework === "d:" + d.ref ? { background: "rgba(217,119,6,0.12)" } : null}>
                           <td className="py-2 pr-2 font-semibold text-slate-500">{i + 1}</td>
-                          <td className="pr-2 font-mono font-semibold">{d.ref}</td>
-                          <td className="pr-2"><span className="mr-1">{SYS_ICON[d.system] || ""}</span>{sysLabel(d.system)}</td>
+                          <td className="pr-2 font-mono font-semibold whitespace-nowrap">{d.ref}</td>
+                          <td className="pr-2"><span className="mr-1">{SYS_ICON[d.system] || ""}</span>{d.title ? niceTitle(d.title) : sysLabel(d.system)}</td>
                           <td className="pr-2"><span className="font-bold px-1.5 py-0.5 rounded" style={{ background: d.rev ? "#fef3c7" : "#eef2f7", color: d.rev ? "#92400e" : "#334155" }}>{revLabel(d.rev)}</span></td>
+                          <td className="pr-2">{(() => {
+                            const st = reworkState(d);
+                            const pill = (bg, fg, t) => <span className="text-[11px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: bg, color: fg }}>{t}</span>;
+                            if (!st) return pill("#dcfce7", "#166534", `${revLabel(d.rev)} Issued`);
+                            if (st.k === "busy") return pill("#dbeafe", "#1e40af", st.text);
+                            if (st.k === "failed") return <span title={(st.job.error || "").slice(0, 300)}>{pill("#fee2e2", "#991b1b", st.text)}</span>;
+                            return <span className="inline-flex items-center gap-1.5">{pill("#fef3c7", "#92400e", st.text)}
+                              <button onClick={() => setReviewOpen(reviewOpen === d.ref ? null : d.ref)}
+                                className="text-[11px] font-bold text-white px-2 py-0.5 rounded" style={{ background: "#d97706" }}>{reviewOpen === d.ref ? "Close" : "Review changes"}</button></span>;
+                          })()}</td>
                           <td className="pr-2">{(d.sheets || []).length || "\u2014"}</td>
                           <td className="pr-2 text-slate-500">{new Date(d.job.finished_at || d.job.created_at).toLocaleDateString("en-GB")}</td>
                           <td className="text-right whitespace-nowrap">
@@ -29730,8 +29857,11 @@ function DraftsmanIfcPackage({ project }) {
                               className="ml-1 font-semibold border rounded px-2 py-1 hover:bg-amber-50" style={{ borderColor: "#fcd34d", color: "#92400e" }}>{"\u21BB"} Rework with comments</button>
                           </td>
                         </tr>
+                        {reviewOpen === d.ref && (reworkState(d) || {}).k === "review" && (
+                          <tr><td colSpan={8} className="py-2">{reviewPanel(reworkState(d).job)}</td></tr>
+                        )}
                         {rework === "d:" + d.ref && (
-                          <tr><td colSpan={7} className="py-2">{reworkForm(`Rework ${d.ref} \u2014 ${sysLabel(d.system)} \u2014 issue as ${revLabel((d.rev || 0) + 1)}`, () => submitRework(d.job, d))}</td></tr>
+                          <tr><td colSpan={8} className="py-2">{reworkForm(`Rework ${d.ref} \u2014 ${sysLabel(d.system)} \u2014 issue as ${revLabel((d.rev || 0) + 1)}`, () => submitRework(d.job, d))}</td></tr>
                         )}
                       </React.Fragment>
                     );
@@ -29740,15 +29870,47 @@ function DraftsmanIfcPackage({ project }) {
               </table>
             </div>
           )}
+          {latestPkg && (() => {
+            const { other, reports } = jobList(latestPkg);
+            const fb = "border rounded px-2 py-1 hover:bg-slate-50 text-xs";
+            return (
+              <div className="space-y-2">
+                {other.length > 0 && <div className="text-[11px] font-bold text-slate-500 tracking-wide pt-1">OTHER DRAWINGS (LATEST PACKAGE)</div>}
+                {other.map(d => (
+                  <div key={d.pdf} className="flex flex-wrap items-center gap-2 text-xs border-t pt-1.5">
+                    <span className="flex-1">{niceTitle(d.title)}</span>
+                    {d.pdf_path && <button onClick={() => open(d.pdf_path)} className={fb}>View</button>}
+                    {d.pdf_path && <button onClick={() => download(d.pdf_path, (d.pdf || "drawing.pdf").split("/").pop())} className={fb}>{"\u2B07"} PDF</button>}
+                    {d.dxf_path && <button onClick={() => download(d.dxf_path, (d.pdf || "drawing.pdf").split("/").pop().replace(/\.pdf$/, ".dxf"))} className={fb}>{"\u2B07"} DXF</button>}
+                  </div>
+                ))}
+                {reports.length > 0 && <>
+                  <div className="text-[11px] font-bold text-slate-500 tracking-wide pt-1">REPORTS &amp; BOQ</div>
+                  <div className="flex flex-wrap gap-2">
+                    {reports.map(o => (
+                      <span key={o.path} className="inline-flex items-stretch border rounded overflow-hidden text-xs">
+                        <button onClick={() => open(o.path)} className="px-2 py-1 hover:bg-slate-50">{label(o.name) || o.name}</button>
+                        <button onClick={() => download(o.path, o.name.split("/").pop())} className="px-2 py-1 border-l hover:bg-slate-50" aria-label={"Download " + (label(o.name) || o.name)}>{"\u2B07"}</button>
+                      </span>
+                    ))}
+                  </div>
+                </>}
+              </div>
+            );
+          })()}
         </div>
       )}
-      {jobs.length > 0 && <div className="text-xs font-semibold text-slate-500 pt-1">Generation history</div>}
-      {jobs.map((j, ji) => {
+      {jobs.length > 0 && (
+        <button onClick={() => setShowHist(!showHist)} className="text-xs font-semibold text-slate-500 hover:text-slate-800 pt-1">
+          {showHist ? "\u25BE" : "\u25B8"} History {"\u2014"} {jobs.length} generation{jobs.length > 1 ? "s" : ""}{jobs.filter(x => x.status === "failed").length ? ` (${jobs.filter(x => x.status === "failed").length} failed)` : ""}
+        </button>
+      )}
+      {showHist && jobs.map((j, ji) => {
         const c = chip[j.status] || chip.queued;
         // the newest finished package is open; older ones fold to one line until clicked
         const latestDone = jobs.find(x => x.status === "done" && (x.summary || {}).rework_stage !== "parse");
         const pkg = j.status === "done" && (j.summary || {}).rework_stage !== "parse";
-        const expanded = !pkg || (latestDone && latestDone.id === j.id) || openJobs[j.id];
+        const expanded = !pkg || openJobs[j.id];
         const waitMin = (Date.now() - new Date(j.created_at).getTime()) / 60000;
         const sm = j.summary || {};
         return (
@@ -29762,7 +29924,7 @@ function DraftsmanIfcPackage({ project }) {
               <span className="flex flex-wrap gap-1">{(j.systems || []).map(k => (
                 <span key={k} title={sysLabel(k)} className="text-[11px] bg-slate-100 rounded-full px-2 py-0.5">{SYS_ICON[k] || ""} {sysLabel(k)}</span>))}</span>
               <div className="flex-1" />
-              {pkg && !(latestDone && latestDone.id === j.id) && (
+              {pkg && (
                 <button onClick={() => setOpenJobs({ ...openJobs, [j.id]: !openJobs[j.id] })} className="text-xs font-semibold text-slate-500 hover:text-slate-800">
                   {expanded ? "\u25BE Hide drawings" : `\u25B8 Show drawings (${jobList(j).regs.length + jobList(j).other.length})`}</button>)}
               {j.status === "queued" && <button onClick={() => cancel(j.id)} className="text-xs border px-2 py-1 rounded">Cancel</button>}
@@ -29771,36 +29933,9 @@ function DraftsmanIfcPackage({ project }) {
               <div className="text-xs text-amber-700">Still waiting after {Math.round(waitMin)} minutes — the draftsman service may not be running. Ask your administrator to check it.</div>
             )}
             {j.status === "failed" && <div className="text-xs text-red-700 whitespace-pre-wrap">{(j.error || "").slice(0, 600)}</div>}
-            {j.status === "done" && sm.rework_stage === "parse" && (() => {
-              const rv = revLabel((j.options || {}).revision || 1);
-              const applied = jobs.some(x => (x.options || {}).rework_stage === "apply" && (x.options || {}).revision === (j.options || {}).revision
-                                            && (x.options || {}).rework_of === (j.options || {}).rework_of && x.created_at > j.created_at);
-              const opName = { add: "Add", remove: "Remove", move: "Move", replace: "Replace", resize_pipe: "Pipe size", resize_duct: "Duct size", note: "Note", for_engineer: "For engineer" };
-              return (
-                <div className="border rounded-lg p-3 space-y-2" style={{ background: "#fffbeb", borderColor: "#fcd34d" }}>
-                  <div className="text-sm font-bold">Consultant comments read — changes proposed for {(j.options || {}).drawing_ref ? j.options.drawing_ref + " " : ""}{rv}</div>
-                  <div className="text-[11px] text-slate-600">Untick anything you don't want. Items marked "For engineer" can't be drawn automatically; they are listed on the comment response sheet for your engineer.</div>
-                  {(sm.comments || []).map((c, ci) => (
-                    <div key={ci} className="bg-white border rounded p-2 space-y-1">
-                      <div className="text-xs font-semibold text-slate-700">{ci + 1}. {c}</div>
-                      {(sm.proposed || []).map((e, i) => e.comment !== ci + 1 ? null : (
-                        <label key={i} className={"flex items-start gap-2 text-xs " + (e.op === "for_engineer" ? "text-slate-500" : "")}>
-                          <input type="checkbox" disabled={e.op === "for_engineer" || applied}
-                            checked={e.op === "for_engineer" ? false : rwPick[j.id + ":" + i] !== false}
-                            onChange={ev => setRwPick({ ...rwPick, [j.id + ":" + i]: ev.target.checked })} />
-                          <span><b className="mr-1">{opName[e.op] || e.op}:</b>{e.summary}</span>
-                        </label>
-                      ))}
-                    </div>
-                  ))}
-                  {applied ? <div className="text-xs text-green-700 font-semibold">{"\u2713"} Applied — see {rv} in the drawing register.</div> : (
-                    <button disabled={busy} onClick={() => applyRework(j)}
-                      className="bg-amber-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50">
-                      {busy ? "Starting…" : `Apply the changes — issue ${rv}`}</button>
-                  )}
-                </div>
-              );
-            })()}
+            {j.status === "done" && sm.rework_stage === "parse" && (
+              <div className="text-xs text-slate-500">Comments read {"\u2014"} the proposed changes are on the drawing's row in the list above.</div>
+            )}
             {pkg && !expanded && (
               <div className="text-xs text-slate-500">{sm.devices} devices · {sm.boq_rows} BOQ lines</div>
             )}
@@ -30535,7 +30670,9 @@ function App() {
   // check were somehow bypassed client-side.
   useEffect(() => {
     if (!session) { setIsPlatformAdmin(false); return; }
-    callAdminAnalytics("is_admin", {}).then(() => setIsPlatformAdmin(true)).catch(() => setIsPlatformAdmin(false));
+    // the draftsman studio shows its in-browser Design / Drawings tabs to platform admins only (2026-10-26)
+    const flag = (v) => { window.__qPlatformAdmin = v; try { window.dispatchEvent(new Event("q-admin")); } catch (_) {} };
+    callAdminAnalytics("is_admin", {}).then(() => { setIsPlatformAdmin(true); flag(true); }).catch(() => { setIsPlatformAdmin(false); flag(false); });
   }, [session]);
 
   // Existing customers (2026-10-20): anyone who has used the platform (their company
