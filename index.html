@@ -2665,6 +2665,161 @@ function detectReferenceZonesSafe(page) {
   ]);
 }
 
+// Cameras counted from their tags on the plan (2026-10-26). Approved CCTV layouts give every camera a
+// tag (NT-IDF-B1-GF-CAM-022) in a box with a leader line to the camera. The tags are text in the PDF, so
+// counting them is exact; following each leader to the camera symbol at its end gives the camera's
+// position, and the colour of that symbol gives its view (identification, detection ...). Tags inside
+// the title strip, legend and schedules are not counted. Returns
+// { cams: [{ n, tag, x, y, type }], schedule: number|null } in page fractions (y down), or null.
+const CAM_TAG_RE = /(^|[-_\s])CAM[-_\s]?\d{1,4}[A-Z]?$/i;
+const CAM_TYPES = {
+  ID:   { name: "120% identification view", colour: "#dc2626", system: "cctv" },
+  REC:  { name: "50% recognition view",      colour: "#2563eb", system: "cctv" },
+  OBS:  { name: "25% observation view",      colour: "#ea7a0c", system: "cctv" },
+  DET:  { name: "10% detection view",        colour: "#16a34a", system: "cctv" },
+  MON:  { name: "5% monitoring view",        colour: "#0ea5e9", system: "cctv" },
+  ANPR: { name: "20% ANPR view",             colour: "#a3a300", system: "anpr" },
+  "?":  { name: "view to confirm",           colour: "#d946ef", system: "cctv" },
+};
+// symbol colours used by the UAE CCTV house style (the FOV legend colours)
+const CAM_SYMBOL_COLOURS = { "245,0,0": "ID", "255,0,0": "ID", "237,31,36": "ID", "0,63,255": "REC", "0,0,255": "REC",
+  "255,150,45": "OBS", "255,127,0": "OBS", "0,245,0": "DET", "0,255,0": "DET", "46,184,0": "DET",
+  "0,255,255": "MON", "0,127,255": "MON", "0,191,255": "MON", "179,179,0": "ANPR" };
+async function readCameraTags(page, OPS, zones) {
+  const vp = page.getViewport({ scale: 1 });
+  const W = vp.width, H = vp.height;
+  const tc = await page.getTextContent();
+  const inZone = (x, y) => (zones || []).some(z => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1);
+  const tags = [];
+  let scheduleTotal = null;
+  const texts = [];
+  for (const it of tc.items) {
+    const s = String(it.str || "").trim();
+    if (!s) continue;
+    const tr = it.transform, nl = Math.hypot(tr[0], tr[1]) || 1, ux = tr[0] / nl, uy = tr[1] / nl, hh = it.height || nl;
+    const cs = [[0, 0], [it.width, 0], [it.width, hh], [0, hh]].map(([a, b]) => vp.convertToViewportPoint(tr[4] + ux * a - uy * b, tr[5] + uy * a + ux * b));
+    const xs = cs.map(p => p[0] / W), ys = cs.map(p => p[1] / H);
+    const t = { s, x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+    t.cx = (t.x0 + t.x1) / 2; t.cy = (t.y0 + t.y1) / 2;
+    texts.push(t);
+    if (CAM_TAG_RE.test(s) && !inZone(t.cx, t.cy)) tags.push(t);
+  }
+  // the sheet's own "OVER ALL CAMERA  161", for the check
+  const ov = texts.find(t => /OVER\s*ALL\s*CAMERA|TOTAL\s*CAMERAS?/i.test(t.s));
+  if (ov) {
+    const h = Math.max(ov.y1 - ov.y0, ov.x1 - ov.x0) * 0.25 + 0.004;
+    const nums = texts.filter(t => /^\d{1,4}$/.test(t.s) && t !== ov && Math.abs(t.cy - ov.cy) < h && t.cx > ov.cx)
+      .sort((a, b) => a.cx - b.cx);
+    if (nums.length) scheduleTotal = Number(nums[nums.length - 1].s);
+  }
+  if (tags.length < 3) return { cams: [], schedule: scheduleTotal };
+  // geometry: black line segments (leaders) and small camera-coloured marks (the symbols)
+  const ol = await page.getOperatorList();
+  let ctm = [1, 0, 0, 1, 0, 0], fill = "0,0,0", stroke = "0,0,0";
+  const st = [];
+  const mul = (a, b) => [a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1], a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3], a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]];
+  const P = (x, y) => { const u = ctm[0]*x+ctm[2]*y+ctm[4], v = ctm[1]*x+ctm[3]*y+ctm[5]; const p = vp.convertToViewportPoint(u, v); return [p[0] / W, p[1] / H]; };
+  const rgb = (a) => Array.from(Object.values(a)).map(v => Math.round(v)).join(",");
+  const S = 3370 / Math.max(W, H);     // distances below were set on an A0 sheet
+  const segs = [], marks = [];
+  let pend = null;
+  for (let i = 0; i < ol.fnArray.length; i++) {
+    const fn = ol.fnArray[i], a = ol.argsArray[i];
+    if (fn === OPS.save) st.push([ctm.slice(), fill, stroke]);
+    else if (fn === OPS.restore) { const s = st.pop(); if (s) [ctm, fill, stroke] = s; }
+    else if (fn === OPS.transform) ctm = mul(ctm, a);
+    else if (fn === OPS.setFillRGBColor) fill = rgb(a);
+    else if (fn === OPS.setStrokeRGBColor) stroke = rgb(a);
+    else if (fn === OPS.constructPath) {
+      const ops = a[0], c = a[1]; let k = 0, cur = null, curves = 0; const pts = [], ss = [];
+      for (const op of ops) {
+        if (op === OPS.moveTo) { cur = P(c[k], c[k+1]); pts.push(cur); k += 2; }
+        else if (op === OPS.lineTo) { const p = P(c[k], c[k+1]); if (cur) ss.push([cur, p]); cur = p; pts.push(p); k += 2; }
+        else if (op === OPS.curveTo) { cur = P(c[k+4], c[k+5]); pts.push(cur); k += 6; curves++; }
+        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { cur = P(c[k+2], c[k+3]); pts.push(cur); k += 4; curves++; }
+        else if (op === OPS.rectangle) { pts.push(P(c[k], c[k+1]), P(c[k]+c[k+2], c[k+1]+c[k+3])); k += 4; }
+      }
+      pend = { pts, ss, curves };
+    } else if (pend && (fn === OPS.stroke || fn === OPS.closeStroke || fn === OPS.fill || fn === OPS.eoFill ||
+                        fn === OPS.fillStroke || fn === OPS.closeFillStroke || fn === OPS.eoFillStroke || fn === OPS.closeEOFillStroke)) {
+      const filled = fn !== OPS.stroke && fn !== OPS.closeStroke;
+      const stroked = fn !== OPS.fill && fn !== OPS.eoFill;
+      if (stroked && stroke === "0,0,0") for (const s of pend.ss) if (Math.hypot(s[0][0]-s[1][0], s[0][1]-s[1][1]) > 0.0005) segs.push(s);
+      if (pend.pts.length) {
+        let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+        for (const p of pend.pts) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
+        if (Math.max(x1 - x0, y1 - y0) < 0.005 * S) {
+          // a filled mark, or a stroked ring (the camera's circles); a short straight coloured stroke is a cable route
+          const ty = (filled && CAM_SYMBOL_COLOURS[fill]) || (!filled && pend.curves && CAM_SYMBOL_COLOURS[stroke]);
+          if (ty) marks.push([(x0 + x1) / 2, (y0 + y1) / 2, ty]);
+        }
+      }
+      pend = null;
+    } else if (fn === OPS.endPath) pend = null;
+  }
+  // leader following, on a grid of segment ends
+  const tol = 0.0012 * S, key = (p) => Math.round(p[0] / tol) + ":" + Math.round(p[1] / tol);
+  const grid = new Map();
+  segs.forEach((s, i) => { for (const p of s) { const k = key(p); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(i); } });
+  const around = (p) => { const gx = Math.round(p[0] / tol), gy = Math.round(p[1] / tol), out = [];
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) (grid.get((gx+dx) + ":" + (gy+dy)) || []).forEach(i => out.push(i)); return out; };
+  const near = (p, q) => Math.abs(p[0]-q[0]) < tol && Math.abs(p[1]-q[1]) < tol;
+  const markGrid = new Map(), mk = (p) => Math.round(p[0] / (0.004 * S)) + ":" + Math.round(p[1] / (0.004 * S));
+  marks.forEach(m => { const k = mk(m); if (!markGrid.has(k)) markGrid.set(k, []); markGrid.get(k).push(m); });
+  const marksNear = (p, r) => { const g = 0.004 * S, n = Math.ceil(r / g), gx = Math.round(p[0] / g), gy = Math.round(p[1] / g), out = [];
+    for (let dx = -n; dx <= n; dx++) for (let dy = -n; dy <= n; dy++) for (const m of (markGrid.get((gx+dx) + ":" + (gy+dy)) || [])) if (Math.hypot(m[0]-p[0], m[1]-p[1]) < r) out.push(m);
+    return out; };
+  const typeOf = (ms) => { const c = {}; ms.forEach(m => c[m[2]] = (c[m[2]] || 0) + 1); let b = null; for (const k in c) if (!b || c[k] > c[b]) b = k; return b; };
+  const pad = 0.0035 * S;
+  const cams = [];
+  for (const t of tags) {
+    const bx0 = t.x0 - pad, bx1 = t.x1 + pad, by0 = t.y0 - pad, by1 = t.y1 + pad;
+    const inBox = (p) => p[0] >= bx0 && p[0] <= bx1 && p[1] >= by0 && p[1] <= by1;
+    let best = null;
+    const cand = new Set();
+    for (const kx of [bx0, bx1]) for (let y = by0; y <= by1 + tol; y += tol) around([kx, y]).forEach(i => cand.add(i));
+    for (const ky of [by0, by1]) for (let x = bx0; x <= bx1 + tol; x += tol) around([x, ky]).forEach(i => cand.add(i));
+    for (let x = bx0; x <= bx1 + tol; x += tol) for (let y = by0; y <= by1 + tol; y += tol) around([x, y]).forEach(i => cand.add(i));
+    for (const i0 of cand) {
+      const s0 = segs[i0];
+      if (inBox(s0[0]) === inBox(s0[1])) continue;
+      let end = inBox(s0[0]) ? s0[1] : s0[0], L = Math.hypot(s0[0][0]-s0[1][0], s0[0][1]-s0[1][1]);
+      const seen = new Set([i0]);
+      for (let step = 0; step < 15; step++) {
+        const nx = around(end).filter(j => !seen.has(j) && (near(segs[j][0], end) || near(segs[j][1], end)));
+        if (nx.length !== 1) break;
+        const s = segs[nx[0]]; seen.add(nx[0]);
+        const ne = near(s[0], end) ? s[1] : s[0]; L += Math.hypot(ne[0]-end[0], ne[1]-end[1]); end = ne;
+      }
+      const ms = marksNear(end, 0.004 * S);
+      const sc = (ms.length ? 1 : 0) * 10 + L;
+      if (L > 0.002 * S && (!best || sc > best.sc)) best = { end, sc, ms };
+    }
+    let pt = best ? best.end : [t.cx, t.cy];
+    let type = best && best.ms.length ? typeOf(best.ms) : null;
+    if (!type) {
+      // the camera symbol nearest the leader end, or touching the tag box
+      const r = 0.008 * S;
+      const ms = marksNear(pt, r).concat(marksNear([t.cx, t.cy], r + (t.x1 - t.x0) / 2));
+      const bd = (m) => Math.min(Math.hypot(m[0]-pt[0], m[1]-pt[1]), Math.hypot(Math.max(t.x0-m[0], 0, m[0]-t.x1), Math.max(t.y0-m[1], 0, m[1]-t.y1)));
+      const m = ms.filter(m => bd(m) < r).sort((a, b) => bd(a) - bd(b))[0];
+      if (m) { type = typeOf(marksNear(m, 0.004 * S)); pt = [m[0], m[1]]; }
+    }
+    cams.push({ tag: t.s, x: pt[0], y: pt[1], type: type || "?" });
+  }
+  // numbered top to bottom, left to right, so number 1 is where a reader starts
+  cams.sort((a, b) => (Math.round(a.y * 20) - Math.round(b.y * 20)) || (a.x - b.x));
+  cams.forEach((c, i) => c.n = i + 1);
+  return { cams, schedule: scheduleTotal };
+}
+function readCameraTagsSafe(page, zones) {
+  if (!window.pdfjsLib || !window.pdfjsLib.OPS) return Promise.resolve({ cams: [], schedule: null });
+  return Promise.race([
+    readCameraTags(page, window.pdfjsLib.OPS, zones).catch(e => { console.warn("Camera tags not read:", e); return { cams: [], schedule: null }; }),
+    new Promise(res => setTimeout(() => res({ cams: [], schedule: null }), 45000)),
+  ]);
+}
+
 async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onProgress, opts = {}) {
   const page = await pdf.getPage(pageNumber);
   const base = page.getViewport({ scale: 1 });
@@ -11089,6 +11244,12 @@ function DrawingsTab({ project }) {
           const refZones = (await detectReferenceZonesSafe(await pdf.getPage(pageNumber)))
             .map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label }));
           if (refZones.length) console.log(`Sheet ${pageNumber}: reference zones`, refZones);
+          // cameras counted from their own tags on the plan: exact count, exact positions
+          const camRead = await readCameraTagsSafe(await pdf.getPage(pageNumber), refZones);
+          const taggedCameras = camRead.cams.length >= 3
+            ? { schedule: camRead.schedule, cams: camRead.cams.map(c => ({ n: c.n, tag: c.tag, type: c.type, x: +c.x.toFixed(5), y: +c.y.toFixed(5) })) }
+            : null;
+          if (taggedCameras) console.log(`Sheet ${pageNumber}: ${taggedCameras.cams.length} camera tags on the plan (schedule ${camRead.schedule ?? "not read"})`);
           setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
           // The high-resolution path had no confirmation loop at all: a
           // cost-protection gate came back as a flat error and the sheet was
@@ -11099,7 +11260,7 @@ function DrawingsTab({ project }) {
           for (;;) {
             try {
               started = await callEngine("analyze_drawing_tiled", {
-                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, ...tileConfirms,
+                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, ...tileConfirms,
               });
               break;
             } catch (ex) {
@@ -11935,6 +12096,8 @@ function MarkupViewerModal({ drawing, onClose }) {
   // Repeated vector symbols on each page, and which BOQ item each one is.
   const [symbolsByPage, setSymbolsByPage] = useState({});
   const [symbolMap, setSymbolMap] = useState(drawing.symbol_map || {});
+  // Cameras counted from their tags, and the title strip / legend / schedule areas, per page.
+  const [camByPage, setCamByPage] = useState({});
   const [pickingFor, setPickingFor] = useState(null);
   const [error2, setError2] = useState("");
   const [symbolSaving, setSymbolSaving] = useState(false);
@@ -12016,6 +12179,15 @@ function MarkupViewerModal({ drawing, onClose }) {
       if (!symbolsByPage[n]) {
         const syms = await extractPageSymbols(pdf, n);
         setSymbolsByPage(prev => ({ ...prev, [n]: syms }));
+      }
+      // Camera tags: the same reading the take-off uses, so the numbers on the sheet are the
+      // numbers that were counted. Areas that are not counted are shown shaded.
+      if (!camByPage[n]) {
+        setCamByPage(prev => (prev[n] ? prev : { ...prev, [n]: null }));
+        const pg = await pdf.getPage(n);
+        const zones = await detectReferenceZonesSafe(pg);
+        const ct = await readCameraTagsSafe(pg, zones);
+        setCamByPage(prev => ({ ...prev, [n]: { zones, cams: ct.cams, schedule: ct.schedule } }));
       }
     } catch (e) {
       console.error("renderPage failed:", e);
@@ -12149,7 +12321,7 @@ function MarkupViewerModal({ drawing, onClose }) {
       // The exported sheet is the sheet on screen, down to the fade and the
       // system that was isolated. A download that quietly shows more than the
       // viewer did is a different drawing, and somebody will build off it.
-      if (dimSheet && (symbolItems.length || aiMarkerItems.length || (useTags && matchedTags.length))) {
+      if (dimSheet && (symbolItems.length || aiMarkerItems.length || (useTags && matchedTags.length) || camMode)) {
         ctx.fillStyle = "rgba(255,255,255,0.60)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
@@ -12226,6 +12398,41 @@ function MarkupViewerModal({ drawing, onClose }) {
           ctx.fillStyle = "#ffffff"; ctx.fillText(label, bx + bw / 2, by + bh / 2 + 0.5);
         });
       });
+      if (camMode) {
+        // the same zones, circles and numbers as the screen
+        const cw = canvas.width, ch = canvas.height;
+        ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+        for (const z of camInfo.zones) {
+          ctx.fillStyle = "rgba(100,116,139,0.30)"; ctx.fillRect(z.x0 * cw, z.y0 * ch, (z.x1 - z.x0) * cw, (z.y1 - z.y0) * ch);
+          ctx.strokeStyle = "rgba(71,85,105,0.85)"; ctx.lineWidth = Math.max(2, cw / 1200); ctx.strokeRect(z.x0 * cw, z.y0 * ch, (z.x1 - z.x0) * cw, (z.y1 - z.y0) * ch);
+          ctx.fillStyle = "#334155"; ctx.font = `bold ${Math.round(badge * 0.9)}px Arial, sans-serif`;
+          ctx.fillText(z.kind === "box" || z.kind === "table" ? "NOT COUNTED" : `NOT COUNTED - ${String(z.label || "").toUpperCase()}`, z.x0 * cw + 6, z.y0 * ch + badge);
+        }
+        const rr = cw * 0.00625, lw = Math.max(3, cw / 700);
+        for (const c of camInfo.cams) {
+          if (isolate && (CAM_TYPES[c.type] || CAM_TYPES["?"]).system !== isolate) continue;
+          const col = (CAM_TYPES[c.type] || CAM_TYPES["?"]).colour, x = c.x * cw, y = c.y * ch;
+          ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.strokeStyle = "#ffffff"; ctx.lineWidth = lw * 1.8; ctx.stroke();
+          ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.stroke();
+          ctx.font = `bold ${badge}px Arial, sans-serif`; ctx.lineWidth = 4; ctx.strokeStyle = "#ffffff";
+          ctx.strokeText(String(c.n), x + rr + 3, y - rr * 0.4); ctx.fillStyle = col; ctx.fillText(String(c.n), x + rr + 3, y - rr * 0.4);
+        }
+        const lines = [`${camInfo.cams.length} cameras counted on the plan from their tags` + (camInfo.schedule != null ? `  |  sheet schedule: ${camInfo.schedule}${camInfo.schedule === camInfo.cams.length ? "  MATCH" : `  DIFFERENCE ${camInfo.cams.length - camInfo.schedule > 0 ? "+" : ""}${camInfo.cams.length - camInfo.schedule}`}` : "")]
+          .concat(["ID", "REC", "OBS", "DET", "MON", "ANPR", "?"].filter(k => camCount[k]).map(k => `${CAM_TYPES[k].name}: ${camCount[k]}`));
+        // the summary sits inside the sheet's header band (a not-counted area), sized to fit it
+        const hb = camInfo.zones.find(z => z.kind === "band" && z.y0 < 0.3);
+        const room = hb ? (hb.y1 - hb.y0) * ch - badge * 1.4 : ch * 0.2;
+        const fs = Math.max(10, Math.min(Math.round(badge * 0.85), Math.floor(room / (lines.length * 1.45 + 0.6)))), lh = fs * 1.45;
+        ctx.font = `bold ${fs}px Arial, sans-serif`;
+        const bw = Math.max(...lines.map(t => ctx.measureText(t).width)) + fs * 1.6, bh = lh * lines.length + fs * 0.6;
+        const bx = cw * 0.012, by = hb ? hb.y0 * ch + badge * 1.2 : ch * 0.012;
+        ctx.fillStyle = "#ffffff"; ctx.fillRect(bx, by, bw, bh); ctx.strokeStyle = "#000000"; ctx.lineWidth = 3; ctx.strokeRect(bx, by, bw, bh);
+        lines.forEach((t, i) => {
+          const k = ["ID", "REC", "OBS", "DET", "MON", "ANPR", "?"].filter(k => camCount[k])[i - 1];
+          ctx.fillStyle = i === 0 ? "#000000" : CAM_TYPES[k].colour; ctx.font = `${i === 0 ? "bold " : ""}${fs}px Arial, sans-serif`;
+          ctx.fillText(t, bx + 14, by + fs + i * lh);
+        });
+      }
       const url = canvas.toDataURL("image/png");
       const a = document.createElement("a");
       a.href = url; a.download = `${drawing.file_name || "drawing"}${pageCount > 1 ? `-p${pageNum}` : ""}-markup.png`;
@@ -12342,6 +12549,14 @@ function MarkupViewerModal({ drawing, onClose }) {
   // Tags read off this page, matched to the systems present on it. When the
   // page has them they replace the AI's coordinates entirely -- they are exact
   // and the AI's are not.
+  // ---- cameras from their tags ---------------------------------------------
+  // When the page's cameras are tagged, those are the camera marks: one numbered circle per
+  // camera, coloured by its view. Every other way of marking cameras (symbols, short tags, AI
+  // positions) would be a second mark on the same camera, so it is left off for CCTV / ANPR.
+  const camInfo = camByPage[pageNum];
+  const camMode = !!(camInfo && camInfo.cams && camInfo.cams.length >= 3);
+  const notCam = sys => !(camMode && (sys === "cctv" || sys === "anpr"));
+  const camCount = camMode ? camInfo.cams.reduce((a, c) => { a[c.type] = (a[c.type] || 0) + 1; return a; }, {}) : {};
   // ---- symbols -------------------------------------------------------------
   const pageSymbols = symbolsByPage[pageNum];
   const symbolsPending = pageSymbols === null || pageSymbols === undefined;
@@ -12356,7 +12571,8 @@ function MarkupViewerModal({ drawing, onClose }) {
       const g = symbolBySig[m.sig];
       return g ? { item: it, group: g, source: m.source } : null;
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(s => notCam(s.item.system_category));
   const useSymbols = symbolItems.length > 0;
   // Systems already marked from their symbols. Their tags would be a second set
   // of boxes on the same devices, so those are dropped -- but every other
@@ -12370,7 +12586,7 @@ function MarkupViewerModal({ drawing, onClose }) {
   const symbolMarkedIds = new Set(symbolItems.map(s => s.item.id));
   // Everything the AI located that no symbol has already covered. This is the
   // set that used to be thrown away whenever a single tag matched.
-  const aiMarkerItems = onPage.filter(it => !symbolMarkedIds.has(it.id));
+  const aiMarkerItems = onPage.filter(it => !symbolMarkedIds.has(it.id) && notCam(it.system_category));
 
   // Automatic count match, once per page, as soon as the symbols are known.
   // Only ever fills in items nobody has decided on -- a person's pick is never
@@ -12390,7 +12606,9 @@ function MarkupViewerModal({ drawing, onClose }) {
   }, [pageSymbols, items, pageNum]);
 
   const pageTags = tagsByPage[pageNum];
-  const matchedTags = pageTags && pageTags.length ? matchTagsToItems(pageTags, items) : [];
+  // with the cameras read from their tags, a short tag the reader could not place (part of a camera's long
+  // tag, a grid label) is noise on top of the numbered cameras, so only tags of a known system stay
+  const matchedTags = (pageTags && pageTags.length ? matchTagsToItems(pageTags, items) : []).filter(t => notCam(t.system) && (!camMode || t.system));
   const useTags = matchedTags.length > 0;
   const tagsPending = pageTags === null || pageTags === undefined;
 
@@ -12417,7 +12635,7 @@ function MarkupViewerModal({ drawing, onClose }) {
   // Fading is only ever right when there is something to fade BEHIND. On a sheet
   // with no markers at all it reads as a failed render, which is exactly the
   // complaint it caused.
-  const anyMarkers = onPage.length > 0 || (useTags && matchedTags.length > 0) || symbolItems.length > 0;
+  const anyMarkers = onPage.length > 0 || (useTags && matchedTags.length > 0) || symbolItems.length > 0 || camMode;
   const dimOn = dimSheet && anyMarkers;
   const markCountBySystem = onPage.reduce((acc, it) => {
     const k = it.system_category || "other";
@@ -12630,7 +12848,46 @@ function MarkupViewerModal({ drawing, onClose }) {
                     </React.Fragment>
                   );
                 })}
+                {camMode && camInfo.zones.map((z, i) => (
+                  <div key={`zone-${i}`} className="absolute pointer-events-none"
+                    style={{ left: `${z.x0 * 100}%`, top: `${z.y0 * 100}%`, width: `${(z.x1 - z.x0) * 100}%`, height: `${(z.y1 - z.y0) * 100}%`,
+                             background: "rgba(100,116,139,0.30)", outline: "2px solid rgba(71,85,105,0.85)" }}>
+                    <span style={{ position: "absolute", left: 4, top: 2, maxWidth: "calc(100% - 8px)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                   fontSize: 10, fontWeight: 700, color: "#334155", background: "rgba(255,255,255,0.85)", padding: "0 4px", borderRadius: 3 }}>
+                      {z.kind === "box" || z.kind === "table" ? "Not counted" : `Not counted — ${z.label}`}
+                    </span>
+                  </div>
+                ))}
+                {camMode && camInfo.cams.map(c => {
+                  const T = CAM_TYPES[c.type] || CAM_TYPES["?"];
+                  return (
+                    <div key={`cam-${c.n}`} title={`Camera ${c.n} — ${c.tag} — ${T.name}`}
+                      className={`absolute${mutedBy(T.system) ? " qtr-marker-mute" : ""}`}
+                      style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, width: "1.25%", aspectRatio: "1", transform: "translate(-50%,-50%)",
+                               border: `3px solid ${T.colour}`, borderRadius: "50%", boxShadow: "0 0 0 1.5px #fff" }}>
+                      <span style={{ position: "absolute", left: "105%", top: "-55%", fontSize: 11, fontWeight: 800, color: T.colour,
+                                     textShadow: "0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff", whiteSpace: "nowrap" }}>{c.n}</span>
+                    </div>
+                  );
+                })}
                 </div>
+              </div>
+            )}
+            {camMode && (
+              <div className={`mb-4 text-xs border rounded-lg px-3 py-2 ${camInfo.schedule == null || camInfo.schedule === camInfo.cams.length ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"}`}>
+                <div className={`font-semibold mb-1 ${camInfo.schedule == null || camInfo.schedule === camInfo.cams.length ? "text-emerald-700" : "text-rose-700"}`}>
+                  {camInfo.cams.length} cameras counted on the plan from their tags
+                  {camInfo.schedule != null && (camInfo.schedule === camInfo.cams.length
+                    ? ` — matches the sheet's camera schedule (${camInfo.schedule})`
+                    : ` — the sheet's camera schedule says ${camInfo.schedule} (difference ${camInfo.cams.length - camInfo.schedule > 0 ? "+" : ""}${camInfo.cams.length - camInfo.schedule}); check the schedule`)}
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-600">
+                  {["ID", "REC", "OBS", "DET", "MON", "ANPR", "?"].filter(k => camCount[k]).map(k => (
+                    <span key={k}><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 999, border: `2.5px solid ${CAM_TYPES[k].colour}`, marginRight: 5, verticalAlign: -1 }} />
+                      {CAM_TYPES[k].name}: <b>{camCount[k]}</b></span>
+                  ))}
+                </div>
+                <div className="text-slate-400 mt-1">Every camera is circled and numbered. Shaded areas (title strip, legend, schedules, details) are not counted and not marked.</div>
               </div>
             )}
             {/* The passive colour legend that used to sit here is gone: the
@@ -12657,7 +12914,7 @@ function MarkupViewerModal({ drawing, onClose }) {
             {error2 && (
               <div className="mb-3 text-sm rounded-lg px-3 py-2 bg-amber-50 border border-amber-200 text-amber-800">{error2}</div>
             )}
-            {imgUrl && (
+            {imgUrl && !camMode && (
               <div style={{ marginTop: -8, marginBottom: 14, fontSize: 12, lineHeight: 1.6 }}>
                 {useSymbols ? (
                   <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 inline-block">
