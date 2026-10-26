@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-25.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-26.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29179,6 +29179,7 @@ function DraftsmanIfcPackage({ project }) {
   const [refQ, setRefQ] = useState("");
   const [refMsg, setRefMsg] = useState("");
   const [zipping, setZipping] = useState("");
+  const [openJobs, setOpenJobs] = useState({});      // generation history: which older packages are expanded
   useEffect(() => { getDraftsmanFamilies().then(f => {
     const fm = f || {};
     setFams(fm);
@@ -29445,6 +29446,43 @@ function DraftsmanIfcPackage({ project }) {
       </div>
     </div>
   );
+  // One package's drawings as a list: the register the worker stored (drawing number, title, sheets,
+  // revision) — or, for packages made before the register existed, read from the file names —
+  // plus the other drawings (3D views, Civil Defence sets, response sheet) and the reports.
+  const ACR = new Set(["CCTV", "ICT", "BGM", "PA", "ANPR", "FTTH", "IPTV", "SMATV", "BMS", "GRMS", "AC", "VA", "AV", "PGS", "MEP", "ELV", "3D", "QA", "BOQ", "IFC", "DCD"]);
+  const niceTitle = t => String(t || "").toLowerCase().replace(/(^|[\s/(&-])([a-z0-9]+)/g, (m, p, w) => p + (ACR.has(w.toUpperCase()) ? w.toUpperCase() : (w === "wi" ? "Wi" : w.charAt(0).toUpperCase() + w.slice(1)))).replace(/\bFi\b/g, "Fi");
+  const jobList = (j) => {
+    const sm = j.summary || {};
+    const outs = (j.outputs || []).filter(o => !/\.json$/.test(o.name) && o.name !== "Drawing-package.zip");
+    const byName = {};
+    outs.forEach(o => { byName[o.name] = o; });
+    const used = new Set();
+    const pre = String(project.project_ref || ("Q" + String(project.id || "").slice(0, 6))).toUpperCase().replace(/[^A-Z0-9-]+/g, "-");
+    let regs = (sm.drawings || []).map(d => ({ ...d, pdf_path: d.pdf_path || (byName[d.pdf] || {}).path, dxf_path: d.dxf_path || (byName[d.dxf] || {}).path }));
+    if (!regs.length) {
+      regs = outs.filter(o => /\.pdf$/.test(o.name) && !o.name.includes("/")).map(o => {
+        const code = o.name.split("-")[0];
+        const sys = LEGACY_CODE_SYS[code];
+        if (!sys || ["ELV", "MEP", "QA", "CR", "3D"].includes(code)) return null;
+        const dxf = byName[o.name.replace(/\.pdf$/, ".dxf")];
+        return { ref: `${pre}-${code}`, system: sys, code, title: (label(o.name) || o.name).replace(/ \(PDF\)$/, ""), pdf: o.name,
+                 pdf_path: o.path, dxf_path: dxf ? dxf.path : null, rev: (j.options || {}).revision || 0, sheets: [] };
+      }).filter(Boolean);
+    }
+    regs.forEach(d => { used.add(d.pdf); used.add(d.dxf); used.add(d.pdf && d.pdf.replace(/\.pdf$/, ".dxf")); });
+    const order = k => { const i = IFC_SYSTEMS.findIndex(x => x[0] === k); return i < 0 ? 99 : i; };
+    regs.sort((a, b) => order(a.system) - order(b.system) || (/-SD$/.test(a.ref) ? 1 : 0) - (/-SD$/.test(b.ref) ? 1 : 0) || a.ref.localeCompare(b.ref));
+    // other drawings: PDFs that are not in the register (3D views, Civil Defence, old combined schematics, response sheet)
+    const other = outs.filter(o => /\.pdf$/.test(o.name) && !used.has(o.name)).map(o => {
+      used.add(o.name);
+      const dxf = byName[o.name.replace(/\.pdf$/, ".dxf")];
+      if (dxf) used.add(dxf.name);
+      return { ref: "", title: (label(o.name) || o.name).replace(/ \(PDF\)$/, ""), pdf_path: o.path, dxf_path: dxf ? dxf.path : null,
+               pdf: o.name, rev: (j.options || {}).revision || 0, sheets: [] };
+    });
+    const reports = outs.filter(o => !used.has(o.name) && !/\.dxf$/.test(o.name));
+    return { regs, other, reports };
+  };
   const chip = { queued: ["#fef3c7", "#92400e", "Waiting"], running: ["#dbeafe", "#1e40af", "Designing…"],
                  done: ["#dcfce7", "#166534", "Ready"], failed: ["#fee2e2", "#991b1b", "Failed"],
                  cancelled: ["#f1f5f9", "#475569", "Cancelled"] };
@@ -29602,8 +29640,12 @@ function DraftsmanIfcPackage({ project }) {
         </div>
       )}
       {jobs.length > 0 && <div className="text-xs font-semibold text-slate-500 pt-1">Generation history</div>}
-      {jobs.map(j => {
+      {jobs.map((j, ji) => {
         const c = chip[j.status] || chip.queued;
+        // the newest finished package is open; older ones fold to one line until clicked
+        const latestDone = jobs.find(x => x.status === "done" && (x.summary || {}).rework_stage !== "parse");
+        const pkg = j.status === "done" && (j.summary || {}).rework_stage !== "parse";
+        const expanded = !pkg || (latestDone && latestDone.id === j.id) || openJobs[j.id];
         const waitMin = (Date.now() - new Date(j.created_at).getTime()) / 60000;
         const sm = j.summary || {};
         return (
@@ -29617,6 +29659,9 @@ function DraftsmanIfcPackage({ project }) {
               <span className="flex flex-wrap gap-1">{(j.systems || []).map(k => (
                 <span key={k} title={sysLabel(k)} className="text-[11px] bg-slate-100 rounded-full px-2 py-0.5">{SYS_ICON[k] || ""} {sysLabel(k)}</span>))}</span>
               <div className="flex-1" />
+              {pkg && !(latestDone && latestDone.id === j.id) && (
+                <button onClick={() => setOpenJobs({ ...openJobs, [j.id]: !openJobs[j.id] })} className="text-xs font-semibold text-slate-500 hover:text-slate-800">
+                  {expanded ? "\u25BE Hide drawings" : `\u25B8 Show drawings (${jobList(j).regs.length + jobList(j).other.length})`}</button>)}
               {j.status === "queued" && <button onClick={() => cancel(j.id)} className="text-xs border px-2 py-1 rounded">Cancel</button>}
             </div>
             {j.status === "queued" && waitMin > 3 && (
@@ -29653,14 +29698,20 @@ function DraftsmanIfcPackage({ project }) {
                 </div>
               );
             })()}
-            {j.status === "done" && sm.rework_stage !== "parse" && (
+            {pkg && !expanded && (
+              <div className="text-xs text-slate-500">{sm.devices} devices · {sm.boq_rows} BOQ lines</div>
+            )}
+            {j.status === "done" && sm.rework_stage !== "parse" && expanded && (
               <div className="space-y-2">
                 <div className="text-xs text-slate-600">
                   {sm.devices} devices · {sm.boq_rows} BOQ lines added to the project BOQ
                   {sm.issues && (sm.issues.FAIL || sm.issues.REVIEW) ? ` · ${sm.issues.FAIL || 0} fail / ${sm.issues.REVIEW || 0} review items — see the compliance report` : " · all checks passed"}
                 </div>
                 {(sm.input_warnings || []).length > 0 && (
-                  <div className="text-xs text-amber-700">Reading the plans: {sm.input_warnings.join(" ")}</div>
+                  <div className="text-xs text-amber-700">{sm.input_warnings.map(w => {
+                    const m = /^(.*?): only (\d+) of (\d+) rooms have a name/.exec(w);
+                    return m ? `${m[1]}: ${m[3] - m[2]} of ${m[3]} rooms have no name on the plan. Unnamed rooms are treated as corridors / stores \u2014 add room names to the drawing for a better design.` : w;
+                  }).join(" ")}</div>
                 )}
                 {(() => {
                   const m3 = (j.outputs || []).find(o => o.name === "model3d.json");
@@ -29683,15 +29734,63 @@ function DraftsmanIfcPackage({ project }) {
                       className="ml-2 text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">{zipping === j.id ? "Preparing ZIP\u2026" : "\u2B07 Download everything (ZIP)"}</button>
                   );
                 })()}
-                <div className="flex flex-wrap gap-2">
-                  {(j.outputs || []).filter(o => !/\.json$/.test(o.name) && o.name !== "Drawing-package.zip").map(o => (
-                    <span key={o.path} className="inline-flex items-stretch border rounded overflow-hidden text-xs">
-                      <button onClick={() => open(o.path)} className="px-2 py-1 hover:bg-slate-50" title="View">{label(o.name)}</button>
-                      <button onClick={() => download(o.path, o.name.split("/").pop())} className="px-2 py-1 border-l hover:bg-slate-50"
-                        title="Download" aria-label={"Download " + label(o.name)}>{"\u2B07"}</button>
-                    </span>
-                  ))}
-                </div>
+                {(() => {
+                  const { regs, other, reports } = jobList(j);
+                  const fb = "text-[11px] border rounded px-2 py-0.5 hover:bg-slate-50";
+                  const row = (d, n) => (
+                    <tr key={(d.ref || d.pdf) + n} id={d.ref ? "qd-job-" + j.id + "-" + d.ref : undefined} className="border-t">
+                      <td className="py-1.5 pr-2 text-slate-500">{n}</td>
+                      <td className="py-1.5 pr-3 font-mono font-semibold text-blue-700 whitespace-nowrap" title={(d.sheets || []).join("\n")}>
+                        {(d.sheets && d.sheets[0]) || d.ref || "\u2014"}{(d.sheets || []).length > 1 ? <span className="text-slate-400 font-normal"> +{d.sheets.length - 1}</span> : null}</td>
+                      <td className="py-1.5 pr-3">{niceTitle(d.title)}</td>
+                      <td className="py-1.5 pr-3 text-center">{(d.sheets || []).length || "\u2014"}</td>
+                      <td className="py-1.5 pr-3"><span className="text-[11px] bg-slate-100 rounded px-1.5 py-0.5">{revLabel(d.rev != null ? d.rev : (j.options || {}).revision)}</span></td>
+                      <td className="py-1.5 whitespace-nowrap space-x-1">
+                        {d.pdf_path && <button onClick={() => open(d.pdf_path)} className={fb}>View</button>}
+                        {d.pdf_path && <button onClick={() => download(d.pdf_path, (d.pdf || "drawing.pdf").split("/").pop())} className={fb}>PDF</button>}
+                        {d.dxf_path && <button onClick={() => download(d.dxf_path, (d.dxf || (d.pdf || "drawing.pdf").replace(/\.pdf$/, ".dxf")).split("/").pop())} className={fb}>DXF</button>}
+                      </td>
+                    </tr>
+                  );
+                  let n = 0, last = null;
+                  const body = [];
+                  regs.forEach(d => {
+                    if (d.system !== last) {
+                      last = d.system;
+                      body.push(<tr key={"g" + d.system} className="bg-slate-50"><td colSpan={6} className="py-1 px-1 text-[11px] font-bold text-slate-600">{SYS_ICON[d.system] || ""} {sysLabel(d.system)}</td></tr>);
+                    }
+                    body.push(row(d, ++n));
+                  });
+                  if (other.length) {
+                    body.push(<tr key="gother" className="bg-slate-50"><td colSpan={6} className="py-1 px-1 text-[11px] font-bold text-slate-600">Other drawings</td></tr>);
+                    other.forEach(d => body.push(row(d, ++n)));
+                  }
+                  return (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-bold text-slate-500 tracking-wide pt-1">DRAWINGS</div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead><tr className="text-left text-[10px] text-slate-500 uppercase tracking-wide">
+                            <th className="py-1 pr-2">#</th><th className="py-1 pr-3">Drawing No.</th><th className="py-1 pr-3">Title</th>
+                            <th className="py-1 pr-3 text-center">Sheets</th><th className="py-1 pr-3">Rev</th><th className="py-1">Files</th></tr></thead>
+                          <tbody>{body}</tbody>
+                        </table>
+                      </div>
+                      {reports.length > 0 && <>
+                        <div className="text-[11px] font-bold text-slate-500 tracking-wide pt-1">REPORTS &amp; BOQ</div>
+                        <div className="flex flex-wrap gap-2">
+                          {reports.map(o => (
+                            <span key={o.path} className="inline-flex items-stretch border rounded overflow-hidden text-xs">
+                              <button onClick={() => open(o.path)} className="px-2 py-1 hover:bg-slate-50" title="View">{label(o.name) || o.name}</button>
+                              <button onClick={() => download(o.path, o.name.split("/").pop())} className="px-2 py-1 border-l hover:bg-slate-50"
+                                title="Download" aria-label={"Download " + (label(o.name) || o.name)}>{"\u2B07"}</button>
+                            </span>
+                          ))}
+                        </div>
+                      </>}
+                    </div>
+                  );
+                })()}
                 {rework === j.id ? (
                   reworkForm(`Rework the whole package on consultant comments \u2014 issue ${revLabel(((j.options || {}).revision || 0) + 1)}`, () => submitRework(j))
                 ) : (
