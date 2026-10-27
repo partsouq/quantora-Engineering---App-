@@ -372,10 +372,25 @@ function validateMeasuredRoutes(raw: any): { description: string; metres: number
 const CONTAINMENT_LIKE = /\b(conduit|trunking|tray|ladder|basket|raceway|containment)\b/i;
 function isAiContainmentRow(r: any): boolean {
   const subj = String(r.description || "").split(/,| with | from | for | including /i)[0];
-  return /^(m|lm)$/i.test(String(r.unit || "").trim()) && CONTAINMENT_LIKE.test(subj);
+  return /^(m|lm)$/i.test(String(r.unit || "").trim()) && CONTAINMENT_LIKE.test(subj) && !/\bduct(work)?\b/i.test(subj);
+}
+// Air ducts measured from the drawing (a legend that names the duct colour in real text). Flexible
+// ducts are short connections and are not drawn as a measured colour, so they stay as read.
+const isMeasuredDuct = (r: { description: string }) => /\bduct(work)?\b/i.test(r.description) && !/\b(bus\s*duct|flex)/i.test(r.description);
+function isAiDuctRow(r: any): boolean {
+  const subj = String(r.description || "").split(/,| with | from | for | including /i)[0];
+  return /^(m|lm)$/i.test(String(r.unit || "").trim()) && /\bduct(work)?\b/i.test(subj) && !/\bflex/i.test(subj) && (r.quantity_source_type ?? "physical_count") !== "note_reference";
 }
 function measuredRouteRows(routes: ReturnType<typeof validateMeasuredRoutes>, base: any): any[] {
   return routes.map((r) => {
+    if (isMeasuredDuct(r)) {
+      return {
+        ...base, system_category: "ducting", description: `Air duct: ${r.description}`, quantity: r.metres, unit: "m",
+        confidence_score: 90, quantity_source_type: "physical_count", coordinates: null,
+        quantity_basis_notes: `Measured from the drawing: every line of the colour the legend names "${r.description}", at the sheet scale ${r.scale}, along the duct centre. ` +
+          "One total for this duct type: the drawing's size labels are not readable text, so split it by size on review. Fittings and wastage are not included.",
+      };
+    }
     const kind = /tray|ladder|basket/i.test(r.description) ? "Cable tray" : /trunking/i.test(r.description) ? "Trunking" : "Conduit";
     const named = r.description.length < 12 ? `${kind}, as marked "${r.description}" on the drawing` : `${kind}: ${r.description}`;
     return {
@@ -3019,8 +3034,8 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
 
-      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes, tagged_devices: rawDevices } = body as {
-        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any; measured_routes?: any; tagged_devices?: any;
+      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes, tagged_devices: rawDevices, schedule_images: rawSchedImgs } = body as {
+        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any; measured_routes?: any; tagged_devices?: any; schedule_images?: any;
         confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean;
       };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
@@ -3166,11 +3181,29 @@ Deno.serve(async (req: Request) => {
         // from. Their quantities replace the AI's plan count for the same items further down.
         let sheetTables: any[] = [];
         try {
-          const zoneTiles = refZones.length ? tileBlocks.filter((tb) => zoneCoverage(tb.tile, refZones) >= 0.15) : [];
-          const pick = (zoneTiles.length ? zoneTiles : legendPicked).slice(0, 6);
-          let bytes = 0;
-          const blocks = pick.filter((tb) => (bytes += tb.bytes) <= LEGEND_BUDGET_BYTES || tb === pick[0]).map((tb) => tb.block);
-          const tabCall = await callClaude(anthropicKey, systemPrompt, [...blocks, { type: "text", text: SCHEDULE_PROMPT }], SCHEDULE_TOOL, 16000);
+          // Sharp images of each table, rendered by the browser from the PDF (see renderScheduleCrops),
+          // else the tiles that hold the title strip / legend / schedule areas.
+          const schedPaths = (Array.isArray(rawSchedImgs) ? rawSchedImgs : [])
+            .filter((p: any) => typeof p === "string" && p.startsWith(`${project.id}/`) && /\.png$/i.test(p) && !p.includes("..")).slice(0, 12);
+          let blocks: any[] = [];
+          if (schedPaths.length) {
+            const got = await mapWithConcurrency(schedPaths, 4, async (p: string) => {
+              const { data: blob } = await admin.storage.from("drawings").download(p);
+              if (!blob) return null;
+              return { type: "image", source: { type: "base64", media_type: "image/png", data: bytesToBase64(new Uint8Array(await blob.arrayBuffer())) } };
+            });
+            blocks = (got as any[]).filter(Boolean);
+          }
+          if (!blocks.length) {
+            const zoneTiles = refZones.length ? tileBlocks.filter((tb) => zoneCoverage(tb.tile, refZones) >= 0.15) : [];
+            const pick = (zoneTiles.length ? zoneTiles : legendPicked).slice(0, 6);
+            let bytes = 0;
+            blocks = pick.filter((tb) => (bytes += tb.bytes) <= LEGEND_BUDGET_BYTES || tb === pick[0]).map((tb) => tb.block);
+          }
+          const tabText = schedPaths.length && blocks.length
+            ? `${SCHEDULE_PROMPT} These images are close-ups of the tables on one sheet, in order. A tall table may be cut into bands top to bottom across consecutive images (with a small overlap): join the bands into ONE table and do not copy the overlapping row twice. An image may also show part of the plan or a legend; copy only real tables.`
+            : SCHEDULE_PROMPT;
+          const tabCall = await callClaude(anthropicKey, systemPrompt, [...blocks, { type: "text", text: tabText }], SCHEDULE_TOOL, 16000);
           addUsage(tabCall.usage);
           sheetTables = Array.isArray(tabCall.result?.tables) ? tabCall.result.tables : [];
         } catch (tabErr) {
@@ -3347,7 +3380,8 @@ Deno.serve(async (req: Request) => {
         let aiContainmentRowsReplaced = 0;
         if (measuredRoutes.length) {
           const before = promotedRows.length;
-          promotedRows = promotedRows.filter((r: any) => !isAiContainmentRow(r));
+          const ductsMeasured = measuredRoutes.some(isMeasuredDuct);
+          promotedRows = promotedRows.filter((r: any) => !isAiContainmentRow(r) && !(ductsMeasured && isAiDuctRow(r)));
           aiContainmentRowsReplaced = before - promotedRows.length;
           promotedRows = promotedRows.concat(measuredRouteRows(measuredRoutes, {
             project_id: project.id, drawing_id, analysis_run_id: run.id, revision_number: nextRevision,
@@ -3355,6 +3389,10 @@ Deno.serve(async (req: Request) => {
           }));
           console.log(`tiled run ${run.id}: ${measuredRoutes.length} measured route(s) replace ${aiContainmentRowsReplaced} AI containment line(s).`);
         }
+        // a length the AI only estimated is shown as an estimate, never as a confident quantity
+        promotedRows = promotedRows.map((r: any) => /\b(estimat|approximate|approx\.|typical\s+\d)/i.test(String(r.quantity_basis_notes || "")) && /^(m|lm|m2)$/i.test(String(r.unit || "").trim())
+          ? { ...r, confidence_score: Math.min(Number(r.confidence_score) || 45, 45), quantity_basis_notes: `${r.quantity_basis_notes} ESTIMATE — not measured from the drawing; check before pricing.` }
+          : r);
         // the sheet's own schedules govern the items they list
         const sched = scheduleTablesToItems(sheetTables);
         const sa = applyScheduleItems(promotedRows, sched.items, {

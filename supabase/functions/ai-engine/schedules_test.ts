@@ -147,3 +147,10 @@ Deno.test("same item described differently on two tiles becomes one line", () =>
   assertEquals(q(/^Return Air Grille/), [57]);
   assertEquals(q(/^Direct Digital/), [28]);
 });
+
+Deno.test("equipment lines read like something you can buy", () => {
+  const fcu = scheduleTablesToItems([FCUS]).items.find((i) => i.quantity === 43)!;
+  assertEquals(fcu.description.startsWith("Fan coil unit, ducted"), true);
+  assertEquals(/total load 19\.33 kW/.test(fcu.description), true);
+  assertEquals(/supply air 1142 L\/s/i.test(fcu.description), true);
+});
