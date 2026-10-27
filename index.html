@@ -3592,11 +3592,35 @@ function pollDelay(activeMs) {
 // Supabase client for the project's owner (RLS: runs_via_project /
 // drawings via the same project-ownership chain), so this polls the
 // table directly rather than adding a new ai-engine round trip per check.
+// A status check that loses the connection for a moment (phone screen locked,
+// app switched, weak signal) shows up as "Failed to fetch" / "Load failed" /
+// "NetworkError". The run itself keeps going on the server, so the poll just
+// waits and checks again instead of showing an error. Only after this many
+// connection failures in a row does it give up.
+const POLL_NETWORK_RETRIES = 8;
+function isNetworkError(err) {
+  const m = String((err && (err.message || err)) || "");
+  return /failed to fetch|load failed|networkerror|network request failed|fetch failed|err_network|err_internet_disconnected/i.test(m);
+}
+
 async function pollAnalysisRun(runId, { intervalMs = 4000, maxWaitMs = 7 * 60 * 1000 } = {}) {
   const startedAt = Date.now();
+  let netFails = 0;
   for (;;) {
-    const { data: row, error } = await sb.from("analysis_runs").select("status, summary, error_message, run_kind, change_reason, project_id").eq("id", runId).single();
-    if (error) throw new Error("Could not check analysis status: " + error.message);
+    let row, error;
+    try {
+      ({ data: row, error } = await sb.from("analysis_runs").select("status, summary, error_message, run_kind, change_reason, project_id").eq("id", runId).single());
+    } catch (e) { error = e; }
+    if (error) {
+      if (isNetworkError(error) && ++netFails <= POLL_NETWORK_RETRIES) {
+        await new Promise(r => setTimeout(r, pollDelay(intervalMs)));
+        continue;
+      }
+      throw new Error(isNetworkError(error)
+        ? "Lost connection while checking the analysis. It is still running on the server -- refresh the page in a minute to see the result."
+        : "Could not check analysis status: " + error.message);
+    }
+    netFails = 0;
     if (row.status === "completed") {
       const k = row.run_kind || "";
       qStepDone(row.change_reason ? "rework" : /^design_(drawing|system)$/.test(k) ? "design" : k === "design_ifc" ? "draftsman" : "takeoff", row.project_id);
@@ -3614,9 +3638,22 @@ async function pollAnalysisRun(runId, { intervalMs = 4000, maxWaitMs = 7 * 60 * 
 
 async function pollClassification(drawingId, { intervalMs = 3000, maxWaitMs = 5 * 60 * 1000 } = {}) {
   const startedAt = Date.now();
+  let netFails = 0;
   for (;;) {
-    const { data: row, error } = await sb.from("drawings").select("classification_status, total_pages_detected").eq("id", drawingId).single();
-    if (error) throw new Error("Could not check classification status: " + error.message);
+    let row, error;
+    try {
+      ({ data: row, error } = await sb.from("drawings").select("classification_status, total_pages_detected").eq("id", drawingId).single());
+    } catch (e) { error = e; }
+    if (error) {
+      if (isNetworkError(error) && ++netFails <= POLL_NETWORK_RETRIES) {
+        await new Promise(r => setTimeout(r, pollDelay(intervalMs)));
+        continue;
+      }
+      throw new Error(isNetworkError(error)
+        ? "Lost connection while checking the pages. It may still finish in the background -- try reopening this dialog in a minute."
+        : "Could not check classification status: " + error.message);
+    }
+    netFails = 0;
     if (row.classification_status === "classified") {
       const { data: pages } = await sb.from("drawing_pages").select("*").eq("drawing_id", drawingId).order("page_number");
       return { total_pages: row.total_pages_detected || 0, pages: pages || [] };
