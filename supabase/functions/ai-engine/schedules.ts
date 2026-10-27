@@ -194,8 +194,22 @@ export function scheduleTablesToItems(tables: any[]): { items: ScheduleItem[]; s
       const size = sizeCols.map(cell).filter(Boolean).join(" x ");
       const loc = locCols.map(cell).filter(Boolean).join(", ");
       const fam = familyOf(`${desc} ${ref}`) ?? familyOf(title);
-      const name = desc ? cap(desc) : (singularTitle(title) || cap(ref.replace(/[-\s]*\d.*$/, "")) || "Scheduled item");
-      const specBits = equipment ? specCols.map((i) => (r[i] ? `${cols[i]} ${r[i]}` : "")).filter(Boolean) : [];
+      // Equipment reads "Fan coil unit, ducted, total load 19.33 kW, supply air 1142 L/s": the family name,
+      // the unit type if the row gives one, then capacities -- only numeric values, so a heading copied one
+      // column off cannot put a word where a kW should be.
+      const typeWord = r.map((c) => String(c ?? "")).find((c) => /\b(DUCTED|CASSETTE|WALL[-\s]?MOUNTED|FLOOR[-\s]?STANDING|CONCEALED|EXPOSED|CEILING|HI[-\s]?WALL|VERTICAL|HORIZONTAL)\b/i.test(c));
+      const descOk = desc && /[a-z]{3}/i.test(desc) && !/^\d/.test(desc);
+      const name = equipment && fam
+        ? [cap(fam.name), typeWord ? typeWord.replace(/^[A-Z]{2,5}[-\s]+/i, "").toLowerCase() : "", descOk && !fam.re.test(desc) ? desc.toLowerCase() : ""].filter(Boolean).join(", ")
+        : descOk ? cap(desc) : (singularTitle(title) || cap(ref.replace(/[-\s]*\d.*$/, "")) || "Scheduled item");
+      const unitOf = (h: string) => (h.match(/\b(KW|L\/S|CFM|W|HP|TR|BTU\/?H?|A|V|M3\/H)\b/i) || [])[1] || "";
+      const specBits = equipment ? specCols.map((i) => {
+        const v = String(r[i] ?? "").trim();
+        if (!/^\d+(\.\d+)?\s*[a-z/%]*$/i.test(v)) return "";
+        const head = cols[i].replace(/\(.*?\)/g, "").replace(/\b(KW|L\/S|CFM|W|HP|TR|BTU\/?H?|M3\/H)\b/gi, "").replace(/\s+/g, " ").trim().toLowerCase();
+        const u = /[a-z]/i.test(v) ? "" : unitOf(cols[i]);
+        return `${head} ${v}${u ? " " + u.replace(/^KW$/i, "kW").replace(/^L\/S$/i, "L/s") : ""}`.trim();
+      }).filter(Boolean).slice(0, 4) : [];
       const lines: { q: number; unit: string; side: string }[] = [];
       if (byRef) {
         const n = countRefs(ref);

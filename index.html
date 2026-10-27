@@ -2778,6 +2778,141 @@ function detectReferenceZonesSafe(page) {
   ]);
 }
 
+// Tables on the sheet, read sharp (2026-10-27). A schedule's text is the smallest on the sheet, and at
+// tile resolution the AI misread "08" as "06". The tables are found from the drawing's own ruled lines
+// (a grid of horizontal and vertical strokes), rendered at about six pixels per point, and sent to the
+// engine for its schedule pass. Falls back to the title strip / legend zones when no grid is found.
+async function detectTableBoxes(page, OPS) {
+  const vp = page.getViewport({ scale: 1 });
+  const W = vp.width, H = vp.height, M = Math.max(W, H);
+  const ol = await page.getOperatorList();
+  let ctm = [1, 0, 0, 1, 0, 0]; const st = [];
+  const mul = (a, b) => [a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1], a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3], a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]];
+  const P = (x, y) => { const u = ctm[0]*x+ctm[2]*y+ctm[4], v = ctm[1]*x+ctm[3]*y+ctm[5]; const q = vp.convertToViewportPoint(u, v); return [q[0] / M, q[1] / M]; };
+  const hs = [], vs = [], images = [];
+  const add = (a, b) => {
+    const dx = Math.abs(a[0] - b[0]), dy = Math.abs(a[1] - b[1]);
+    if (dy < 0.0004 && dx > 0.004 && dx < 0.5) hs.push({ y: (a[1] + b[1]) / 2, x0: Math.min(a[0], b[0]), x1: Math.max(a[0], b[0]) });
+    else if (dx < 0.0004 && dy > 0.002 && dy < 0.5) vs.push({ x: (a[0] + b[0]) / 2, y0: Math.min(a[1], b[1]), y1: Math.max(a[1], b[1]) });
+  };
+  let pend = null;
+  for (let i = 0; i < ol.fnArray.length; i++) {
+    const fn = ol.fnArray[i], a = ol.argsArray[i];
+    if (fn === OPS.save) st.push(ctm.slice());
+    else if (fn === OPS.restore) ctm = st.pop() || [1, 0, 0, 1, 0, 0];
+    else if (fn === OPS.transform) ctm = mul(ctm, a);
+    else if (fn === OPS.constructPath) {
+      const ops = a[0], c = a[1]; let k = 0, cur = null; const ss = [];
+      for (const op of ops) {
+        if (op === OPS.moveTo) { cur = P(c[k], c[k+1]); k += 2; }
+        else if (op === OPS.lineTo) { const q = P(c[k], c[k+1]); if (cur) ss.push([cur, q]); cur = q; k += 2; }
+        else if (op === OPS.curveTo) { cur = P(c[k+4], c[k+5]); k += 6; }
+        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { cur = P(c[k+2], c[k+3]); k += 4; }
+        else if (op === OPS.rectangle) {
+          const p0 = P(c[k], c[k+1]), p1 = P(c[k] + c[k+2], c[k+1]), p2 = P(c[k] + c[k+2], c[k+1] + c[k+3]), p3 = P(c[k], c[k+1] + c[k+3]);
+          ss.push([p0, p1], [p1, p2], [p2, p3], [p3, p0]); k += 4;
+        }
+      }
+      pend = ss;
+    } else if (pend && fn !== OPS.endPath && (fn === OPS.stroke || fn === OPS.closeStroke || fn === OPS.fillStroke || fn === OPS.closeFillStroke || fn === OPS.eoFillStroke || fn === OPS.closeEOFillStroke)) {
+      for (const sg of pend) add(sg[0], sg[1]); pend = null;
+    } else if (pend && (fn === OPS.fill || fn === OPS.eoFill)) {
+      // a rule drawn as a thin filled rectangle
+      const pts = pend.flat(), xs = pts.map(q => q[0]), ys = pts.map(q => q[1]);
+      if (pend.length <= 4 && pts.length && (Math.max(...ys) - Math.min(...ys) < 0.0012 || Math.max(...xs) - Math.min(...xs) < 0.0012)) for (const sg of pend) add(sg[0], sg[1]);
+      pend = null;
+    } else if (fn === OPS.endPath) pend = null;
+    else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject) {
+      // a schedule pasted in as a picture (an Excel table placed in CAD)
+      const ps = [P(0, 0), P(1, 0), P(0, 1), P(1, 1)], xs = ps.map(q => q[0]), ys = ps.map(q => q[1]);
+      const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
+      if (w > 0.04 && h > 0.012 && w < 0.6 && h < 0.6) images.push({ x0: Math.min(...xs) * M / W, y0: Math.min(...ys) * M / H, x1: Math.max(...xs) * M / W, y1: Math.max(...ys) * M / H, image: true });
+    }
+    if (hs.length + vs.length > 200000) break;
+  }
+  // a table: a block of at least 4 rules across and 3 down that cross each other
+  const tol = 0.0015, boxes = [];
+  const used = new Set();
+  hs.sort((p, q) => p.y - q.y);
+  for (let i = 0; i < hs.length; i++) {
+    if (used.has(i)) continue;
+    const seed = hs[i];
+    let x0 = seed.x0, x1 = seed.x1, y0 = seed.y, y1 = seed.y; const rows = [i];
+    // the rules of one table run its full width; a stack of tables in a title strip is several tables
+    for (let j = i + 1; j < hs.length && hs[j].y - y1 < 0.012; j++) {
+      const h = hs[j];
+      if (used.has(j)) continue;
+      if (Math.abs(h.x0 - x0) < 0.006 && Math.abs(h.x1 - x1) < 0.006) { rows.push(j); y1 = h.y; }
+    }
+    const ys = [...new Set(rows.map(r => Math.round(hs[r].y / tol)))];
+    if (ys.length < 4) continue;
+    const cols = vs.filter(v => v.x > x0 - tol && v.x < x1 + tol && v.y0 < y1 + tol && v.y1 > y0 - tol && (Math.min(v.y1, y1) - Math.max(v.y0, y0)) > 0.25 * (y1 - y0));
+    const xs = [...new Set(cols.map(v => Math.round(v.x / tol)))];
+    if (xs.length < 3 || x1 - x0 < 0.04 || y1 - y0 < 0.015) continue;
+    rows.forEach(r => used.add(r));
+    // rows drawn only part-way across (merged cells) still sit between the table's own verticals
+    for (const v of cols) { if (v.y0 > y0 - tol && v.y0 < y1 + tol) y1 = Math.max(y1, v.y1); if (v.y1 < y1 + tol && v.y1 > y0 - tol) y0 = Math.min(y0, v.y0); }
+    boxes.push({ x0: x0 * M / W, y0: y0 * M / H, x1: x1 * M / W, y1: y1 * M / H });
+  }
+  // merge boxes that touch (a title band drawn as its own rule above the table)
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let i = 0; i < boxes.length && !changed; i++) for (let j = i + 1; j < boxes.length && !changed; j++) {
+      const a = boxes[i], b = boxes[j];
+      if (a.x0 - 0.002 < b.x1 && b.x0 - 0.002 < a.x1 && a.y0 - 0.004 < b.y1 && b.y0 - 0.004 < a.y1) {
+        boxes[i] = { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) };
+        boxes.splice(j, 1); changed = true;
+      }
+    }
+  }
+  return boxes.filter(b => (b.x1 - b.x0) * (b.y1 - b.y0) < 0.5).concat(images);
+}
+async function renderScheduleCrops(pdf, pageNumber, projectId, drawingId, zones) {
+  try {
+    if (!window.pdfjsLib || !window.pdfjsLib.OPS) return [];
+    const page = await pdf.getPage(pageNumber);
+    let boxes = await Promise.race([detectTableBoxes(page, window.pdfjsLib.OPS), new Promise(res => setTimeout(() => res([]), 30000))]);
+    if (!boxes.length) boxes = (zones || []).filter(z => ["title_strip", "legend", "table", "schedule"].includes(z.kind)).map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1 }));
+    if (!boxes.length) return [];
+    const base = page.getViewport({ scale: 1 });
+    // tables in the title strip / legend first, then the biggest; tiny grids on the plan last
+    const inZ = (b) => (zones || []).some(z => (b.x0 + b.x1) / 2 >= z.x0 && (b.x0 + b.x1) / 2 <= z.x1 && (b.y0 + b.y1) / 2 >= z.y0 && (b.y0 + b.y1) / 2 <= z.y1);
+    const area = (b) => (b.x1 - b.x0) * (b.y1 - b.y0);
+    boxes = boxes.filter(b => b.image || area(b) > 0.002 || inZ(b)).sort((p, q) => (inZ(q) - inZ(p)) || (area(q) - area(p)));
+    // The AI sees at most about 1500 px across, so each table gets its own image at that width and,
+    // when tall, is cut into bands top to bottom (with a little overlap).
+    const stamp = Date.now(), out = [];
+    for (const b0 of boxes) {
+      if (out.length >= 12) break;
+      const b = { x0: Math.max(0, b0.x0 - 0.004), y0: Math.max(0, b0.y0 - 0.012), x1: Math.min(1, b0.x1 + 0.004), y1: Math.min(1, b0.y1 + 0.004) };
+      const wPt = (b.x1 - b.x0) * base.width, hPt = (b.y1 - b.y0) * base.height;
+      const scale = Math.min(8, 1500 / wPt);
+      const vp = page.getViewport({ scale });
+      const fullH = hPt * scale, bandPx = 1450;
+      const pieces = Math.min(4, Math.max(1, Math.ceil(fullH / bandPx)));
+      for (let k = 0; k < pieces && out.length < 12; k++) {
+        const top = b.y0 * vp.height + k * (fullH / pieces) - (k ? 40 : 0);
+        const cv = document.createElement("canvas");
+        cv.width = Math.round(wPt * scale); cv.height = Math.round(fullH / pieces + (k ? 40 : 0));
+        const ctx = cv.getContext("2d"); ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, cv.width, cv.height);
+        await page.render({ canvasContext: ctx, viewport: vp, transform: [1, 0, 0, 1, -b.x0 * vp.width, -top] }).promise;
+        if (tileLooksBlank(cv)) { cv.width = 0; cv.height = 0; continue; }
+        const blob = await new Promise(res => cv.toBlob(res, "image/png"));
+        cv.width = 0; cv.height = 0;
+        if (!blob || blob.size > 4.5 * 1024 * 1024) continue;
+        const path = `${projectId}/tiles/${drawingId}/${stamp}/p${pageNumber}-table${out.length}.png`;
+        const { error } = await sb.storage.from("drawings").upload(path, blob, { contentType: "image/png", upsert: true });
+        if (!error) out.push(path);
+      }
+    }
+    console.log(`Sheet ${pageNumber}: ${boxes.length} table area(s), ${out.length} sharp image(s) for the schedule pass`);
+    return out;
+  } catch (e) {
+    console.warn("Tables not rendered sharp, the engine reads them from the tiles:", e);
+    return [];
+  }
+}
+
 // Cameras counted from their tags on the plan (2026-10-26). Approved CCTV layouts give every camera a
 // tag (NT-IDF-B1-GF-CAM-022) in a box with a leader line to the camera. The tags are text in the PDF, so
 // counting them is exact; following each leader to the camera symbol at its end gives the camera's
@@ -3016,7 +3151,7 @@ function readCameraTagsSafe(page, zones) {
 // with a leader to the line ("300x50 mm SECURITY CABLE TRAY"). Every line of that colour on the plan is
 // then measured; a route drawn as two parallel edges (a tray) is measured once along its centre. The
 // sheet's own scale turns it into metres. Returns [{ description, colour, metres, double }] or [].
-const ROUTE_RE = /\b(CONDUIT|CABLE\s*TRAY|TRAY|TRUNKING|LADDER|BASKET|RACEWAY|BUSBAR|BUSWAY|BUS\s*DUCT|WIREWAY|CHEMIN DE C[AÂ]BLES|GOULOTTE|CANALETA|BANDEJA)\b|حامل كابلات|مجرى كابلات|أنبوب/i;
+const ROUTE_RE = /\b(CONDUIT|CABLE\s*TRAY|TRAY|TRUNKING|LADDER|BASKET|RACEWAY|BUSBAR|BUSWAY|BUS\s*DUCT|WIREWAY|(?:SUPPLY|RETURN|EXHAUST|EXTRACT|FRESH|TRANSFER|KITCHEN|SMOKE)\s*(?:AIR\s*)?DUCT(?:WORK)?|AIR\s*DUCT(?:WORK)?|CHEMIN DE C[AÂ]BLES|GOULOTTE|CANALETA|BANDEJA)\b|حامل كابلات|مجرى كابلات|أنبوب/i;
 const NEUTRAL = (c) => { const [r, g, b] = c.split(",").map(Number); return Math.max(r, g, b) - Math.min(r, g, b) < 25; };
 const PAPER_MM = { A0: 1189, A1: 841, A2: 594, A3: 420, A4: 297 };
 async function measureRoutes(page, OPS, zones) {
@@ -11749,6 +11884,8 @@ function DrawingsTab({ project }) {
           setTiling(t => ({ ...t, [d.id]: `Measuring tray and conduit${label}…` }));
           const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pageNumber), refZones);
           if (measuredRoutes.length) console.log(`Sheet ${pageNumber}: measured`, measuredRoutes);
+          setTiling(t => ({ ...t, [d.id]: `Reading the sheet's schedules${label}…` }));
+          const scheduleImages = await renderScheduleCrops(pdf, pageNumber, project.id, d.id, refZones);
           setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
           // The high-resolution path had no confirmation loop at all: a
           // cost-protection gate came back as a flat error and the sheet was
@@ -11759,7 +11896,7 @@ function DrawingsTab({ project }) {
           for (;;) {
             try {
               started = await callEngine("analyze_drawing_tiled", {
-                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, ...tileConfirms,
+                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages, ...tileConfirms,
               });
               break;
             } catch (ex) {
@@ -18347,10 +18484,12 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus }) {
       : null;
     const taggedDevices = (camRead.devices || []).map(dv => ({ kind: dv.kind, tag: dv.tag, n: dv.n, x: +dv.x.toFixed(5), y: +dv.y.toFixed(5) }));
     const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pn), refZones);
+    say(`Reading the sheet's schedules${label}…`);
+    const scheduleImages = await renderScheduleCrops(pdf, pn, projectId, drawing.id, refZones);
     say(`Reading ${tiles.length} tiles with AI${label}…`);
     const started = await callEngine("analyze_drawing_tiled", {
       ...payload, drawing_id: drawing.id, page_number: pn, tiles, grid,
-      reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes,
+      reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages,
     });
     const summary = await pollAnalysisRun(started.run_id);
     total += summary.item_count || 0; read++; tilesUsed += tiles.length;
