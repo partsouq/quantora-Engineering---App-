@@ -56,6 +56,9 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "content-type": "application/json" } });
 }
 
+// Must match ai-engine checkPlanLimit() and billing usage_summary.
+const PAGE_ACTIONS = ["analyze_drawing", "analyze_drawing_tiled", "analyze_drawings_combined", "rework", "page_refund"];
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -130,7 +133,9 @@ Deno.serve(async (req: Request) => {
       if (!projectId) return jsonResponse({ error: "project_id is required." }, 400);
       const { data: drawings, error } = await admin
         .from("drawings")
-        .select("id, file_name, discipline, floor_label, classification_status")
+        // file and source fields let Admin Assist read a big sheet at high
+        // resolution, as the customer's own button does (2026-10-27).
+        .select("id, file_name, discipline, floor_label, classification_status, file_type, storage_path, analysis_source_path, analysis_source_type, page_count")
         .eq("project_id", projectId)
         .order("uploaded_at", { ascending: false });
       if (error) throw error;
@@ -213,7 +218,7 @@ Deno.serve(async (req: Request) => {
       const [{ data: companies }, { data: plans }, { data: usageAll }, { data: projectsAll }, { data: pagesAll }] = await Promise.all([
         admin.from("companies").select("id, name, plan, trial_start_date, trial_end_date, created_at"),
         admin.from("plans").select("id, name, price_usd"),
-        admin.from("ai_usage").select("company_id, action, actual_cost_cents, page_count"),
+        admin.from("ai_usage").select("company_id, action, actual_cost_cents, page_count, is_admin_assisted"),
         admin.from("projects").select("id, company_id"),
         admin.from("drawing_pages").select("detected_system_category, selected"),
       ]);
@@ -233,7 +238,9 @@ Deno.serve(async (req: Request) => {
       for (const u of usageAll ?? []) {
         if (!u.company_id) continue;
         costByCompany[u.company_id] = (costByCompany[u.company_id] ?? 0) + (u.actual_cost_cents ?? 0);
-        if (u.action === "analyze_drawing" || u.action === "rework") {
+        // Every action that reads drawing pages, as ai-engine counts them;
+        // page_refund rows are pages returned on a report (negative).
+        if (PAGE_ACTIONS.includes(u.action) && !u.is_admin_assisted) {
           pagesByCompany[u.company_id] = (pagesByCompany[u.company_id] ?? 0) + (u.page_count ?? 0);
         }
       }
@@ -777,7 +784,7 @@ Deno.serve(async (req: Request) => {
     // successful analyze_drawing/rework call as a stand-in, and clearly labeled as
     // an estimate everywhere it's surfaced (never presented as precise).
     const successfulAnalysisCosts = (usageRows ?? [])
-      .filter((u: any) => (u.action === "analyze_drawing" || u.action === "rework") && (u.actual_cost_cents ?? 0) > 0)
+      .filter((u: any) => ["analyze_drawing", "analyze_drawing_tiled", "analyze_drawings_combined", "rework"].includes(u.action) && (u.actual_cost_cents ?? 0) > 0)
       .map((u: any) => u.actual_cost_cents as number);
     const avgActualCostCentsPerAnalysisCall = successfulAnalysisCosts.length
       ? successfulAnalysisCosts.reduce((s: number, c: number) => s + c, 0) / successfulAnalysisCosts.length

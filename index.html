@@ -3526,6 +3526,7 @@ async function xlDownloadStyled(sheetDefs, filename, meta) {
 }
 
 async function callEngine(action, payload) {
+  try { clearUsageCache(); } catch (_) {}   // an engine call changes pages used
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(FN_URL, {
     method: "POST",
@@ -3627,7 +3628,14 @@ async function pollAnalysisRun(runId, { intervalMs = 4000, maxWaitMs = 7 * 60 * 
   for (;;) {
     let row, error;
     try {
-      ({ data: row, error } = await sb.from("analysis_runs").select("status, summary, error_message, run_kind, change_reason, project_id").eq("id", runId).single());
+      ({ data: row, error } = await sb.from("analysis_runs").select("status, summary, error_message, run_kind, change_reason, project_id").eq("id", runId).maybeSingle());
+      // A platform admin running Admin Assist cannot see a customer's run
+      // through RLS; the server reads it for them (2026-10-27).
+      if (!error && !row) {
+        const { data: ar, error: aerr } = await sb.rpc("admin_run_status", { p_run_id: runId });
+        if (aerr) error = aerr; else row = (ar && ar[0]) || null;
+        if (!error && !row) error = { message: "This analysis run could not be found." };
+      }
     } catch (e) { error = e; }
     if (error) {
       if (isNetworkError(error) && ++netFails <= POLL_NETWORK_RETRIES) {
@@ -3660,7 +3668,12 @@ async function pollClassification(drawingId, { intervalMs = 3000, maxWaitMs = 5 
   for (;;) {
     let row, error;
     try {
-      ({ data: row, error } = await sb.from("drawings").select("classification_status, total_pages_detected").eq("id", drawingId).single());
+      ({ data: row, error } = await sb.from("drawings").select("classification_status, total_pages_detected").eq("id", drawingId).maybeSingle());
+      if (!error && !row) {
+        const { data: ar, error: aerr } = await sb.rpc("admin_drawing_classification", { p_drawing_id: drawingId });
+        if (aerr) error = aerr; else row = (ar && ar[0]) || null;
+        if (!error && !row) error = { message: "This drawing could not be found." };
+      }
     } catch (e) { error = e; }
     if (error) {
       if (isNetworkError(error) && ++netFails <= POLL_NETWORK_RETRIES) {
@@ -3685,7 +3698,23 @@ async function pollClassification(drawingId, { intervalMs = 3000, maxWaitMs = 5 
 }
 
 const BILLING_FN_URL = `${SUPABASE_URL}/functions/v1/billing`;
+// usage_summary is asked for from several places on one screen (home, header,
+// plan badge, project page) and was being fetched about 750 times a day. A
+// 20-second cache serves them all from one call; anything that changes usage
+// (an analysis, a purchase) clears it.
+let __usageCache = null;
+function clearUsageCache() { __usageCache = null; }
 async function callBilling(action, payload) {
+  if (action === "usage_summary" && (!payload || !Object.keys(payload).length)) {
+    if (__usageCache && Date.now() - __usageCache.at < 20000) return __usageCache.p;
+    const p = callBillingRaw(action, payload).catch(e => { __usageCache = null; throw e; });
+    __usageCache = { at: Date.now(), p };
+    return p;
+  }
+  if (action !== "usage_summary") clearUsageCache();
+  return callBillingRaw(action, payload);
+}
+async function callBillingRaw(action, payload) {
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(BILLING_FN_URL, {
     method: "POST",
@@ -7166,7 +7195,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
       const { data: plan } = await sb.from("plans").select("*").eq("id", planId).maybeSingle();
       const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0,0,0,0);
       const { count: analysesUsed } = await sb.from("ai_usage").select("id", { count: "exact", head: true })
-        .eq("user_id", user.id).gte("created_at", monthStart.toISOString()).in("action", ["analyze_drawing","design_system","rework"]);
+        .eq("user_id", user.id).gte("created_at", monthStart.toISOString()).in("action", ["analyze_drawing","analyze_drawing_tiled","analyze_drawings_combined","design_system","rework"]);
       const { count: requestsUsed } = await sb.from("ai_usage").select("id", { count: "exact", head: true })
         .eq("user_id", user.id).gte("created_at", monthStart.toISOString());
       setUsage({ plan, analysesUsed: analysesUsed||0, requestsUsed: requestsUsed||0, creditBalanceCents });
@@ -18266,6 +18295,70 @@ function ChatTab({ project }) {
 // margin per customer and per project, so pricing can be tuned against real
 // usage instead of estimates.
 // ---------------------------------------------------------------------------
+// ADMIN ASSIST, HIGH RESOLUTION (2026-10-27). Admin Assist used to read every
+// sheet whole, while the customer's own button reads a large or scanned sheet
+// in overlapping tiles with the camera tags, device tags and measured routes --
+// so an admin re-run gave a weaker BOQ than the customer would have got. This
+// runs the same steps for an admin: same sheet check, same tiles, same readers.
+// Anything it cannot do (no PDF engine, file not readable, a civil sheet)
+// falls back to the whole-sheet read, as the customer path does.
+async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus }) {
+  const say = onStatus || (() => {});
+  const whole = async () => {
+    say("Reading the whole sheet with AI…");
+    const started = await callEngine("analyze_drawing", { ...payload, drawing_id: drawing.id });
+    const summary = await pollAnalysisRun(started.run_id);
+    return { ...summary, pages_processed: started.pages_processed, method: "whole sheet" };
+  };
+  const isPdf = drawing.file_type === "pdf" || drawing.analysis_source_type === "pdf";
+  if (isCivilDiscipline(drawing.discipline) || !isPdf || !drawing.storage_path || !window.__PDFJS_OK__ || !window.pdfjsLib) return whole();
+  let pdf, assessment, sheetKind = "vector";
+  try {
+    say("Checking the drawing…");
+    pdf = await openStoredPdf(drawing.analysis_source_path || drawing.storage_path);
+    let page = await pdf.getPage(1);
+    for (let i = 1; i <= Math.min(pdf.numPages || 1, 10); i++) {
+      const pg = i === 1 ? page : await pdf.getPage(i);
+      const k = (await inspectPdfPage(pg)).kind;
+      if (k !== "empty") { page = pg; sheetKind = k; break; }
+    }
+    assessment = assessPageForAnalysis(page.getViewport({ scale: 1 }));
+  } catch (ex) {
+    console.warn("Admin Assist: could not open the PDF, reading the whole sheet instead:", ex);
+    return whole();
+  }
+  if (!assessment.needsTiling && sheetKind !== "scan") return whole();
+  const n = Math.min(pdf.numPages || 1, MAX_AUTO_TILED_PAGES);
+  let total = 0, read = 0, tilesUsed = 0;
+  for (let pn = 1; pn <= n; pn++) {
+    const pg = await pdf.getPage(pn);
+    const kind = (await inspectPdfPage(pg)).kind;
+    if (kind === "empty") continue;
+    const label = n > 1 ? ` (sheet ${pn} of ${n})` : "";
+    const { tiles, grid } = await renderAndUploadTiles(pdf, pn, projectId, drawing.id,
+      (p) => say(p.phase === "render" ? `Rendering row ${p.row}/${p.rows}${label}…` : `Uploading ${p.done}/${p.total}${label}…`),
+      { cleanScan: kind === "scan" });
+    say(`Finding the title block, legend, tags and routes${label}…`);
+    const refZones = (await detectReferenceZonesSafe(await pdf.getPage(pn)))
+      .map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label }));
+    const camRead = await readCameraTagsSafe(await pdf.getPage(pn), refZones);
+    const taggedCameras = camRead.cams.length >= 3
+      ? { schedule: camRead.schedule, cams: camRead.cams.map(c => ({ n: c.n, tag: c.tag, type: c.type, x: +c.x.toFixed(5), y: +c.y.toFixed(5) })) }
+      : null;
+    const taggedDevices = (camRead.devices || []).map(dv => ({ kind: dv.kind, tag: dv.tag, n: dv.n, x: +dv.x.toFixed(5), y: +dv.y.toFixed(5) }));
+    const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pn), refZones);
+    say(`Reading ${tiles.length} tiles with AI${label}…`);
+    const started = await callEngine("analyze_drawing_tiled", {
+      ...payload, drawing_id: drawing.id, page_number: pn, tiles, grid,
+      reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes,
+    });
+    const summary = await pollAnalysisRun(started.run_id);
+    total += summary.item_count || 0; read++; tilesUsed += tiles.length;
+  }
+  if (!read) throw new Error("Every page of this drawing is blank, so there was nothing to read.");
+  return { item_count: total, pages_processed: read, method: `high resolution, ${tilesUsed} tiles` };
+}
+
 function AdminAssistPanel() {
   const [companies, setCompanies] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -18279,6 +18372,7 @@ function AdminAssistPanel() {
   const [designRequirements, setDesignRequirements] = useState("");
   const [reworkComments, setReworkComments] = useState("");
   const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
 
@@ -18321,9 +18415,8 @@ function AdminAssistPanel() {
       // from the timeout fix itself. Only "chat" is still a direct
       // synchronous round trip.
       if (actionType === "analyze_drawing") {
-        const started = await callEngine("analyze_drawing", { ...payload, drawing_id: drawingId });
-        const summary = await pollAnalysisRun(started.run_id);
-        out = { ...summary, pages_processed: started.pages_processed };
+        const drawing = drawings.find(d => d.id === drawingId) || { id: drawingId };
+        out = await adminAnalyzeDrawing({ drawing, projectId, payload, onStatus: setProgress });
       } else if (actionType === "classify_pages") {
         const started = await callEngine("classify_pages", { ...payload, drawing_id: drawingId });
         out = started.cached ? started : await pollClassification(drawingId);
@@ -18341,7 +18434,7 @@ function AdminAssistPanel() {
     } catch (e) {
       setError(e.message || "Admin Assist action failed.");
     } finally {
-      setRunning(false);
+      setRunning(false); setProgress("");
     }
   }
 
@@ -18431,7 +18524,7 @@ function AdminAssistPanel() {
       {error && <div className="bg-rose-50 text-rose-700 border border-rose-200 rounded-lg p-3 mb-4 text-sm">{error}</div>}
 
       <button onClick={runAction} disabled={running || !projectId} className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-40">
-        {running ? "Running…" : "Run for this customer (free)"}
+        {running ? (progress || "Running…") : "Run for this customer (free)"}
       </button>
 
       {result && (
