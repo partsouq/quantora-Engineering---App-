@@ -2,7 +2,7 @@
 function assertEquals(a: unknown, b: unknown) {
   if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
 }
-import { applyScheduleItems, countRefs, scheduleTablesToItems } from "./schedules.ts";
+import { applyScheduleItems, countRefs, mergeSameKindRows, scheduleTablesToItems } from "./schedules.ts";
 
 // The two tables on a real customer HVAC sheet (AC-01), copied as printed.
 const DIFFUSERS = {
@@ -113,4 +113,37 @@ Deno.test("a table with no quantities gives nothing", () => {
   ]);
   assertEquals(items.length, 0);
   assertEquals(skipped.length, 1);
+});
+
+Deno.test("a table copied with its headings shifted still counts right", () => {
+  // the AI dropped one heading, so every heading after it sits over the wrong column
+  const shifted = { ...FCUS, columns: ["SI. NO.", "FCU REF", "LOCATION", "SPEED", "TOTAL LOAD", "SENSIBLE LOAD", "SUPPLY AIR", "ON COIL DB", "ON COIL WB", "OFF COIL DB", "TYPE OF UNIT", "NO. OF UNITS"],
+    rows: [["1", "FCU-01", "SERVER ROOM", "Medium", "6.92", "6.09", "492", "22.6", "15.9", "12.4", "11.5", "FCU-DUCTED", "50"],
+           ["2", "FCU-02 TO 44", "RETAIL AREA", "Medium", "19.33", "16.04", "1142", "23.5", "16.6", "12", "11.4", "FCU-DUCTED", "50"]] };
+  const { items } = scheduleTablesToItems([shifted]);
+  assertEquals(items.filter((i) => i.system_category === "fcu").reduce((s, i) => s + i.quantity, 0), 44);
+  const noQtyHeads = { ...DIFFUSERS, columns: ["LOCATION", "DESCRIPTION", "NECK SIZE (mm)", "SUPPLY AIR FLOW", "SUPPLY", "RETURN", "VELOCITY", "THROW", "PD", "NOISE"] };
+  const d = scheduleTablesToItems([noQtyHeads]).items;
+  assertEquals(sum(d, /^Supply .*round diffuser/i), 289);
+  assertEquals(sum(d, /^Return .*flow bar/i, "m"), 127.5);
+});
+
+Deno.test("same item described differently on two tiles becomes one line", () => {
+  const rows = [
+    { description: "Fire Damper (FD), 3-hour fire-rated", quantity: 55, unit: "nr", system_category: "fire_fighting", quantity_source_type: "physical_count" },
+    { description: "Fire Damper (FD), red rectangular bar symbol", quantity: 12, unit: "nr", system_category: "fire_fighting", quantity_source_type: "physical_count" },
+    { description: "Motorized Smoke Fire Damper, 24VDC", quantity: 4, unit: "nr", system_category: "fire_fighting", quantity_source_type: "physical_count" },
+    { description: "Supply Air Grille (SAG), triangle", quantity: 145, unit: "nr", system_category: "hvac", quantity_source_type: "physical_count" },
+    { description: "Supply Air Grille (SAG), upward triangle. Size not stated", quantity: 18, unit: "nr", system_category: "hvac", quantity_source_type: "physical_count" },
+    { description: "Return Air Grille (RAG)", quantity: 57, unit: "nr", system_category: "hvac", quantity_source_type: "physical_count" },
+    { description: "Direct Digital Controller (DDC) for Fan Coil Unit", quantity: 21, unit: "nr", system_category: "bms", quantity_source_type: "physical_count" },
+    { description: "Direct Digital Controller (DDC) for FCU control", quantity: 7, unit: "nr", system_category: "bms", quantity_source_type: "physical_count" },
+  ];
+  const r = mergeSameKindRows(rows);
+  const q = (re: RegExp) => r.rows.filter((x: any) => re.test(x.description)).map((x: any) => x.quantity);
+  assertEquals(q(/^Fire Damper/), [67]);
+  assertEquals(q(/^Motorized/), [4]);
+  assertEquals(q(/^Supply Air Grille/), [163]);
+  assertEquals(q(/^Return Air Grille/), [57]);
+  assertEquals(q(/^Direct Digital/), [28]);
 });

@@ -5,7 +5,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { PDFDocument } from "npm:pdf-lib@1.17.1";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
 import { localNormsLine, civilMethodLine } from "./authorities.ts";
-import { SCHEDULE_TOOL, SCHEDULE_PROMPT, scheduleTablesToItems, applyScheduleItems } from "./schedules.ts";
+import { SCHEDULE_TOOL, SCHEDULE_PROMPT, scheduleTablesToItems, applyScheduleItems, mergeSameKindRows } from "./schedules.ts";
 import { evalQuantityFormula, measureLine, standardForProject, civilStandardPrompt, VALIDATION, type Rule, type StandardChoice } from "./civil_rules.ts";
 
 const corsHeaders = {
@@ -2983,7 +2983,8 @@ Deno.serve(async (req: Request) => {
             found_nothing: safeRows.length === 0,
             civil,
             sheet_schedules: wholeSheetTables.length ? { tables: wholeSheetTables.map((t: any) => ({ title: String(t?.title ?? "").slice(0, 120), kind: t?.kind, rows: Array.isArray(t?.rows) ? t.rows.length : 0 })),
-                               lines_from_schedules: wsApplied.added, ai_lines_replaced: wsApplied.replaced, detail: wsApplied.notes } : null,
+                               lines_from_schedules: wsApplied.added, ai_lines_replaced: wsApplied.replaced, detail: wsApplied.notes, tables_without_quantities: wsSched.skipped,
+                               copied: wholeSheetTables.slice(0, 8).map((t: any) => ({ title: t?.title, kind: t?.kind, columns: t?.columns, rows: Array.isArray(t?.rows) ? t.rows.slice(0, 60) : [] })) } : null,
             notes: autoTypedNote + (safeRows.length === 0 && civil
               ? `No BOQ items were produced. No measurable civil, structural or architectural work (concrete, blockwork, finishes, skirting, doors, external works) with readable dimensions was found on this sheet. ${result.analysis_notes ?? ""}`.trim()
               : safeRows.length === 0
@@ -3293,7 +3294,9 @@ Deno.serve(async (req: Request) => {
         const typicalFixedTiled = reclassifyTypicalDetailRows(merged);
         if (typicalFixedTiled) console.warn(`reclassifyTypicalDetailRows (tiled): ${typicalFixedTiled} row(s) moved to typical_detail_reference.`);
 
-        const { items: deduped, removed } = mergeTileRows(merged);
+        const { items: deduped0, removed } = mergeTileRows(merged);
+        const { rows: deduped, merged: sameKindMerged } = mergeSameKindRows(deduped0);
+        if (sameKindMerged) console.log(`tiled run ${run.id}: ${sameKindMerged} line(s) of the same item described differently on different tiles were combined.`);
         const legendFlagged = crossCheckAgainstLegend(deduped, legend);
         if (legendFlagged) {
           console.log(`tiled run ${run.id}: ${legendFlagged} line(s) disagree with the sheet legend's stated quantity.`);
@@ -3400,7 +3403,8 @@ Deno.serve(async (req: Request) => {
             tagged_devices: taggedDevices.length ? { counted: td.counted, ai_lines_replaced: td.replaced } : null,
             measured_routes: measuredRoutes.length ? { routes: measuredRoutes, ai_containment_lines_replaced: aiContainmentRowsReplaced } : null,
             sheet_schedules: { tables: sheetTables.map((t: any) => ({ title: String(t?.title ?? "").slice(0, 120), kind: t?.kind, rows: Array.isArray(t?.rows) ? t.rows.length : 0 })),
-                               lines_from_schedules: sa.added, ai_lines_replaced: sa.replaced, detail: sa.notes, tables_without_quantities: sched.skipped },
+                               lines_from_schedules: sa.added, ai_lines_replaced: sa.replaced, detail: sa.notes, tables_without_quantities: sched.skipped,
+                               copied: sheetTables.slice(0, 8).map((t: any) => ({ title: t?.title, kind: t?.kind, columns: t?.columns, rows: Array.isArray(t?.rows) ? t.rows.slice(0, 60) : [] })) },
             positions_discarded_in_panels: panelDropped,
             notes: (safeRows.length === 0
               ? `No BOQ items were produced from this sheet. Every tile was read and nothing countable for the systems Quantora reads (MEP and ELV) was found. If this is a civil, structural or architectural drawing, set its type to Civil, Structural or Architectural so it is measured as civil works — and if it is a specification or schedule rather than a drawing, upload it on the Specification page instead. Per-tile detail follows.\n\n`
