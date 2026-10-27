@@ -2000,7 +2000,9 @@ async function checkPlanLimit(
       // and the plan limit never bound. A trial account with a 5-page
       // allowance processed 8 pages that way, every one billed as free quota.
       .eq("company_id", companyId).gte("created_at", windowStart.toISOString())
-      .in("action", ["analyze_drawing", "analyze_drawing_tiled", "analyze_drawings_combined", "rework"])
+      // page_refund rows carry a negative page_count: pages an admin gave
+      // back on a "Report a problem" (2026-10-27).
+      .in("action", ["analyze_drawing", "analyze_drawing_tiled", "analyze_drawings_combined", "rework", "page_refund"])
       .eq("is_admin_assisted", false);
     current = (rows ?? []).reduce((s: number, r: any) => s + (r.page_count ?? 0), 0);
   } else {
@@ -2032,13 +2034,12 @@ async function recordUsageAndBill(
   tokens: { input_tokens: number; output_tokens: number },
   pageCount: number | null = null,
   processingTimeMs: number | null = null,
-  isAdminAssisted = false
+  isAdminAssisted = false,
+  runId: string | null = null
 ) {
   const costCents = computeCostCents(tokens.input_tokens, tokens.output_tokens);
   const actualCostCents = computeActualCostCents(tokens.input_tokens, tokens.output_tokens);
-  const { data: row } = await admin
-    .from("ai_usage")
-    .insert({
+  const usageRow: Record<string, unknown> = {
       company_id: usage.companyId,
       user_id: userId,
       project_id: projectId,
@@ -2052,9 +2053,18 @@ async function recordUsageAndBill(
       processing_time_ms: processingTimeMs,
       billed_from: usage.billing ?? null,
       is_admin_assisted: isAdminAssisted,
-    })
-    .select()
-    .single();
+  };
+  // run_id ties the charge to its analysis run, so a "Report a problem" on
+  // that run can show and return exactly what it cost (2026-10-27). If the
+  // column is not there yet (SQL not run), the charge is still recorded
+  // without it rather than lost.
+  if (runId) usageRow.run_id = runId;
+  let { data: row, error: insErr } = await admin.from("ai_usage").insert(usageRow).select().single();
+  if (insErr && runId && /run_id/.test(String(insErr.message || ""))) {
+    delete usageRow.run_id;
+    ({ data: row, error: insErr } = await admin.from("ai_usage").insert(usageRow).select().single());
+  }
+  if (insErr) console.error("recordUsageAndBill: ai_usage insert failed:", insErr);
 
   if (usage.billing === "wallet" && usage.companyId) {
     await admin.rpc("debit_company_credits", {
@@ -2959,7 +2969,7 @@ Deno.serve(async (req: Request) => {
                   : result.analysis_notes)),
           },
         }).eq("id", run.id);
-        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "analyze_drawing", parsed.usage, requestedPages, elapsedMs, isAdminOverride);
+        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "analyze_drawing", parsed.usage, requestedPages, elapsedMs, isAdminOverride, run.id);
         await admin.from("drawings").update({ pages_ai_processed: (drawing.pages_ai_processed ?? 0) + requestedPages }).eq("id", drawing_id);
         if (usingSelection) {
           await admin.from("drawing_pages").update({ selected: true, ai_processed: true }).eq("drawing_id", drawing_id).in("page_number", page_selection!);
@@ -3346,7 +3356,7 @@ Deno.serve(async (req: Request) => {
         await recordUsageAndBill(
           admin,
           { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing },
-          userId, project.id, "analyze_drawing_tiled", totalUsage, requestedPages, Date.now() - startTime, isAdminOverride
+          userId, project.id, "analyze_drawing_tiled", totalUsage, requestedPages, Date.now() - startTime, isAdminOverride, run.id
         );
         await admin.from("drawings").update({ pages_ai_processed: (drawing.pages_ai_processed ?? 0) + requestedPages }).eq("id", drawing_id);
 
@@ -3728,7 +3738,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
             revised_from: latestRevision,
           },
         }).eq("id", run.id);
-        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "rework", parsed.usage, requestedPages, elapsedMs, isAdminOverride);
+        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "rework", parsed.usage, requestedPages, elapsedMs, isAdminOverride, run.id);
         await admin.from("drawings").update({ pages_ai_processed: (drawing.pages_ai_processed ?? 0) + requestedPages }).eq("id", drawing_id);
         if (usingSelection) {
           await admin.from("drawing_pages").update({ selected: true, ai_processed: true }).eq("drawing_id", drawing_id).in("page_number", page_selection!);
@@ -3885,7 +3895,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
             combined_file_names: fetched.map(f => f.drawing.file_name),
           },
         }).eq("id", run.id);
-        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "analyze_drawings_combined", parsed.usage, totalPages, elapsedMs, isAdminOverride);
+        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "analyze_drawings_combined", parsed.usage, totalPages, elapsedMs, isAdminOverride, run.id);
         for (const f of fetched) {
           await admin.from("drawings").update({ pages_ai_processed: (f.drawing.pages_ai_processed ?? 0) + f.pages }).eq("id", f.drawing.id);
         }

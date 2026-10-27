@@ -11906,7 +11906,15 @@ function DrawingsTab({ project }) {
     <div className="space-y-6">
       <div className="bg-white border rounded-xl p-5 qup">
         <h3 className="font-semibold mb-3 qup-h">Upload Drawings<span>Pick the discipline, tick the systems, then add your files</span></h3>
-        {err && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2 mb-3">{err}</div>}
+        {err && (
+          <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2 mb-3" style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between" }}>
+            <span style={{ minWidth: 0, wordBreak: "break-word" }}>{err}</span>
+            <button type="button" onClick={() => supportOpen({ kind: "issue", category: "analysis", projectId: project.id, page: "drawings", errorText: err })}
+              style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, color: "#be123c", background: "transparent", border: "1px solid #fda4af", borderRadius: 8, padding: "3px 10px", cursor: "pointer" }}>
+              Report this
+            </button>
+          </div>
+        )}
         <div className="mb-3">
           <DrawingScopePicker discipline={discipline} setDiscipline={setDiscipline}
             systems={scopeSystems} setSystems={setScopeSystems} custom={scopeCustom} setCustom={setScopeCustom}
@@ -12016,9 +12024,24 @@ function DrawingsTab({ project }) {
                 )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
                 <button onClick={()=>previewDrawing(d.storage_path)} className="text-xs text-slate-600 border px-3 py-2 rounded-lg hover:bg-slate-50">Preview</button>
                 <button onClick={()=>deleteDrawing(d)} className="text-xs text-rose-600 border border-rose-200 px-3 py-2 rounded-lg hover:bg-rose-50">Delete</button>
+                {/* 2026-10-27: report a wrong or failed result on this sheet,
+                    with the latest run attached so pages can be returned. */}
+                <button onClick={() => {
+                    const r0 = runs[d.id] && runs[d.id][0];
+                    supportOpen({
+                      kind: "issue", page: "drawings", projectId: project.id,
+                      drawingId: d.id, drawingName: d.file_name,
+                      runId: r0 ? r0.id : null, runRev: r0 ? r0.revision_number : null, runStatus: r0 ? r0.status : null,
+                      errorText: r0 && r0.status === "failed" ? r0.error_message : null,
+                      category: r0 && r0.status === "failed" ? "analysis" : "",
+                      refundAsk: !!(r0 && r0.status === "completed"),
+                    });
+                  }}
+                  title="Something wrong with this sheet's result? Tell us and ask for the pages back."
+                  className="text-xs text-amber-700 border border-amber-200 px-3 py-2 rounded-lg hover:bg-amber-50">Report</button>
                 {runs[d.id] && (
                   <button onClick={()=>setMarkupDrawing(d)} className="text-xs text-blue-700 bg-blue-50 px-3 py-2 rounded-lg font-semibold">View Markup</button>
                 )}
@@ -19178,6 +19201,71 @@ function QSupportView({ companyNameById }) {
   // The conversation on the open report. Loaded per report rather than all at
   // once: the inbox lists up to 500 tickets and almost none of them are open.
   const [thread, setThread] = useState({});
+  // 2026-10-27: what the reported run cost, and returning it.
+  const [runInfo, setRunInfo] = useState({});
+  const [refundPages, setRefundPages] = useState({});
+  const [refundBusy, setRefundBusy] = useState(false);
+
+  async function loadRunInfo(t) {
+    if (!t.run_id && !t.drawing_id) return;
+    try {
+      const out = {};
+      if (t.run_id) {
+        const [{ data: ch }, { data: run }] = await Promise.all([
+          sb.rpc("run_charge", { p_run_id: t.run_id }),
+          sb.from("analysis_runs").select("revision_number, status, error_message, created_at").eq("id", t.run_id).maybeSingle(),
+        ]);
+        out.charge = (ch && ch[0]) || null;
+        out.run = run || null;
+      }
+      if (t.drawing_id) {
+        const { data: dr } = await sb.from("drawings").select("file_name").eq("id", t.drawing_id).maybeSingle();
+        out.drawingName = dr ? dr.file_name : null;
+      }
+      setRunInfo(ri => ({ ...ri, [t.id]: out }));
+      if (out.charge && out.charge.pages > 0) setRefundPages(rp => (rp[t.id] != null ? rp : { ...rp, [t.id]: String(out.charge.pages) }));
+    } catch (e) { console.error("loadRunInfo failed:", e); }
+  }
+
+  async function postToCustomer(t, text) {
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from("support_messages").insert({ ticket_id: t.id, sender_user_id: user.id, from_admin: true, body: text });
+    if (error) throw error;
+    loadThread(t.id);
+  }
+
+  async function returnPages(t) {
+    const n = parseInt(refundPages[t.id], 10);
+    const ch = runInfo[t.id] && runInfo[t.id].charge;
+    const wallet = ch && ch.billed_from === "wallet" && ch.cost_cents > 0;
+    if (!wallet && !(n > 0)) { setErr("Enter how many pages to return."); return; }
+    setRefundBusy(true); setErr("");
+    try {
+      const { data, error } = await sb.rpc("admin_refund_ticket", { p_ticket_id: t.id, p_pages: wallet ? 0 : n, p_note: noteDraft.trim() || null });
+      if (error) throw error;
+      const patch = { pages_refunded: data?.pages || 0, credit_refunded_cents: data?.credit_cents || 0, refunded_at: new Date().toISOString() };
+      setRows(rs => rs.map(r => (r.id === t.id ? { ...r, ...patch } : r)));
+      await postToCustomer(t, data?.credit_cents
+        ? `We checked your report and returned US$${(data.credit_cents / 100).toFixed(2)} to your wallet for this analysis.`
+        : `We checked your report and returned ${data.pages} page${data.pages === 1 ? "" : "s"} to your plan.`);
+      loadRunInfo(t);
+    } catch (e) {
+      console.error("returnPages failed:", e);
+      setErr(e.message || "Could not return the pages.");
+    } finally { setRefundBusy(false); }
+  }
+
+  async function fixedAndNotify(t) {
+    setSaving(true); setErr("");
+    try {
+      const back = t.pages_refunded ? ` ${t.pages_refunded} page${t.pages_refunded === 1 ? " has" : "s have"} been returned to your plan.` : "";
+      await postToCustomer(t, `This is fixed. Please open the drawing again or re-run it to see the corrected result.${back}`);
+      await setStatus(t, "resolved");
+    } catch (e) {
+      console.error("fixedAndNotify failed:", e);
+      setErr(e.message || "Could not send the message.");
+    } finally { setSaving(false); }
+  }
 
   async function loadThread(ticketId) {
     try {
@@ -19349,7 +19437,7 @@ function QSupportView({ companyNameById }) {
             return (
               <div key={t.id} style={{ borderTop: "1px solid var(--border-soft)", padding: "12px 0" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, cursor: "pointer" }}
-                     onClick={() => { const next = isOpen ? null : t.id; setOpenId(next); setNoteDraft(next ? (t.admin_notes || "") : ""); if (next) { signShots(t); loadThread(t.id); } }}>
+                     onClick={() => { const next = isOpen ? null : t.id; setOpenId(next); setNoteDraft(next ? (t.admin_notes || "") : ""); if (next) { signShots(t); loadThread(t.id); loadRunInfo(t); } }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 700 }}>{qSupportLabel(t.kind, t.category)}</div>
                     <div style={{ fontSize: 12, color: "var(--text-dimmer)", marginTop: 2 }}>
@@ -19358,6 +19446,14 @@ function QSupportView({ companyNameById }) {
                       {" · "}{new Date(t.created_at).toLocaleString()}
                       {t.screenshots && t.screenshots.length ? ` · ${t.screenshots.length} attachment${t.screenshots.length === 1 ? "" : "s"}` : ""}
                     </div>
+                    {t.refund_requested && !t.refunded_at && (
+                      <span style={{ display: "inline-block", marginTop: 4, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: "#fcd34d", border: "1px solid rgba(252,211,77,0.5)", borderRadius: 99, padding: "1px 8px" }}>Asks for pages back</span>
+                    )}
+                    {t.refunded_at && (
+                      <span style={{ display: "inline-block", marginTop: 4, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: "#86efac", border: "1px solid rgba(134,239,172,0.5)", borderRadius: 99, padding: "1px 8px" }}>
+                        {t.credit_refunded_cents ? `US$${(t.credit_refunded_cents / 100).toFixed(2)} returned` : `${t.pages_refunded} pages returned`}
+                      </span>
+                    )}
                   </div>
                   <span style={{ flexShrink: 0, alignSelf: "flex-start", fontSize: 10.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: st[2], border: `1px solid ${st[2]}55`, borderRadius: 999, padding: "3px 9px" }}>{st[1]}</span>
                 </div>
@@ -19375,6 +19471,49 @@ function QSupportView({ companyNameById }) {
                       {t.project_id ? `Project ${String(t.project_id).slice(0, 8)}` : "No project"}
                       {t.page_context ? ` · page: ${t.page_context}` : ""}
                     </div>
+                    {t.error_text && (
+                      <div style={{ fontSize: 12.5, color: "#fca5a5", marginTop: 8, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>Error shown: {t.error_text}</div>
+                    )}
+                    {(() => {
+                      const ri = runInfo[t.id];
+                      if (!ri || (!ri.run && !ri.drawingName)) return null;
+                      const ch = ri.charge;
+                      const wallet = ch && ch.billed_from === "wallet" && ch.cost_cents > 0;
+                      const done = !!t.refunded_at || (ch && ch.already_refunded);
+                      return (
+                        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border-soft)", background: "rgba(255,255,255,0.02)" }}>
+                          <div style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.6 }}>
+                            {ri.drawingName && <div><b style={{ color: "var(--text)" }}>Drawing:</b> {ri.drawingName}</div>}
+                            {ri.run && <div><b style={{ color: "var(--text)" }}>Run:</b> rev {ri.run.revision_number} · {ri.run.status} · {new Date(ri.run.created_at).toLocaleString()}</div>}
+                            {ri.run && <div><b style={{ color: "var(--text)" }}>Charged:</b> {!ch || !ch.pages ? "nothing (not charged)" : wallet ? `${ch.pages} pages, US$${(ch.cost_cents / 100).toFixed(2)} from the wallet` : `${ch.pages} pages from the plan`}</div>}
+                            {ri.run && ri.run.error_message && <div style={{ color: "#fca5a5", wordBreak: "break-word" }}>{ri.run.error_message.slice(0, 400)}</div>}
+                          </div>
+                          {t.run_id && ch && ch.pages > 0 && (
+                            done ? (
+                              <div style={{ fontSize: 12.5, color: "#86efac", marginTop: 8 }}>
+                                Already returned{t.refunded_at ? ` on ${new Date(t.refunded_at).toLocaleDateString()}` : " on another report"}.
+                              </div>
+                            ) : (
+                              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+                                {!wallet && (
+                                  <input id={`refund-pages-${t.id}`} type="number" min="1" max="500" value={refundPages[t.id] || ""}
+                                    onChange={e => setRefundPages(rp => ({ ...rp, [t.id]: e.target.value }))}
+                                    style={{ width: 80, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-soft)", borderRadius: 8, padding: "5px 8px", fontSize: 13, color: "var(--text)" }} />
+                                )}
+                                <button className="btn btn-sm" disabled={refundBusy} onClick={() => returnPages(t)}
+                                  style={{ borderColor: "rgba(134,239,172,0.6)", color: "#86efac" }}>
+                                  {refundBusy ? "Returning…" : wallet ? `Return US$${(ch.cost_cents / 100).toFixed(2)} to wallet` : "Return pages"}
+                                </button>
+                                <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>The customer gets a message in their bell.</span>
+                              </div>
+                            )
+                          )}
+                          <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 8 }}>
+                            To re-run it for them without using their pages, use Admin Assist on this project.
+                          </div>
+                        </div>
+                      );
+                    })()}
                     {(shots[t.id] || []).length > 0 && (
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
                         {(shots[t.id] || []).map(s => (
@@ -19400,11 +19539,15 @@ function QSupportView({ companyNameById }) {
                     <textarea value={noteDraft} onChange={e => setNoteDraft(e.target.value)} rows={2}
                       placeholder="Internal note — what you found, what you changed"
                       style={{ width: "100%", marginTop: 10, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-soft)", borderRadius: 10, padding: "8px 10px", fontSize: 12.5, color: "inherit", resize: "vertical" }} />
-                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
                       {QSUPPORT_STATUS.map(([k, label]) => (
                         <button key={k} className="btn btn-sm" disabled={saving} onClick={() => setStatus(t, k)}
                           style={t.status === k ? { borderColor: "rgba(96,165,250,0.6)", color: "#93c5fd" } : undefined}>{label}</button>
                       ))}
+                      {t.status !== "resolved" && t.kind === "issue" && (
+                        <button className="btn btn-sm" disabled={saving} onClick={() => fixedAndNotify(t)}
+                          style={{ borderColor: "rgba(134,239,172,0.6)", color: "#86efac" }}>Fixed — tell the customer</button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -22984,6 +23127,62 @@ function SupportContactRow({ subject }) {
   );
 }
 
+// "Capture this screen" (2026-10-27). Loads html-to-image only when someone
+// presses the button, hides the report window for the moment of the capture,
+// and hands back a PNG File that joins the attachments like any screenshot the
+// customer picked themselves. html-to-image lets the browser draw the page
+// itself (SVG foreignObject), so the app's modern CSS colours come through --
+// html2canvas re-implements CSS and fails on them. Canvases (the PDF viewer,
+// the markup) are copied as they are on screen.
+const HTML_TO_IMAGE_SRC = "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js";
+let __h2iP = null;
+function loadHtmlToImage() {
+  if (window.htmlToImage) return Promise.resolve(window.htmlToImage);
+  if (!__h2iP) {
+    __h2iP = new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = HTML_TO_IMAGE_SRC; el.async = true;
+      el.onload = () => window.htmlToImage ? resolve(window.htmlToImage) : reject(new Error("Screen capture did not load."));
+      el.onerror = () => { __h2iP = null; reject(new Error("Screen capture could not load. Attach a screenshot instead.")); };
+      document.head.appendChild(el);
+    });
+  }
+  return __h2iP;
+}
+async function captureScreenFile(hideEl) {
+  const h2i = await loadHtmlToImage().catch(e => { throw e instanceof Error ? e : new Error("Screen capture could not load. Attach a screenshot instead."); });
+  const prev = hideEl ? hideEl.style.visibility : null;
+  if (hideEl) hideEl.style.visibility = "hidden";
+  try {
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const w = window.innerWidth, h = window.innerHeight;
+    const bg = getComputedStyle(document.body).backgroundColor;
+    // Only what is on screen: the body is drawn shifted by the scroll offset
+    // into a viewport-sized picture.
+    // A picture that cannot be fetched (another site, an expired link) is
+    // drawn as a blank square instead of failing the whole capture.
+    const blankPx = "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
+    const blob = await h2i.toBlob(document.body, {
+      imagePlaceholder: blankPx,
+      width: w, height: h,
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      backgroundColor: bg && bg !== "rgba(0, 0, 0, 0)" ? bg : "#ffffff",
+      style: { transform: `translate(${-window.scrollX}px, ${-window.scrollY}px)`, transformOrigin: "0 0", margin: "0" },
+      // Comments are dropped because "--" inside one is invalid in the SVG the
+      // picture is built from, and scripts because they add megabytes of text
+      // and nothing visible.
+      filter: node => node.nodeType !== 8 && node.tagName !== "SCRIPT" && node.tagName !== "NOSCRIPT" && !(hideEl && node === hideEl),
+      cacheBust: false,
+      skipFonts: true,
+    }).catch(e => { throw e instanceof Error ? e : new Error("Could not capture this screen. Attach a screenshot instead."); });
+    if (!blob) throw new Error("Screen capture came back empty. Attach a screenshot instead.");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    return new File([blob], `screen-${stamp}.png`, { type: "image/png" });
+  } finally {
+    if (hideEl) hideEl.style.visibility = prev || "";
+  }
+}
+
 // The form itself. Three things it deliberately does NOT do: it does not ask
 // for a name or an email (both are already on the session), it does not make
 // the message field mandatory (a chosen category plus a screenshot is often
@@ -23002,9 +23201,25 @@ function SupportModal({ open, initial, onClose }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [sent, setSent] = useState(false);
+  // A report raised from a drawing or an error carries what it is about, so
+  // the customer does not have to describe it and the admin sees the exact run.
+  const [capturing, setCapturing] = useState(false);
+  const [charge, setCharge] = useState(null);
+  const [refundAsk, setRefundAsk] = useState(false);
+  const overlayRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
+    setCharge(null);
+    setRefundAsk(!!initial?.refundAsk);
+    if (initial?.runId) {
+      (async () => {
+        try {
+          const { data, error } = await sb.rpc("run_charge", { p_run_id: initial.runId });
+          if (!error && data && data[0]) setCharge(data[0]);
+        } catch (e) { console.error("run_charge failed (non-fatal):", e); }
+      })();
+    }
     setKind(initial?.kind || null);
     setCategory(initial?.category || "");
     setPicks([]); setMessage(""); setFiles([]);
@@ -23055,7 +23270,7 @@ function SupportModal({ open, initial, onClose }) {
         if (upErr) throw new Error(`Could not attach ${f.name}: ${upErr.message}`);
         paths.push(path);
       }
-      const { error: insErr } = await sb.from("support_tickets").insert({
+      const ticket = {
         user_id: user.id,
         company_id: companyId,
         contact_email: user.email || null,
@@ -23064,10 +23279,23 @@ function SupportModal({ open, initial, onClose }) {
         improvements: picks,
         project_id: projectId || null,
         drawing_id: initial?.drawingId || null,
+        run_id: initial?.runId || null,
         message: message.trim() || null,
         screenshots: paths,
         page_context: initial?.page || null,
-      });
+      };
+      const extra = {
+        error_text: initial?.errorText ? String(initial.errorText).slice(0, 2000) : null,
+        refund_requested: kind === "issue" && refundAsk && !!(charge && charge.pages > 0 && !charge.already_refunded),
+      };
+      let { error: insErr } = await sb.from("support_tickets").insert({ ...ticket, ...extra });
+      // Before the 2026-10-27 SQL is run those two columns do not exist; the
+      // report still goes through, with the error text kept in the message.
+      if (insErr && /error_text|refund_requested|column/i.test(String(insErr.message || ""))) {
+        const msg = [ticket.message, extra.error_text ? `Error shown: ${extra.error_text}` : null,
+          extra.refund_requested ? "Asked for the pages back." : null].filter(Boolean).join("\n\n") || null;
+        ({ error: insErr } = await sb.from("support_tickets").insert({ ...ticket, message: msg }));
+      }
       if (insErr) throw insErr;
       setSent(true);
     } catch (e) {
@@ -23095,7 +23323,7 @@ function SupportModal({ open, initial, onClose }) {
   const boxOn = { ...box, border: "1px solid #6366f1", background: "rgba(99,102,241,0.16)" };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" onClick={onClose}>
+    <div ref={overlayRef} className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" onClick={onClose}>
       <div className="bg-white border rounded-2xl max-w-lg w-full p-6"
            style={{ maxHeight: "86vh", overflowY: "auto" }}
            onClick={e => e.stopPropagation()}>
@@ -23152,6 +23380,40 @@ function SupportModal({ open, initial, onClose }) {
               </div>
             ) : (
               <div>
+                {(initial?.drawingName || initial?.errorText) && (
+                  <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, fontSize: 12.5, lineHeight: 1.5,
+                    background: "var(--q-panel-2,#f8fafc)", border: "1px solid var(--q-border,#e2e8f0)", color: "var(--q-text,#0f172a)" }}>
+                    {initial?.drawingName && (
+                      <div><b>About:</b> {initial.drawingName}{initial?.runRev ? ` · analysis rev ${initial.runRev}` : ""}{initial?.runStatus ? ` · ${initial.runStatus}` : ""}</div>
+                    )}
+                    {initial?.errorText && (
+                      <div style={{ color: "#be123c", marginTop: initial?.drawingName ? 4 : 0, wordBreak: "break-word" }}>{String(initial.errorText).slice(0, 300)}</div>
+                    )}
+                  </div>
+                )}
+                {kind === "issue" && charge && (charge.run_status === "failed" || (charge.pages || 0) === 0) && !charge.already_refunded && (
+                  <div style={{ marginTop: 8, fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>
+                    {charge.run_status === "failed"
+                      ? "This analysis failed, so no pages were taken from your plan."
+                      : "No pages were taken from your plan for this run."}
+                  </div>
+                )}
+                {kind === "issue" && charge && charge.pages > 0 && !charge.already_refunded && (
+                  <label style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 10, padding: "10px 12px", borderRadius: 10, cursor: "pointer",
+                    border: refundAsk ? "1px solid #6366f1" : "1px solid var(--q-border,#e2e8f0)",
+                    background: refundAsk ? "rgba(99,102,241,0.12)" : "var(--q-panel-2,#fff)", color: "var(--q-text,#0f172a)" }}>
+                    <input id="support-refund-ask" type="checkbox" checked={refundAsk} onChange={e => setRefundAsk(e.target.checked)} style={{ marginTop: 3 }} />
+                    <span style={{ fontSize: 13, lineHeight: 1.5 }}>
+                      <b>Give my {charge.billed_from === "wallet" ? "credit" : `${charge.pages} page${charge.pages === 1 ? "" : "s"}`} back</b>
+                      <span style={{ display: "block", fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>
+                        We check the result. If it is wrong, the {charge.billed_from === "wallet" ? "credit returns to your wallet" : "pages return to your plan"} and you get a message here.
+                      </span>
+                    </span>
+                  </label>
+                )}
+                {kind === "issue" && charge && charge.already_refunded && (
+                  <div style={{ marginTop: 8, fontSize: 12.5, color: "#047857" }}>The pages for this run have already been returned.</div>
+                )}
                 <p className="text-sm text-slate-600 mt-2 mb-3 leading-relaxed">
                   {kind === "issue"
                     ? "Pick the line closest to what you are seeing — it tells us where to look."
@@ -23197,6 +23459,18 @@ function SupportModal({ open, initial, onClose }) {
               <label className="text-xs font-semibold text-slate-600 block mb-1">
                 Attach a screenshot or file (optional)
               </label>
+              <button type="button" disabled={capturing || files.length >= MAX_FILES}
+                onClick={async () => {
+                  setCapturing(true); setErr("");
+                  try { addFiles([await captureScreenFile(overlayRef.current)]); }
+                  catch (e) { console.error("captureScreen failed:", e); setErr(e.message || "Could not capture the screen. Attach a screenshot instead."); }
+                  finally { setCapturing(false); }
+                }}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 8, fontSize: 12.5, fontWeight: 700,
+                  padding: "7px 12px", borderRadius: 8, cursor: capturing ? "wait" : "pointer",
+                  border: "1px solid #6366f1", background: "rgba(99,102,241,0.12)", color: "var(--q-text,#3730a3)" }}>
+                {capturing ? "Capturing…" : "\u{1F4F7} Capture this screen"}
+              </button>
               <input type="file" multiple accept="image/*,application/pdf" className="text-xs"
                      style={{ color: "var(--q-text-dim,#64748b)" }}
                      onChange={e => { addFiles(e.target.files); e.target.value = ""; }} />
