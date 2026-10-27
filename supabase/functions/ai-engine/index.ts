@@ -5,6 +5,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { PDFDocument } from "npm:pdf-lib@1.17.1";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
 import { localNormsLine, civilMethodLine } from "./authorities.ts";
+import { SCHEDULE_TOOL, SCHEDULE_PROMPT, scheduleTablesToItems, applyScheduleItems, mergeSameKindRows } from "./schedules.ts";
 import { evalQuantityFormula, measureLine, standardForProject, civilStandardPrompt, VALIDATION, type Rule, type StandardChoice } from "./civil_rules.ts";
 
 const corsHeaders = {
@@ -2514,7 +2515,8 @@ async function callClaude(apiKey: string, systemPrompt: string, userContent: any
   // run "completes" with a BOQ quietly missing line items. Refuse entirely.
   const isClassification = tool === PAGE_CLASSIFICATION_TOOL;
   const isLegend = tool === TILE_LEGEND_TOOL;
-  const expectedArrayKey = isClassification ? "pages" : isLegend ? "legend_entries" : "items";
+  const isTables = tool === SCHEDULE_TOOL;
+  const expectedArrayKey = isClassification ? "pages" : isLegend ? "legend_entries" : isTables ? "tables" : "items";
 
   if (data.stop_reason === "max_tokens") {
     const err = new Error(
@@ -2899,6 +2901,19 @@ Deno.serve(async (req: Request) => {
           await admin.from("analysis_runs").update({ status: "failed", error_message: describeError(aiErr) }).eq("id", run.id);
           return;
         }
+        // One-sheet MEP drawings: copy the sheet's own schedules too (see schedules.ts). Several pages are
+        // left alone, because a set often repeats one schedule on every sheet and the sum would double it.
+        let wholeSheetTables: any[] = [];
+        if (!civil && requestedPages === 1 && fileContent.kind !== "dxf" && fileContent.kind !== "ifc") {
+          try {
+            const tabCall = await callClaude(anthropicKey, systemPrompt, [fileContent.block, { type: "text", text: SCHEDULE_PROMPT }], SCHEDULE_TOOL, 16000);
+            wholeSheetTables = Array.isArray(tabCall.result?.tables) ? tabCall.result.tables : [];
+            parsed.usage = { input_tokens: (parsed.usage?.input_tokens ?? 0) + (tabCall.usage?.input_tokens ?? 0),
+                             output_tokens: (parsed.usage?.output_tokens ?? 0) + (tabCall.usage?.output_tokens ?? 0) };
+          } catch (tabErr) {
+            console.error("schedule pass failed, keeping the plan count:", tabErr);
+          }
+        }
         const elapsedMs = Date.now() - startTime;
         const result = parsed.result as { items: any[]; analysis_notes: string; document_kind?: string; cost_optimizations?: any[]; assumptions?: any[]; review_items?: any[] };
         const scopeNote = applyTakeoffScope(result, drawing);
@@ -2945,10 +2960,17 @@ Deno.serve(async (req: Request) => {
             validation_notes: it.validation_notes ?? null,
           } : {}),
         }));
-        const { rows: promotedRows, promoted: promotedScheduleRows } = promoteSoleSourceScheduleRows(rows);
+        const { rows: promotedRows0, promoted: promotedScheduleRows } = promoteSoleSourceScheduleRows(rows);
         if (promotedScheduleRows > 0) {
           console.warn(`promoteSoleSourceScheduleRows: reclassified ${promotedScheduleRows} schedule-only row(s) to physical_count so they count toward the BOQ.`);
         }
+        const wsSched = scheduleTablesToItems(wholeSheetTables);
+        const wsApplied = applyScheduleItems(promotedRows0, wsSched.items, {
+          project_id: project.id, drawing_id, analysis_run_id: run.id, revision_number: nextRevision,
+          floor_label: drawing.floor_label ?? null, source: "ai_drawing_analysis", optimization_status: "drawing_requirement",
+        });
+        const promotedRows = wsApplied.rows;
+        if (wsApplied.added) result.analysis_notes = `${result.analysis_notes ?? ""} ${wsApplied.added} line(s) were taken from the sheet's own schedules and replace the AI's plan count for those items (${wsApplied.notes.join("; ")}).`;
         const safeRows = lumpSumsAreNotCounted(fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0)));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
         const derived = await deriveEngineeringItems(admin, inserted);
@@ -2960,6 +2982,9 @@ Deno.serve(async (req: Request) => {
             typical_detail_rows: typicalFixed,
             found_nothing: safeRows.length === 0,
             civil,
+            sheet_schedules: wholeSheetTables.length ? { tables: wholeSheetTables.map((t: any) => ({ title: String(t?.title ?? "").slice(0, 120), kind: t?.kind, rows: Array.isArray(t?.rows) ? t.rows.length : 0 })),
+                               lines_from_schedules: wsApplied.added, ai_lines_replaced: wsApplied.replaced, detail: wsApplied.notes, tables_without_quantities: wsSched.skipped,
+                               copied: wholeSheetTables.slice(0, 8).map((t: any) => ({ title: t?.title, kind: t?.kind, columns: t?.columns, rows: Array.isArray(t?.rows) ? t.rows.slice(0, 60) : [] })) } : null,
             notes: autoTypedNote + (safeRows.length === 0 && civil
               ? `No BOQ items were produced. No measurable civil, structural or architectural work (concrete, blockwork, finishes, skirting, doors, external works) with readable dimensions was found on this sheet. ${result.analysis_notes ?? ""}`.trim()
               : safeRows.length === 0
@@ -3136,6 +3161,23 @@ Deno.serve(async (req: Request) => {
         }
         const legendText = legendToPromptText(legend);
 
+        // The sheet's own schedules (FCU, diffusers, fixtures, DBs, doors ...), copied cell by cell from the
+        // tiles that hold the title strip / legend / schedule areas, else the same tiles the legend was read
+        // from. Their quantities replace the AI's plan count for the same items further down.
+        let sheetTables: any[] = [];
+        try {
+          const zoneTiles = refZones.length ? tileBlocks.filter((tb) => zoneCoverage(tb.tile, refZones) >= 0.15) : [];
+          const pick = (zoneTiles.length ? zoneTiles : legendPicked).slice(0, 6);
+          let bytes = 0;
+          const blocks = pick.filter((tb) => (bytes += tb.bytes) <= LEGEND_BUDGET_BYTES || tb === pick[0]).map((tb) => tb.block);
+          const tabCall = await callClaude(anthropicKey, systemPrompt, [...blocks, { type: "text", text: SCHEDULE_PROMPT }], SCHEDULE_TOOL, 16000);
+          addUsage(tabCall.usage);
+          sheetTables = Array.isArray(tabCall.result?.tables) ? tabCall.result.tables : [];
+        } catch (tabErr) {
+          // without the schedules the plan count still stands, exactly as before
+          console.error("tiled schedule pass failed, continuing with the plan count:", tabErr);
+        }
+
         // ---- pass 2: count devices, one call per tile ---------------------
         const tileResults = await mapWithConcurrency(tileBlocks, TILE_CONCURRENCY, async (tb) => {
           const t = tb.tile;
@@ -3162,7 +3204,11 @@ Deno.serve(async (req: Request) => {
             `containment run whose route is visible here. If this tile contains a schedule or legend table rather than plan ` +
             `content, record its rows with quantity_source_type "schedule_quantity" and no coordinates. ` +
             `If this tile contains no countable items at all, return an empty items list -- that is a valid and useful answer, ` +
-            `do not invent content to fill it.`;
+            `do not invent content to fill it.\n\n` +
+            `RUNS BY SIZE: ductwork, pipework and cable runs are one line PER SIZE as labelled on the drawing (e.g. "Supply duct 600x300", ` +
+            `"Chilled water pipe 50 mm"), length in m measured along the run at the sheet scale -- never one total line for every size. ` +
+            `A run with no size label goes on its own line saying the size is not shown. Units are what the item is bought in: ` +
+            `a flow bar / linear slot diffuser in m, a damper, diffuser or grille in nr.`;
 
           // the app's own reference zones, as fractions of THIS tile
           const zl = refZones.map((z) => {
@@ -3248,7 +3294,9 @@ Deno.serve(async (req: Request) => {
         const typicalFixedTiled = reclassifyTypicalDetailRows(merged);
         if (typicalFixedTiled) console.warn(`reclassifyTypicalDetailRows (tiled): ${typicalFixedTiled} row(s) moved to typical_detail_reference.`);
 
-        const { items: deduped, removed } = mergeTileRows(merged);
+        const { items: deduped0, removed } = mergeTileRows(merged);
+        const { rows: deduped, merged: sameKindMerged } = mergeSameKindRows(deduped0);
+        if (sameKindMerged) console.log(`tiled run ${run.id}: ${sameKindMerged} line(s) of the same item described differently on different tiles were combined.`);
         const legendFlagged = crossCheckAgainstLegend(deduped, legend);
         if (legendFlagged) {
           console.log(`tiled run ${run.id}: ${legendFlagged} line(s) disagree with the sheet legend's stated quantity.`);
@@ -3307,6 +3355,14 @@ Deno.serve(async (req: Request) => {
           }));
           console.log(`tiled run ${run.id}: ${measuredRoutes.length} measured route(s) replace ${aiContainmentRowsReplaced} AI containment line(s).`);
         }
+        // the sheet's own schedules govern the items they list
+        const sched = scheduleTablesToItems(sheetTables);
+        const sa = applyScheduleItems(promotedRows, sched.items, {
+          project_id: project.id, drawing_id, analysis_run_id: run.id, revision_number: nextRevision,
+          floor_label: drawing.floor_label ?? null, source: "ai_drawing_analysis", optimization_status: "drawing_requirement",
+        });
+        promotedRows = sa.rows;
+        if (sched.items.length) console.log(`tiled run ${run.id}: schedules ${sa.notes.join("; ")}`);
         // a line that says "0 found in this tile" is not a BOQ line
         const keptRows = promotedRows.map(({ __zone, ...r }: any) => r);
         let safeRows = keptRows.map((r: any) => {
@@ -3346,10 +3402,13 @@ Deno.serve(async (req: Request) => {
             tagged_cameras: taggedCams ? { counted: taggedCams.cams.length, schedule: taggedCams.schedule, ai_camera_lines_replaced: aiCameraRowsReplaced } : null,
             tagged_devices: taggedDevices.length ? { counted: td.counted, ai_lines_replaced: td.replaced } : null,
             measured_routes: measuredRoutes.length ? { routes: measuredRoutes, ai_containment_lines_replaced: aiContainmentRowsReplaced } : null,
+            sheet_schedules: { tables: sheetTables.map((t: any) => ({ title: String(t?.title ?? "").slice(0, 120), kind: t?.kind, rows: Array.isArray(t?.rows) ? t.rows.length : 0 })),
+                               lines_from_schedules: sa.added, ai_lines_replaced: sa.replaced, detail: sa.notes, tables_without_quantities: sched.skipped,
+                               copied: sheetTables.slice(0, 8).map((t: any) => ({ title: t?.title, kind: t?.kind, columns: t?.columns, rows: Array.isArray(t?.rows) ? t.rows.slice(0, 60) : [] })) },
             positions_discarded_in_panels: panelDropped,
             notes: (safeRows.length === 0
               ? `No BOQ items were produced from this sheet. Every tile was read and nothing countable for the systems Quantora reads (MEP and ELV) was found. If this is a civil, structural or architectural drawing, set its type to Civil, Structural or Architectural so it is measured as civil works — and if it is a specification or schedule rather than a drawing, upload it on the Specification page instead. Per-tile detail follows.\n\n`
-              : ``) + `High-resolution tiled take-off: the sheet was rendered at full scale and read as ${tiles.length} overlapping tiles, so device symbols too small to resolve on a whole-sheet pass are legible. ${legendLine} ${removed} per-tile row(s) were merged into one line per device, so a device counted on several tiles is one BOQ line and not several. ${legendFlagged} line(s) disagree with the quantity printed in the sheet's own legend and are flagged for review rather than silently adjusted. ${panelDropped} marker position(s) landing inside a legend, schedule or title block were discarded, because a symbol drawn in a key is a reference and not a device in the building. ${emptyTiles} tile(s) contained no countable items.\n\n${notesParts.join("\n")}`,
+              : ``) + `High-resolution tiled take-off: the sheet was rendered at full scale and read as ${tiles.length} overlapping tiles, so device symbols too small to resolve on a whole-sheet pass are legible. ${legendLine} ${sa.added ? `${sa.added} line(s) were taken from the sheet's own schedules and replace the AI's plan count for those items (${sa.notes.join("; ")}). ` : ""}${removed} per-tile row(s) were merged into one line per device, so a device counted on several tiles is one BOQ line and not several. ${legendFlagged} line(s) disagree with the quantity printed in the sheet's own legend and are flagged for review rather than silently adjusted. ${panelDropped} marker position(s) landing inside a legend, schedule or title block were discarded, because a symbol drawn in a key is a reference and not a device in the building. ${emptyTiles} tile(s) contained no countable items.\n\n${notesParts.join("\n")}`,
           },
         }).eq("id", run.id);
 
