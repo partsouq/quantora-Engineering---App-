@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-28.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-28.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -28666,11 +28666,12 @@ const QDD_MAP = {
   water_supply: ["water", "drainage"], hot_water: ["water"], pumps: ["water"], fixtures: ["water"], pump_room: ["water"],
   drainage: ["drainage"],
   lighting: ["electrical"], power_distribution: ["electrical"], db_panels: ["electrical"], cable_sizing: ["electrical"], lv_panel: ["electrical"],
+  partitions: ["partition"], masonry: ["partition"],
 };
-const QDD_ORDER = ["ls", "fa", "el", "ff", "hvac", "water", "drainage", "electrical", "cctv", "acs", "ict", "intercom", "bgm"];
+const QDD_ORDER = ["ls", "fa", "el", "ff", "hvac", "water", "drainage", "electrical", "cctv", "acs", "ict", "intercom", "bgm", "partition"];
 const QDD_SHORT = { ls: "Life safety", fa: "Fire alarm", el: "Emerg. lighting", ff: "Fire fighting", hvac: "HVAC",
   water: "Water", drainage: "Drainage", electrical: "Electrical", cctv: "CCTV", acs: "Access control", ict: "ICT",
-  intercom: "Intercom", bgm: "BGM / PA" };
+  intercom: "Intercom", bgm: "BGM / PA", partition: "Partitions" };
 const QDD_STATE = {
   req:  { bg: "#fef3c7", fg: "#92400e", mark: "●", word: "required" },
   run:  { bg: "#dbeafe", fg: "#1e40af", mark: "⟳", word: "being drawn" },
@@ -30232,20 +30233,21 @@ const IFC_SYSTEMS = [["cctv", "CCTV", "ELV"], ["acs", "Access control", "ELV"], 
                      ["chw", "Chilled water", "Mechanical"], ["smoke", "Smoke control / stair pressurisation", "Mechanical"],
                      ["water", "Water supply", "Plumbing"], ["drainage", "Drainage", "Plumbing"],
                      ["electrical", "Lighting and power", "Electrical"],
-                     ["earthing", "Earthing and bonding", "Electrical"], ["lps", "Lightning protection", "Electrical"]];
-const IFC_FAMILY_ORDER = ["ELV", "Fire", "Mechanical", "Plumbing", "Electrical"];
+                     ["earthing", "Earthing and bonding", "Electrical"], ["lps", "Lightning protection", "Electrical"],
+                     ["partition", "Partition layout", "Civil"]];
+const IFC_FAMILY_ORDER = ["ELV", "Fire", "Mechanical", "Plumbing", "Electrical", "Civil"];
 // one icon per system, on the job form and on every job card
 const SYS_ICON = { cctv: "\u{1F4F9}", acs: "\u{1F510}", ict: "\u{1F310}", intercom: "\u{1F4DE}", bgm: "\u{1F50A}", iptv: "\u{1F4FA}",
   av: "\u{1F3AC}", parking: "\u{1F17F}\uFE0F", bms: "\u{1F3E2}", grms: "\u{1F6CF}\uFE0F", ls: "\u{1F6AA}", fa: "\u{1F6A8}", el: "\u{1F4A1}",
   ff: "\u{1F9EF}", hvac: "\u2744\uFE0F", chw: "\u{1F9CA}", smoke: "\u{1F4A8}", water: "\u{1F6B0}", drainage: "\u{1F6BF}",
-  electrical: "\u26A1", earthing: "\u23DA", lps: "\u{1F329}\uFE0F" };
+  electrical: "\u26A1", earthing: "\u23DA", lps: "\u{1F329}\uFE0F", partition: "\u{1F9F1}" };
 const sysLabel = k => ((IFC_SYSTEMS.find(s => s[0] === k) || [])[1]) || k;
 // revisions are printed on the drawings as R0, R1, R2 ...
 const revLabel = n => "R" + (parseInt(n, 10) || 0);
 // file-name code -> system, for packages generated before drawing reference numbers were stored
 const LEGACY_CODE_SYS = { CCTV: "cctv", ACC: "acs", TEL: "ict", VIC: "intercom", BGM: "bgm", LS: "ls", FA: "fa", EL: "el", FF: "ff",
   M: "hvac", P: "water", D: "drainage", E: "electrical", EE: "earthing", LP: "lps", MC: "chw", MS: "smoke", TV: "iptv", AV: "av",
-  PK: "parking", BMS: "bms", GR: "grms" };
+  PK: "parking", BMS: "bms", GR: "grms", "A-PAR": "partition" };
 function qdLoadZip() {
   if (typeof window.JSZip !== "undefined") return Promise.resolve(true);
   return __loadLib(["https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
@@ -31241,7 +31243,7 @@ function DraftsmanIfcPackage({ project }) {
     return (b.specs || []).length ? `Designed to: specification (${b.specs.join(", ")}) + ${who} as the minimum` : `Designed to: ${who} (no specification uploaded)`;
   };
   useEffect(() => { getDraftsmanFamilies().then(f => {
-    const fm = f || {};
+    const fm = { Civil: true, ...(f || {}) };      // the partition layout: on unless the administrator switches it off
     setFams(fm);
     // untick systems whose family the administrator has switched off
     setSystems(cur => cur.filter(k => fm[(IFC_SYSTEMS.find(x => x[0] === k) || [])[2]] === true));
