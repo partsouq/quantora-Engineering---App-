@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-28.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-28.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -2158,8 +2158,28 @@ function CivilMeasureDetail({ ev, unit }) {
         <div>{ev.deductions.map((d, i) => <span key={i} className={d.applied ? "" : "line-through text-slate-400"} title={d.reason}>{i ? "; " : ""}{d.description} {d.qty ?? "?"}</span>)}</div>
       )}
       {ev.validationNotes && <div className="text-slate-500">{ev.validationNotes}</div>}
+      {ev.drawing_id && /^Height needed/.test(ev.validationNotes || "") && (
+        <button onClick={() => window.dispatchEvent(new CustomEvent("quantora:duct-sizes", { detail: { drawingId: ev.drawing_id } }))}
+          className="mt-0.5 text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500 text-white hover:bg-amber-600">Add height</button>
+      )}
     </div>
   );
+}
+
+// Opens a drawing's Duct sizes panel from anywhere (the BOQ's "Add height").
+function DuctSizesHost() {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    const on = async (e) => {
+      const id = e.detail && e.detail.drawingId;
+      if (!id) return;
+      const { data } = await sb.from("drawings").select("*").eq("id", id).maybeSingle();
+      if (data) setD(data);
+    };
+    window.addEventListener("quantora:duct-sizes", on);
+    return () => window.removeEventListener("quantora:duct-sizes", on);
+  }, []);
+  return d ? <MarkupViewerModal drawing={d} focusDucts onClose={() => setD(null)} /> : null;
 }
 function simpleBoqRemarksFor(row) {
   // A discrepancy outranks everything else: it is the one remark an estimator
@@ -2621,7 +2641,8 @@ function describeStandardReports(reports) {
     if (x.blank) bits.push(`${x.blank} blank page${x.blank === 1 ? "" : "s"} removed`);
     return `${x.name}: ${bits.join(", ")}${x.converted ? "" : " (will be cleaned when it is read)"}`;
   });
-  return "Checked and brought to standard — " + parts.join(" · ");
+  return "Checked and brought to standard — " + parts.join(" · ")
+    + ". Next step: click \u201cAnalyze with AI\u201d on the drawing below to get its BOQ.";
 }
 
 // Renders one page of an already-parsed pdf.js document into overlapping tile
@@ -11554,6 +11575,8 @@ function DrawingsTab({ project }) {
   const [stdSummary, setStdSummary] = useState("");   // what the standard check did, shown after upload
   const [analyzing, setAnalyzing] = useState({});
   const [runs, setRuns] = useState({});
+  const [markupDucts, setMarkupDucts] = useState(false);   // open the markup straight on Duct sizes
+  const measuringRef = useRef({});                          // run id -> drawing name, while its ducts are measured
   const [err, setErr] = useState("");
   const [expandedHistory, setExpandedHistory] = useState(null);
   const [classifyDrawing, setClassifyDrawing] = useState(null);
@@ -11626,7 +11649,32 @@ function DrawingsTab({ project }) {
     const grouped = {};
     (r||[]).forEach(run => { grouped[run.drawing_id] = grouped[run.drawing_id] || []; grouped[run.drawing_id].push(run); });
     setRuns(grouped);
+    // A run that was being measured and is now done: say what came out, once.
+    const names = Object.fromEntries((data || []).map(x => [x.id, x.file_name]));
+    for (const run of r || []) {
+      const sm = run.summary || {};
+      if (run.status === "processing" && sm.measuring) measuringRef.current[run.id] = names[run.drawing_id] || "the drawing";
+      else if (measuringRef.current[run.id] && run.status === "completed") {
+        const nm = measuringRef.current[run.id];
+        delete measuringRef.current[run.id];
+        const dm = sm.duct_measured;
+        if (dm) {
+          const missingW = (sm.duct_widths || []).filter(w => (w.used || []).some(u => !u.h)).length;
+          alert(`Ducts measured on ${nm}: ${Number(dm.total_m).toLocaleString()} m of duct`
+            + (dm.area_m2 ? `, ${Number(dm.area_m2).toLocaleString()} m\u00b2 by size and gauge` : "") + ".\n\n"
+            + (missingW ? `${missingW} duct width(s) need a height (the drawing prints no size beside them). Click \u201cDuct sizes: add heights\u201d on the drawing to type them or read them from the specification.`
+                        : "Every duct has a size. Click \u201cDuct sizes\u201d on the drawing to check where each size came from."));
+        }
+      }
+    }
   }
+  // While the worker measures a sheet (about a minute), check back so the row moves on by itself.
+  useEffect(() => {
+    const busy = Object.values(runs).some(rs => rs && rs[0] && rs[0].status === "processing");
+    if (!busy) return;
+    const t = setTimeout(() => load(), 6000);
+    return () => clearTimeout(t);
+  }, [runs]);
 
   // Bug fix: this used to apply ONE shared "Floor Label" text field to every
   // file in a multi-file selection at once, so uploading a full drawing set
@@ -12239,8 +12287,24 @@ function DrawingsTab({ project }) {
                   title="Something wrong with this sheet's result? Tell us and ask for the pages back."
                   className="text-xs text-amber-700 border border-amber-200 px-3 py-2 rounded-lg hover:bg-amber-50">Report</button>
                 {runs[d.id] && (
-                  <button onClick={()=>setMarkupDrawing(d)} className="text-xs text-blue-700 bg-blue-50 px-3 py-2 rounded-lg font-semibold">View Markup</button>
+                  <button onClick={()=>{ setMarkupDucts(false); setMarkupDrawing(d); }} className="text-xs text-blue-700 bg-blue-50 px-3 py-2 rounded-lg font-semibold">View Markup</button>
                 )}
+                {(() => {
+                  const r0 = runs[d.id] && runs[d.id][0];
+                  const sm = (r0 && r0.summary) || {};
+                  if (r0 && r0.status === "processing" && sm.measuring) {
+                    return <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
+                      {["mechanical", "hvac"].includes(d.discipline) ? "Measuring the ducts from the drawing…" : "Measuring the lines from the drawing…"}</span>;
+                  }
+                  if (r0 && r0.status === "completed" && sm.duct_widths && sm.duct_widths.length) {
+                    const need = sm.duct_widths.filter(w => (w.used || []).some(u => !u.h)).length;
+                    return <button onClick={() => { setMarkupDucts(true); setMarkupDrawing(d); }}
+                      title="Every duct's width and length, the heights used, and where each size came from"
+                      className={`text-xs font-semibold px-3 py-2 rounded-lg ${need ? "bg-amber-500 text-white hover:bg-amber-600" : "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"}`}>
+                      {need ? `Duct sizes: add heights (${need})` : "Duct sizes \u2713"}</button>;
+                  }
+                  return null;
+                })()}
                 {canAnalyze(d) ? (
                   <>
                     {d.file_type === "pdf" && (
@@ -12252,9 +12316,12 @@ function DrawingsTab({ project }) {
                       title={anyAiCallInFlight && !analyzing[d.id] && !tiling[d.id]
                         ? "Another AI analysis is already running -- please wait for it to finish first"
                         : "Quantora measures the sheet and reads it at whatever resolution its symbols need."}
-                      className="bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
+                      className={`bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50 ${!runs[d.id] && !tiling[d.id] && !analyzing[d.id] ? "ring-2 ring-offset-2 ring-blue-500 animate-pulse" : ""}`}>
                       {tiling[d.id] || (analyzing[d.id] ? "Analyzing with AI…" : (runs[d.id] ? "Re-analyze" : "Analyze with AI"))}
                     </button>
+                    {!runs[d.id] && !tiling[d.id] && !analyzing[d.id] && (
+                      <span className="text-[11px] text-blue-700 font-semibold">← Next step: get this drawing's BOQ</span>
+                    )}
                   </>
                 ) : d.discipline === "specification" ? <span className="text-xs text-slate-400">Reference document</span> : NEEDS_EXPORT_TYPES.includes(d.file_type) ? (
                   <label className="text-xs text-amber-700 border border-amber-200 bg-amber-50 px-3 py-2 rounded-lg font-semibold cursor-pointer">
@@ -12308,7 +12375,7 @@ function DrawingsTab({ project }) {
         />
       )}
       {markupDrawing && (
-        <MarkupViewerModal drawing={markupDrawing} onClose={()=>setMarkupDrawing(null)} />
+        <MarkupViewerModal drawing={markupDrawing} focusDucts={markupDucts} onClose={()=>setMarkupDrawing(null)} />
       )}
     </div>
   );
@@ -12773,13 +12840,13 @@ async function projectSpecDocs(projectId) {
   return out.filter(d => /\.pdf$/i.test(d.file_name || "") && !seen.has((d.file_name || "").toLowerCase()) && seen.add((d.file_name || "").toLowerCase()));
 }
 
-function DuctSizesPanel({ drawing, widths, measured, onRemeasured }) {
+function DuctSizesPanel({ drawing, widths, measured, onRemeasured, startOpen }) {
   const [vals, setVals] = useState({});          // width -> {h, from}
   const [all, setAll] = useState("");
   const [scale, setScale] = useState("");
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
-  const [open, setOpen] = useState(!!(measured && measured.unsized_m > 0));
+  const [open, setOpen] = useState(!!startOpen || !!(measured && measured.unsized_m > 0));
   const [specs, setSpecs] = useState([]);
   useEffect(() => { projectSpecDocs(drawing.project_id).then(setSpecs).catch(() => setSpecs([])); }, [drawing.project_id]);
   useEffect(() => {
@@ -12895,10 +12962,15 @@ function DuctSizesPanel({ drawing, widths, measured, onRemeasured }) {
       </div>
       {open && (
         <div className="mt-2">
-          <p className="text-slate-600 mb-2">
-            Width and length come from the drawing's duct lines. Type a height where the drawing shows none, or read the
-            heights from the specification or duct schedule. A size printed beside a duct on the drawing always wins.
-          </p>
+          <div className="bg-white border border-sky-100 rounded px-2.5 py-2 mb-2 text-slate-600 leading-relaxed">
+            <div><strong>1. Measured:</strong> every duct's width and length, from its two drawn edges on the sheet.</div>
+            <div><strong>2. Missing:</strong> {missing.length
+              ? <span className="text-amber-700">the height of {missing.length} width(s), highlighted below: the drawing prints no size beside them.</span>
+              : "nothing. Every duct has a size; you can still change one."}</div>
+            <div><strong>3. To fill it:</strong> type the height in the row, or give one height for all, or read the heights
+              from the specification. Then press <em>Save and re-measure</em> (free, about a minute). A size printed beside a
+              duct on the drawing always wins.</div>
+          </div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-xs bg-white border rounded">
               <thead><tr className="text-left text-slate-500">
@@ -12957,7 +13029,7 @@ function DuctSizesPanel({ drawing, widths, measured, onRemeasured }) {
   );
 }
 
-function MarkupViewerModal({ drawing, onClose }) {
+function MarkupViewerModal({ drawing, onClose, focusDucts }) {
   const [items, setItems] = useState([]);
   const [imgUrl, setImgUrl] = useState(null);
   const [pageRenderFailed, setPageRenderFailed] = useState(false);
@@ -13607,7 +13679,7 @@ function MarkupViewerModal({ drawing, onClose }) {
                 )}
               </div>
             )}
-            {ducts && <DuctSizesPanel drawing={drawing} widths={ducts.widths} measured={ducts.measured} onRemeasured={load} />}
+            {ducts && <DuctSizesPanel drawing={drawing} widths={ducts.widths} measured={ducts.measured} onRemeasured={load} startOpen={focusDucts} />}
             {imgUrl && measured && measuredRef.current[pageNum] && measured.some(m => m.category === "hvac") && (
               <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 mb-2">
                 <strong>The ducts on this sheet are measured from their drawn edges.</strong>{" "}
@@ -32849,6 +32921,7 @@ function App() {
   return (
     <div className={`min-h-screen ${view && view.name === "admin" ? "" : "qx"}`}>
       <LocationGate isPlatformAdmin={isPlatformAdmin} userId={session.user.id} />
+      <DuctSizesHost />
       <nav className="qtr-topnav bg-white border-b px-6 py-3 flex items-center justify-between sticky top-0 z-10">
         {/* The real brand mark. This was previously the building-construction
             emoji -- a base character plus a variation selector -- and where the
