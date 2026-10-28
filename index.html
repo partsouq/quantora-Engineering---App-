@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-28.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-28.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -12727,12 +12727,12 @@ const DUCT_FROM_LABEL = {
   "specification": "specification", "typed (all ducts)": "one height for all", "specification (all ducts)": "specification (all)",
   "none": "missing",
 };
-async function readSpecDuctSizes(file) {
+async function readSpecDuctSizes(file, count = {}) {
   // Every "WxH" in the document, counted: the height most written with each width wins.
+  // `file` is a File or an ArrayBuffer; pass the same `count` to add up several documents.
   if (!window.pdfjsLib) throw new Error("The PDF reader is not loaded yet; try again in a moment.");
-  const buf = await file.arrayBuffer();
+  const buf = file instanceof ArrayBuffer ? file : await file.arrayBuffer();
   const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
-  const count = {};
   const rx = /(\d{2,4})\s*(?:mm)?\s*[x×X*]\s*(\d{2,4})(?!\d)/g;
   const pages = Math.min(pdf.numPages, 200);
   for (let n = 1; n <= pages; n++) {
@@ -12750,7 +12750,27 @@ async function readSpecDuctSizes(file) {
   for (const [w, hs] of Object.entries(count)) {
     out[w] = +Object.entries(hs).sort((a, b) => b[1] - a[1])[0][0];
   }
-  return { sizes: out, pages };
+  return { sizes: out, pages, count };
+}
+
+// The project's own specifications: Tender > Specification uploads (tender_documents,
+// "tenders" bucket) and specification files added with the drawings ("drawings" bucket).
+async function projectSpecDocs(projectId) {
+  const out = [];
+  try {
+    const { data } = await sb.from("drawings").select("id, file_name, storage_path").eq("project_id", projectId).eq("discipline", "specification");
+    (data || []).forEach(d => out.push({ ...d, bucket: "drawings" }));
+  } catch (e) { /* none */ }
+  try {
+    const { data: ts } = await sb.from("tenders").select("id").eq("project_id", projectId);
+    for (const t of ts || []) {
+      const { data } = await sb.from("tender_documents").select("id, file_name, storage_path, doc_type").eq("tender_id", t.id);
+      (data || []).filter(d => d.doc_type === "specification" || /spec|schedule|boq/i.test(d.file_name || ""))
+        .forEach(d => out.push({ ...d, bucket: "tenders" }));
+    }
+  } catch (e) { /* none */ }
+  const seen = new Set();
+  return out.filter(d => /\.pdf$/i.test(d.file_name || "") && !seen.has((d.file_name || "").toLowerCase()) && seen.add((d.file_name || "").toLowerCase()));
 }
 
 function DuctSizesPanel({ drawing, widths, measured, onRemeasured }) {
@@ -12760,6 +12780,8 @@ function DuctSizesPanel({ drawing, widths, measured, onRemeasured }) {
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
   const [open, setOpen] = useState(!!(measured && measured.unsized_m > 0));
+  const [specs, setSpecs] = useState([]);
+  useEffect(() => { projectSpecDocs(drawing.project_id).then(setSpecs).catch(() => setSpecs([])); }, [drawing.project_id]);
   useEffect(() => {
     let live = true;
     (async () => {
@@ -12776,6 +12798,38 @@ function DuctSizesPanel({ drawing, widths, measured, onRemeasured }) {
   }, [drawing.id]);
 
   const missing = widths.filter(w => (w.used || []).some(u => !u.h));
+  function fillFrom(sizes) {
+    let filled = 0;
+    const v = { ...vals };
+    for (const w of widths) {
+      const h = sizes[w.w];
+      if (h && !(v[w.w] && v[w.w].h && v[w.w].from === "typed")) { v[w.w] = { h: String(h), from: "specification" }; filled++; }
+    }
+    setVals(v);
+    return filled;
+  }
+  async function readProjectSpecs() {
+    setBusy(`Reading ${specs.length} specification document(s)…`); setMsg("");
+    try {
+      const count = {};
+      let pages = 0, read = 0, sizes = {};
+      for (const d of specs) {
+        const { data: sg, error } = await sb.storage.from(d.bucket).createSignedUrl(d.storage_path, 300);
+        if (error || !sg) continue;
+        const res = await fetch(sg.signedUrl);
+        if (!res.ok) continue;
+        const r = await readSpecDuctSizes(await res.arrayBuffer(), count);
+        pages += r.pages; read++;
+        sizes = r.sizes;                       // counts add up across the documents
+      }
+      const filled = read ? fillFrom(sizes) : 0;
+      setMsg(!read ? "Could not open the project's specification files."
+        : filled ? `Read ${read} document(s), ${pages} page(s): heights found for ${filled} of ${widths.length} widths. Check them, then save.`
+        : `Read ${read} document(s), ${pages} page(s): no duct sizes (like 500x200) for these widths were found in them.`);
+    } catch (err) {
+      setMsg(err.message || "Could not read the specification.");
+    } finally { setBusy(""); }
+  }
   async function readSpec(e) {
     const f = e.target.files && e.target.files[0];
     e.target.value = "";
@@ -12881,8 +12935,14 @@ function DuctSizesPanel({ drawing, widths, measured, onRemeasured }) {
               <input value={scale} inputMode="numeric" onChange={e => setScale(e.target.value.replace(/[^0-9]/g, ""))} className="w-16 border rounded px-1.5 py-0.5 ml-1" /></label>
           </div>
           <div className="flex items-center gap-2 flex-wrap mt-2">
+            {specs.length > 0 && (
+              <button onClick={readProjectSpecs} disabled={!!busy} title={specs.map(d => d.file_name).join("\n")}
+                className="text-[11px] font-semibold px-2.5 py-1 rounded border border-sky-300 bg-white text-sky-800 hover:bg-sky-50 disabled:opacity-50">
+                Read heights from this project's specification ({specs.length})
+              </button>
+            )}
             <label className="text-[11px] font-semibold px-2.5 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">
-              Read heights from a specification (PDF)
+              {specs.length ? "Or upload another PDF" : "Read heights from a specification (PDF)"}
               <input type="file" accept="application/pdf,.pdf" onChange={readSpec} className="hidden" disabled={!!busy} />
             </label>
             <button onClick={save} disabled={!!busy} className="text-[11px] font-semibold px-3 py-1 rounded bg-sky-700 text-white hover:bg-sky-800 disabled:opacity-50">
