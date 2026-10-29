@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-28.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -30917,6 +30917,122 @@ function qd3dLoadThree() {
       });
     }
     let raf;
+    // a copy of what is shown, for the file: repeated parts (instanced devices, hangers, flanges) written
+    // out one by one with their own colour, since other programs do not read three.js instancing
+    // the screen uses smooth round parts; the file gets lighter ones (a few thousand bolts and hangers
+    // at full smoothness would make a file of hundreds of MB)
+    function lowPoly(g) {
+      const q = g.parameters || {};
+      if (g.type === "SphereGeometry") return new T.SphereGeometry(q.radius, 6, 4);
+      if (g.type === "CylinderGeometry") {
+        const thin = Math.max(q.radiusTop || 0, q.radiusBottom || 0) < 0.03;           // rods, bolts, small pipe
+        return new T.CylinderGeometry(q.radiusTop, q.radiusBottom, q.height, Math.min(q.radialSegments || 8, thin ? 6 : 10), 1, q.openEnded);
+      }
+      if (g.type === "TorusGeometry") return new T.TorusGeometry(q.radius, q.tube, 6, 10, q.arc);
+      return g;
+    }
+    // what is shown, as plain triangle lists in world coordinates (metres, Y up): one entry per part with
+    // its colour; repeated parts (instanced devices, hangers, flanges) written out one by one
+    function bakeForExport() {
+      scene.updateMatrixWorld(true);
+      const parts = [];
+      const shownUp = o => { for (let q = o; q; q = q.parent) if (!q.visible) return false; return true; };
+      const usable = m => m && m.visible !== false && !(m.transparent && m.opacity < 0.05);
+      const m4 = new T.Matrix4(), vv = new T.Vector3(), cc = new T.Color();
+      const indexOf = (g, start, count) => {
+        const ix = g.index;
+        const n = count != null ? count : (ix ? ix.count : g.attributes.position.count);
+        const out = new Uint32Array(n);
+        for (let k = 0; k < n; k++) out[k] = ix ? ix.getX((start || 0) + k) : (start || 0) + k;
+        return out;
+      };
+      scene.traverse(o => {
+        if (o === scene || !shownUp(o) || (o.userData && o.userData.noExport)) return;
+        if (o.isInstancedMesh) {
+          if (!usable(o.material) || !o.count || !o.geometry.attributes.position) return;
+          const g0 = lowPoly(o.geometry);
+          const pos = g0.attributes.position, n = pos.count, N = o.count, one = indexOf(g0);
+          const percol = !!o.instanceColor, base = o.material.color || new T.Color(0x9aa3ad);
+          const P = new Float32Array(n * N * 3), C = percol ? new Float32Array(n * N * 3) : null, I = new Uint32Array(one.length * N);
+          for (let i = 0; i < N; i++) {
+            o.getMatrixAt(i, m4); m4.premultiply(o.matrixWorld);
+            if (percol) { o.getColorAt(i, cc); cc.multiply(base); }
+            for (let k = 0; k < n; k++) {
+              const j = (i * n + k) * 3;
+              vv.fromBufferAttribute(pos, k).applyMatrix4(m4); P[j] = vv.x; P[j + 1] = vv.y; P[j + 2] = vv.z;
+              if (C) { C[j] = cc.r; C[j + 1] = cc.g; C[j + 2] = cc.b; }
+            }
+            for (let k = 0; k < one.length; k++) I[i * one.length + k] = one[k] + i * n;
+          }
+          parts.push({ name: o.name || "", pos: P, col: C, prims: [{ idx: I, colour: percol ? new T.Color(1, 1, 1) : base, opacity: o.material.opacity }] });
+        } else if (o.isMesh && o.geometry && o.geometry.attributes.position) {
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          if (!mats.some(usable)) return;
+          const g = o.geometry, pos = g.attributes.position, n = pos.count;
+          const P = new Float32Array(n * 3);
+          for (let k = 0; k < n; k++) { vv.fromBufferAttribute(pos, k).applyMatrix4(o.matrixWorld); P[k * 3] = vv.x; P[k * 3 + 1] = vv.y; P[k * 3 + 2] = vv.z; }
+          const groups = Array.isArray(o.material) && g.groups && g.groups.length ? g.groups : [{ start: 0, count: null, materialIndex: 0 }];
+          const prims = [];
+          groups.forEach(gr => {
+            const m = mats[gr.materialIndex || 0];
+            if (!usable(m)) return;
+            prims.push({ idx: indexOf(g, gr.start, gr.count === Infinity ? null : gr.count), colour: m.color || new T.Color(0x9aa3ad), opacity: m.opacity });
+          });
+          if (prims.length) parts.push({ name: o.name || (o.userData && o.userData.space) || "", pos: P, col: null, prims });
+        }
+      });
+      return parts;
+    }
+    // a minimal glTF 2.0 binary writer: positions, optional vertex colours, triangle indices, one
+    // material per colour. Written directly, so a large model saves in seconds.
+    function writeGLB(parts) {
+      const lin = c => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+      const chunks = [], bufferViews = [], accessors = [], meshes = [], nodes = [], materials = [], matKey = {};
+      let off = 0;
+      const addView = (arr, target) => {
+        const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+        chunks.push(bytes); const pad = (4 - (bytes.byteLength % 4)) % 4; if (pad) chunks.push(new Uint8Array(pad));
+        bufferViews.push({ buffer: 0, byteOffset: off, byteLength: bytes.byteLength, target });
+        off += bytes.byteLength + pad; return bufferViews.length - 1;
+      };
+      const material = (colour, opacity) => {
+        const a = opacity == null ? 1 : opacity, k = colour.getHexString() + "|" + a.toFixed(2);
+        if (matKey[k] == null) {
+          const m = { pbrMetallicRoughness: { baseColorFactor: [lin(colour.r), lin(colour.g), lin(colour.b), a], metallicFactor: 0.05, roughnessFactor: 0.75 },
+                      doubleSided: true, name: "#" + colour.getHexString() };
+          if (a < 0.999) m.alphaMode = "BLEND";
+          materials.push(m); matKey[k] = materials.length - 1;
+        }
+        return matKey[k];
+      };
+      parts.forEach(pt => {
+        if (!pt.pos.length) return;
+        const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+        for (let k = 0; k < pt.pos.length; k += 3) for (let c = 0; c < 3; c++) { const v = pt.pos[k + c]; if (v < mn[c]) mn[c] = v; if (v > mx[c]) mx[c] = v; }
+        const pa = accessors.push({ bufferView: addView(pt.pos, 34962), componentType: 5126, count: pt.pos.length / 3, type: "VEC3", min: mn, max: mx }) - 1;
+        const attrs = { POSITION: pa };
+        if (pt.col) attrs.COLOR_0 = accessors.push({ bufferView: addView(pt.col, 34962), componentType: 5126, count: pt.col.length / 3, type: "VEC3" }) - 1;
+        if (pt.col) for (let k = 0; k < pt.col.length; k++) pt.col[k] = lin(pt.col[k]);
+        const prims = pt.prims.filter(p => p.idx.length >= 3).map(p => ({
+          attributes: attrs, mode: 4, material: material(p.colour, p.opacity),
+          indices: accessors.push({ bufferView: addView(p.idx, 34963), componentType: 5125, count: p.idx.length, type: "SCALAR" }) - 1 }));
+        if (!prims.length) return;
+        meshes.push({ name: pt.name, primitives: prims });
+        nodes.push({ name: pt.name, mesh: meshes.length - 1 });
+      });
+      const json = { asset: { version: "2.0", generator: "Quantora Draftsman" },
+        scene: 0, scenes: [{ name: "Draftsman model", nodes: nodes.map((_, i) => i) }], nodes, meshes, materials, accessors, bufferViews,
+        buffers: [{ byteLength: off }] };
+      let js = new TextEncoder().encode(JSON.stringify(json));
+      const jpad = (4 - (js.byteLength % 4)) % 4;
+      if (jpad) { const t = new Uint8Array(js.byteLength + jpad); t.set(js); t.fill(0x20, js.byteLength); js = t; }
+      const total = 12 + 8 + js.byteLength + 8 + off;
+      const head = new DataView(new ArrayBuffer(20));
+      head.setUint32(0, 0x46546C67, true); head.setUint32(4, 2, true); head.setUint32(8, total, true);
+      head.setUint32(12, js.byteLength, true); head.setUint32(16, 0x4E4F534A, true);
+      const bh = new DataView(new ArrayBuffer(8)); bh.setUint32(0, off, true); bh.setUint32(4, 0x004E4942, true);
+      return new Blob([head.buffer, js, bh.buffer, ...chunks], { type: "model/gltf-binary" });
+    }
     function loop() { stepAnim(); renderer.render(scene, camera); drawLabels(); raf = requestAnimationFrame(loop); }
     function resize() { renderer.setSize(W(), H()); camera.aspect = W() / H(); camera.updateProjectionMatrix(); }
     window.addEventListener("resize", resize);
@@ -30944,6 +31060,18 @@ function qd3dLoadThree() {
       },
       orbit(o) { Object.assign(orb, { th: o.th ?? orb.th, ph: o.ph ?? orb.ph, r: o.r ?? orb.r }); if (o.t) orb.t.set(...o.t); place(); },
       zoom(f) { zoomAt(f); },
+      // the model as a .glb file (glTF binary, metres, Y up): what is on screen now (floors and systems
+      // shown), at the real floor heights, so it opens in Windows 3D Viewer, Blender, SketchUp, browsers
+      async exportGLB() {
+        const keep = state.explode;
+        state.explode = 0; layout();
+        try {
+          await new Promise(r => setTimeout(r, 30));     // let the "Preparing" state paint first
+          return writeGLB(bakeForExport());
+        } finally {
+          state.explode = keep; layout();
+        }
+      },
       dispose() { cancelAnimationFrame(raf); window.removeEventListener("resize", resize); window.removeEventListener("keydown", onKey); renderer.dispose(); host.innerHTML = ""; },
       colours: COL,
     };
@@ -30985,6 +31113,10 @@ const QD3D_CSS = `
 .q3-stats{position:absolute;right:16px;bottom:16px;display:flex;gap:10px}
 .q3-stats div{background:#fff;border:1px solid #e3e9f1;border-radius:12px;padding:8px 14px;box-shadow:0 8px 20px -16px rgba(15,42,82,.4)}
 .q3-stats b{display:block;font-size:18px;font-weight:800;color:#0f2140}.q3-stats span{font-size:11px;color:#5a6b82}
+.q3-dl{border:0;background:linear-gradient(180deg,#2474ec,#1862d8);color:#fff;font:inherit;font-weight:800;border-radius:10px;padding:9px 14px;cursor:pointer;white-space:nowrap;flex:none}
+.q3-dl:disabled{opacity:.7;cursor:wait}
+.q3-err{position:absolute;left:50%;top:16px;transform:translateX(-50%);background:#fff1f1;border:1px solid #f5c2c2;color:#9b1c1c;border-radius:10px;padding:9px 14px;font-weight:600;z-index:2;max-width:90%}
+.q3-err button{margin-left:10px;border:0;background:none;color:#9b1c1c;font-weight:800;cursor:pointer}
 .q3-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#5a6b82;font-weight:600;padding:20px;text-align:center}
 @media (max-width:900px){
   .q3-top{height:auto;flex-wrap:wrap;padding:10px 12px;gap:8px}
@@ -31008,6 +31140,7 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
   const [floor, setFloor] = useState("all");
   const [view, setView] = useState("iso");
   const [opts, setOpts] = useState({ walls: true, labels: true, apart: true, cones: false });
+  const [dl, setDl] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -31076,6 +31209,20 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
     if (k === "cones") v.setCones(val);
   };
   const sysName = k => ((model && model.systems.find(s => s.k === k)) || {}).n || k;
+  const downloadGlb = async () => {
+    if (!v || dl === "busy") return;
+    setDl("busy");
+    try {
+      const blob = await v.exportGLB();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = ((title || "Project").replace(/[^A-Za-z0-9 _-]+/g, "").trim().replace(/\s+/g, "-") || "Project")
+        + (floor !== "all" ? "-" + short(floor) : "") + "-3D.glb";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      setDl("");
+    } catch (e) { setDl(e.message || String(e)); }
+  };
 
   return (
     <div className="q3" role="dialog" aria-label="3D model">
@@ -31095,6 +31242,11 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
           <button onClick={() => v && v.fit()} title="Fit everything in view (F)">Fit</button>
         </div>
         {model && (
+          <button className="q3-dl" onClick={downloadGlb} disabled={dl === "busy"}
+            title="Download the 3D model as a .glb file (opens in Windows 3D Viewer, Blender, SketchUp). It saves what is shown: the floors and systems you have switched on.">
+            {dl === "busy" ? "Preparing…" : "⤓ Download 3D (.glb)"}</button>
+        )}
+        {model && (
           <div className="q3-seg" style={{ overflowX: "auto", maxWidth: "100%" }}>
             {[["all", "All floors"]].concat(model.storeys.map(s => [s.id, short(s.id)])).map(([k, l]) => (
               <button key={k} className={floor === k ? "on" : ""} onClick={() => { setFloor(k); v && v.setFloor(k); }} title={k}>{l}</button>
@@ -31105,6 +31257,7 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
       <div className="q3-body">
         <div className="q3-cv" ref={host} />
         {!model && <div className="q3-msg">{err || "Loading the 3D model…"}</div>}
+        {dl && dl !== "busy" && <div className="q3-err" role="alert">{dl} <button onClick={() => setDl("")}>Close</button></div>}
         {model && stats && (
           <>
             <div className="q3-panel">
@@ -31564,7 +31717,8 @@ function DraftsmanIfcPackage({ project }) {
     "MC-CHILLED-WATER-PIPING.pdf": "Chilled water (PDF)", "MS-SMOKE-CONTROL-AND-STAIR-PRESSURISATION.pdf": "Smoke control (PDF)",
     "3D-COORDINATION-VIEWS.pdf": "3D coordination views, all systems (PDF)", "TV-IPTV-SMATV.pdf": "IPTV / SMATV (PDF)", "AV-AUDIO-VISUAL.pdf": "Audio-visual (PDF)", "PK-CAR-PARK-MANAGEMENT.pdf": "Car park PGS / ANPR (PDF)",
     "BMS-BUILDING-MANAGEMENT-SYSTEM.pdf": "BMS (PDF)", "GR-GUEST-ROOM-MANAGEMENT.pdf": "GRMS (PDF)",
-    "MEP-ELV-devices.ifc": "IFC with all devices", "QA-report.md": "QA report (DBC screen, clash, sheet check)",
+    "MEP-ELV-devices.ifc": "IFC with all devices", "MEP-MODEL.ifc": "3D model for BIM software (IFC)",
+    "MEP-MODEL.ifczip": "3D model for BIM software (IFC, zipped)", "QA-report.md": "QA report (DBC screen, clash, sheet check)",
     "QA.json": "QA data (JSON)", "CR-CONSULTANT-COMMENTS-RESPONSE.pdf": "Consultant comments — response sheet (PDF)" }[n] || (n.startsWith("comments/") ? "Consultant file: " + n.slice(9) : null) || (n.startsWith("DCD/") ? "Civil Defence: " + n.slice(4).replace(/^XXXXX_/, "").replace(/\.pdf$/, "") : n));
 
   // the consultant-comment review of one rework (stage "parse" done): tick the changes, apply them
@@ -31811,6 +31965,12 @@ function DraftsmanIfcPackage({ project }) {
                 <div className="flex flex-wrap gap-2 pt-1">
                   {m3 && <button onClick={() => setModel3d({ path: m3.path, sub: [new Date(latestPkg.created_at).toLocaleString(), sm.devices != null ? `${sm.devices} devices` : null].filter(Boolean).join(" \u00b7 ") })}
                     className="text-sm font-semibold text-white px-4 py-2 rounded-lg" style={{ background: "linear-gradient(180deg,#2474ec,#1862d8)" }}>&#9651; Open 3D model</button>}
+                  {(() => {
+                    const ifc = ((newestDone || latestPkg).outputs || []).find(o => /^MEP-MODEL\.ifc(zip)?$/.test(o.name)) || (latestPkg.outputs || []).find(o => /^MEP-MODEL\.ifc(zip)?$/.test(o.name));
+                    return ifc ? <button onClick={() => download(ifc.path, `${(project.project_name || "Project").replace(/[^\w-]+/g, "_")}-3D-model.${ifc.name.split(".").pop()}`)}
+                      title="The 3D model as an IFC file: opens in Revit, Navisworks, Solibri and other BIM software, with every device and run in its system and size."
+                      className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">{"\u2B07"} Download 3D (IFC)</button> : null;
+                  })()}
                   {zip ? <button onClick={() => download(zip.path, `${(project.project_name || "Project").replace(/[^\w-]+/g, "_")}-drawings.zip`)} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">{"\u2B07"} Download everything (ZIP)</button>
                     : <button disabled={zipping === latestPkg.id} onClick={() => downloadZip(zipJob)} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">{zipping === latestPkg.id ? "Preparing ZIP\u2026" : "\u2B07 Download everything (ZIP)"}</button>}
                   <button onClick={() => { setRework("pkg:" + latestPkg.id); setRwText(""); setRwFiles([]); }}
