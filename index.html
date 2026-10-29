@@ -3,6 +3,21 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<script>
+/* Phones and small tablets open the site in its desktop layout (2026-10-29), the same as ticking
+   "Desktop site" in the browser: the page is laid out 1440 px wide and the browser fits it to the
+   screen; people pinch to zoom. Turn it off for one visit with ?mobile=1. */
+(function(){try{
+  var q=location.search, small=Math.min(screen.width,screen.height)<1024 && ('ontouchstart' in window || navigator.maxTouchPoints>0);
+  if(/[?&]mobile=1/.test(q)){sessionStorage.setItem('q.mobileView','1');}
+  if(/[?&]mobile=0/.test(q)){sessionStorage.removeItem('q.mobileView');}
+  if(small && sessionStorage.getItem('q.mobileView')!=='1'){
+    var m=document.querySelector('meta[name="viewport"]');
+    if(m) m.setAttribute('content','width=1440');
+    document.documentElement.classList.add('q-desktop-view');
+  }
+}catch(e){}})();
+</script>
 <!-- QUANTORA BUILD 2026-10-09.1 — if this line is not at the top of the file on GitHub,
      the upload did not replace index.html. The same string shows under the
      sign-in box and in the browser console on every page load. -->
@@ -21,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-29.18"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.19"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
