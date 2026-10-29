@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-29.15"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.16"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -299,6 +299,41 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
 /* Already used by the Comparison page's column labels and silently absent
    from the purged Tailwind build. */
 .tracking-wider{letter-spacing:.05em}
+/* Sign in / Create account (2026-10-29): the home page look -- brand panel left, glass form right */
+.qauth{min-height:100vh;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);background:#050a1f;color:#f4f6ff;
+  background-image:radial-gradient(900px 520px at 25% 20%, rgba(59,92,246,0.22), transparent 62%),radial-gradient(800px 500px at 90% 100%, rgba(91,33,182,0.22), transparent 60%),
+  repeating-linear-gradient(0deg, rgba(129,140,248,0.03) 0 1px, transparent 1px 72px),repeating-linear-gradient(90deg, rgba(129,140,248,0.03) 0 1px, transparent 1px 72px);}
+.qauth-art{position:relative;overflow:hidden;padding:40px clamp(28px,5vw,72px);display:flex;flex-direction:column;border-right:1px solid rgba(129,140,248,0.14);}
+.qauth-brand{display:flex;align-items:center;gap:12px;position:relative;z-index:2;}
+.qauth-brand img{border-radius:12px;box-shadow:0 0 0 1px rgba(129,140,248,.25),0 10px 30px -8px rgba(91,92,246,.8);}
+.qauth-brand b{display:block;font-size:20px;font-weight:700;color:#fff;} .qauth-brand b span{color:#4f8ff7;}
+.qauth-brand small{display:block;font-size:13px;color:#a9b3d6;margin-top:2px;}
+.qauth-copy{position:relative;z-index:2;margin-top:auto;margin-bottom:auto;padding:40px 0;max-width:560px;}
+.qauth-pill{display:inline-block;padding:8px 16px;border-radius:999px;font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#a5b4fc;background:rgba(30,38,96,0.45);border:1px solid rgba(129,140,248,0.45);}
+.qauth-copy h2{font-size:clamp(28px,2.85vw,48px);line-height:1.1;font-weight:700;letter-spacing:-0.02em;margin:24px 0 16px;color:#fff;}
+.qauth-copy h2 span{background:linear-gradient(90deg,#3b82f6,#5b6cf9 45%,#8b5cf6);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.qauth-copy p{color:#b8c1e3;font-size:16px;line-height:1.6;margin:0 0 24px;max-width:470px;}
+.qauth-chips{display:flex;gap:12px;flex-wrap:wrap;}
+.qauth-chips i{font-style:normal;padding:9px 16px;border-radius:12px;font-weight:600;font-size:14px;color:#e8ecff;background:rgba(16,24,72,0.78);border:1px solid rgba(129,140,248,0.55);box-shadow:0 0 22px -6px rgba(91,92,246,.7);}
+.qauth-chips i.g{border-color:rgba(52,211,153,0.55);box-shadow:0 0 22px -6px rgba(16,185,129,.6);}
+.qauth-holo{position:absolute;right:-8%;top:6%;width:70%;max-width:none;opacity:.55;pointer-events:none;z-index:0;filter:drop-shadow(0 0 16px rgba(59,130,246,.4));-webkit-mask-image:radial-gradient(70% 70% at 60% 40%,#000 45%,transparent 80%);mask-image:radial-gradient(70% 70% at 60% 40%,#000 45%,transparent 80%);}
+.qauth-arc{position:absolute;left:-25%;width:150%;height:70%;top:82%;border-radius:50%;pointer-events:none;z-index:1;border-top:1.5px solid rgba(225,220,255,.85);
+  box-shadow:0 -18px 70px 6px rgba(124,92,255,.65),inset 0 14px 40px rgba(167,139,250,.7);background:radial-gradient(50% 30% at 50% 0%, rgba(124,92,255,.5), transparent 70%);}
+.qauth-side{display:flex;align-items:center;justify-content:center;padding:32px 16px;}
+.qauth .qauth-card{background:linear-gradient(180deg,rgba(17,24,64,.88),rgba(10,15,44,.88)) !important;border:1px solid rgba(129,140,248,.3);
+  box-shadow:0 0 0 6px rgba(99,102,241,.06),0 30px 80px -30px rgba(91,92,246,.7) !important;backdrop-filter:blur(10px);color:#e8ecff;}
+.qauth .qauth-card .text-slate-900{color:#fff !important;} .qauth .qauth-card .text-blue-700{color:#4f8ff7 !important;}
+.qauth .qauth-card .text-slate-500,.qauth .qauth-card .text-slate-400{color:#a9b3d6 !important;}
+.qauth .qauth-card input,.qauth .qauth-card select{background:rgba(6,10,34,.85) !important;border:1px solid rgba(129,140,248,.3) !important;color:#f4f6ff !important;border-radius:10px !important;padding:12px 14px !important;}
+.qauth .qauth-card input::placeholder{color:#7480a8 !important;}
+.qauth .qauth-card input:focus,.qauth .qauth-card select:focus{outline:none;border-color:#7c5cff !important;box-shadow:0 0 0 3px rgba(124,92,255,.3);}
+.qauth .qauth-card .bg-slate-100{background:rgba(6,10,34,.7) !important;border:1px solid rgba(129,140,248,.2);}
+.qauth .qauth-card .bg-slate-100 button.bg-white{background:linear-gradient(90deg,#5b5cf6,#8b5cf6) !important;color:#fff !important;box-shadow:0 8px 20px -10px rgba(124,92,255,.9) !important;}
+.qauth .qauth-card button.bg-slate-900{background:linear-gradient(90deg,#5b5cf6,#7c5cff 55%,#8b5cf6) !important;color:#fff !important;border-radius:12px !important;padding-top:13px !important;padding-bottom:13px !important;box-shadow:0 10px 30px -10px rgba(124,92,255,.85);}
+.qauth .qauth-card .bg-slate-50{background:rgba(6,10,34,.6) !important;border-color:rgba(129,140,248,.18) !important;color:#a9b3d6 !important;}
+.qauth .qauth-card select{color:#c3cae6 !important;} .qauth .qauth-card select option{background:#0b1233;color:#f4f6ff;}
+@media (max-width:900px){.qauth{grid-template-columns:1fr;}.qauth-art{border-right:0;border-bottom:1px solid rgba(129,140,248,.14);padding:24px 18px 40px;min-height:0;}
+  .qauth-copy{padding:26px 0 6px;}.qauth-copy h2{font-size:30px;}.qauth-copy p{display:none;}.qauth-arc{top:88%;}.qauth-holo{width:90%;opacity:.35;}}
 </style>
 <script>
   // Launch promotion window. One timestamp, read by the marketing page and by
@@ -6602,10 +6637,24 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-700 px-4">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
+    <div className="qauth">
+      {/* Brand side (2026-10-29): the same look as the home page -- deep navy, the
+          holographic building, the purple horizon and the BOQ / Pricing / 3D chips. */}
+      <div className="qauth-art" aria-hidden="true">
+        <div className="qauth-brand"><img src="icon192.png" alt="" width="44" height="44" /><div><b>Quantora <span>Engineering</span></b><small>Powered by Quantora AI</small></div></div>
+        <div className="qauth-copy">
+          <div className="qauth-pill">Engineering Workflow Platform</div>
+          <h2>From Drawings to<br /><span>Design, BOQ, Pricing &amp; 3D.</span></h2>
+          <p>One AI-powered engineering platform for take-off, BOQ, shop drawings and 3D coordination.</p>
+          <div className="qauth-chips"><i>BOQ</i><i>Pricing</i><i className="g">3D</i></div>
+        </div>
+        <img className="qauth-holo" src="showcase/hero-holo.webp" alt="" />
+        <div className="qauth-arc"></div>
+      </div>
+      <div className="qauth-side">
+      <div className="qauth-card w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
         <div className="mb-6 text-center">
-          {onBack && <button onClick={onBack} className="text-xs text-slate-400 hover:text-slate-700 mb-3">&larr; Back to home</button>}
+          {onBack && <button onClick={onBack} className="qauth-back text-xs text-slate-400 hover:text-slate-700 mb-3">&larr; Back to home</button>}
           <div className="text-2xl font-bold text-slate-900">Quantora <span className="text-blue-700">Engineering</span></div>
           <div className="text-sm text-slate-500 mt-1">AI Quantity Surveyor · Design Engineer · MEP Consultant · Estimator · Procurement</div>
         </div>
@@ -6746,6 +6795,7 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
         <div className="text-[10px] text-slate-400 text-center mt-4">
           Build {typeof window !== "undefined" && window.QUANTORA_BUILD ? window.QUANTORA_BUILD : "unknown"}
         </div>
+      </div>
       </div>
     </div>
   );
