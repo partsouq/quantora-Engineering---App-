@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-29.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -528,13 +528,38 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   .m3d-points{display:flex;flex-wrap:wrap;justify-content:center;gap:10px 22px;margin-top:22px;color:var(--text-dim);font-size:14px;}
   .m3d-points b{color:#fff;font-weight:700;}
   @media (max-width:860px){.m3d-grid{grid-template-columns:1fr;}}
-  /* the drawing set as moving cards: 3D, markup, shop drawings, schematics, civil (2026-10-29) */
-  .m3d-slide{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;}
-  .m3d-sl{align-self:stretch;height:auto;}
-  .m3d-sl .m3d-img{position:relative;aspect-ratio:4/3;background:#fff;flex:none;overflow:hidden;}
-  .m3d-sl .m3d-img img{position:absolute;inset:8px;width:calc(100% - 16px);height:calc(100% - 16px);object-fit:contain;min-height:0;flex:none;}
-  .m3d-sl figcaption{flex:1;min-height:64px;line-height:1.45;}
-  .m3d-tag{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd;background:rgba(59,130,246,0.14);border-radius:99px;padding:2px 8px;margin-right:8px;vertical-align:1px;}
+  /* the drawing set on one stage, one slide at a time with a 3D turn, like the email signature (2026-10-29) */
+  .m3d-wrap{display:grid;grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr);gap:clamp(28px,4vw,60px);align-items:center;}
+  .m3d-copy .kicker{justify-content:flex-start;text-align:left;}
+  .m3d-copy .sectitle{text-align:left;}
+  .m3d-copy p.secsub{text-align:left;margin:0 0 18px;max-width:none;}
+  .m3d-list{list-style:none;margin:0 0 24px;padding:0;display:grid;gap:10px;color:var(--text-dim);font-size:14.5px;}
+  .m3d-list li{position:relative;padding-left:26px;}
+  .m3d-list li:before{content:"";position:absolute;left:0;top:6px;width:14px;height:14px;border-radius:5px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);box-shadow:0 0 0 3px rgba(99,102,241,.18);}
+  .m3d-list b{color:#fff;}
+  .m3d-stage{position:relative;}
+  .m3d-frame{position:relative;aspect-ratio:16/10;perspective:1300px;border-radius:18px;overflow:hidden;}
+  .m3d-s{position:absolute;inset:0;margin:0;border-radius:18px;overflow:hidden;background:#fff;box-shadow:0 30px 60px rgba(0,0,0,.5),0 0 0 1px rgba(147,197,253,.35);
+    transform:translateX(100%) rotateY(40deg) translateZ(-200px);opacity:0;transition:transform .75s cubic-bezier(.65,0,.35,1),opacity .75s ease;backface-visibility:hidden;}
+  .m3d-s.on{transform:none;opacity:1;z-index:2;}
+  .m3d-s.out{transform:translateX(-100%) rotateY(-40deg) translateZ(-200px);opacity:.35;z-index:1;}
+  .m3d-ph{position:absolute;inset:0;padding:54px 14px 14px;display:flex;align-items:center;justify-content:center;}
+  .m3d-ph img{width:100%;height:100%;object-fit:contain;display:block;}
+  .m3d-cap{position:absolute;left:14px;top:14px;background:rgba(7,16,38,.92);color:#fff;border-radius:10px;padding:8px 12px;font-size:14px;font-weight:700;display:flex;gap:8px;align-items:center;max-width:calc(100% - 28px);}
+  .m3d-cap em{font-style:normal;background:#2563eb;border-radius:6px;padding:2px 7px;font-size:11px;letter-spacing:.04em;}
+  .m3d-chip{position:absolute;right:14px;bottom:14px;background:rgba(7,16,38,.92);color:#fff;border-radius:10px;padding:8px 13px;line-height:1.15;}
+  .m3d-chip small{display:block;font-size:11px;color:#9fb3d9;}.m3d-chip b{font-size:22px;}
+  .m3d-s-boq{background:#0d1730;}
+  .m3d-boq{position:absolute;inset:0;padding:66px 22px 20px;display:grid;grid-template-columns:1fr 1fr;column-gap:20px;align-content:center;}
+  .m3d-br{display:flex;justify-content:space-between;align-items:center;padding:12px 6px;border-bottom:1px solid #22305a;color:#e6edff;font-size:15px;}
+  .m3d-br span{display:flex;align-items:center;gap:10px;}.m3d-br i{width:12px;height:12px;border-radius:4px;display:inline-block;}
+  .m3d-br b{color:#4ade80;font-size:13px;white-space:nowrap;}
+  .m3d-dots{display:flex;justify-content:center;gap:8px;margin-top:14px;}
+  .m3d-dots button{width:8px;height:8px;border-radius:9px;border:0;padding:0;background:rgba(147,197,253,.35);cursor:pointer;transition:width .3s ease,background .3s ease;}
+  .m3d-dots button.on{width:26px;background:#60a5fa;}
+  @media (max-width:960px){.m3d-wrap{grid-template-columns:1fr;}}
+  @media (max-width:560px){.m3d-frame{aspect-ratio:4/3;}.m3d-boq{grid-template-columns:1fr;padding-top:58px;}.m3d-br{padding:7px 4px;font-size:13.5px;}.m3d-cap{font-size:12.5px;}.m3d-chip b{font-size:18px;}}
+  @media (prefers-reduced-motion:reduce){.m3d-s{transition:opacity .3s ease;transform:none;}.m3d-s.out{transform:none;}}
 
   /* ---- 3D cards, moving card sliders, GF plan to 3D (2026-10-25) ---- */
   html:has(.quantora-landing-root),html:has(.quantora-landing-root) body{overflow-x:clip !important;overflow-y:visible !important;}
@@ -977,32 +1002,42 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
 </header>
 
 <section id="model3d">
-  <div class="wrap">
+  <div class="wrap m3d-wrap">
+    <div class="m3d-copy">
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>AI Draftsman &middot; Shop Drawings &amp; 3D</div>
     <h2 class="sectitle">Your Plans In. Shop Drawings And A 3D Model Out.</h2>
-    <p class="secsub">Upload the architectural plans and the draftsman designs every system you choose &mdash; fire, mechanical, plumbing, electrical and ELV &mdash; then delivers the shop drawings, riser schematics, take-off markup drawings and civil layouts, with a 3D coordination model of all systems on every floor, to your country&rsquo;s authority rules and the project specification.</p>
-    <div class="m3d-slide">
-      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="3d-building.jpg" alt="3D coordination model of a five-storey building with every MEP and ELV system" width="1240" height="1290" loading="lazy"/></div>
-        <figcaption><span class="m3d-tag">3D model</span>Whole building, every floor and every system</figcaption></figure>
-      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="3d-floor-detail.jpg" alt="3D floor detail with chillers, air handling unit, ducts, pipes and cable trays at their real heights" width="1600" height="947" loading="lazy"/></div>
-        <figcaption><span class="m3d-tag">3D model</span>Floor detail: chillers, AHU, ducts, pipes and trays at real heights</figcaption></figure>
-      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/3d-floor-view.jpg" alt="3D coordination view of one floor with ducts, pipes, devices and plant" width="1065" height="820" loading="lazy"/></div>
-        <figcaption><span class="m3d-tag">3D view</span>Coordination view of one floor, in the drawing set</figcaption></figure>
-      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/takeoff-markup.jpg" alt="Take-off markup drawing with every measured duct and device highlighted and numbered" width="1024" height="636" loading="lazy"/></div>
-        <figcaption><span class="m3d-tag">Markup</span>Take-off markup: every item highlighted and numbered against the BOQ</figcaption></figure>
-      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/ac-layout.jpg" alt="AC layout shop drawing with fan coil units, diffusers, dampers, legend and schedules" width="1100" height="793" loading="lazy"/></div>
-        <figcaption><span class="m3d-tag">Shop drawing</span>AC layout: FCUs, diffusers, dampers, legend and schedules</figcaption></figure>
-      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/cctv-layout.jpg" alt="CCTV layout shop drawing showing each camera and its field of view" width="1005" height="820" loading="lazy"/></div>
-        <figcaption><span class="m3d-tag">Shop drawing</span>CCTV layout with every camera view and coverage</figcaption></figure>
-      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/cctv-schematic.jpg" alt="CCTV riser schematic from cameras to racks and recorders, floor by floor" width="1011" height="325" loading="lazy"/></div>
-        <figcaption><span class="m3d-tag">Schematic</span>CCTV riser schematic, floor by floor to the head-end</figcaption></figure>
-      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/ict-schematic.jpg" alt="ICT structured cabling riser schematic with IDFs and fibre backbone" width="781" height="325" loading="lazy"/></div>
-        <figcaption><span class="m3d-tag">Schematic</span>ICT riser: IDFs, fibre backbone and outlets</figcaption></figure>
-      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/partition-layout.jpg" alt="Partition layout drawing with each partition type tagged and colour coded" width="1100" height="793" loading="lazy"/></div>
-        <figcaption><span class="m3d-tag">Civil drawing</span>Partition layout: every type, height and location tagged</figcaption></figure>
+    <p class="secsub">Upload the architectural plans and AI Quantora Draftsman designs every system you choose &mdash; fire, mechanical, plumbing, electrical, ELV and civil &mdash; then issues the shop drawings, riser schematics, take-off markup drawings and a 3D coordination model, to your country&rsquo;s authority rules and the project specification.</p>
+    <ul class="m3d-list">
+      <li><b>3D model</b> of every floor and every system, downloadable as IFC and .glb</li>
+      <li><b>Shop drawings and schematics</b> with reference numbers and R0 / R1 revisions</li>
+      <li><b>Markup drawing</b> with every item highlighted and numbered against the BOQ</li>
+      <li><b>Rework on consultant comments</b>, with clouds and a response sheet</li>
+    </ul>
+    <div class="hero-ctas"><a class="btn btn-lg btn-grad" href="?auth=signup">Try It Free &rarr;</a></div>
     </div>
-    <div class="m3d-points"><span><b>33</b> systems</span><span>Drawing reference numbers with <b>R0 / R1</b> revisions</span><span>Rework on <b>consultant comments</b></span><span>PDF &middot; DXF &middot; IFC &middot; 3D (.glb) &middot; BOQ</span></div>
-    <div class="hero-ctas" style="justify-content:center;margin-top:26px;"><a class="btn btn-lg btn-grad" href="?auth=signup">Try It Free &rarr;</a></div>
+    <div class="m3d-stage" aria-roledescription="carousel" aria-label="Drawings Quantora Draftsman issues">
+      <div class="m3d-frame">
+        <figure class="m3d-s on"><div class="m3d-ph"><img src="3d-building.jpg" alt="3D coordination model of a five-storey building with every MEP and ELV system" width="1240" height="1290" fetchpriority="high"/></div>
+          <figcaption class="m3d-cap"><em>3D</em>Whole building, every system in 3D</figcaption><div class="m3d-chip"><small>Systems</small><b>33</b></div></figure>
+        <figure class="m3d-s"><div class="m3d-ph"><img src="showcase/takeoff-markup.jpg" alt="Take-off markup drawing with every measured duct and device highlighted and numbered" width="1024" height="636" loading="lazy"/></div>
+          <figcaption class="m3d-cap"><em>AI</em>Take-off markup on the drawing</figcaption><div class="m3d-chip"><small>Items numbered to the BOQ</small><b>&#10003;</b></div></figure>
+        <figure class="m3d-s m3d-s-boq" aria-label="System-wise BOQ"><div class="m3d-boq"><div class="m3d-br"><span><i style="background:#14b8a6"></i>HVAC</span><b>BOQ &#10003;</b></div><div class="m3d-br"><span><i style="background:#1d4ed8"></i>Chilled water</span><b>BOQ &#10003;</b></div><div class="m3d-br"><span><i style="background:#e0a21b"></i>Electrical</span><b>BOQ &#10003;</b></div><div class="m3d-br"><span><i style="background:#d62828"></i>Fire fighting</span><b>BOQ &#10003;</b></div><div class="m3d-br"><span><i style="background:#e5484d"></i>Fire alarm</span><b>BOQ &#10003;</b></div><div class="m3d-br"><span><i style="background:#22c55e"></i>Plumbing &amp; drainage</span><b>BOQ &#10003;</b></div><div class="m3d-br"><span><i style="background:#8b5cf6"></i>ELV</span><b>BOQ &#10003;</b></div><div class="m3d-br"><span><i style="background:#a8a29e"></i>Civil</span><b>BOQ &#10003;</b></div></div>
+          <figcaption class="m3d-cap"><em>BOQ</em>System-wise BOQ, with the marked-up drawing</figcaption></figure>
+        <figure class="m3d-s"><div class="m3d-ph"><img src="showcase/ac-layout.jpg" alt="AC layout shop drawing with fan coil units, diffusers, dampers, legend and schedules" width="1100" height="793" loading="lazy"/></div>
+          <figcaption class="m3d-cap"><em>SHOP</em>AC layout shop drawing</figcaption><div class="m3d-chip"><small>Drawings in the set</small><b>50</b></div></figure>
+        <figure class="m3d-s"><div class="m3d-ph"><img src="showcase/cctv-layout.jpg" alt="CCTV layout shop drawing showing each camera and its field of view" width="1005" height="820" loading="lazy"/></div>
+          <figcaption class="m3d-cap"><em>ELV</em>CCTV layout with camera coverage</figcaption><div class="m3d-chip"><small>Cameras placed</small><b>61</b></div></figure>
+        <figure class="m3d-s"><div class="m3d-ph"><img src="showcase/cctv-schematic.jpg" alt="CCTV riser schematic from cameras to racks and recorders, floor by floor" width="1011" height="325" loading="lazy"/></div>
+          <figcaption class="m3d-cap"><em>SCHEMATIC</em>CCTV riser schematic</figcaption><div class="m3d-chip"><small>Floors</small><b>5</b></div></figure>
+        <figure class="m3d-s"><div class="m3d-ph"><img src="showcase/ict-schematic.jpg" alt="ICT structured cabling riser schematic with IDFs and fibre backbone" width="781" height="325" loading="lazy"/></div>
+          <figcaption class="m3d-cap"><em>SCHEMATIC</em>ICT riser: IDFs and fibre backbone</figcaption><div class="m3d-chip"><small>Revisions</small><b>R0 / R1</b></div></figure>
+        <figure class="m3d-s"><div class="m3d-ph"><img src="showcase/partition-layout.jpg" alt="Partition layout drawing with each partition type tagged and colour coded" width="1100" height="793" loading="lazy"/></div>
+          <figcaption class="m3d-cap"><em>CIVIL</em>Partition layout, every type tagged</figcaption><div class="m3d-chip"><small>Measured to</small><b>POMI</b></div></figure>
+        <figure class="m3d-s"><div class="m3d-ph"><img src="3d-floor-detail.jpg" alt="3D floor detail with chillers, air handling unit, ducts, pipes and cable trays at their real heights" width="1600" height="947" loading="lazy"/></div>
+          <figcaption class="m3d-cap"><em>3D</em>Floor detail at real heights</figcaption><div class="m3d-chip"><small>Devices placed</small><b>3,767</b></div></figure>
+      </div>
+      <div class="m3d-dots"><button type="button" class="on" aria-label="Show slide 1"></button><button type="button" class="" aria-label="Show slide 2"></button><button type="button" class="" aria-label="Show slide 3"></button><button type="button" class="" aria-label="Show slide 4"></button><button type="button" class="" aria-label="Show slide 5"></button><button type="button" class="" aria-label="Show slide 6"></button><button type="button" class="" aria-label="Show slide 7"></button><button type="button" class="" aria-label="Show slide 8"></button><button type="button" class="" aria-label="Show slide 9"></button></div>
+    </div>
   </div>
 </section>
 
@@ -5971,7 +6006,7 @@ function LandingPage({ onGetStarted }) {
 
     // 1. Moving card sliders: the AI team cards and the industry panels glide
     //    sideways in a loop; hover (or touch) pauses them.
-    [["#model3d .m3d-slide", 70, 420, false], ["#capabilities .team-grid", 52, 300, false], ["#industries .wrap > div[style*='grid']", 44, 280, true]].forEach(([sel, dur, w, rev]) => {
+    [["#capabilities .team-grid", 52, 300, false], ["#industries .wrap > div[style*='grid']", 44, 280, true]].forEach(([sel, dur, w, rev]) => {
       const grid = root.querySelector(sel);
       if (!grid || grid.dataset.qsl) return;
       grid.dataset.qsl = "1";
@@ -5987,6 +6022,30 @@ function LandingPage({ onGetStarted }) {
       box.addEventListener("touchstart", hold, { passive: true }); box.addEventListener("touchend", go);
       offs.push(() => { items.forEach(el => grid.appendChild(el)); box.remove(); grid.style.display = ""; delete grid.dataset.qsl; });
     });
+
+    // 1b. The drawing-set stage (#model3d): one slide at a time with a 3D turn, every 3.5 s,
+    //     paused while pointed at or touched; dots and a swipe change the slide (2026-10-29).
+    (() => {
+      const st = root.querySelector("#model3d .m3d-stage");
+      if (!st) return;
+      const sl = Array.from(st.querySelectorAll(".m3d-s")), dots = Array.from(st.querySelectorAll(".m3d-dots button"));
+      if (sl.length < 2) return;
+      let k = 0, hold = false, x0 = null;
+      const show = n => {
+        n = (n + sl.length) % sl.length;
+        if (n === k) return;
+        sl.forEach((e, i) => { e.classList.toggle("on", i === n); e.classList.toggle("out", i === k); if (i !== n && i !== k) e.classList.remove("out"); });
+        dots.forEach((d, i) => d.classList.toggle("on", i === n));
+        k = n;
+      };
+      const tick = setInterval(() => { if (!hold && !document.hidden && !reduce) show(k + 1); }, 3500);
+      const on = (el, ev, fn, o) => { el.addEventListener(ev, fn, o); offs.push(() => el.removeEventListener(ev, fn, o)); };
+      dots.forEach((d, i) => on(d, "click", () => show(i)));
+      on(st, "mouseenter", () => { hold = true; }); on(st, "mouseleave", () => { hold = false; });
+      on(st, "touchstart", e => { hold = true; x0 = e.touches[0].clientX; }, { passive: true });
+      on(st, "touchend", e => { const dx = (e.changedTouches[0].clientX - (x0 == null ? 0 : x0)); if (Math.abs(dx) > 40) show(k + (dx < 0 ? 1 : -1)); x0 = null; setTimeout(() => { hold = false; }, 2500); });
+      offs.push(() => clearInterval(tick));
+    })();
 
     // 2. 3D tilt with a soft light on every framed box (mouse only).
     if (fine && !reduce) {
