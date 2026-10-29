@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-29.19"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.20"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25488,7 +25488,7 @@ function CountryPrompt() {
 // and city their company works from before using the platform. It drives the
 // authority rules, codes and market prices they are shown, and tells the admin
 // team where each customer is. Platform admins are not asked.
-function LocationGate({ isPlatformAdmin, userId }) {
+function LocationGate({ isPlatformAdmin, userId, onNeed }) {
   const [need, setNeed] = useState(false);
   const [hasCity, setHasCity] = useState(true);
   const [locs, setLocs] = useState([]);
@@ -25532,6 +25532,7 @@ function LocationGate({ isPlatformAdmin, userId }) {
     return () => { alive = false; };
   }, [userId, isPlatformAdmin]);
 
+  useEffect(() => { if (onNeed) onNeed(!!need && !isPlatformAdmin); }, [need, isPlatformAdmin]);
   if (!need || isPlatformAdmin) return null;
 
   const countries = [];
@@ -33198,6 +33199,7 @@ function App() {
   // Step feedback: steps finished in this visit wait here until the user leaves the page.
   const [fbQueue, setFbQueue] = useState([]);
   const [fbOpen, setFbOpen] = useState(null);
+  const [countryGate, setCountryGate] = useState(false);
   const [fbTrial, setFbTrial] = useState(null);       // null = not known yet
 
   useEffect(() => {
@@ -33243,7 +33245,9 @@ function App() {
         if (!prof || !prof.company_id) return;
         const { data: proj } = await sb.from("projects").select("id").eq("company_id", prof.company_id).limit(1);
         if (!proj || !proj.length || !alive) return;
-        setFbQueue(qs => qs.some(x => qFbKey(x) === qFbKey(it)) ? qs : [it].concat(qs));
+        // asked straight after sign-in (2026-10-29), not only on the next page change: people who
+        // finish and close the tab were never asked.
+        setTimeout(() => { if (alive) setFbOpen(cur => cur || it); }, 2500);
       } catch (e) { console.error("overall rating check failed (non-fatal):", e); }
     })();
     return () => { alive = false; };
@@ -33431,7 +33435,7 @@ function App() {
 
   return (
     <div className={`min-h-screen ${view && view.name === "admin" ? "" : "qx"}`}>
-      <LocationGate isPlatformAdmin={isPlatformAdmin} userId={session.user.id} />
+      <LocationGate isPlatformAdmin={isPlatformAdmin} userId={session.user.id} onNeed={setCountryGate} />
       <DuctSizesHost />
       <nav className="qtr-topnav bg-white border-b px-6 py-3 flex items-center justify-between sticky top-0 z-10">
         {/* The real brand mark. This was previously the building-construction
@@ -33509,7 +33513,8 @@ function App() {
         }}>Help</button>
       <PulseBar />
       <SupportModal open={!!supportCtx} initial={supportCtx} onClose={()=>setSupportCtx(null)} />
-      <StepFeedbackModal item={fbOpen} mandatory={true} onDone={()=>setFbOpen(null)} />
+      {/* the location question comes first; the rating waits behind it */}
+      <StepFeedbackModal item={countryGate ? null : fbOpen} mandatory={true} onDone={()=>setFbOpen(null)} />
     </div>
   );
 }
