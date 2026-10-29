@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-29.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -1183,13 +1183,13 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
 
     <div style="max-width:1000px;margin:0 auto 54px;">
       <div style="position:relative;border-radius:16px;overflow:hidden;border:1px solid rgba(148,163,184,0.18);box-shadow:0 24px 70px rgba(0,0,0,0.55);background:#070b14;">
-        <video id="qtour" muted loop playsinline preload="none" poster="quantoraintroposter.jpg" style="display:block;width:100%;height:auto;">
+        <video id="qtour" muted loop playsinline preload="none" poster="platformtourposter.jpg" style="display:block;width:100%;height:auto;">
           <!-- Single H.264 source, 1600x1000 native (2026-08-24). Encoded at the master
                resolution instead of downscaled to 1280: the player box is 1000 CSS px
                wide, so on a retina screen a 1280-wide file was being upscaled and every
                label in the recording went soft. There is deliberately NO <source>
                element and no preload here -- the source is attached at runtime by the
-               qtour effect in LandingPage(), so the 11 MB request never sits on the
+               qtour effect in LandingPage(), so the 7 MB request never sits on the
                critical path and the page paints before the video starts loading. -->
         </video>
         <button id="qtour-play" type="button" aria-label="Play the Quantora platform tour" style="position:absolute;inset:0;width:100%;height:100%;display:flex;align-items:flex-end;justify-content:center;background:rgba(3,6,14,0.24);border:0;cursor:pointer;padding:0 0 7% 0;">
@@ -1199,7 +1199,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
           </span>
         </button>
       </div>
-      <p style="text-align:center;font-size:13px;color:var(--text-dimmer);margin-top:14px;">Quantora Mall — Phase 1 · the platform from the dashboard home to the four division dashboards · 1 min 58 s · no sound · sample project data</p>
+      <p style="text-align:center;font-size:13px;color:var(--text-dimmer);margin-top:14px;">Quantora Mall · recorded on the live platform: dashboard, drawings to BOQ, BOQ export, system-wise drawings and the 3D model · 1 min 29 s · no sound</p>
     </div>
 
     <div class="steps">
@@ -5955,7 +5955,7 @@ function LandingPage({ onGetStarted }) {
       if (attached) return;
       attached = true;
       const src = document.createElement("source");
-      src.src = "quantoraintroweb.mp4";
+      src.src = "platformtour.mp4";
       src.type = "video/mp4";
       v.appendChild(src);
       v.load();
