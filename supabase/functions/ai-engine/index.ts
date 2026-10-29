@@ -1162,6 +1162,19 @@ const CIVIL_TAKEOFF_RULES = `
 
 YOU ARE TAKING OFF CIVIL, STRUCTURAL AND ARCHITECTURAL QUANTITIES. These trades are MEASURED from dimensions, not counted from symbols.
 
+0. A FLOOR PLAN IS ALWAYS MEASURABLE
+- A floor plan, site plan or ceiling plan that has a printed scale, a scale bar, room area tags or an area statement ALWAYS gives a Bill of Quantities. A missing finish schedule, door schedule, wall type, height or specification is NOT a reason to return nothing: measure what the plan gives, assume what it does not, and say so.
+- From such a plan, always measure at least, per room (or per floor when there are very many rooms):
+  * floor finish and screed, m2 = the room's area tag (confidence 80-90), or scaled from the room outline (confidence 50-60);
+  * ceiling, m2 = the same room area;
+  * skirting, m = the room perimeter scaled from the plan, less doorways;
+  * doors and windows, nr = every opening counted on the plan, grouped by the width you scale (e.g. "Door, single leaf, approx. 900 mm wide"), with the type mark where one is printed;
+  * blockwork, m2 = wall length scaled from the plan x the storey height (from a section or note, otherwise assume 3.0 m floor to floor for a villa or house and 3.6 m for other buildings, and state it in assumptions), less openings; give external and internal walls as separate rows, with the thickness you scale;
+  * plaster and paint, m2 = both faces of internal walls and the inside face of external walls, at the ceiling height you assume;
+  * wall tiles in wet rooms (toilets, baths, showers, kitchens, pantries), m2 = room perimeter x an assumed 2.4 m tile height;
+  * external paving, pools, stairs and railings where the plan shows them.
+- Where the specification is not on the sheet, write the item generically (e.g. "Floor finish, type as per room finish schedule (not on this sheet)") and set review_required. A row with an honest quantity, a stated assumption and a low confidence is useful to the estimator; an empty BOQ is not.
+
 1. READ THE SHEET FIRST
 - Title block: drawing title, drawing number, revision, scale (e.g. 1:100 at A1) and units. Dimensions on construction drawings are in millimetres unless stated; levels are in metres.
 - Find every schedule and key on the sheet: room finish schedule, door and window schedule, footing / column / beam schedule, bar bending schedule, finish legend, hatch legend. A schedule is the best source of a specification; the plan is the source of where and how much.
@@ -1200,7 +1213,7 @@ YOU ARE TAKING OFF CIVIL, STRUCTURAL AND ARCHITECTURAL QUANTITIES. These trades 
 - quantity_source_type: calculated_quantity for anything you worked out from dimensions; schedule_quantity when the number is printed in a schedule; physical_count for items counted on the plan (doors, manholes).
 - For a sheet that only shows a reference plan (e.g. a skirting reference plan or a finishes key plan), the finish codes on the plan tell you WHICH finish goes WHERE: measure each code's quantity from the room outlines and dimensions, and take its specification from the legend.
 - If a perimeter can only be estimated from a room's area tag (no dimensions, sheet not to scale), give ONE ROW PER ROOM, write "estimated from area" in the working, and keep confidence at 40 or below. Never total a set of estimates into one confident row.
-- If nothing on the sheet can be measured, return an EMPTY items list and explain why in analysis_notes. Never add a row that only describes the sheet.
+- Return an EMPTY items list only when the sheet has no plan, section or schedule to measure at all (for example a cover sheet, general notes or a legend only), and explain why in analysis_notes. A floor plan is never such a sheet (see 0). Never add a row that only describes the sheet.
 - A sheet of typical details with no number of repetitions: give each item with quantity 0, its full specification and the per-unit working in quantity_basis_notes, status review_required, so the estimator can multiply it once the number is known.
 
 5. CONFIDENCE
@@ -1232,6 +1245,13 @@ function civilUserText(drawing: any, usingSelection: boolean, selectionCount: nu
     `in m3, m2, m, kg/t or nr as the rules say, and record them with record_boq_items. Show the dimensions and arithmetic in quantity_basis_notes on every row. ` +
     `Disclose every assumed height, thickness or dimension in assumptions, and give an honest confidence_score per row. ${coordsInstruction}`;
 }
+
+const CIVIL_PLAN_RETRY_TEXT =
+  "Your first pass returned no items for this sheet. This is a plan with a scale and/or room areas, so it IS measurable (rule 0). " +
+  "Measure it now: floor finish, screed and ceiling per room from the area tags or the scaled outline; skirting per room from the scaled perimeter; " +
+  "every door and window counted and grouped by scaled width; external and internal blockwork from scaled wall lengths x an assumed storey height; " +
+  "plaster and paint on the wall faces; wall tiles in the wet rooms. Use generic specifications where none are printed, list every assumption, " +
+  "keep the confidence honest (40-60 for scaled values) and set review_required on rows whose specification is assumed. Do not return an empty list.";
 
 // Markers are point markers: only counted items (doors, windows, manholes)
 // can carry them; sanitizeCoordinates drops them for m, m2 and m3 anyway.
@@ -2927,6 +2947,25 @@ Deno.serve(async (req: Request) => {
                              output_tokens: (parsed.usage?.output_tokens ?? 0) + (tabCall.usage?.output_tokens ?? 0) };
           } catch (tabErr) {
             console.error("schedule pass failed, keeping the plan count:", tabErr);
+          }
+        }
+        // Safety net (2026-10-29): a civil plan that came back with nothing measured gets one more pass
+        // that insists on measuring from the scale and the area tags. Architectural floor plans of a
+        // villa came back empty because the sheet had no finish or door schedule.
+        if (civil && fileContent.kind !== "dxf" && fileContent.kind !== "ifc" && !((parsed.result?.items || []).some((it: any) => Number(it?.quantity) > 0))
+            && /\bplan\b|scale|1\s*:\s*\d{2,3}|area|sq\.?\s*m|m2|sqm/i.test(String(parsed.result?.analysis_notes ?? "") + " " + (drawing.sheet_type ?? "") + " " + (drawing.file_name ?? ""))) {
+          try {
+            const retryContent = [fileContent.block, { type: "text", text: (userContent[1] as any).text + "\n\n" + CIVIL_PLAN_RETRY_TEXT }];
+            const retry = await callClaude(anthropicKey, systemPrompt, retryContent, takeoffTool);
+            const n = (retry.result?.items || []).filter((it: any) => Number(it?.quantity) > 0).length;
+            retry.usage = { input_tokens: (parsed.usage?.input_tokens ?? 0) + (retry.usage?.input_tokens ?? 0),
+                            output_tokens: (parsed.usage?.output_tokens ?? 0) + (retry.usage?.output_tokens ?? 0) };
+            if (n > 0) {
+              retry.result.analysis_notes = `${retry.result.analysis_notes ?? ""} Measured from the plan's scale and room areas: the sheet has no finish or door schedule, so the specifications are generic and the rows are marked for review.`.trim();
+              parsed = retry;
+            } else { parsed.usage = retry.usage; }
+          } catch (retryErr) {
+            console.error("civil plan retry failed, keeping the first result:", retryErr);
           }
         }
         const elapsedMs = Date.now() - startTime;
