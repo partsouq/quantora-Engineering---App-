@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-29.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -528,6 +528,13 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   .m3d-points{display:flex;flex-wrap:wrap;justify-content:center;gap:10px 22px;margin-top:22px;color:var(--text-dim);font-size:14px;}
   .m3d-points b{color:#fff;font-weight:700;}
   @media (max-width:860px){.m3d-grid{grid-template-columns:1fr;}}
+  /* the drawing set as moving cards: 3D, markup, shop drawings, schematics, civil (2026-10-29) */
+  .m3d-slide{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;}
+  .m3d-sl{align-self:stretch;height:auto;}
+  .m3d-sl .m3d-img{position:relative;aspect-ratio:4/3;background:#fff;flex:none;overflow:hidden;}
+  .m3d-sl .m3d-img img{position:absolute;inset:8px;width:calc(100% - 16px);height:calc(100% - 16px);object-fit:contain;min-height:0;flex:none;}
+  .m3d-sl figcaption{flex:1;min-height:64px;line-height:1.45;}
+  .m3d-tag{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd;background:rgba(59,130,246,0.14);border-radius:99px;padding:2px 8px;margin-right:8px;vertical-align:1px;}
 
   /* ---- 3D cards, moving card sliders, GF plan to 3D (2026-10-25) ---- */
   html:has(.quantora-landing-root),html:has(.quantora-landing-root) body{overflow-x:clip !important;overflow-y:visible !important;}
@@ -973,14 +980,28 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   <div class="wrap">
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>AI Draftsman &middot; Shop Drawings &amp; 3D</div>
     <h2 class="sectitle">Your Plans In. Shop Drawings And A 3D Model Out.</h2>
-    <p class="secsub">Upload the architectural plans and the draftsman designs every system you choose &mdash; fire, mechanical, plumbing, electrical and ELV &mdash; then delivers the shop drawings with a 3D coordination model of all systems on every floor.</p>
-    <div class="m3d-grid">
-      <figure class="m3d-card"><img src="3d-building.jpg" alt="3D coordination model of a five-storey building with all MEP and ELV systems" width="1240" height="1290" fetchpriority="high"/>
-        <figcaption>Whole building &mdash; every floor, every system</figcaption></figure>
-      <figure class="m3d-card"><img src="3d-floor-detail.jpg" alt="3D detail of one floor with chillers, air handling unit, ducts, pipes and cable trays" width="1600" height="947" loading="lazy"/>
-        <figcaption>Floor detail &mdash; chillers, AHU, ducts, pipes and cable trays at their real heights</figcaption></figure>
+    <p class="secsub">Upload the architectural plans and the draftsman designs every system you choose &mdash; fire, mechanical, plumbing, electrical and ELV &mdash; then delivers the shop drawings, riser schematics, take-off markup drawings and civil layouts, with a 3D coordination model of all systems on every floor, to your country&rsquo;s authority rules and the project specification.</p>
+    <div class="m3d-slide">
+      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="3d-building.jpg" alt="3D coordination model of a five-storey building with every MEP and ELV system" width="1240" height="1290" loading="lazy"/></div>
+        <figcaption><span class="m3d-tag">3D model</span>Whole building, every floor and every system</figcaption></figure>
+      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="3d-floor-detail.jpg" alt="3D floor detail with chillers, air handling unit, ducts, pipes and cable trays at their real heights" width="1600" height="947" loading="lazy"/></div>
+        <figcaption><span class="m3d-tag">3D model</span>Floor detail: chillers, AHU, ducts, pipes and trays at real heights</figcaption></figure>
+      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/3d-floor-view.jpg" alt="3D coordination view of one floor with ducts, pipes, devices and plant" width="1065" height="820" loading="lazy"/></div>
+        <figcaption><span class="m3d-tag">3D view</span>Coordination view of one floor, in the drawing set</figcaption></figure>
+      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/takeoff-markup.jpg" alt="Take-off markup drawing with every measured duct and device highlighted and numbered" width="1024" height="636" loading="lazy"/></div>
+        <figcaption><span class="m3d-tag">Markup</span>Take-off markup: every item highlighted and numbered against the BOQ</figcaption></figure>
+      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/ac-layout.jpg" alt="AC layout shop drawing with fan coil units, diffusers, dampers, legend and schedules" width="1100" height="793" loading="lazy"/></div>
+        <figcaption><span class="m3d-tag">Shop drawing</span>AC layout: FCUs, diffusers, dampers, legend and schedules</figcaption></figure>
+      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/cctv-layout.jpg" alt="CCTV layout shop drawing showing each camera and its field of view" width="1005" height="820" loading="lazy"/></div>
+        <figcaption><span class="m3d-tag">Shop drawing</span>CCTV layout with every camera view and coverage</figcaption></figure>
+      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/cctv-schematic.jpg" alt="CCTV riser schematic from cameras to racks and recorders, floor by floor" width="1011" height="325" loading="lazy"/></div>
+        <figcaption><span class="m3d-tag">Schematic</span>CCTV riser schematic, floor by floor to the head-end</figcaption></figure>
+      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/ict-schematic.jpg" alt="ICT structured cabling riser schematic with IDFs and fibre backbone" width="781" height="325" loading="lazy"/></div>
+        <figcaption><span class="m3d-tag">Schematic</span>ICT riser: IDFs, fibre backbone and outlets</figcaption></figure>
+      <figure class="m3d-card m3d-sl"><div class="m3d-img"><img src="showcase/partition-layout.jpg" alt="Partition layout drawing with each partition type tagged and colour coded" width="1100" height="793" loading="lazy"/></div>
+        <figcaption><span class="m3d-tag">Civil drawing</span>Partition layout: every type, height and location tagged</figcaption></figure>
     </div>
-    <div class="m3d-points"><span><b>33</b> systems</span><span>Drawing reference numbers with <b>R0 / R1</b> revisions</span><span>Rework on <b>consultant comments</b></span><span>PDF &middot; DXF &middot; IFC &middot; BOQ</span></div>
+    <div class="m3d-points"><span><b>33</b> systems</span><span>Drawing reference numbers with <b>R0 / R1</b> revisions</span><span>Rework on <b>consultant comments</b></span><span>PDF &middot; DXF &middot; IFC &middot; 3D (.glb) &middot; BOQ</span></div>
     <div class="hero-ctas" style="justify-content:center;margin-top:26px;"><a class="btn btn-lg btn-grad" href="?auth=signup">Try It Free &rarr;</a></div>
   </div>
 </section>
@@ -5950,7 +5971,7 @@ function LandingPage({ onGetStarted }) {
 
     // 1. Moving card sliders: the AI team cards and the industry panels glide
     //    sideways in a loop; hover (or touch) pauses them.
-    [["#capabilities .team-grid", 52, 300, false], ["#industries .wrap > div[style*='grid']", 44, 280, true]].forEach(([sel, dur, w, rev]) => {
+    [["#model3d .m3d-slide", 70, 420, false], ["#capabilities .team-grid", 52, 300, false], ["#industries .wrap > div[style*='grid']", 44, 280, true]].forEach(([sel, dur, w, rev]) => {
       const grid = root.querySelector(sel);
       if (!grid || grid.dataset.qsl) return;
       grid.dataset.qsl = "1";
