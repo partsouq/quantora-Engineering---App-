@@ -2,13 +2,13 @@
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MEP Take-Off from PDF Drawings — A Working Method | Quantora Engineering</title>
-<meta name="description" content="Why MEP take-off is harder than architectural take-off, a working order for processing a PDF drawing set, how to state the basis of derived quantities, and where estimates most often lose money." />
+<meta name="description" content="MEP drawing take-off and BOQ from PDF drawings: why MEP is harder than architectural take-off, a working order for a drawing set, how to state derived quantities, and where estimates lose money." />
 <meta name="robots" content="index, follow" />
 <link rel="canonical" href="https://quantoraengineering.com/meptakeoff.html" />
 <meta property="og:type" content="article" />
 <meta property="og:site_name" content="Quantora Engineering" />
 <meta property="og:title" content="MEP Take-Off from PDF Drawings — A Working Method | Quantora Engineering" />
-<meta property="og:description" content="Why MEP take-off is harder than architectural take-off, a working order for processing a PDF drawing set, how to state the basis of derived quantities, and where estimates most often lose money." />
+<meta property="og:description" content="MEP drawing take-off and BOQ from PDF drawings: why MEP is harder than architectural take-off, a working order for a drawing set, how to state derived quantities, and where estimates lose money." />
 <meta property="og:url" content="https://quantoraengineering.com/meptakeoff.html" />
 <meta property="og:image" content="https://quantoraengineering.com/poster.jpg" />
 <meta name="twitter:card" content="summary_large_image" />
@@ -52,6 +52,7 @@ th{color:var(--dimmer);font-size:11px;letter-spacing:.08em;text-transform:upperc
 .related a{display:block;margin-bottom:10px;font-size:15.5px}
 footer{border-top:1px solid var(--line);padding:26px 24px;text-align:center;color:var(--dimmer);font-size:13px}
 footer a{color:var(--dim);text-decoration:none;margin:0 10px}
+@media (max-width:640px){.nav{display:flex;flex-wrap:wrap;gap:4px 14px}.nav a{margin-left:0}table{display:block;overflow-x:auto;max-width:100%}footer div{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 0}}
 </style></head>
 <body>
 <div class="top"><div class="in">
@@ -127,12 +128,27 @@ figures are kept as a separate cross-check rather than being mixed into the tota
 <p>It is a fast first pass by a tireless estimator, not a replacement for your judgement. You review it, and
 the reasoning is in front of you while you do.</p>
 
+<h2>Getting an MEP drawing BOQ in Quantora</h2>
+<p>Upload the MEP drawings &mdash; HVAC, chilled water, plumbing and drainage, fire fighting, electrical and ELV
+layouts &mdash; and choose the systems to measure. Quantora returns one MEP BOQ for all of them:</p>
+<ul>
+<li><strong>HVAC:</strong> ducts by size, measured along the route, with the height from the drawing or the
+specification; diffusers and grilles by neck size; fire and volume control dampers; fan coil units and AHUs</li>
+<li><strong>Piping:</strong> chilled water, water supply, drainage and fire fighting pipe by diameter, with valves
+and fittings</li>
+<li><strong>Electrical and ELV:</strong> fittings, outlets and devices counted, cable and containment derived from the
+routes, with the basis on each line</li>
+</ul>
+<p>Every counted item is boxed and numbered on a marked-up copy of the drawing, so the BOQ can be checked
+against the sheet in minutes. See also <a href="aitakeoffboq.html">AI take-off and BOQ from drawings</a>,
+<a href="elvdrawingboq.html">ELV drawing BOQ</a> and <a href="electricaldrawingboq.html">electrical drawing take-off</a>.</p>
+
 <div class="cta">
   <h3>Let Quantora do this from your drawings</h3>
   <p style="margin-bottom:4px">Upload a floor plan and Quantora returns a complete bill of quantities in minutes &mdash; every item counted, located and justified, with a confidence score and the reasoning behind each line.</p>
   <a class="btn" href="index.html?auth=signup">Start free &mdash; no credit card &rarr;</a>
 </div>
-<div class="related"><h3 style="margin-top:0">Related guides</h3><a href="cctvboq.html">How to prepare a CCTV BOQ from drawings</a><a href="structuredcablingboq.html">Structured cabling quantity estimation</a><a href="firealarmboq.html">Fire alarm BOQ and Civil Defence approval</a></div>
+<div class="related"><h3 style="margin-top:0">Related guides</h3><a href="aitakeoffboq.html">AI take-off and BOQ from drawings</a><a href="elvdrawingboq.html">ELV drawing BOQ</a><a href="electricaldrawingboq.html">Electrical drawing take-off and BOQ</a><a href="civildrawingboq.html">Civil drawing take-off and BOQ</a><a href="cctvboq.html">How to prepare a CCTV BOQ from drawings</a><a href="structuredcablingboq.html">Structured cabling quantity estimation</a><a href="firealarmboq.html">Fire alarm BOQ and Civil Defence approval</a></div>
 </main>
 <footer>
   <div style="margin-bottom:10px"><a href="index.html">Home</a><a href="guides.html">Guides</a><a href="terms.html">Terms</a><a href="privacy.html">Privacy</a><a href="refund.html">Refunds</a><a href="contact.html">Contact</a></div>
