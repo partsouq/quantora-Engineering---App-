@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-29.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -432,7 +432,26 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   /* HERO */
   .hero{padding:clamp(40px, 6vw, 84px) 0 40px;position:relative;overflow:hidden;}
   .hero-blueprint{position:absolute;top:-16px;right:-16px;left:auto;width:min(50vw,680px);height:auto;border-radius:16px;opacity:0.92;z-index:0;pointer-events:none;-webkit-mask-image:linear-gradient(to left, black 60%, transparent 100%);mask-image:linear-gradient(to left, black 60%, transparent 100%);}
-  .hero-grid{position:relative;z-index:1;display:grid;grid-template-columns:1fr 1.05fr;gap:clamp(32px, 5vw, 72px);align-items:start;}
+  .hero-grid{position:relative;z-index:1;display:grid;grid-template-columns:1fr 1.05fr;gap:clamp(32px, 5vw, 72px);align-items:center;}
+  /* the product tiles, dashboards and figures run the full width under the headline and the dashboard
+     picture, so the two columns above stay level (2026-10-29) */
+  .hero-strip{grid-column:1 / -1;margin-top:clamp(0px, 1vw, 12px);}
+  .hero-strip .qtr-divrow-5{grid-template-columns:repeat(5,1fr);margin-bottom:22px;}
+  .hero-strip .qtr-divrow-5 > .qtr-div,.hero-strip .qtr-divrow-5 > .qtr-div:nth-child(n+4){grid-column:auto;}
+  .hero-strip .qtr-div{padding:14px 16px;}
+  .hero-strip .qtr-div span{font-size:12px;line-height:1.5;margin-top:4px;}
+  .hero-strip-bottom{display:grid;grid-template-columns:1fr;gap:22px;}
+  .hero-strip-bottom .qtr-divrow{margin-bottom:0;}
+  .hero-strip-bottom .qx-row-label{margin:0 0 10px;}
+  /* the four figures: equal cards in an even grid, the same width as the dashboard tiles above */
+  .hero-strip-bottom .stat-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
+  .hero-strip-bottom .stat-item{padding:12px 14px;border-radius:12px;background:rgba(255,255,255,0.025);border:1px solid var(--border-soft);min-width:0;}
+  .hero-strip-bottom .stat-label{white-space:normal;}
+  @media (max-width:860px){.hero-strip-bottom .stat-row{grid-template-columns:repeat(2,minmax(0,1fr));}}
+  @media (max-width:1100px){.hero-strip .qtr-divrow-5{grid-template-columns:repeat(6,1fr);}
+    .hero-strip .qtr-divrow-5 > .qtr-div{grid-column:span 2;}.hero-strip .qtr-divrow-5 > .qtr-div:nth-child(n+4){grid-column:span 3;}}
+  @media (max-width:600px){.hero-strip .qtr-divrow-5{grid-template-columns:1fr;}
+    .hero-strip .qtr-divrow-5 > .qtr-div,.hero-strip .qtr-divrow-5 > .qtr-div:nth-child(n+4){grid-column:auto;}}
   .hero h1{font-size:clamp(30px, 3.2vw, 48px);line-height:1.14;font-weight:800;letter-spacing:-0.02em;margin:18px 0 14px;}
   .hero p.sub{color:var(--text-dim);font-size:16px;max-width:560px;margin:0 0 24px;}
   .hero-ctas{display:flex;gap:14px;margin-bottom:28px;flex-wrap:wrap;}
@@ -832,26 +851,6 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
         <a class="btn btn-lg btn-grad" href="?auth=signup">Start Free Trial →</a>
         <a class="btn btn-lg btn-outline-lg" href="#works"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z" fill="currentColor" stroke="none"/></svg> Watch How It Works</a>
       </div>
-      <div class="qtr-divrow qtr-divrow-5">
-        <a class="qtr-div" style="--qtr-a:#3987e5;" href="#works"><b>Take-off BOQ</b><span>AI counts every item from your drawings</span></a>
-        <a class="qtr-div" style="--qtr-a:#22c55e;" href="#capabilities"><b>Design BOQ</b><span>AI Quantora Engineer designs the complete system and its BOQ, with marked-up and highlighted drawings</span></a>
-        <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#capabilities"><b>Pricing BOQ</b><span>Live supplier prices, source shown</span></a>
-        <a class="qtr-div" style="--qtr-a:#818cf8;" href="#model3d"><b>Shop drawings + 3D + schematics + markup</b><span>AI Quantora Draftsman issues drawings to your country&rsquo;s authority rules and the project specification, and reworks them on consultant comments</span></a>
-        <a class="qtr-div" style="--qtr-a:#a8a29e;" href="#works"><b>Civil take-off</b><span>Measured to the drawing scale, your country&rsquo;s approved method and the project specification, with marked-up and highlighted drawings</span></a>
-      </div>
-      <div class="qx-row-label">Four dashboards, one project</div>
-      <div class="qtr-divrow">
-        <a class="qtr-div" style="--qtr-a:#3987e5;" href="#workspaces"><b>Projects</b><span>Take-off &amp; BOQ</span></a>
-        <a class="qtr-div" style="--qtr-a:#22c55e;" href="#workspaces"><b>Commercial</b><span>Tender &amp; revenue</span></a>
-        <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#workspaces"><b>Operations</b><span>Programme</span></a>
-        <a class="qtr-div" style="--qtr-a:#818cf8;" href="#draftsman"><b>Draftsman</b><span>Shop drawings</span></a>
-      </div>
-      <div class="stat-row">
-        <div class="stat-item"><div class="stat-ic" style="background:rgba(99,102,241,0.15);color:#a5b4fc;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg></div><div><div class="stat-num">5</div><div class="stat-label">Free AI Pages</div></div></div>
-        <div class="stat-item"><div class="stat-ic" style="background:rgba(168,85,247,0.15);color:#d8b4fe;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg></div><div><div class="stat-num">33</div><div class="stat-label">Systems Analyzed</div></div></div>
-        <div class="stat-item"><div class="stat-ic" style="background:rgba(34,197,94,0.15);color:#86efac;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 6h6v6"/></svg></div><div><div class="stat-num">98%</div><div class="stat-label">Avg. Confidence</div></div></div>
-        <div class="stat-item"><div class="stat-ic" style="background:rgba(59,130,246,0.15);color:#93c5fd;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg></div><div><div class="stat-num">35 min</div><div class="stat-label">Avg. Turnaround</div></div></div>
-      </div>
     </div>
 
     <div class="mock">
@@ -939,6 +938,32 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
             <div class="draw-card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--text-dimmer);gap:4px;"><svg class="icon" width="16" height="16" viewBox="0 0 24 24"><path d="M7 18a4 4 0 01-1-7.9A5 5 0 0115 7a4.5 4.5 0 011 8.9"/><path d="M12 12v7M9 15l3-3 3 3"/></svg> Upload More</div>
           </div>
         </div>
+      </div>
+    </div>
+    <div class="hero-strip">
+      <div class="qtr-divrow qtr-divrow-5">
+        <a class="qtr-div" style="--qtr-a:#3987e5;" href="#works"><b>Take-off BOQ</b><span>AI counts every item from your drawings</span></a>
+        <a class="qtr-div" style="--qtr-a:#22c55e;" href="#capabilities"><b>Design BOQ</b><span>AI Quantora Engineer designs the complete system and its BOQ, with marked-up and highlighted drawings</span></a>
+        <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#capabilities"><b>Pricing BOQ</b><span>Live supplier prices, source shown</span></a>
+        <a class="qtr-div" style="--qtr-a:#818cf8;" href="#model3d"><b>Shop drawings + 3D + schematics + markup</b><span>AI Quantora Draftsman issues drawings to your country&rsquo;s authority rules and the project specification, and reworks them on consultant comments</span></a>
+        <a class="qtr-div" style="--qtr-a:#a8a29e;" href="#works"><b>Civil take-off</b><span>Measured to the drawing scale, your country&rsquo;s approved method and the project specification, with marked-up and highlighted drawings</span></a>
+      </div>
+      <div class="hero-strip-bottom">
+        <div>
+      <div class="qx-row-label">Four dashboards, one project</div>
+      <div class="qtr-divrow">
+        <a class="qtr-div" style="--qtr-a:#3987e5;" href="#workspaces"><b>Projects</b><span>Take-off &amp; BOQ</span></a>
+        <a class="qtr-div" style="--qtr-a:#22c55e;" href="#workspaces"><b>Commercial</b><span>Tender &amp; revenue</span></a>
+        <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#workspaces"><b>Operations</b><span>Programme</span></a>
+        <a class="qtr-div" style="--qtr-a:#818cf8;" href="#draftsman"><b>Draftsman</b><span>Shop drawings</span></a>
+      </div>
+        </div>
+      <div class="stat-row">
+        <div class="stat-item"><div class="stat-ic" style="background:rgba(99,102,241,0.15);color:#a5b4fc;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg></div><div><div class="stat-num">5</div><div class="stat-label">Free AI Pages</div></div></div>
+        <div class="stat-item"><div class="stat-ic" style="background:rgba(168,85,247,0.15);color:#d8b4fe;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg></div><div><div class="stat-num">33</div><div class="stat-label">Systems Analyzed</div></div></div>
+        <div class="stat-item"><div class="stat-ic" style="background:rgba(34,197,94,0.15);color:#86efac;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 6h6v6"/></svg></div><div><div class="stat-num">98%</div><div class="stat-label">Avg. Confidence</div></div></div>
+        <div class="stat-item"><div class="stat-ic" style="background:rgba(59,130,246,0.15);color:#93c5fd;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg></div><div><div class="stat-num">35 min</div><div class="stat-label">Avg. Turnaround</div></div></div>
+      </div>
       </div>
     </div>
   </div>
