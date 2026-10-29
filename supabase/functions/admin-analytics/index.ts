@@ -103,7 +103,7 @@ Deno.serve(async (req: Request) => {
     // -----------------------------------------------------------------
     if (action === "list_companies") {
       const [{ data: companies, error }, { data: plans }] = await Promise.all([
-        admin.from("companies").select("id, name, plan, trial_end_date, bonus_drawing_pages").order("name"),
+        admin.from("companies").select("id, name, plan, trial_end_date, bonus_drawing_pages, created_at").order("created_at", { ascending: false }),   // newest customer first (2026-10-29)
         admin.from("plans").select("id, max_drawing_pages"),
       ]);
       if (error) throw error;
