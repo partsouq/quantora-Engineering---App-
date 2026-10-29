@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-29.13"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.14"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -543,6 +543,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   .works-cap{text-align:left;font-size:13px;color:var(--text-dimmer);margin:12px 2px 0;}
   .works-more{margin-top:56px;}
   @media (max-width:960px){.works-wrap .m3d-copy{order:-1;}}
+  #demo .soon-cta-grid{grid-template-columns:1fr;}
   .m3d-stage{position:relative;}
   .m3d-frame{position:relative;aspect-ratio:16/10;perspective:1300px;border-radius:18px;overflow:hidden;}
   .m3d-s{position:absolute;inset:0;margin:0;border-radius:18px;overflow:hidden;background:#fff;box-shadow:0 30px 60px rgba(0,0,0,.5),0 0 0 1px rgba(147,197,253,.35);
@@ -1134,190 +1135,62 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   </div>
 </section>
 
-
-<section id="workspaces">
-  <div class="wrap">
-    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Four Divisions, One Platform</div>
-    <h2 class="sectitle">A Dashboard For Each Discipline</h2>
-    <p class="secsub">Technical work, commercial control, delivery and draughting each have their own workspace &mdash; so a quantity surveyor pricing a tender is never looking at the same screen as the draughtsman setting out a riser. Switch between them at any time; the project data is shared, the working view is not.</p>
-    <div class="team-grid">
-
-      <div class="team-card qtr-accent" style="--qtr-a:#3987e5;">
-        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#93c5fd;"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 12h6M9 16h6"/></svg></div>
-        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#3987e522;color:#3987e5;border:1px solid #3987e555;">Workspace 01</div>
-        <h3>Projects &mdash; Technical</h3>
-        <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Drawing register and document control</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Quantity take-off, marked up on the sheet</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Bill of quantities, by system and by level</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Technical submittals and material approvals</div>
-        </div>
-      </div>
-
-      <div class="team-card qtr-accent" style="--qtr-a:#22c55e;">
-        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#86efac;"><path d="M3 18l5.5-6 4 4L21 7"/><path d="M15 7h6v6"/></svg></div>
-        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#22c55e22;color:#22c55e;border:1px solid #22c55e55;">Workspace 02</div>
-        <h3>Commercial</h3>
-        <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Tender pricing, preliminaries and margin</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Enquiries, comparison sheets and award</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Revenue, invoicing and cash position</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Variations and the value of work done</div>
-        </div>
-      </div>
-
-      <div class="team-card qtr-accent" style="--qtr-a:#f59e0b;">
-        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#fcd34d;"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></div>
-        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b55;">Workspace 03</div>
-        <h3>Operations</h3>
-        <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Programme, milestones and delivery stage</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Procurement schedule and lead times</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Percentage complete against the bill</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Workload across every live project</div>
-        </div>
-      </div>
-
-      <div class="team-card qtr-accent" style="--qtr-a:#818cf8;border-color:rgba(99,102,241,0.45);">
-        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#c4b5fd;"><path d="M3 20l4-1 11-11-3-3L4 16z"/><path d="M14.5 5.5l3 3"/><path d="M3 20h18"/></svg></div>
-        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#6366f122;color:#818cf8;border:1px solid #6366f155;">Workspace 04 &middot; New</div>
-        <h3>Draftsman &mdash; Shop Drawing Studio</h3>
-        <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Reads the architectural plan and sets the scale</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Reads the specification, clause by clause</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Sizes every MEP and ELV system to the code</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Issues coordinated shop drawings in SVG and DXF</div>
-        </div>
-      </div>
-
-    </div>
-  </div>
-</section>
-
-<section id="draftsman">
-  <div class="wrap">
-    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M3 20l4-1 11-11-3-3L4 16z"/><path d="M14.5 5.5l3 3"/></svg>The Shop Drawing Studio</div>
-    <h2 class="sectitle">From Architectural Plan To Issued Shop Drawing</h2>
-    <p class="secsub">A draughtsman does four things before a sheet can be issued: establish the base plan, read what the specification binds, size the system to the code of the authority having jurisdiction, and set it out. The studio does them in that order, and shows its working at every step.</p>
-
-    <div class="steps">
-      <div class="step qtr-accent" style="--qtr-a:#3987e5;">
-        <div class="step-num" style="background:#3987e5;">01</div>
-        <h3>Base Plan &amp; Scale</h3>
-        <ul><li>Reads the room enclosures off your architectural PDF</li><li>Takes the scale from the sheet, or calibrates it from one known dimension</li><li>Types every room &mdash; office, corridor, plant, car park</li><li>Kept against the project, so it is read once</li></ul>
-        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 10h18M9 10v10"/></svg> Architectural &middot; structural &middot; floor plans</div>
-      </div>
-      <div class="step qtr-accent" style="--qtr-a:#7c4bb8;">
-        <div class="step-num" style="background:#7c4bb8;">02</div>
-        <h3>Specification Review</h3>
-        <ul><li>Every page searched in your browser</li><li>Tells you which pages specify each system</li><li>Or type the page numbers straight from the contents list</li><li>Each value returned with its page and its clause</li></ul>
-        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg> Mounting height &middot; coverage &middot; IP &middot; cable</div>
-      </div>
-      <div class="step qtr-accent" style="--qtr-a:#1f8a5b;">
-        <div class="step-num" style="background:#1f8a5b;">03</div>
-        <h3>Design &amp; Calculation</h3>
-        <ul><li>33 MEP, ELV, fire and public health systems</li><li>Device schedule, mounting heights, containment and cable</li><li>Plant sizing, riser and single-line schematics</li><li>Every quantity carries the code clause it came from</li></ul>
-        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg> NFPA &middot; ASHRAE &middot; SIRA &middot; SBC &middot; local AHJ</div>
-      </div>
-      <div class="step qtr-accent" style="--qtr-a:#b4761c;">
-        <div class="step-num" style="background:#b4761c;">04</div>
-        <h3>Shop Drawing Production</h3>
-        <ul><li>General notes and design basis on sheet QE-000</li><li>Layouts per level, per discipline, with legend and north point</li><li>Containment routed from the floor IDF along the corridor spine</li><li>Title block, revision, scale bar &mdash; SVG, DXF or print</li></ul>
-        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 15h18"/></svg> Issued for review &middot; DXF to AutoCAD</div>
-      </div>
-    </div>
-
-    <div class="panel" style="margin-top:46px;">
-      <h3 style="margin:0 0 10px;font-size:19px;color:#e6ecf7;">Every Drawing Says What It Was Built On</h3>
-      <p style="margin:0 0 18px;color:var(--text-dimmer);font-size:14.5px;line-height:1.75;max-width:900px;">
-        Sheet QE-000 leads the set with three registers side by side, because three different
-        things bind a shop drawing and they are not the same thing. A reviewer can check any
-        figure on any layout without asking anybody where it came from.
-      </p>
-      <div class="team-grid">
-        <div class="team-card">
-          <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#3987e522;color:#3987e5;border:1px solid #3987e555;">Register 01</div>
-          <h3>Client Instructions</h3>
-          <p style="color:var(--text-dimmer);font-size:13.5px;line-height:1.7;margin:0;">Building type, levels, gross area, specification grade, floor-to-floor, scope of works, the systems instructed, and every device count fixed by hand. Each one referenced to the project record.</p>
-        </div>
-        <div class="team-card">
-          <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#7c4bb822;color:#a78bfa;border:1px solid #7c4bb855;">Register 02</div>
-          <h3>Specification Instructions</h3>
-          <p style="color:var(--text-dimmer);font-size:13.5px;line-height:1.7;margin:0;">Every accepted requirement and every binding clause, each referenced to the document and the page number it was read from. A coverage figure here changes the device count on every level.</p>
-        </div>
-        <div class="team-card">
-          <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#b4761c22;color:#d8a13c;border:1px solid #b4761c55;">Register 03</div>
-          <h3>Authority Instructions</h3>
-          <p style="color:var(--text-dimmer);font-size:13.5px;line-height:1.7;margin:0;">The authority having jurisdiction for the project's city, and the code clauses that actually produced a quantity on this set. Not a list of standards &mdash; the rules that fired.</p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-
-
-<section>
-  <div class="wrap" style="max-width:1040px;">
-    <div class="kicker" style="justify-content:flex-start;text-align:left;"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg>Beyond BOQ</div>
-    <h2 class="sectitle" style="text-align:left;">One Platform, Every Step of the Job</h2>
-    <p class="secsub" style="text-align:left;margin:0 0 34px;">Quantora is bigger than a BOQ generator. Four dashboards &mdash; estimation, sales, operations and revenue &mdash; each with its own screens, all following the same project reference from the day you bid it to the day you are paid.</p>
-    <div class="outputs-grid-3col">
-      <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Drawing Upload &amp; AI Take-Off</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Drawing Markup &amp; Verification</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>System Design (no drawings)</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Tender Document Intelligence</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Specification Review</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Compliance by Country &amp; City</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Take-Off &amp; BOQ Workspace</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Market Price Lookup (pay as you go)</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Estimation, Labour &amp; Margin</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Supplier Comparison</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Approval Tracking</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Cost &amp; Budget Analysis</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Product Recommendations</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Sales Pipeline &amp; Targets</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Project Operations &amp; Programme</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Revenue, Claims &amp; Collections</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="14" height="14" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Excel &amp; PDF Export</div>
-    </div>
-  </div>
-</section>
-
 <section>
   <div class="wrap">
-    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg>Compatibility</div>
-    <h2 class="sectitle">Supports Every File You Already Have</h2>
-    <p class="secsub">Drop in whatever your team already produces — Quantora reads it.</p>
-    <div class="format-tiles" style="max-width:920px;margin:0 auto;grid-template-columns:repeat(5,1fr);">
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(248,113,113,0.16);color:#fca5a5;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/></svg></div>PDF</div>
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(96,165,250,0.16);color:#93c5fd;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M12 2v20M4.5 6.5l15 11M19.5 6.5l-15 11M2 12h20"/></svg></div>DWG</div>
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(96,165,250,0.16);color:#93c5fd;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 15l4-4 4 4 4-6 4 4"/></svg></div>DXF</div>
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(168,85,247,0.16);color:#d8b4fe;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"/><path d="M3 7l9 5 9-5"/></svg></div>IFC</div>
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(168,85,247,0.16);color:#d8b4fe;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21V9M16 21V13"/></svg></div>RVT</div>
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(34,197,94,0.16);color:#86efac;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="15" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-5 4 4 6-6 3 3"/></svg></div>PNG / JPG</div>
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(59,130,246,0.16);color:#93c5fd;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M3 21V9l9-6 9 6v12"/><path d="M9 21v-6h6v6"/></svg></div>BIM</div>
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(34,197,94,0.16);color:#86efac;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h2M8 12h8M8 16h8M8 8h8"/></svg></div>Excel</div>
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(245,158,11,0.16);color:#fcd34d;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M9 12h6M9 16h6M9 8h2"/></svg></div>Specifications</div>
-      <div class="format-tile"><div class="ft-ic" style="background:rgba(245,158,11,0.16);color:#fcd34d;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M4 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/></svg></div>Tender Docs</div>
-    </div>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>Live Intelligence</div>
-    <h2 class="sectitle">Watch the AI Think</h2>
-    <p class="secsub">Every upload runs through a real engineering pipeline — not a black box.</p>
-    <div class="think-card">
-      <div class="think-step"><div class="think-circ" style="background:#22c55e;color:#062;"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></div><div class="think-label">Uploading Drawing…</div></div>
-      <div class="think-step"><div class="think-circ" style="background:#22c55e;color:#062;"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></div><div class="think-label">Reading Drawing…</div></div>
-      <div class="think-step"><div class="think-circ" style="background:#22c55e;color:#062;"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></div><div class="think-label">Recognizing Symbols…</div></div>
-      <div class="think-step"><div class="think-circ" style="background:var(--grad);color:#fff;">4</div><div class="think-label" style="font-weight:700;">Engineering Analysis…</div></div>
-      <div class="think-step"><div class="think-circ" style="background:rgba(255,255,255,0.07);color:var(--text-dimmer);">5</div><div class="think-label" style="color:var(--text-dimmer);">Calculating Quantities…</div></div>
-      <div class="think-step"><div class="think-circ" style="background:rgba(255,255,255,0.07);color:var(--text-dimmer);">6</div><div class="think-label" style="color:var(--text-dimmer);">Checking Compliance…</div></div>
-      <div class="think-step"><div class="think-circ" style="background:rgba(255,255,255,0.07);color:var(--text-dimmer);">7</div><div class="think-label" style="color:var(--text-dimmer);">Building BOQ…</div></div>
-      <div class="think-step"><div class="think-circ" style="background:rgba(255,255,255,0.07);color:var(--text-dimmer);">8</div><div class="think-label" style="color:var(--text-dimmer);">Finished</div></div>
+    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M9 3h3v2a2 2 0 004 0V3h3a1 1 0 011 1v3h-2a2 2 0 000 4h2v3a1 1 0 01-1 1h-3v-2a2 2 0 00-4 0v2H9a1 1 0 01-1-1v-3H6a2 2 0 010-4h2V4a1 1 0 011-1z"/></svg>Engineering Scope</div>
+    <h2 class="sectitle">Engineering Disciplines Covered</h2>
+    <p class="secsub">One platform across every major discipline on your project.</p>
+    <div class="disc-grid">
+      <div class="disc-card">
+        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#fbbf24;"><path class="fill-solid" d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg></div>
+        <h3>Electrical</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Power distribution &amp; DBs</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Lighting &amp; small power</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Cable sizing &amp; schedules</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Earthing &amp; lightning protection</div>
+        </div>
+      </div>
+      <div class="disc-card">
+        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#93c5fd;"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg></div>
+        <h3>ELV &amp; ICT</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>CCTV &amp; access control</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Structured cabling &amp; networks</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Public address &amp; BMS</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Nurse call &amp; intercom systems</div>
+        </div>
+      </div>
+      <div class="disc-card">
+        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#86efac;"><path d="M12 2v20M4.5 6.5l15 11M19.5 6.5l-15 11M2 12h20"/></svg></div>
+        <h3>Mechanical &amp; HVAC</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Cooling load calculations</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Ductwork &amp; equipment sizing</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Ventilation &amp; air balancing</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Chiller &amp; AHU schedules</div>
+        </div>
+      </div>
+      <div class="disc-card">
+        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#fca5a5;"><path class="fill-solid" d="M12 22c4 0 7-3 7-7 0-3-2-5-3-8-1 3-3 3-3 6 0 2 1 3 1 5-2 0-3-2-3-4-2 2-3 4-3 6 0 3 2 4.5 4 4z"/></svg></div>
+        <h3>Fire &amp; Life Safety</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Fire alarm &amp; detection design</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Sprinkler &amp; suppression systems</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Emergency evacuation routes</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Civil defense compliance</div>
+        </div>
+      </div>
+      <div class="disc-card">
+        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#93c5fd;"><path d="M7 18a4 4 0 01-1-7.9A5 5 0 0115 7a4.5 4.5 0 011 8.9"/><path d="M12 12v7M9 15l3-3 3 3"/></svg></div>
+        <h3>Plumbing</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Water supply &amp; drainage</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Fixture &amp; pipe schedules</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Sump &amp; pump sizing</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Stormwater &amp; drainage design</div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -1404,18 +1277,142 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   </div>
 </section>
 
+<section id="draftsman">
+  <div class="wrap">
+    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M3 20l4-1 11-11-3-3L4 16z"/><path d="M14.5 5.5l3 3"/></svg>The Shop Drawing Studio</div>
+    <h2 class="sectitle">From Architectural Plan To Issued Shop Drawing</h2>
+    <p class="secsub">A draughtsman does four things before a sheet can be issued: establish the base plan, read what the specification binds, size the system to the code of the authority having jurisdiction, and set it out. The studio does them in that order, and shows its working at every step.</p>
+
+    <div class="steps">
+      <div class="step qtr-accent" style="--qtr-a:#3987e5;">
+        <div class="step-num" style="background:#3987e5;">01</div>
+        <h3>Base Plan &amp; Scale</h3>
+        <ul><li>Reads the room enclosures off your architectural PDF</li><li>Takes the scale from the sheet, or calibrates it from one known dimension</li><li>Types every room &mdash; office, corridor, plant, car park</li><li>Kept against the project, so it is read once</li></ul>
+        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 10h18M9 10v10"/></svg> Architectural &middot; structural &middot; floor plans</div>
+      </div>
+      <div class="step qtr-accent" style="--qtr-a:#7c4bb8;">
+        <div class="step-num" style="background:#7c4bb8;">02</div>
+        <h3>Specification Review</h3>
+        <ul><li>Every page searched in your browser</li><li>Tells you which pages specify each system</li><li>Or type the page numbers straight from the contents list</li><li>Each value returned with its page and its clause</li></ul>
+        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg> Mounting height &middot; coverage &middot; IP &middot; cable</div>
+      </div>
+      <div class="step qtr-accent" style="--qtr-a:#1f8a5b;">
+        <div class="step-num" style="background:#1f8a5b;">03</div>
+        <h3>Design &amp; Calculation</h3>
+        <ul><li>33 MEP, ELV, fire and public health systems</li><li>Device schedule, mounting heights, containment and cable</li><li>Plant sizing, riser and single-line schematics</li><li>Every quantity carries the code clause it came from</li></ul>
+        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg> NFPA &middot; ASHRAE &middot; SIRA &middot; SBC &middot; local AHJ</div>
+      </div>
+      <div class="step qtr-accent" style="--qtr-a:#b4761c;">
+        <div class="step-num" style="background:#b4761c;">04</div>
+        <h3>Shop Drawing Production</h3>
+        <ul><li>General notes and design basis on sheet QE-000</li><li>Layouts per level, per discipline, with legend and north point</li><li>Containment routed from the floor IDF along the corridor spine</li><li>Title block, revision, scale bar &mdash; SVG, DXF or print</li></ul>
+        <div class="step-visual"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 15h18"/></svg> Issued for review &middot; DXF to AutoCAD</div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:46px;">
+      <h3 style="margin:0 0 10px;font-size:19px;color:#e6ecf7;">Every Drawing Says What It Was Built On</h3>
+      <p style="margin:0 0 18px;color:var(--text-dimmer);font-size:14.5px;line-height:1.75;max-width:900px;">
+        Sheet QE-000 leads the set with three registers side by side, because three different
+        things bind a shop drawing and they are not the same thing. A reviewer can check any
+        figure on any layout without asking anybody where it came from.
+      </p>
+      <div class="team-grid">
+        <div class="team-card">
+          <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#3987e522;color:#3987e5;border:1px solid #3987e555;">Register 01</div>
+          <h3>Client Instructions</h3>
+          <p style="color:var(--text-dimmer);font-size:13.5px;line-height:1.7;margin:0;">Building type, levels, gross area, specification grade, floor-to-floor, scope of works, the systems instructed, and every device count fixed by hand. Each one referenced to the project record.</p>
+        </div>
+        <div class="team-card">
+          <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#7c4bb822;color:#a78bfa;border:1px solid #7c4bb855;">Register 02</div>
+          <h3>Specification Instructions</h3>
+          <p style="color:var(--text-dimmer);font-size:13.5px;line-height:1.7;margin:0;">Every accepted requirement and every binding clause, each referenced to the document and the page number it was read from. A coverage figure here changes the device count on every level.</p>
+        </div>
+        <div class="team-card">
+          <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#b4761c22;color:#d8a13c;border:1px solid #b4761c55;">Register 03</div>
+          <h3>Authority Instructions</h3>
+          <p style="color:var(--text-dimmer);font-size:13.5px;line-height:1.7;margin:0;">The authority having jurisdiction for the project's city, and the code clauses that actually produced a quantity on this set. Not a list of standards &mdash; the rules that fired.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section>
   <div class="wrap">
-    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 6h6v6"/></svg>The Difference</div>
-    <h2 class="sectitle">Why Quantora Engineering is Different</h2>
-    <p class="secsub" style="margin-bottom:30px;">&nbsp;</p>
-    <div class="comp-table">
-      <div class="comp-row head"><div>Traditional Software</div><div>Quantora Engineering</div></div>
-      <div class="comp-row"><div class="trad">Manual</div><div class="qtr">AI-Driven</div></div>
-      <div class="comp-row"><div class="trad">Needs Engineers</div><div class="qtr">Self Learning</div></div>
-      <div class="comp-row"><div class="trad">Static</div><div class="qtr">Engineering Intelligence</div></div>
-      <div class="comp-row"><div class="trad">No Learning</div><div class="qtr">Continuous Rework</div></div>
-      <div class="comp-row"><div class="trad">One-off Output</div><div class="qtr">Project Memory</div></div>
+    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg>Compatibility</div>
+    <h2 class="sectitle">Supports Every File You Already Have</h2>
+    <p class="secsub">Drop in whatever your team already produces — Quantora reads it.</p>
+    <div class="format-tiles" style="max-width:920px;margin:0 auto;grid-template-columns:repeat(5,1fr);">
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(248,113,113,0.16);color:#fca5a5;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/></svg></div>PDF</div>
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(96,165,250,0.16);color:#93c5fd;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M12 2v20M4.5 6.5l15 11M19.5 6.5l-15 11M2 12h20"/></svg></div>DWG</div>
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(96,165,250,0.16);color:#93c5fd;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 15l4-4 4 4 4-6 4 4"/></svg></div>DXF</div>
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(168,85,247,0.16);color:#d8b4fe;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"/><path d="M3 7l9 5 9-5"/></svg></div>IFC</div>
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(168,85,247,0.16);color:#d8b4fe;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21V9M16 21V13"/></svg></div>RVT</div>
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(34,197,94,0.16);color:#86efac;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="15" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-5 4 4 6-6 3 3"/></svg></div>PNG / JPG</div>
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(59,130,246,0.16);color:#93c5fd;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M3 21V9l9-6 9 6v12"/><path d="M9 21v-6h6v6"/></svg></div>BIM</div>
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(34,197,94,0.16);color:#86efac;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h2M8 12h8M8 16h8M8 8h8"/></svg></div>Excel</div>
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(245,158,11,0.16);color:#fcd34d;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M9 12h6M9 16h6M9 8h2"/></svg></div>Specifications</div>
+      <div class="format-tile"><div class="ft-ic" style="background:rgba(245,158,11,0.16);color:#fcd34d;"><svg class="icon" width="17" height="17" viewBox="0 0 24 24"><path d="M4 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/></svg></div>Tender Docs</div>
+    </div>
+  </div>
+</section>
+
+<section id="workspaces">
+  <div class="wrap">
+    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Four Divisions, One Platform</div>
+    <h2 class="sectitle">A Dashboard For Each Discipline</h2>
+    <p class="secsub">Technical work, commercial control, delivery and draughting each have their own workspace &mdash; so a quantity surveyor pricing a tender is never looking at the same screen as the draughtsman setting out a riser. Switch between them at any time; the project data is shared, the working view is not.</p>
+    <div class="team-grid">
+
+      <div class="team-card qtr-accent" style="--qtr-a:#3987e5;">
+        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#93c5fd;"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 12h6M9 16h6"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#3987e522;color:#3987e5;border:1px solid #3987e555;">Workspace 01</div>
+        <h3>Projects &mdash; Technical</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Drawing register and document control</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Quantity take-off, marked up on the sheet</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Bill of quantities, by system and by level</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Technical submittals and material approvals</div>
+        </div>
+      </div>
+
+      <div class="team-card qtr-accent" style="--qtr-a:#22c55e;">
+        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#86efac;"><path d="M3 18l5.5-6 4 4L21 7"/><path d="M15 7h6v6"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#22c55e22;color:#22c55e;border:1px solid #22c55e55;">Workspace 02</div>
+        <h3>Commercial</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Tender pricing, preliminaries and margin</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Enquiries, comparison sheets and award</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Revenue, invoicing and cash position</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Variations and the value of work done</div>
+        </div>
+      </div>
+
+      <div class="team-card qtr-accent" style="--qtr-a:#f59e0b;">
+        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#fcd34d;"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b55;">Workspace 03</div>
+        <h3>Operations</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Programme, milestones and delivery stage</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Procurement schedule and lead times</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Percentage complete against the bill</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Workload across every live project</div>
+        </div>
+      </div>
+
+      <div class="team-card qtr-accent" style="--qtr-a:#818cf8;border-color:rgba(99,102,241,0.45);">
+        <div class="sec-icon"><svg class="icon" width="22" height="22" viewBox="0 0 24 24" style="color:#c4b5fd;"><path d="M3 20l4-1 11-11-3-3L4 16z"/><path d="M14.5 5.5l3 3"/><path d="M3 20h18"/></svg></div>
+        <div style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:9px;background:#6366f122;color:#818cf8;border:1px solid #6366f155;">Workspace 04 &middot; New</div>
+        <h3>Draftsman &mdash; Shop Drawing Studio</h3>
+        <div class="sec-list small">
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Reads the architectural plan and sets the scale</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Reads the specification, clause by clause</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Sizes every MEP and ELV system to the code</div>
+          <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Issues coordinated shop drawings in SVG and DXF</div>
+        </div>
+      </div>
+
     </div>
   </div>
 </section>
@@ -1507,6 +1504,22 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   </div>
 </section>
 
+<section>
+  <div class="wrap">
+    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 6h6v6"/></svg>The Difference</div>
+    <h2 class="sectitle">Why Quantora Engineering is Different</h2>
+    <p class="secsub" style="margin-bottom:30px;">&nbsp;</p>
+    <div class="comp-table">
+      <div class="comp-row head"><div>Traditional Software</div><div>Quantora Engineering</div></div>
+      <div class="comp-row"><div class="trad">Manual</div><div class="qtr">AI-Driven</div></div>
+      <div class="comp-row"><div class="trad">Needs Engineers</div><div class="qtr">Self Learning</div></div>
+      <div class="comp-row"><div class="trad">Static</div><div class="qtr">Engineering Intelligence</div></div>
+      <div class="comp-row"><div class="trad">No Learning</div><div class="qtr">Continuous Rework</div></div>
+      <div class="comp-row"><div class="trad">One-off Output</div><div class="qtr">Project Memory</div></div>
+    </div>
+  </div>
+</section>
+
 <section id="coverage">
   <div class="wrap">
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18a15 15 0 010-18"/></svg>Global Coverage</div>
@@ -1562,66 +1575,6 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Australia and New Zealand &mdash; AS 1670.1, AS 2118 and AS/NZS 3000</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>South Africa, Egypt, Kenya, Nigeria and Ethiopia &mdash; national codes named</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Anywhere else &mdash; falls back to IEC, ISO and EN standards, and says so</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M9 3h3v2a2 2 0 004 0V3h3a1 1 0 011 1v3h-2a2 2 0 000 4h2v3a1 1 0 01-1 1h-3v-2a2 2 0 00-4 0v2H9a1 1 0 01-1-1v-3H6a2 2 0 010-4h2V4a1 1 0 011-1z"/></svg>Engineering Scope</div>
-    <h2 class="sectitle">Engineering Disciplines Covered</h2>
-    <p class="secsub">One platform across every major discipline on your project.</p>
-    <div class="disc-grid">
-      <div class="disc-card">
-        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#fbbf24;"><path class="fill-solid" d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg></div>
-        <h3>Electrical</h3>
-        <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Power distribution &amp; DBs</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Lighting &amp; small power</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Cable sizing &amp; schedules</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Earthing &amp; lightning protection</div>
-        </div>
-      </div>
-      <div class="disc-card">
-        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#93c5fd;"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg></div>
-        <h3>ELV &amp; ICT</h3>
-        <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>CCTV &amp; access control</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Structured cabling &amp; networks</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Public address &amp; BMS</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Nurse call &amp; intercom systems</div>
-        </div>
-      </div>
-      <div class="disc-card">
-        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#86efac;"><path d="M12 2v20M4.5 6.5l15 11M19.5 6.5l-15 11M2 12h20"/></svg></div>
-        <h3>Mechanical &amp; HVAC</h3>
-        <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Cooling load calculations</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Ductwork &amp; equipment sizing</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Ventilation &amp; air balancing</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Chiller &amp; AHU schedules</div>
-        </div>
-      </div>
-      <div class="disc-card">
-        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#fca5a5;"><path class="fill-solid" d="M12 22c4 0 7-3 7-7 0-3-2-5-3-8-1 3-3 3-3 6 0 2 1 3 1 5-2 0-3-2-3-4-2 2-3 4-3 6 0 3 2 4.5 4 4z"/></svg></div>
-        <h3>Fire &amp; Life Safety</h3>
-        <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Fire alarm &amp; detection design</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Sprinkler &amp; suppression systems</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Emergency evacuation routes</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Civil defense compliance</div>
-        </div>
-      </div>
-      <div class="disc-card">
-        <div class="sec-icon" style="width:38px;height:38px;"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" style="color:#93c5fd;"><path d="M7 18a4 4 0 01-1-7.9A5 5 0 0115 7a4.5 4.5 0 011 8.9"/><path d="M12 12v7M9 15l3-3 3 3"/></svg></div>
-        <h3>Plumbing</h3>
-        <div class="sec-list small">
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Water supply &amp; drainage</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Fixture &amp; pipe schedules</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Sump &amp; pump sizing</div>
-          <div class="sec-item"><span class="check-ic"><svg class="icon" width="11" height="11" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Stormwater &amp; drainage design</div>
         </div>
       </div>
     </div>
@@ -1724,44 +1677,9 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   </div>
 </section>
 
-<section>
-  <div class="wrap">
-    <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0113.7-5.7L21 9"/><path d="M21 4v5h-5"/><path d="M20 12a8 8 0 01-13.7 5.7L3 15"/><path d="M3 20v-5h5"/></svg>End to End</div>
-    <h2 class="sectitle">Your Journey, End to End</h2>
-    <p class="secsub">From first sign-in to final procurement — one connected workflow, not ten disconnected tools.</p>
-    <div class="journey-grid">
-      <div class="journey-step"><div class="journey-num">1</div><div class="journey-label">Register</div></div>
-      <div class="journey-step"><div class="journey-num">2</div><div class="journey-label">Create Project</div></div>
-      <div class="journey-step"><div class="journey-num">3</div><div class="journey-label">Upload Drawings</div></div>
-      <div class="journey-step"><div class="journey-num">4</div><div class="journey-label">AI Analysis</div></div>
-      <div class="journey-step"><div class="journey-num">5</div><div class="journey-label">Review</div></div>
-      <div class="journey-step"><div class="journey-num">6</div><div class="journey-label">Rework</div></div>
-      <div class="journey-step"><div class="journey-num">7</div><div class="journey-label">Approve</div></div>
-      <div class="journey-step"><div class="journey-num">8</div><div class="journey-label">Export</div></div>
-      <div class="journey-step"><div class="journey-num">9</div><div class="journey-label">Tender</div></div>
-      <div class="journey-step"><div class="journey-num">10</div><div class="journey-label">Procurement</div></div>
-    </div>
-  </div>
-</section>
-
 <section id="demo">
   <div class="wrap">
     <div class="soon-cta-grid">
-      <div class="soon-col">
-        <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M5 15s-1-5 4-9c4-3.5 9-4 9-4s-.5 5-4 9c-4 5-9 4-9 4z"/><circle class="fill-solid" cx="14.7" cy="9.3" r="1.4"/><path d="M9 15l-3 3M6.2 12.2l-3 3"/></svg>What's Next</div>
-        <h2>Coming Soon</h2>
-        <p>The four division dashboards are live. Here is what comes next.</p>
-        <div class="soon-list">
-          <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg>AI Scheduling</div>
-          <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M3 21V9l9-6 9 6v12"/><path d="M9 21v-6h6v6"/></svg>AI BIM</div>
-          <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M4 4l16 16M20 4L4 20"/></svg>AI Clash Detection</div>
-          
-          
-          
-          <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>AI Site Monitoring</div>
-          <div class="soon-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg>AI Procurement Marketplace</div>
-        </div>
-      </div>
       <div class="cta-panel">
 <img class="cta-iso" src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBAUEBAYFBQUGBgYHCQ4JCQgICRINDQoOFRIWFhUSFBQXGiEcFxgfGRQUHScdHyIjJSUlFhwpLCgkKyEkJST/2wBDAQYGBgkICREJCREkGBQYJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCT/wAARCAG+AXMDASIAAhEBAxEB/8QAHQAAAgMBAQEBAQAAAAAAAAAAAgMAAQQFBggJB//EAFkQAAIBAwICBwMFCwYKCAYDAQECAwAEERIhBTEGEyJBUWFxMoGRBxRCobEYI1JWcpSys8HR0ggVRmLT4RYkJSYzY3R1gqI0NURTc4OS8TZDVGRl8FWTo8L/xAAaAQADAQEBAQAAAAAAAAAAAAAAAQIDBAUG/8QAKxEAAgICAQQCAQQCAwEAAAAAAAECEQMSIQQTMUEiUWEjcYGxQvAykcGh/9oADAMBAAIRAxEAPwD5ryavJxzqsVdescZMnxqwTVAVdIC81eTQ0QpgWGNTVmqFXikBATUyfGpUxTAsE+NTJqYq8UATJqZNQLV4pgTJq81MVMUCLzUyamDV4oArJq8nxqYqYpgTPnUyammrAoEQEirz51WKvFAFe+rqwtTFAEBqwamDUxQImTU99WBUxQBVWPWpirxQBPfVVeKmmgCt6urAqaaAKBqZq9NTFAEz51MnxqYqYoAlTNTFTFAye+pmpipigCj8RX99/kyfKxfWHHYehHFbl5+HXgIsDI2TbTAE6AfwWAO3cQMczX8DxXe+T6aS16e9G5omKOnFLXDDu++qPsNZ5IqUWmVF07P0JBON6lKdiHO/fUrzKOyz8zRUxV4qV6hxkxUxVirpgDV4ohUxQBBUxmrFWBQBWKvFXipigCsVeKvGKsCmIoVeKvFWBQBWKmKLGavFAA4q9NEBVgUxA4qac0YFXigAMVMUeKmKYA4qYotNXikAGKvFFiiApiA01NNMAqaaKAVipimaaoigQIFWBV4qYoGUBV6aIVeKABxU00QFXgUCAxVYpmmq00DAxUxR6arFIAMVMUeKmKBggVCKICoRQAsjeu30IH+evR7/AHnafrkrjY8a7fQUf579Hf8Aelp+uSpl4Gj9ApPbb1qVb+23rUryjsPzQqYq8VeK9Q5SgKvFSrFAExU76sCrxTEUKICoBVgUATFWBUxRAUxA4q8VeKvFAFAVYq8VeKYFVYFWBV4oFZQFXUogKAJipiiAqYpiKAq8VeKvFMAQKvTRAVMUUFg4qwKvBqwKYiACr28KsCr00CFmh007QamilQxGmrC03RV6PKigsVpq8U3RVaaAAxUxR6avFAAaavTRYqYpAARVFaZipigBWmpppumppoodi9NUVp2mqK0qARort9CFx016Pf70tP1yVydNdroSv+efR/8A3na/rkqZeCkffj+23rUqnHbb1qV5R2H5qCpipV16hyEAq8VAKvFAFgVNNWBVimBWKsCrq8UwKAq6sCrxQIoCrqwKmKAIKvFQLRAUxEAqal16MjVjOPKqBL7Lt/W/dWRGjM7dYNWByBJ32pWFG3TVgUCQtH9NyPAnJH76NdR9lkb1GKoAgKvFUCw5p/6TmprA56h6g0WIvFXiopVx2WB9DRacUxEFSrAqwKAKxmrAHhRAVYFMCh6Ci91WFogtFioAbd1TPlTQPGr0A8tqAEjnmrphjNVooADJocU3TU0UAK01AtN0b1YSgYnTU007RU0UgE6ammn9XU0UhiQtXopuipoosKFaahWmlaopSASVrs9CVx0z6P8A+87X9clczTXZ6FJnpn0f/wB52v65KUvA0feT+23rUqP7Z9aleSdp+agqwKgFXmvUOQsDarxUBoqYFVYFWBRAUwKAqxVgUWmgChUq8VemgRWKICppqtXh8aYFnA51WnX7XLw8fWrQY5nJPfTAKBAjYislsFNxrxgltseBBra/ZjY43A2rOqPHKQ+Mq6jb3/vpMaNQFU0asc7g+I50YFEBVEiwGXmMjxH7qMYIyDt5UWKrRk5GQfEUAUUVuaqfUVBCoxjUvoTRbr7Q28RRDtDIIIoADQw5SZ/KA/ZUxIPoq3ocU0LVhc0AADtujj3Z+yrDofpD37UeKvGRgjI86YFBdvGrAqhEmchQPTaiEZHKRh670AEFosUA6wcyjfEfvogzDnG/uwaLFQWKsAUImQnByhxntjFORQwyCCPI0WFABAanVeFOEdFoPhTEZxH5UXVjGKcFJPI1Cu+5Ax50goR1flU6vypvWQqdLSxg4zjUOVWZYFwOtTJ2wDmix0xXV+VUYyBmtRXG2KBlzSBGfR3VfV08LU0k91IZn0VRStJTyoShpDM+iu10JT/PTo//ALztf1y1zNFdnoWMdMuAHw4na/rlpS8DR9zP7R9alR/aPrUryjsPzUqwKsCpivUOUgFFmoBV6aYFg0QNCBVigKGAiiBrPrbUR2Njj2t6Hr3A5x5/KosVGqrJC4z/AO9KSQlFOBk8znIH76PIG6jUx7z3UxBHfY8z9EftolTG5xn7Ki4Hjv4iiB8j8KoRWjFXVh9iSFyRt2u+h1M2ymMH1JpAVLlkChSxZgNI7xzP1Ckr2utZGwispIPOnSprkjHs4DNz937aQFXROdOkjuByBtSY0dDRmppI7qSJxJkKzLpxkhguT4UYjwAXZ3zyxIefgaYqGBT4GjA25UgWoB1EM5xupJ+qg6pMLMqAgj2SP399A6NeABuQPU0DNCN+tRT46hWY3EEZYJ82B04cMPa8qdFcQNBGolSMYHYVht5UWFF/O4UwGlQ5OAV33pomjxsWI8kP7qWZIpCQ0nZB7IOSMePrRo2NKFJmT6P3ttz50rCghKpzhXPdnTgfXVNKAwXq5AScYwP31GZlYExSKCQd1AwfHJ2FDrKJpKsuo41F1GSe8+FOwosTMXKCFsg4wWAqCWQvp6pfDOvbPhy51RZmGkPbhx9LruVUJQyiMPFg8wFc6fU0WFDA07HCpEWB5aj9uNqNTIcYaNc8sqcH0NLQOcqWkKnvW3O/lTgs0h0Os+nvYxKM/XSsKLXrMuHm0BcckG/pn4UBtRLIC7yqc6cqVTfuHZHfRiKcnDpdFeYzKgI9dqIW08hCyITGO5rliT8ABRYEFrIVKozkcg5kbJolgQEBRIzH/wCXIzNj35+uqXhuGXCRhRzVmdgfro/5tTJIWBM/gxZx8TQAHze3TD4hZ1IJjd8kHyOaJVs1UShrbrtzhiNyfHn8aeLMBcAov5EKDHpkGjS10NrE0hbGMhUXb3CgDMbm2fS/WQa15YfBTyGB/wC9Wt51ihNLMCRnTGxVvdp2pzWSNL1jS3DH8HrSF+ApgtYz7QdvynY/tpcgZ+s+bhiy3BRVzpMbZX3kDb1rQqa4xIvskA+e/lU+YWpxm2hODndBTygNAUZwmKvRT9G1TRmiwoRoqtFaOrqGPaiwMpTNdbocn+eHAf8AeVr+uWsPV11+hsWemHAf95Wv61amT4GkfbL+0fWpUcdo+tSvMOs/NjFQCiq8V6hylAUQFQCiFAFUMmRExXmBR0QFAHM0NnJP20GgeI+Fdc+yfQ1ysnAG+KTQyhg4BYbcs02J2izokC554HOtlog6kHAzk1oAoSE2c1ppn26xiPLNWJJyfblP/CTXUAogKdfkLOYGu8bGb/0f3VYa8U5HX5/JrqCpjNOhWcpp7pDqdpFYDGSMbVSddIzh53jwpLEj0506+Ds7BmJUMuPIYNBE2Y5MnJMLb+O9CX2Bdrb3UjYEuqNe9ZMZPwzW5LadSu4wOYMzb/VQ8Jw0zhc6dGd/dXRZN6NUgsyi0JHa0E5zzc+7nVfzcr5yId/9Xn9tawtEo3p8BycGXhU8cxjRWkAxgheeeX2Gt3DOHyRKZXkdNYGAuM489q6gGDVqOyPSkkgtiupVhhpJmHhrP7KM28T7MrN+U7HP10emiVaYhIs7cAL1CEDxGftpqwxKAFjQDyUUYGaMLSAFVVeSqPQCi38avSe+iAosKBAqwtGFogtFjoWFogvjTAtEEosKAAoguaPRRBKLChYSiCU1UotGaVhQkJVhKaI6Lq/KjYeovRmoEp4jzRiMVNj1M4jq+rrRoz3VBCzEYHPl50th6mYpVFK1dTg4J9cUJiwRRYambq++ux0Mjx0w4Ef/AMjbfrVrCErr9EEx0t4GT3cQtv1q0m+ASPshvaPrUqN7R9aleedB+bek1eB5VBUAr1DlJgirolosbUDAxRAVeKvFAiAUsWUH/dfWaaBRigAY41jUKqgAcgKPTViipgUBVhasCi50gKC0YSoAakknVLqKs3dhRTEczipkhkGQml9xjc7eNc8Syq4cOQ3lWq+la4nJYKgVQMFs/ZWUdpgCVHcM8qzb5KSO7wbUYDMeq7ex0pg7H4V0QM1zODTtHCIZYyAGwrDfn3H99dcJVp8CaA0Cr00zTRBaLChYTf4USL2RWHiMF+bpXtpMIQoAzyYHP110LOF4reJJW1yBQGbxNKwotUzRiPypoWjC0WFCRHRdXTQtFoFFjoToqwlOCVYSlYUJCUWk07QKvRRY6EqKagzVBKYgI5VNlahBPKiEflRICRTljyOYHvpbBqJEeaIR5rTHCpZVL4BOCQM4pzwQrrCPK+PYJQLnfvGTjalsNRMXVVYirYiQlR7ervGRV6IxyQ+9qNh6mZYSME4APfmmdScFRpO/M4GfjTtRHsgJ+SKWVzS2HQsRnTnrAoPdn9gqaQORJ8zTAmahTHlRsFCjkd5oNOafoPdVaKLFqJCnFdbokMdKuCn/AO/t/wBYtYNHlXU6LJjpPwf/AG6D9YtJvgNT6/b2j61Kje0fWpXGaH5vBaILViiAr1DlKVDV6dqsUYFAwMGpimgZ58/GpppAAFogvlRhN6MKfdQFC9NWFpmijVKAoWFo1Smqg08vfRKoG9AxYTvqpYklQo6hlbmDTtxVFSaLFRxn4f1czpCA6jB0M2Ce/GaVDC0jynQmHXUSx9kE8x411JImeaUAsN03XnjFItVEs8iEkZTG3kxzipKHcL4XArPI2pmjcBcnAxgEbD1rrAVm4YzyrOX06hJg6eRworaFp2FAhaIJRKtNSOlYUZpVP3v8sU4LRSoPveTjtj37GmaaLCgVWiAoguKJUJ5UrHRQWrC0QQ86g2pbD1IEzRhN6JMEimiOlsPUUEqxHmnhR30+GEO2KlyKUTEIgDypghOM4OK3rDGNwN/OiMOUHLffY0rHRgCYpgWnmDG9Tqzmp2HqLC71eKaE76IJS2K0GRySTBIpJewNgX3C/tq3TCAZTY4wBv6576uKLc92BmjZMbHb1qdi9RHV78wKsRr4/spxQuRk+WT3VYgLEhWVsDOc4+2lsGgnSo32qALjOlvdpH7DTCm1V1dPYWoG/MAD1OSKFkwd6cIzU0eNGwamfRvXT6Lr/nPwf/boP1i1k0V0ui8f+c/B9v8At0H6xaNhaH1k3tH1qVG9o+tSsCT841Wi04waFWpg7Q2r1DlKUb0xRQqMGnNowpGxxuO7NAygnuotNEpXSoAIxnvo9jjA7qBgKlEFoxgeFFzNKwoDTtzogtEBtRhaTY0gQvZqwtMC4FXopWOhQowoohHRdXSsKMEzolw4UHrdSaXHJBgZ/wDas8YJLqnaHVZwOZGts/VWmUyxXUzquqMFNYzjkBvz86wWbATMxl0YUFTk79pvCnYUdqxaMmcx4CdYMY8NC1sXBrn8IiCxTBckdZkE8z2RW7SwO1S2UkPVRRqtJQvmtMe4zU2PUmmoFowM0YSjYeosLRhKYEolTflU7DURariqkU1rEalQcjJzjf02+BBoWizS2KUTKinNagMLmrEeANqpgTsKlyLUQNRLZrXaSKmSRk4wN+R8azrCfCnRwNt3VLkUoGheW9GBmoseABTkSpchqBWNSBcct6oRU9U25Uap41OxWpm6rHdUCY51q6sYx30IjJ5Y+NLYegEIKuCNqMpkDOTj6qOKPBOTjamiFvZ0kN4GlsPUUIl7Iyo8SB9tFKqatCIuleRxgnzOa1RQkY0x6283AA9wNAyOE0loyA2wXfu557/jS2HqYynhU0d9axGuNwSfWhZB3DFGwamXRU0b1o6omr6ltsjajcNDNo3rpdGEx0n4Qf8A76D9YtI6quh0bjx0j4T/ALbB+sWluDhwfUbe0alRh2jUqjjPzfFMVtqACiAr0rOegid8ijVzmhA3piJlgBzNFhQyNwVAIHqK0IuQMDu8c1mjTanIMb0WVQ9dIYMGC4A5g88b91EFj75P/SpP24oAzYAznFMEjKE79OdmAI+FK0OmWRHjsq+3exH2VYG9Cp7Ld237aKNyDvg+tS2UkMA2oh9dWoBA5+YPdVhTU2OihzoxUC4owtKx6nPmjJupZMkopUsnj2QQfq5d9JtoEeeQQHSojRoix/rvjPr3+taJpOpu3cuQFZBoH0zgf371msphHNIQ6huqwCRkAiRxv9VMVcnU4ey3BndVKjrAMHmOyP762rACQBzOwpXDYlT5yo5CQc/yFP7a2IMSL6iobNEiXNvEk2mH2AB9INk43OR55oViIqW4PUxnllc8vOtCrUN0Uo2LKbLgAenfRhNsU9Y+XpTjbDSWDDIXUVO3fjbxpbD1MojoglMxiox7LEeB+ylZWgiEZuX/APEb9Ba2RxBnA3OawWUbLche0B3g+PVLXXjGgZGxxilKQ4xFiEVFgAbenLgjOwzg0apUORooihEByFEIzTgm9GI88hU7FamVhiWAEndz7+w1aVXes9zcIt2i47UTDs59r72x/urbGAyqw3DAHak2EVyy1XlTAgNWq0xUqHItRFBN6ix5NaCuSSRvQ4C4yQMkAZ8TyqditQAm3KiZMjxpyxmr0EDPdS2HqZ1Qg7UeC2ATnwp2gnuqurOfClsPUUBtypF9pWznZ8hRGxOPDFbNIGefkaycVQtwy7AOCYX38NqE+ROPAwFcA6hjFLa5RWxufOiW12AO+wovmoBxijZD0MpunLZ09nwrd0cnkbpJwnuHz6D9YtL+Zit/R20H+EPCvK8g/WLT3RLg6Pp9/aNSrYdo1K6DzT85VTB5UYjpujGPSppIr0WzGiupwdtx3YOaZDDqkRdWnJAyRyqt806EsJFOeW9JvkajwQRjbJxsKdHCSNgD76uJyjq+xI5ZG1MTAHsiobLSILdvwTUaLC5NMXT+CPidqP2gBk48DSbLSAEA2+2mJbYYEEbeIqwvnTVBxzqGxpE6gAnl5aeVWIxRrTFXVilZVCTH31YiIpwTfFGE2ByDnbnSsNTkFFPE5UdC4OnGH04Oldz4jflSLS2jtp5eswURMMDyI65xv8K3sxS7vCOyMx5bbsjC+O1ZLCdRM7zEYMOWJ3z99c+/PhVp8Ea8m7hqSQtdRyNrYSjfxGhcfVitxBKkjmAe/HdWLhETAXIOdpcAMdwNK4HuGK6bRYik/Ib7Kzb5NUuBHDUdoRrYnAXGWzjsjvroCMBc4IO2Ky8JBa2xGpbCx+yP6tdHCGMRtPEhYhvpNjbGNhjv8amXkcFwhY3PuombOnP4Io40t1yzvO+ByVQn2kn6qd1sUQVVtodLjSxcl27uR2x7hUWa6mUDV6UFxAfms+CR97b3dk0+SWyiVsSyhlGeraNiW5bAgfsrHxHpBaw2bslmsRaNiolZ2dtu4HAPOmk2+CW0lyc+wcteW2l5GUEljuQPvQxk8q7obJrxB6U3w4tbcQeaaR4IidIcKDzAwAMDn4V6fhnTDh3E2UXYijlPe46on/iXsn3irywkRinHwdi2UyIGx3lfgcVqSIVdqLYRYSYoMk5kHZ3P4S5Hf34rQ8LRMA4G/Ig5B9DXNN8nVFCHixpwcgjfbkfChKkDvrTgFB+Uf2ULKMcxWbkWonAm1G9n7ZZutbA/BHU/311+Fx44dad/3lP0RXBvivzy5k1Hqxc9S6g4Zx1QOBv5GvR8IQnhlmfGCP8ARFVkfxRGONtmlE3pgTFWq0wCsXI31AKb7VnvOwkJ/wBfEP8AmFbsYNczizr84hjAOfvbE5/1gpRdsJRpHRVdqsR5pfDz1tlDIAQCvLOfL9lalWoci1EWqAVZQAU3TVFTzpbD1M5UGsfFvvfDLptJf70RpBxnO37a6RU4xWHi6n+b5FG2oge7Of2VUZcomS4YyH75Ej4I1KDg921HoxV2qHqEB5jI+BIpxjBG1JyHqIwM1v6P/wDxBwv/AGyH9MVm6utvAY/8vcN3/wC1w/pihS5FKHDPpBuZqVG5mpXeeKfnfqJwSxJqx60ANGN672yEg0QlgBuScU9YHjfDqRglc+YG9LixrGW0+fhTogZZTgEsQT9VJlJFIKco3oEU6QwBI8cUxSQf31DZokMUUwLvigTmKao3PdvU2UkEijDZGdtt+VGo7u6oo76NedS2UohJHqzuNhnc0ajBFLYamjwcYbO3oaancaVlJFjnVAgIN8UWB5+6oGMelkxqzgZAONvOkFHGuJYFu7o3ADqDHhCC2WCbbDzrJAotGnadjGGTMbSZXV2m5fGj4hw67ubu5aKclVKfetZXV2R4VxZrdiwHWBdMSHLn6q6ccYteTknKSfg9LD0isLSS6YdZPrlDLoGBjSo5nzBpcvTK5kDpbW9vANDYYjrHG3idvqrzlvY3cjyCGMSFCNS8/TY0I61bmQTqyyMHLBhjcqTyq1GCfBLnOuTfFx2+hCym+vA0g0tokIDAHABGcYxXWHSW3mghW8gjnjGGBRijKRgZxnFeVeRWjhAB798+dariG3jtbTIkDyRGRnDAjBYgDHu+uiUdghNxPYDigkmeKxvDGoxpjnQ4Ow5Nua6ssV5LbR3M4jSBVLnq2Yhuzy1AYrw1vfvw+9QR6chY11ncjKjON/AmtvD+PpDK0CRBFOsa4nIbAHgTjPZH11jLF7N45vTPX2ENta20aQoYjgAqzknO30u+uD03aR/mCRo5fVIqooOfo7ACulw7pAnF7NpZImjRHVH1MG1EjOfqNcrpfDMy8ONikkjapMdTlu5e8cqwxprLTOjK08La8Hn0guBLJFLDL1nUMoXQSTsDyFZsESCPBDZwQdiK223CbuODIa3ikMbhYluEEmo6QNg22c0qeO6hulN310cpI3nBDEYxzPOux8HAlZOHXdxBM4jupYQUPsOQDy251/ZoXaLSVOCMdwIPLmDsa/lvB7K0W5JnieRWgOkF8aTtvtX9aAi1aznTthTIFzy8ia8/qpeD0uki1dioijqQ4IIdt0Axz8P3URtWdSUIcAZxyI9xpUMgEzwMArr2jgnfO/fv31s1RrFEwng++A6VLENnwAxvtXHKzrSPFXNvcfzxdsb14yJnVEiQEBREe87Z23POvWcEiMfBLBWOWFvHk/8ACK8vfxSPe30rXdyqS3xhjjjkwq5jbLDfnnFem6Pyyz8EsHmkDyNAhZgMZ2FaZn8UZ4Y/JmyXsxSHwUn6qkMjSRxMxyxjXf3VdzEWtZh/q2+w1OF22qwt2RMKEUEgbZxXNt8bOnX5UORA1crjRKXkcaRgv1avqLY2D8q7qRhOdcrihD8WUNqCJbqxYeyPvvfRCXITjwauFEPwy3fRoyudOc43PfWrTmsfAUc8IttTamAYE5zvqNdJVxWc5fJmkI/FCwtWVzTdO1UUqdh6mdkOM4OPGuZxg5gdcbLDJJnwwVA+2tvEeL2HDAFu7tIiRqCZyx89IrxXH+mqS9ZHYo5jkhaItJ2cHUCGx6D663xQlJ2kYZZxiuT21tsJk/AmkX3Zz+2jOa8XwTp6DOycTiWNZ5C5nQ9mPIHNcZ7ufnXtLW4gvrdLi2mSaFxlXQ5BqckJQfyRWOUZr4sgUtW/o/H/AJf4b/tcP6YrMBjlW/gA/wAvcN/2uL9MVMZclTj8WfQrDtGpVtzNSvUPnz87AhowpouYBznPljFGuT3122NRACmmRkg0wLnuqwnfjapstRLUkcvqoxvzNUq4ohU2UkMRgpBO4G9PSTrMuebMTjwpABYEAZJBwBTY9lwcDc9/pS9Fex4OFFWrb0AAIG5OR8DRxRtI2lAWPlUFib+Npo9AKgYOxON9t66SEZ3XO/jXPvUMaAtJGpwRjVvzHhXRJQBm1EgHGw5702uESvLLOgrkBgdWME52xUADFQATzO3pS0m1RE6FXDDfVnOR7qFpG9gk4OTgbbjFTRaZiuWSK8umkkMTa4xHzyx0jkK4dpF86vJkkjkkBtg3Y5g59eVdySXPELsseTQgn/gNeeyIlDSSRIHto10O5BbvzgAkjaujHFtOjlyummzdwEOs12WYLoVdWd8kKp8fI10OMRI0KuIC5CSjXpzpwviDXL4bxu2spLohJbhpmDARqEC9nHNj5+FbIOlRuuIW0L2disbyhSkzvLs2AcgYBqo4nvsyXljpqjzgRgYo4QWkPJVXUx37hXd4h0bvltLSW8intT80TLzqsSglnzqLsu/LkDXPvOPXMUIW04k8QJKtFBALfT705j1OaRxq+a5tOG26C224fGzyPGpkZi7k9s71u+DBHR4hwa1biiR2nHeG3CFIjrUvqz1a5AUqNW4OMc6yWxtOHXylrO/uJAHx84HzeP2TzG5xz7xXJ4o7SXYMrE/eYhuO4RrVWV1OjOkczhOrc6NWVOFPMcqhuxmuPj1xChW2itrWMgHEUIJyOXafUapr24vbPNxeTPiTGmWQ4xp5ADasRuNR7UUJ9EA+ynCaNrTQI1UiTOxOD2fWhILN9nHGbYorwnKuDkhRnKnfPlVC74hwolY5biGPwB1Rn3bqaxI5FqynZcv7zpHnSY7iSOdpYneLJ+gcbVMiouj0Fl0hLda8lpau0cJIZD1Peo+j2e/wr2cfylWF5bLA8FzaMSNRIEqkDuyuCPhX84hvS8dz1scMmqLGWQA+0veMVURtiO0siHxU5HwP76xnhjP/AJG+PPOHhn9Z6OcRWZpzBexup04MbgkD/i3HvrrRFntbFWct22wSfANX8cWZIreMpMshWQ7suk7gc/hW2z6W8UsGTqLydY48hEYCRBnngGuXJ0t8xZ14+rSVSR7C8i6ziN1/jciOL9FCaVZVzntbnI5V7Po1AG6PcOd431G3TLRrty8M1/IV6TzyTPK0oiadzLKQMBiDtpB5cz3173o/0s4FLY2NnezrBdW6LFKHLKpIxyIOPjWHUYpKCNunyxcmeskaGW1fRcxMHjcBmV0wceYx9dcGzZ06S8LTriYzatqEcmpCQrYzg4p9rda7JCHwro7bHIwS3nXM4ZGRxfh1wkehtBVWimIJ7PM/HlXNDhP+Tqny1/B7NiG5b+dcHjVmLri0aveG1RrXQCFZgXMqhc4PLOK9M5ZngU6ELIPbh16ztk6gc1y+LR2r36IZdDy2mlMK+nJlABJHIZHfXPik1KzbLFONDei0LLwG16zBdtbNjxLsT9tdIpvsKzdGCI+BWyONZXWuSfB2rad9u6s8k/ky8cPihOk8qEqK0dWMc6hRfGs9zTU/lvT0gdIJBp36qLfPlXl5QSUGCc5AAOK9f05VT0mk1jUoijyM4z2a8oyFZUJPssOVe508v00eRnj8mJC5A9BX9J+T+4FxwMwLCIxbSFCdWdZPa1eXPlX88WM4G3ID7BX9B+TWMjhd8T/9QP0BWfWNduy+lX6h6oR5rdwFAvHeHb/9qi/TFY3IjXLMF9ab0fuI34/w7S2r/Gov0xXmwds7siqLPolvaNSqY9o1K9o+aPzvU7U1WO1IBpitgiuxmiHqfOmgjxrOr57qYjA1DLQ4HNNAzsKUtMU1BdBSx/4vKGIUaGyW5DaigRcv2idxsBpHIeNZ7u4SOCRWdAzIwAJxnak/ztBCWOXkyfojH1mrSbiZyklLlnUaUImRpTSD3aiTjzqI5aVA8hY49nnnl3CuE/HxJKirHEFZtJ1uTsdu6sEvGbgjUJnUsdxEAoHv51osTIlmj6PVT3jW4Q6guGUknGAM/wB1IuOkNuqafngY6lOFJbIHpXkTcGRZSQSdIOXOr6QpRlc7atP5O32VXaSq2ZPO+aR6abpAWhmEMM0mlAw1HTywOQ3765s/Si/ljJDpGQQAUXfeuXHsspzg6OffzFU0jPG2o6jkdo8+/vq1CK9EPLN+x89xJeM0k9ydRCkhs9rA25U24mSaC3RpSkqwopLKcEZONx5VgLYCk+Ap1w2RASMHqE+yrTM2iltZTraN42CqWbTIOQ5misleK+tG7ODPGBhgfpDzqWrZ+cf7O/7KVZLm+tiOfXJ+kKTBIVJIS7j+sftrXxFGC2Wf/oocfA1mZ2SWT2fabfSPGunxWbWvD16tG/yfBzG/snwpFGKeWdLqMpK6/e4+TbewKOzkAkl1oh1QyjIXBHYPhWm5jWK4jke3bSFj3GRnsCs0BRixVSCY5BjPLsmnQGckAA4+ujRlERLasatgvjj7KWyFck4Hvq1GqEkOgw3e2O6psDakzfzbIobALMf+QCs3zkMoSS3gbBzqVdDH3j91Pt16yymyyDS3MHbdf7qSYG7gD6EGlIpDka2aCbQk6PoHN1ZfaHkDVLGrJEI3zIxIYNhQPDcnFVDGyJLlSOyOY8xRHHUIAoyHYk+OwqGWkTS4jxgnD92/d5UOrHfinW5ZRGUyr9emGB5U0yyMXDN7ROdhvvUM0SKEp6iNTHE4CHZ0z9InnWi4tjLfzlWC6pWwGOBz8eVCDoh7KRbRtuVyTzrZfNqmkx7PWk/8q1LZokVaS3NiwaOWSMj8Ftv3V6fhvS26s762kZorrql1bjQeW4yPCvNwtItpIiMwRnXUoOx2OKqNsSDUowI2GQTvtWE0peUdEG4+Gf1/h/yjcIu5bQ3Sz2egMGZl1oMgY3Xfn5Uvid7Be30M9jdpOi2eoGIhw2JwcEE+Hca/k9s+BpK6h3DOMGupY2N27IotZpHcgqAhBO4xjbeuKXTQi7To7I9RKSpo/r/RcNLwOBvwnlP/APo1dpYV8TXjuicXSheGwNbm3NpkhUuXUlcNhhsA3MHvr27hdWEJI8SMV4/ULWb5PTw/KK4FGDlpIPp3UDQsOYNOIINQZByCc1huban8z6awD/CKWQ6tCxxZKkA8u7NeTkj0Sagdwc5Fe36YyMvSgyljlViI0gZ5dw5V5KSNes2zpzjzxXu9PP4L9jy82P5MVAJYrgPbmTrEOpWX2hjvr3nyc78Nvck5+cDn+QK8MrvHNqjZ0bJwwbDV7v5OYT/Nl8S2T85XfOfoCp6yX6TH00P1EemeIMMEA03gloqcb4eVGP8AGoj/AM4q8Abb1s4M8Y4zYDv+cxfpCvLxz5R3ZIVFn91I3NSrb2jUr6I+SPzq7qJalWu29dpVFhjmmxneg2IyAd6JRjepZaRrjKkbkg+lOR9BOynIx2lB+2saPTBKfOoo0TQF7YwNbzTdtXVCey2xwK5sHBBewCf50VYkjDLkbHxroXc/+Jz/APht9lBwyTNpGOXP7a0UpKJk4Rc/Byrrg1xZSnLxOsKrKxU4wMjx796T/Nt01vHIttKyt2gV3yPSu5fspjuSTubfHwI/dTOGShoIhnkigVam1GzN4YuWp5rqtEc2rUjBOTDH0hS+qUEfflIJ5gHau/x5CyMWY5MQAB5jtiruLex/muIiKDr8R9pBuDjfNVvwmR2uWk/Bw4zF1c4USEhNmYgD2h3f30oj722PEV1DBaLZPIgdXMA1ZYEE5HLwrO8MK2XWJKxcsoKMB4E5GDmrTszlFowSbBPHH7adeKFaFVfWohQBsYzt4U0xTMiCNDpKDJKjfn3mjvbfS1v1skMX+Lx7M+Ty8BmqogTZR6vnOO62c/o1LNi15ZxDTtOmAOZywrXwp7RTe4mR2FnIRrTK5yu2M799dLgKcXu+IWiWttfMhuIyeph6tMa1zkhR9tNIZxjwy7nll6u0uH7bco2/C9K0cZjubNrAMJIf8nwZ1KV+ifGi4lwy/jmdrkwW41ttLdJkb+AYmtfGCsENjFccXhKrw+DTCitMu6k8vZHOpfA0cu8Ev86NKmVyyYOcc1FVbM3XGNpx2kkXcnHsmncRv4Yb9+osbYhRGVaQM2RoXuLYpEPE7oyNoEMYKPtHCij2T5UtgoQYYnO04b8iMn7cU5bJRb5FvdyZcYyAgO3dsaULu5Oxnkx5Nj7Kbqd7btEses2yc91LhjOhagR2Lr8xjQllyskxy4IYeIxis8logQOYrqEHvZQ6/EYqo1MdpICuDlc5HmaTHMyKNDsm/wBFiKUpIuKNEMR6uTq7iN+zjSGKkbjuNW6y9WqvETpJJOnOc47xQpPKY5dTBxpHtKD9IVI5gN2iUecZKms20apDrVAVRgAMTL9lOitVkM2oyBlzpCpqyc8j4UMd2Or9qYAOCNQVwD9VarPjk1ozGKSBWcgs2hkJwQe7zrKd1wbQq/kZmhdQyOChWOTKnmK9nwb5Pr/jdp86N3b29q7awdLOzbAcht9deY/6TMXC9mVGOVkB7RO/M8s17jg/G7Dh9m9jcyXNvKrYLqGZT7PIq3r3VydVLIofp+f+zr6SGNy+fgwcC6M2c/SC84TcyyvDbvjrFIRjhlHoOZrpXPRzhvDvlHtOHW8ANoOqJjkbWGJTJznnk0ng19bR9JeJXPzmGWOZ/vZZyvWgyLjc7jbnW/it3q+Uu3lIRGHUbI+oDsePfXFKU9uX/j/94OxRhqqX+R6rjvCLW34VeNBbQRYtZvYjVfoeVJ4pJJHxLg6xKzseHRqABqOBLHnbPhmn8WuL2XhlzGEidjbP2nkU5OnfAFZblJLu/wCCO0YeQcPVwOvEQBym5J7vKvOxu0rf3/R6GVU+Px/Z1+ijM3AoMd7SH4yNXYCGuZ0Si0cBtx4F/wBM12kRie6uPNL9SX7m+NfBfsLEervzRiDyNZ5AltMzmbDE5wPCtMF1FO2lH38DWTkXqfz3phFjpPkKWbEWFBwTtyz3V5SVAHyBvqGBnzFex6YwmXpE6hdRIRQD39mvLywdsZ2XUAa9np8nwX7HFlx8swaUWfMgkChjq0Y1D47V7n5OXji4RfNK6oDcrzP9QV4r5uXlEYI3bALHA+Nel6D2wkjvQx5Mn2Gr6pp4mZ4ItZEei4lxtU7NsMn8Ij7Ky8C4nO/SDhmuR/8ApkPp7Yra3DYnHtUfAuEqeP8ADiDsLuI/84riwzhaR1ZovVn0ezZJqUTJ2jUr6M+OPzyUL4U2ONWIDNpHdgUAYFQNKZ7zyzTBj8Ee410NnSkWq+VGI1xiqCjbZvjmjG1Q2WkRYBzyPCi6lc4qsgCjRk+kW8tOKVseqM9/CBY3BH/dt9lVwmMGzjzknHJefOivhO0M5RoOp0NsQdWnH21z4LLiM1qpikPVHkok099bxiteWc8pNT4j6NvEtCRygIdRhOCxHjyxWeC4jSCITXMYIXtAN5+Arn3Nnc2qyPPFyTOdQPMgUn5tdCLX82uCGwVYLtj4elaqMaqzBzntdGu/uYLjrSjPgRgDCb+0PGkNfgQiIRtpGPacLnHfWcrII5tcTx9gbOCM9oeNJx36UHuq6XFGTk7bNS3AeJ1UoEWPko1HmPGl/OnA2acjwBC/YKBCwSXljqzy9RWcsSOZ+NVZNmiWYHQTGDlAe0Sx5mtU/FrnqraMdUiRRIF0xICMd+cZrC+4i/8ADX9tNlAKxf8AhJRYGu34/wAVgFwIuITqGiZSUIU4yORG4pFvf3M1/bNPcTzYmTPWSFvpDxNBDCxSbY/6M/aKljZzS39rHHGzM88agAcyWFJuhxVgS9UJ5lYEJqYDQBkHNFxJdQtNif8AE4Ruf6pFVcWsyXM6shBWVgQfyjW+9sbhorArBIwaxibIGfwqltFKLMfEHNxeNIyIhKxjSgwBhFH7KG0UCc55aH/QNab+3dbtxpIwFG/5IrSvAeJQTyRy2cyOsEkhBHJQhJPwrNzSfk0WOT8I5C8wa1IuqFFXUSzkb+OBUW2kbZY3Y4zspO3jRBGMMYVSxLNgDyAo2DRjlBFlIzDJBAw3ke/41nRY2jGY2U6uatn6j++ujDw+4SzaF4nEuSdBHa9pR9tdO46FcVsWsILmBIXvpNEQaQbNts34PtDnWWTLGLVs3x4ZSTaRwYolMcgD/RB7QxjcVbQEIh1oc55HzrtcN6Oz3/GJ+DCaKGdQ6s7ZKgqRkbelaeKdDLng1xb291fWqiZJHWTtYXT3HbO/dWMs8U9b5N44JauVcHnlj0wnLjdxy37jRC3UgnJztjbFeh6GdFP8J57iF7z5qIUWTJTVqycY5iu10g6E2nR/hsF0OKfOGluUtyvVBVUEEluZO2Kyn1UIz7bfJtDpZyh3K4PI2lqGzqAwluzb+R/vrZdIRcysrEHV4gdworjqrKaWJJkuFNthZEBAOSD3717Ho50L4fx+0kvbqe6RjJoCxsoGwHiPOs8/URxx3l4NsHTym9I+Tw4LuXJnICae4NzrTZSyW94rxXDB0GtZFAUqQM16jo30Y4Te9IOMWNw0rWlt/oy0uknS+NyKKXgXC4endpw+1iDWRCB01lgxIJO53rF9TBtx/Fmi6aSSl+aAsemXFDHolmW4RlKHroVJwRjmMGutH0tZrnh8724X5lAsAEc2NYBU5OQeeOVdy/4dwDgFxbMeHwiBwcqF1b7Y5ml3snDhxiyaK3EUJti2mKL2iWHMDyPOvN72KXKh9npdjIvMjq9E+KRzcJgtoZFNz22KMDle0Tzxg11EuLsTmJm7WAwI8Kx9F7nHBLdEJ0gvgf8AEau8u7m34lasFAjkbqiM5zkjevNzPbJJRO3FHWKs3LYO+5OSfOmxWTQyLIMEqc866MduQOdMMJrkeVlujwXSiAT8ZlZwQCEzp3OMDlXnZrdV9nJXUMZ54r2nHrcjijvyxoOT6VwLqDDaiobLgkdx8q9HBm4SJnitWeeeOPriXQsmo5UNjI9a9H0CgBS/HPDR/Y1cZwyXGoImQScOAV+uvQfJ+dK8Q9Y/saunqJ3hZzY4VkR6XqdPcBWng3Y41Ybf9pj/AEhS5HJBwM+lDwcu/GuH5z/0mLu/rivNwtuSOjMvg7P74WyalQjBNSvsj4U/PBc7YNMXIrKshAzTFlaupo2UkaRJjvohITtk1nDk1kvriWKVQjso091JQt0OWTVWdYHzo1UmvPC+uFP+mb411eH3jzxFpGBIOOVEsbXIQzKTo1XeRZTgbkxt9lXw1m+Zxrg9/wBtVPJmzuCQCerbmfKpwx+qsowmRzzufGivh/JV/qfwDxWIy2s+FYnqhsAc+2K1pBpghHLsL3eQrDxW4PzaYZYZiA2Y9zjzp8N2Vto8a8YUDt78hTa+KEn82YOkqkoSoZsQjuJ+nXSnCvw2IdWMnqgeyM8xXM43NriftOD1S/S/r10bmOJeG6huSqbls8yKqUXrAiL+U3+Dk3cMS8HTEcaTEaWxjUdzzp0vDuHvfcNEaRrDMjGVATjOO/8AupMqgQNHFGikqhcE5Jbvx4VfzqRm4c4BxGvaH4PIVbhKlX5M9427/AniVlZpxQwrItvbhFAYAsB2fDnuaROlsZoFkkkjiFvH2lTUSceGafePcTXkrQgmNwi5OO1gDxpsvBbqdbZibWNHt495bqNO855tmtYxeqsxm1s6+zHbzOyTsSSerzn4Vp4FKw4vZsXKgXERJLYA7a99BeWM1vPdW81/ZoRgAfOMgA7jGkHurPYWdr8/thLxS2UdcmdKSP8ASH9WqceKZCk07Rd9Apup9dxD/ppPpM30j4CtnErK5S34ZdW00cgj4bGWMUuGUBnGdJwaXOOEw3tyJru7mCzOPvcAT6R/Cat/Sf8AmgwcMNncXIhXhsQHWQBjnLk5IPPJNGiYbDekfFbr5xdwpdhIetjOhkBBPVJvkg45Vrv+IG5m4gIbm8Rbhpswxg6JQsQwT645V53jMnWXswlunc5UsNBwSFAzz8KRZ3CC5LPPcE9VIoIXOOwR41z9hJo6X1Td/kcJ7yONooZLhEY5KpkA5FF82ne3T71IxEjFhy/ArEksAxmS5PuH760G5tvm6J1UraWYgllHPHkfCtO3HyZLIzq2wuPmskirMhZicqcneXJ3z5ivZ8SuoJuBdHCGV3F0omy+WyYhnO/lX87t5oFsJMQMMagTrGTkp/V2pUNxGpGGuU3zswP7q5c/TqbTvwdeHqXCLVeT1nQ0dZ0q1Rpo1QyYRJDnkO875rt9PEhF3AJXnYI066esB/Bx7s14yw4k1o7zwXtzFPpAEmncDIyMg03iHHJ+IlWur4TsucM4IO+M8h5Vzy6V91ZL4R0w6qKwvG1y2eu+TULDc3rmSRW6lQFQqNZ1csmt/TIw3/AY7iJroAXGvS8qEA9W3gN/CvEcK47f8GRrmwlt16xhGZDhtx2sYblWv/Ce/u+Fjh88kTx69ZbshzsRzz5mubL0s3m7i/B04uqgsPbZm7YDrHFEV+baWMjEsMDJx8RX9Q6CS/5FYtG4UTtuGBzsvdzr+ZwtI2rSjKhjcMQQc9keflXs+D9IbWy4RLw6SeS3lMjNqVCeePhyrPr8Up4tYo26DJGOS5MwLIbfpBxh0kaMNcEBgdx981eO/KtltfyXvTnh95MIw8jRjCDA2Q91eYkn03882oOGkZg3jls53rRDcJcdJrPq58RhQOsycABW3qZYuP4/8LjlXj8/+ntek4jY4UneTLZOcdmiuEc8StDEY+zCV7ecY1Dw765t4UESqs8cwyO1G2Qdv767AZfndvg8oyNvyhXmuLjFL9z001Jv+DucAzbcBSYrq6tXbTnGcMaRJxKS8njlMap1bBlXOQD41p4dKp6OSAEexJj/ANRrm20ZbG9cDSUpP8nTFWkj+g8Kma8s0mkVQzE7Ly510BbE8hXO6ODTw+IHkNX21/QuE8GtltUlniWWSQasNyUd1cuHBLPNxicPWdSsHLP5hxmwJvGlGxGnG2eQry3EYOr8jqB9K/rfS7g0doyzwriOQEafwSK/mfGIim4G+oYpJSxZdJejv6XNHPhUonjZ41ebtk4JySBk/Cu70EtyRfnzj+xq407ETEkeOTXougLjq7/8qP7Gr08sv0mY1UzzvTbi80l6bKJpYFtnZWKyECTlvgeFczojcSDpbwQmaX/rC3z2z/3i+dN6YOG4/wAQx/3x+wVi6KBz0s4Jsd+IW+//AJi16nSwjGEUjzeqk25WfaTntmpQt7RqV6x8sfnUh7NNG2Mgj1rnW8mhFPOiN8QSoU/Gu1wKWRVydESefKsF+5aZd/o0fzkOmVOD9lZp2LuCd+zTjGmLJNNUUBkZ8K6fDABC35Vc0ciedara5MMekAHJzzpzVqhYmoytnSvJEihniZwH0EYGT3eIrJBxNLeFY2WUkeCHxpkl311nIMYyjd/lWaFIlTBRGzv2hk0RUVHlFScnPhjLi9F3HIBHKo6sjJA8QfGkycQlkiEQjCKAAcyYzjFSZIFhbTGgZlYZAo7eO2MAV401AnJ5HnWnxSujP5ttWZTdyCKQh410qoAB1EjPLejHFJGgCm9mEmoDSE7IXbfP7MUN5DEkZ6kYyozufGnQWVo0KOY2J2DdrmcU9qSI0bbRja7k1ODdTED6Q76TJKTCoWWRm1HJJPLG3fQRbM2RkaW+yiVF6pj35XH11XkzFoAQdROcjG2abdsCtuByFuo5eZqKqaDk9rIx6Ud/GimAI4dRCo1Yxnc770tR2UZGlWd2JJ1IM+41LVc3Vuf9an6QoWyIpgO91+w0+GMJdWpBxrkQ6c8hqG9OgEcR2vbv/wAeT9I0/isskUXDdDldXDo8gcju/Oq4lGReXROMfOJBz/rGi45gQ8P/AKvDoh+lUuLQ0Hxgj+c7jYDdf0VrPa4M/wDwSfoNTeMPjitxsDgpsfyFpFs337kBlX2H5BofkYrODRhuyD5nn7qHHrTEVFiBYM2WOMMB4eVQM026lrGbwH8S0vSQinBxuM+NarYw/wA2XOFdWGMlnBG7LjbHrWZmGANWw5DNKaLgHG2Fff6P7RUA1kDxoY8HUM8x+0VqLffAwhjQg8lGFxjHKsWbRAiBAC6jpBzjO2fGjKtuVBYDvAzinWx6uWKTAJVgQCPOtTSuZLrB0h3UsF2HOoZrFJmS2kMTzZABEMg5cjjFbJ7hzcyYySWJ2rLoLzXTEc43P/MK7djNJbXjSRu8bLyZTgjYVlO0rNcSt0YopLhy4RpQ+nZVJznburXaG+F3FDmcSt7KHYnI250cN668de5Z+31hJY7nOa03d8t5xaK6TKn2Mk77LsfrrCTbfj0dUIqrv2aorTjUDKhtXGo9lSVG+3Leuva/z7JexWkkbpLKdI++og7ju2cAetcdZdTKXOR3sfQGnRSh1kGtRuFy3LOa48kW/KR3QqPhs9xwjjiW3D2tJoEYMkkQkU5cdo8znBGafZ3MeQK8jbTlI1GrO7fpGunaXWdwwGMbE7n0ry8+BctHp4Mniz+lcJ4qEtkiCjbO+fOvdWHTIx28aSQoxVQuQ2M4r+PWHEQkUYJxj99dePjBC57RUd4Bx8a8hrJjk3jdG2bpMWdfNHtOkPSN+ISEghFjUAKDyz314PinFJH26xidQwc99Zr/AIy3XOVY745VwOI8SCxoSSdW57Q+qtMWGc57z5bNIY4YIax4EXt7KjyJ1jjJOoaue9FwHpK/B2utSdeJCo7T4xgH99cSa71MWDYGdiTWYXOp5WZsljknxr2Y9OpQ1kjhyZWpWi+OcSN/xS7u9OjrZC2nOcbCn9EJC3S3gK5OP5xtgBnlmVa41zJl2PnXR6IPp6YdHckYfiVqRv8A65R+yvRxY1FJI8zPO7Z9tP7R9alRz2jUruPnT81lb70oz8PWgLFj55oQKJR7sGvSoxsZE+lWBG+Nt+Rq85I9KAc6IDGCds0DQ0KSpI5d9XIrREIwIYdxoSdLEBiV+Gapt8elJFPgYhb74pznq2GPdRvkEDyH2VLSQRSM+hHxG/ZcZU9k8xTLjiL61PU2e6KdrdfCtEuCLAcgwZPPDfZQpJpXGM5aiN7LJAVWK1VsntCFRgYofnLKrqiwt2856tSSCPSqUQciTkdSfDT/AP8AVaIJVECqO5gT8KyvduImUrCD2eUS+PpQJfSlwn3nc4/0a/up6LiyVOrFIoeTbG+sf8pqJ24pSojAQITkgcz599RL2UPnEQxnlEvgfKqNzJJbSREIFJRuygG4z4Cq4Jsask8dtKIpYurOkyBWBPl/+intbXt1DBOZ7dkMShesuYlYAEj2SQRvmsCws0R0hj2hyo7nGmDBGBHj/mNJILNV3Zm3keFpraQlgxaKUSKAfEjbvpkNijX0cf8AOdmNDqquTJpbccsJnG/eBWJnOqTfmP2in2MbTXceBlUkRnOcBV1AZNVrYbD725bh3Er9YWtpg87gu9uHwQxyF1jb4b1OJ8fmm+bPosCVso0wLGHGQD3aaz8URpzc3ilepN26e1uSSW5eGKy3yrpgAcf9GTPrg1DTHZ1ukfEzf3zxSiKNUMbo0NvGpOYkzq0gZrBZAyXMca3LFmyqjTpySpHPOBRcTUNfyMD+APgi0mBR1o9G/RNLV2Gw1o54G0GddQxnTMGHxBNPJuDDGfnEeCW2Mi+VYAcKPdRs33tcbAs2PLlSHZ07Y3LcPudFxCGVozkyoNs786TovW0HrrdscvvsW3LzpEH/AEC5/wCE/wDNSdWVRTjAJI99TJFxkzpwQXCiVmNs2V7WWjO2R50yW3nW5KmK21FyvtLpyCMjnyrmxuUWQKcalAOO8ZFGw1mNVwWbu28dqylH6NYzpG1XaEx6o7flnPtZ37962iVk60SR2udW5AB79u+uTBkSBTgkkciCDyp6xsjSs2gqJNJ3G535b1Diaxmb41nWS4xb6l6tsHqc55YreOsjuXDRuuWHtIRttXnoXKGcAnBicc/KnvOwupju3a/DIqJQTRcMjRvRxJdSS5PMn66tJv8AGIsnHabn+TWL52XQENMuP9ZmtkEhi4nGBNPiJ9WQ++y91ZSgbRyGlLoHTlwfIn0rRFdaopMkHtJzPnS34xcExMl5dMMYfJXnty2p9v0hvlhYJMGBkQZkiRiBv4iueUDqhkN8NwWWMZ/C/SNdK0nIUr1gAYgEePhvXCm4m87QvJ1auEZcpGqA4dt8AAZq0vSBuzb8xnY1xZMLZ34s6R6kcQWFWUs2obAAZya2Q8SIgUEtz1E52O3hmvGfPiDgEitI4koUDG+Nzq51yT6Q7IdWd664oDI/bYDTtjfJrk3Vy8kOoK2kMBq7skcvqrHJc9dN2GGCNssB3edY5LrlkZOR7q1x9MkZ5OqbNPWuGVcnLY2pPzrEsmTzNZZHOlnAOgEAnGwPh9VZ5ZmickAqGG2QNwfWuyGM4J5uTRNMGDkE6gc8xjFbeh9xq6Y9Hhj2eJWu/wD5q1wJJhzHLzrqdDH1dMuADvPErX9atdEYUcmTJaZ95ue2fWpUf2z61Ks8k/NXrRjGtSDgns1ayqW7RXBOThaRkAcgffUDDwHxr1aOfY0iXQTofGRjYcxRdccL98bsjA2O1Z85UHCjHM95okIZgNKDPgKaiG48yBjkkcsbLims0IjiOEzp7XPc576RFJChcyIG7JCAxtjV3HYii+dR7DqYP/6z5edWsYu4OiKPI4DxoDE558uzUngXrEUTRkBFGrfB+qmR8SRbYW/WOsfUlCqwoAWJ3JOcmkz3MEpXTJJsoUZQd3vrRY1XJLmC6KsTr1gJ35A+QoJDpJKncBeXjpoxJCyvqnOWB/8Alnmcb86opCc/fkyTnJRqen0LYQu6P6D7aWRgnb6Vbo7dGicK8TE4GQjDGCDVm0DuNCpk6djrG+2afZlQt0YAO0ffRIOwR5j9tbXsHgOXtZ8FiCVyQB48qAQoInPU3YA09w3+qjttBtYEcZkgYBScMN8gAbd9RpWgMTRthhGNxv3mnLCjWpPU3HZcZBxvkelLaKFxGui5BC4JJXA39POnrwFiZdpZRyA/eKqNEl1a5URQV3bPea2TpaLc3CgyuMuNRdRyPMbeVCkVoLJ5G65VaVUyJFJOATyx5ik8bDYGaJTYth0x86cDf+qKzzIOzuDhAMg+VdRBaHgQbS5Pz0jLSgbdWPAVlnksjCqLG4fTzEwI+Gmr7fAtuSX4Hz6fyb9gpMCFpRjvVv0TXV4itknErkC3mOmQjPXjfl/VrNa/NWnVCswUhucg27J/q1MocjTObpJXGKYELRRqoLMXIwO84FNL2YhAIlycH/Sr/DRxT2XzQgC4D9aB/pF5aT5VnoVZaI0VrOjKVOBsfyxWfGdI295861xta/MrhY+uBCoSWZT9MeFJBgKICHypOWBGWHd6YqJQLiwUXsOdu7v86IhdcevJTA1Ac8Zo41Rkk0JKQAp3Izz8hTBG7KpWFywAGAjGs9DRMSpXs9nkd985rQGhXrS0eDrGnSe6pHY3JBItLjO2OwQKf81uZHx81YM7ZCZxk+AGc1LiUpGaLfrf/Cf7KbM2m5nx3sRVrC4MysFjYxyA6nUYJHLc0c/VF2YFAudyZlOT7qzcTRSEo33s1t1EX0uD+H+iayFodACyRZ7zqJ/ZW03HD/nDyichTnGIiTuMcyahxNIyJDKNOFYHKkH6q1QAGJsf97H+2sa3NouALifHlEg/bWheLwxxhYpLpdA3Koi6znPa3rJwNozRsm6hVhL3MaNhjggnYucHYUwNay2utZoUaKQIMBsvqGdzjuwfjSYePRRxRKP5wGjOR1selt87goaOTjvDHjZDwQHWQxPztl3Ax3KMczWMsZusqB1p1mlriJMd51H37CnDqmUg3tqMnOcNn0zjlWZ7nh98srR2ElvOEGhluiygjA7QK77Z5Eb0uPh93NukZIHPflWUoL2bQyP0Ol0q2kXUDjHtAsAPiKkjK4WUSQCMnTgMx07DY7ViltZV9rYe+kEFTzOaqONMmWRr0b5GRmLCaEZ822HwrKWRtutiHrqH7KzEk+OKWdR5ZrRYzCWVmkqhGOui33zhv3V2eg6r/ht0eBmT/rO1xgHf76tecGa7PQbI6b9HT/8AlLX9atXoZSnwffr+2fWpUf2z61KyOQ/M4gDkwqadgQc57h3VpSzkZJnIGmEgN99Ubnl6+6kvEySMpxkHGzA17jxNK2jhWRPiwMHONs+tTcd9NKqsaH6ZyTuCMd2KrUNAXQoIOdQO/vpLGPYDU34TfGoC34R+NGd8ftIo8awD355AAAVSg2LZCw7ryZt9tjVksO9vhTOrwNyw9cVbWrrFHINWXYrp0HbGN/PnV9uROyFaz3sfqqzICqrk7d+kb0zqnicj74MjG64JB9arqyCch6rSSDZAZ22bAqKxb6Yq9BXA7Q8MgCiPbbJZiSck45/CmosTaKDFQNM8ik89Odvrpkd1cgMI7u5JIGAGb99LaLcnIx76uK3MpIUljj6K5/bT0k34FsqGfPOIL/2q7H/mt++i/nHicWCL68UHvEzfvqxwycsAI3OeXY/voXsZYnIZGGOfIftqu1NemLuRfsfHxfieR/j10fVyftph6Q8W0af5wnZc5AJBGfTFZFtnONOWDDbDrv8AXVm2Ke08aEdzSD9marWaQtonRj6U8cSze3Tic6xs4YoAuCcHflVP0l4wGBj4lJ2VAB0opzgZ7q5/V6Y89ZGcnuc/upYTOBqjx+Uf3VLUkUmjrTca45LO0h4rdtqwS4m57DwNVBx7jMMoZuJXoGG2MnPY4rnKqo+SEdfDTQBhGwIO47yoqG2ho2jjvFjH2+JysdtmIYfWKh47xBwga6VgOeY0/hrBqY8mJ/4RR6ZfB/8A0iot+iuDevGb4wyqLgAFVzpjjGe0PKkHiV6f+1SD0IH2UoGUKVLYBxzxVaWP/wAwfD+6okpMtSQ0Xt2+dV5NjHfIaBmdlybnXvjGs1BA5QvzQbFiMDPhmh0DTkFT5awSfdWbgzRSQOgA76W94qwoHIL8BRCFgurT/wAp3o9ICgnq9+7bI91S8bGpoVhR3qPdVgqds5pj7N2XQgciFxn41YYAjt/8oqXjKUwVZRsATTQjaVkEb4LYVscyKW0oJ9rGTywBT+3HBC+sFX1FVVt13wcju5VOhe4HtyHKsXJ323Jpigcgnr/7UMbAYwrZPLDH9gosqP8Au8DnqY7e4iocC1MahOAFUe5MmtccbPhSdPkFG/10MPC7l4ZJVMCqmnIE6KdxkHGeXn40nsTT4jhkUnkqMHIwN96l4y1kOxbssaxr84KBfB41z6869Xw7iCR2ZRuNaEIzj+ctHh3LHX84E0bthluFJ8MbV6Th0HDjwiSeXgPFrlFIV7pJ9KA7YHs4FcPUYotHf0+aXodxficE0mr+cOuwAB/jkkn2qK4E11Dgklmfu++be/ajupOHB+ris5IX8ZbnPh4DFZTI2GjTBSM6zoUOBy3Jxy9a1xYklSMsuZt8lBusxgRgEhcs23v8vOks4VyMxYzjOdqZKssQCTZjwNlk54O/IVmmkixhQ7N3sxx7gP2mt9aRzPJZojkjVwzrG6A7qHOW8vKur0HkJ6adH8IhP86Wm/8A5y+dcKa9aZYwc5UYJLZ1Hx8tsbeVdXoTLGOmvR06TkcUtCWLf65O6nJKuCNmz9BpM629alVJ7betSuIk/NDqyCBpGfdRGHkcr6YO31UUYTQyAEasbiQfZitcFikkDyfOYoWTGElYDXnwxX0uPFt4R5c56+TNoC4w22B9A/tq1UEZ1AnPLqzXYs+HWU3DriSbjHD47nSOrimMmrII9kgFSSPGuabfBCrcwyEn2Y2LH69q2eFqjJZU7FgMSDqHr1X91dWPhSPwmK8hvIpbl5zC1sFCsqhdQbfGe/yrGYo7RmF1FeLvpUHShyOYPOiPELJYUReHq2kk6nuGJbIHPAFaQhGPMn/ZMnJ/8V/QLhg+BJjHIogA+vFGtvHdSxqgmkkYhSHkUaj5UtLxJXwkFpHsT2lJ5DxYmrTiFwmGW4WM92jSuPgKqMoe+f8AfyDUvQwwBkVEtnDq3acOWLDwxypjWrjMkdvOkTLo1MSQeWd9hWeS/uJVxJdSsO8GalNMrRiJnOgHPtMwJ9OVDnBeAUZM0tb22kGWSQyHujdAo5cyaP8AxOZJZsQoUA7MkzMXPgFUD91c9Z0hUqgLAkEhlGk48qjXII1CJVA54z++p7sPwV25G1ZIXkVBJbxqSBqS2JxuN96ddSILmZPnc9wOsYagqxq2/MDwrkidGOBCuT5mi1Akr1KgjvD0451/tieL/eDfDLafOI+uR+rDDX99Gcd/dS5ni62Q26ER6jozpJxnbJrLG8R9pHPowFFoiwfvb+pdTijuNoNKZqVzM8mkySBF1HRpACjHdSwtuAMs/wBVJjW2Zhrm6sd/YLEfCtdlBZSyuJ57lIh7Mixj6wTtRFuTrgUqirNdnccFh4bfx3Vpcy3TootZQ+FifO5YZ3GK5yzQAE5mz5RqPrJrZNNwn+b4Ikgl+dq7GWfrdpFPsgL3YrEZrVD2YScd5lP7qMnHtDhz6YTXPWsg6lWKqFG4BOO/lRwxXjdZJDbtphXU7KgIQZAyT3UpJSYWKodAIyC2R9lRHiWBztrJA05wNPjnPjjasrvlsuvwFouJAI2kwuc6TKAM+OM0HVqOyXi5j6Wr7BSWlT6IHvbP7KYLiNACsfWNpIIlCaQT3gAZrFziaJMMLbpLqUyHAxsBg7edGsmD2Qx8tY/YKVFdNGwYJEGHInJ+00z+dblYRAs7JEGLhUwACRgke6o2j9lpMIvOIi4BjTPtE7E+/wDdQLIerMRnXQxBKjx9cUnrZpH1ASOPMft7qbHbOySSNJFDpxtLIBnPgd8kelSvl4HwvI5LWElQJYcldRJk0geWcc6FokEvVoA5zjKHUD6Has5aJHIabrAO+IHf3tj7KA3EedrcMP67k/Zis5SiikmblgkkVWWKbSSVJRExqHd64350Sq5h6vqZGjDasmJS2fXOfdWReITyWq2er7wkhlWIL2Q5ABPwAFM+byRRx3EyGGGRigcKDkjGQB7xStPlDV+GGwuLfIUtbxyjl7IYfWTUFpO0KTkO0bMYw+lsZAB06jgct8ZpCXixSao11Y5FwPs/fRS8SuZ7dYHmkaNWLiPOEBIAzjlnAqLh7Zfy9DAoB7TqSO4nJ/Sp0tw0WjqlLLpB1EFQDjcAZ7vGuaZDnGcejVaKHIZ918ScZ99Rt9FV9nRiuZ2tptV20avhGjGr76Mg4J5YHmaSkqKy4GvHcXGD7h++sepMdonPkNqMtFhSMse8cgP31DLTNqteTKFLTMo5DOwrpWPBeIXUbytJ1FvENbzSuQqjxABy3uBrj2siLKpkhgkX8B2Kg+8HNdWWSO9aMzRBmWIRJpvhhUUbDtDPf41zZGzrw0/Jkvo4oypSaaRTtqlAGTtyXJIHrWZp1jBEMkwDDD52DDw2O/voJo4xhkVx6yKf2UsaSwXOnJAyzDA9fAVpFfRjOXI+OaNXUu7Bc5Ohd/tpJkLEktgnffepciKGVoVlWUqcGRGzGfTbJHnWd3PIFRjw76tquGZ7XyPMjIqlZQGYHOk4IHga6vQl/wDPPo+NQH+U7XkP9clcMAk4yD767fQeJj026PgY/wCtLUc/9clTJWhpn6Hye23rUqSDtt61K4ij80GuGOO0dv61B1jdzfDFK5/SxVhRt2hXtbtnFqkNDt3sR60Qfb2l+NJ2U4BGfEGiD5+kfhQpNBQwSSjOl2Ho21UJTzZY2Hmo/ZSzufaBolJxgMQPAHaq3YqQ1WUnIQj8lv30Y6osMtIgPM4DfZSFZVYF1JXO4GASPWr+dqIjGsMYOrPWHd8eHh9VUsiXklxfo0x25lhlmWaELFjIdwrNn8EHnQhD3TMSO5QTWQu0u7EsR41BsOWPfR3I/Qav7NGnC4Kt72AojHMMN1DKDy7JIPxrOJnj9l2GRg791FFLJqCpqYkYAxq+qqWSIasfqmHMFfdj9tQOVOGl0jyOfspWlj7S4/KIH20cccbBi8yJpGQBlix8NuXrVqbfgmguujXm0zehA/fT7ee1Z/vqSrGM5KtqYnG3PArJoVyqRB3cnGMhfh40yWO6g+8TW7IYjjQ6klTQptOxOKfBrbishsIbJIoEWKRpOsWNVkfONmYDJA7t++sZmLHLhWI8WORVRXBjYN1ULY7nXIpbOSqqzjSvIeFE8ra8hGCXoa0qHAEQHmGOTV9YgBBQjffB3+us4ZNOMOXzsQcDFFGGkkEaoxcnAXO9Y7tmmtBs0Z5PIPUUIAYgBxnzBFFcQNaztFMUDpzCEP8AWDila1UYCZ82P7BUyfPI144Hrbv1TTB4tA2JLD6gdz7qIwPoTUoQEZzobtDxrL1pHLC+gqmcsQO0x8OZo2gFSNnzfQwGC5I5BlFVqmiPZiKeYXJ+O9ZjCw5hU8NeB9XOrUog3Z2Pguw+P91S2vXA0gpJGYYkZt+Wo07qLp4xL1LLEMKG0aUH7KO241eWcE1vbyLFHONMg0BiR+UwJHuIrI07v7TB8bDUScUnKNeRpP6Hxxw9Yq3FwVT6RiTWR8SAfjR21xb2t0JRbRXKKThLnLK3qFI9edYy+3sjPiCagbO9ZuX0Ul9jmkLDBfbw5Cq1EALqOPClhiP/AHoh/WOkVDbZZesgYz7qsdrckAeJqlkRAulAHU51kkn3DlRSTddI8kpZ5HJYtnmTzpUgsgZQNgPDcZ+qryXPt5NAAuNyw91XnuVsD1pjCKDSp6xSTzXw99Wux7ifyxStLHYEH30SIxAOknJqWhpmoI5ALrP64Bp6RQkjU0o8dUOfsNYEDOQsYww3JBx7z4VtsuIy8MuobqCcvcwuJI3O6owIIIB5kEd+3kaiSNYNAzRJEodnUBt1AG7D4nHvrPdTxuyiEOkYHsk539e+jv7ufiF3Nd3Lh553MkjbDUxOScDbnWTB8Prqr4pEPlh5XA3PwoeffQ7jmpqs0qFY1VOgt3A4z513egRA6c9HCf8A+VtP1yV53WMYwK7nQVgem/R3AAP86Wn65KJJUCZ+i8ntt61KqT229alcJofmQCO/HuNTK9xPwql6sA51E42xtipqA5KPfvXrHIXk5GM0SqzsAzhfNjigMjgYyceHdVA+QotWFBdnvc+gFFqTbsttz7XOl5B//c1Bjxo2Cg9S9yfEk1BqPs7egoAT3CoSx50bBQzQcZaRceuT9VWeqUDBZj6YpQ9RRAeJxT2+goatzo2WOI/lLq+2g6585DFfydvsoMbZwcedWdJHtH4VW0hUiZHifhRD8oVQKjkpPqatXJIwQPTahAxuAi5YD8k99W8ruxkY4Lb5G32UnIwOervOaHUM86p5PSJ1HPcyE4EkuMYwWzQdYe8A+q0GTns/VzqaWHtdn8o4qHNspRQ8TIEKmGMnOdWWB+2hefUMEEDvAO310CP1TBldtQ5FdvrqGfJJCLk953P10OfHkFEJAjbKXH/Dn7KfHbRvHKz3kERjTUqNq1SHI7IwDv64G1ZGlZhhiT5d1UNPnUqSXoerHdheSM/mTgfAVDPJyB0DwUYpOB3H6qsFhyb66Ww9Qgcnnipmq1N6+6q1eKj4VIy9VTNCGHeProhp86QyZx30QZicbmqxgZGw8TVajg47+ZoAMStGxxoPdyBqBweaj40qrFJyYUN1L5j31eVxkNv5jlSav1OKLGORC5IDKTgnc4+2oFY7gA+hBpYI8Kokd1HADTqG7Aj1FWqbBnJVTyI5t6U7hXEpeD39vfwiNpYHEiLKgdCR4qdiPWkXFy91M80rku7FmPmarirJt3Rbz6uyo0oO7n7z4mnW+g62Zyp6tiABnJxyrIF/rj0OaagJBw6eyfpY+2sZ8msOGSRsmgGWIAGSdsVCr88Z9DVEkdxHup0JshJ1HPPlV9YyrpDELnOPOgJqi2aYgtZxzrt9BGP+G/R3/elp+uSuDmu50DOenHR3/elp+uSpfgaP0bf229TUqSe23rUriNT8xKnvq8eRqveK9I5yAkcqmfHFTB9aqgCwV8D7qJXCgjGc+NBt4mpnHd8TTuhUFqOe/wBxqZbxPvocnGBtUo2Cg1cA5IXPlmqyD4ih99THhRsFBBsDGsjy7qvby+NBgnuJogoHtMB9ZoTYF4B5Ej66dHaTyQPOkbPEhCs6jZSeWfCkawOQz6/upnzufqmi61xG2CUBwD7quLj/AJEyUvRWkD2nA8huarWg5LnzY0Gs+NTI8BU7fQ6D61ztnA8BtQZqZHgfjUGk95+FTbY6oupnNTA/CFTB7sfGgC/qqqvS2M6TgVXrtQwJU3PKpkd311RJPOkMsYHM/Cr145UOPGr2oALW3fRI2llZkDAHODsD5UvVz2z5mpqzzJNPwIfdXK3VxJMYUiDnISLZUHgB4Urs/hfEUGasUm75BKuAwpbkQffU0MOYJ9KH0qDyo4GFqI2xipU1sPpVBIT9FT7qOBF1eycx2vDwpqT26W0sb2xadiCkokI0DvGORzSOz4n4U2kvDBO/RRYk5J3qwcetVt3MPfUAPdg++pplWWDmjz9lAAw7jUJqWhpkOMVMnxqjtQ5pgFqqatudCamaBFlq7nQJv8+ejvL/AK0tO7/XJXBJru9Ad+nPRwf/AJS0/XJUy8DXk/R6TOtvWpUk9tvWpXEbH5hA0Wo0NTNejZz0FqzVZ86omqosdF4q6HNTNKwCxUx5j41WamaLFQW3jVZHh8aGrp2FBFiRgnYd1DUzUpWFEzUqZqUDJV1VSgC9qm/dt6VVTNAi9zUx51WTUzQMvPhVhie+hqUWKgtXkKvUPAj0NBUzRYUFseRx61MeYPvoKuiwoMjHeKrSaHNQDO+cDxosC6IfCqEpXZe/bcZqtXkKfABAioTVZHgasYPfj17qQFZJ5VeoLsp9TVFtsDl9tVR4GEDUzQ5qZpAFmpmhzUzQAQNGsjIwIYgil71VABFj37+6qz5CqzUzQARIPdVZ2qqlAErvfJ/v086Njx4rafrkrg13vk+DN0+6NBFLMeK2mAO/78lTLwNeT9HpB229alXJnW23fUriNj8wMN4Grw3ga++fub/ks/FC1/OZ/wCOp9zf8ln4oWv5zP8Ax10d5Geh8C6W8DU0t4Gvvr7m/wCSz8ULX85n/jqfc3fJZ+KFr+cz/wAdHeHofAulvA1NLeBr75+5t+Sz8Ubb86uP46n3NvyWfijbfnVx/aUd4ND4H0t4GppbwNffP3N3yWD+iFr+cz/x1Pub/ks/FC0/OJ/46O8g0PgbB8DU0t4Gvvr7nD5LPxPtPzif+OqP8m75LD/RC1/OZ/46O8g0PgbS3gamD4Gvvn7m75LMf/CFr+c3H8dV9zb8ln4oW351cf2lHeQaHwPhvA1NLeBr74+5u+Sz8Ubb86uP46n3NvyWfijb/nVx/aUd5C0PgfS3gamDnka++Pubvks/FG2/Orj+Op9zd8ln4oW351cfx0d5BofA+G8DVaW8DX30P5N/yWD+iFr+cz/x1Pub/ks/FC1/OZ/46O8PQ+BcN4GppbwNffP3NvyWfihbfnVx/aVPubfks/FG3/Orj+0o7waHwNpPgamG8DX3z9zb8ln4o2351cf2lV9zZ8lf4o2/51cf2lHeDQ+B8N4Gr0nwNfe/3NnyWfijb/nVx/aVf3NvyWD+iFt+dXH8dHeDQ+B8N4Gq0t4Gvvk/ybvks/FC2/OZ/wCOp9zb8ln4o2/51cf2lHeDQ+BsHPsmphj3Gvvj7mz5K/xRt/zq4/tKn3NnyV/ijb/nVx/aUd4ND4Hw3gavB8DX3x9zd8lg/ohbfnVx/HVH+TZ8lZ/ojb+67uP7SjvBofBIVu8Gp2j9EgV97fc2fJWP6I2/53cf2lT7mz5K/wAUbf8AOrj+0o7yFofBOD4GphvA197fc2fJZ+KUH53cf2lT7mz5LPxRt/zq4/tKO8g0PgnSfA1MN4GvvcfybvksH9Ebb86uP46n3N3yWH+iNt+dXH8dHeQaHwRhvA1MHwNfe4/k3fJYP6I2351cfx1f3N/yWfiha/nM/wDHR3kGh8D4PgavteBr72+5t+Sz8Ubb86uP7SoP5NvyWD+iNt+dXH9pR3kPQ+CcHwNVpPga++B/Jv8AksH9ELX85n/jqj/Jt+Sw/wBEbb3XVx/aUd5BofA+k55GrwfA197fc2fJX+KNv+d3H9pU+5t+Sv8AFG3/ADq4/tKO8LQ+CdJ79q/v/wDJc+SC/wCO9JLTptxO3eDhHDXMloZFx87nGwK/1VO+fEADvx9B8M/k/wDyZcKu1urfofw5pF3HXtJOo/4ZGI+qv6DBBFBGkUUapGgCqijAUDkAO4VEstlKNFhCRuN6lGW9alZFH//Z" alt="" aria-hidden="true"/>
         <div class="cta-scrim" aria-hidden="true"></div>
