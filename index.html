@@ -440,14 +440,16 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   .hero-strip .qtr-divrow-5 > .qtr-div,.hero-strip .qtr-divrow-5 > .qtr-div:nth-child(n+4){grid-column:auto;}
   .hero-strip .qtr-div{padding:14px 16px;}
   .hero-strip .qtr-div span{font-size:12px;line-height:1.5;margin-top:4px;}
-  .hero-strip-bottom{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:clamp(24px, 4vw, 56px);align-items:center;}
+  .hero-strip-bottom{display:grid;grid-template-columns:1fr;gap:22px;}
   .hero-strip-bottom .qtr-divrow{margin-bottom:0;}
   .hero-strip-bottom .qx-row-label{margin:0 0 10px;}
-  .hero-strip-bottom .stat-row{display:grid;grid-template-columns:repeat(4,max-content);justify-content:space-between;gap:14px 20px;}
-  @media (max-width:1440px){.hero-strip-bottom .stat-row{grid-template-columns:repeat(2,max-content);justify-content:space-around;}}
+  /* the four figures: equal cards in an even grid, the same width as the dashboard tiles above */
+  .hero-strip-bottom .stat-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
+  .hero-strip-bottom .stat-item{padding:12px 14px;border-radius:12px;background:rgba(255,255,255,0.025);border:1px solid var(--border-soft);min-width:0;}
+  .hero-strip-bottom .stat-label{white-space:normal;}
+  @media (max-width:860px){.hero-strip-bottom .stat-row{grid-template-columns:repeat(2,minmax(0,1fr));}}
   @media (max-width:1100px){.hero-strip .qtr-divrow-5{grid-template-columns:repeat(6,1fr);}
     .hero-strip .qtr-divrow-5 > .qtr-div{grid-column:span 2;}.hero-strip .qtr-divrow-5 > .qtr-div:nth-child(n+4){grid-column:span 3;}}
-  @media (max-width:860px){.hero-strip-bottom{grid-template-columns:1fr;}.hero-strip-bottom .stat-row{justify-content:start;}}
   @media (max-width:600px){.hero-strip .qtr-divrow-5{grid-template-columns:1fr;}
     .hero-strip .qtr-divrow-5 > .qtr-div,.hero-strip .qtr-divrow-5 > .qtr-div:nth-child(n+4){grid-column:auto;}}
   .hero h1{font-size:clamp(30px, 3.2vw, 48px);line-height:1.14;font-weight:800;letter-spacing:-0.02em;margin:18px 0 14px;}
