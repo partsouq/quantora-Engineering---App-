@@ -1173,6 +1173,10 @@ YOU ARE TAKING OFF CIVIL, STRUCTURAL AND ARCHITECTURAL QUANTITIES. These trades 
   * plaster and paint, m2 = both faces of internal walls and the inside face of external walls, at the ceiling height you assume;
   * wall tiles in wet rooms (toilets, baths, showers, kitchens, pantries), m2 = room perimeter x an assumed 2.4 m tile height;
   * external paving, pools, stairs and railings where the plan shows them.
+- KEEP THE TRADES CONSISTENT WITH EACH OTHER:
+  * Blockwork is measured ONCE per wall (wall length x height, one face). Never "both faces".
+  * Internal plaster = both faces of the internal blockwork + the inside face of the external walls, less openings; external render = the outside face of the external walls. Paint = the plastered area it covers. Write that arithmetic in quantity_formula so the plaster and paint rows can be checked against the blockwork rows.
+  * Every room that gets a floor finish row also gets a ceiling row, a screed row and a skirting row (skirting only where the floor is not tiled up the wall), unless the plan shows the room has none (open to sky, plant deck).
 - NO LEGIBLE SCALE, NO AREA TAGS, NO DIMENSIONS is still a measurable floor plan. Calibrate the scale yourself from objects of standard size drawn on the plan, in this order: a written dimension or area anywhere on the sheet (even one "10 m2" note), parking bays (2.5 m x 5.5 m), single door leaves (900 mm), lift cars (about 2.0 m x 2.0 m), stair flights (treads 300 mm), WC cubicles (about 0.9 m x 1.5 m), sports courts (badminton 13.4 m x 6.1 m, basketball 28 m x 15 m, tennis 23.77 m x 10.97 m). Write in assumptions which object you calibrated from and the scale it gives, keep confidence at 30-50 and set review_required. Never return an empty list for a floor plan because the scale or dimensions are not legible.
 - Where the specification is not on the sheet, write the item generically (e.g. "Floor finish, type as per room finish schedule (not on this sheet)") and set review_required. A row with an honest quantity, a stated assumption and a low confidence is useful to the estimator; an empty BOQ is not.
 
@@ -1245,6 +1249,38 @@ function civilUserText(drawing: any, usingSelection: boolean, selectionCount: nu
     `Read the title block, scale, schedules and legends first. Then measure every civil, structural and architectural item this sheet gives enough information for, ` +
     `in m3, m2, m, kg/t or nr as the rules say, and record them with record_boq_items. Show the dimensions and arithmetic in quantity_basis_notes on every row. ` +
     `Disclose every assumed height, thickness or dimension in assumptions, and give an honest confidence_score per row. ${coordsInstruction}`;
+}
+
+/** Cross-checks between the civil trades. Fixes blockwork measured on both faces; flags plaster / paint that do not
+ *  match the blockwork and rooms with a floor finish but no ceiling or skirting. Quantities are only changed for the
+ *  "both faces" blockwork case, where the arithmetic is certain. */
+function checkCivilTrades(items: any[]): string {
+  const notes: string[] = [];
+  const sum = (f: (it: any) => boolean) => items.filter(f).reduce((a, it) => a + (Number(it?.quantity) || 0), 0);
+  const txt = (it: any) => `${it?.description ?? ""} ${it?.quantity_basis_notes ?? ""}`;
+  for (const it of items) {
+    if (String(it?.system_category) === "masonry" && /both faces|two faces|each face|2 faces/i.test(String(it?.description ?? "")) && Number(it?.quantity) > 0) {
+      it.quantity = Math.round(Number(it.quantity) / 2 * 100) / 100;
+      it.description = String(it.description).replace(/,?\s*measured on (both|two|2) faces/i, "").replace(/\b(both|two|2) faces\b/i, "one face");
+      it.quantity_basis_notes = `${it.quantity_basis_notes ?? ""} Halved: blockwork is measured once per wall, not on both faces.`.trim();
+      it.review_required = true;
+      notes.push("blockwork measured on both faces was halved to one face");
+    }
+  }
+  const intBlock = sum((it) => it?.system_category === "masonry" && /internal/i.test(txt(it)));
+  const extBlock = sum((it) => it?.system_category === "masonry" && /external/i.test(txt(it)));
+  const intPlaster = sum((it) => it?.system_category === "plaster_render" && !/external face|outside face|render/i.test(String(it?.description ?? "")));
+  const expected = intBlock * 2 + extBlock;
+  if (intBlock > 0 && intPlaster > 0 && (intPlaster < expected * 0.6 || intPlaster > expected * 1.3)) {
+    notes.push(`internal plaster (${Math.round(intPlaster)} m2) does not match the blockwork (both faces of ${Math.round(intBlock)} m2 internal + ${Math.round(extBlock)} m2 external = about ${Math.round(expected)} m2 before openings); check the plaster and paint rows`);
+    for (const it of items) if (["plaster_render", "painting"].includes(String(it?.system_category))) it.review_required = true;
+  }
+  const rooms = (cat: string) => new Set(items.filter((it) => it?.system_category === cat && it?.room).map((it) => String(it.room).toLowerCase()));
+  const floors = rooms("floor_finishes"), ceil = rooms("ceiling_finishes"), skirt = rooms("skirting");
+  const noCeil = [...floors].filter((r) => !ceil.has(r)), noSkirt = [...floors].filter((r) => !skirt.has(r) && !/wc|toilet|bath|shower|chang|wet|kitchen|pantry/i.test(r));
+  if (noCeil.length) notes.push(`${noCeil.length} room(s) have a floor finish but no ceiling row (${noCeil.slice(0, 8).join(", ")})`);
+  if (noSkirt.length) notes.push(`${noSkirt.length} room(s) have a floor finish but no skirting row (${noSkirt.slice(0, 8).join(", ")})`);
+  return notes.length ? `Quantity checks: ${notes.join("; ")}.` : "";
 }
 
 /** A slab or screed row in m3 whose quantity is really its area (the thickness in the description was never applied). */
@@ -3000,6 +3036,8 @@ Deno.serve(async (req: Request) => {
         const scopeNote = applyTakeoffScope(result, drawing);
         if (scopeNote) result.analysis_notes = `${result.analysis_notes ?? ""}${scopeNote}`;
         if (civil) {
+          const tradeNote = checkCivilTrades(result.items || []);
+          if (tradeNote) result.analysis_notes = `${result.analysis_notes ?? ""} ${tradeNote}`;
           const fixedVol = fixSlabVolumes(result.items || []);
           if (fixedVol) result.analysis_notes = `${result.analysis_notes ?? ""} ${fixedVol} concrete or screed volume(s) were recalculated as area x thickness: the AI had written the area as the volume.`;
         }
