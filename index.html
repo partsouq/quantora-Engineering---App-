@@ -21,7 +21,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-29.16"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-29.17"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -332,6 +332,10 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
 .qauth .qauth-card button.bg-slate-900{background:linear-gradient(90deg,#5b5cf6,#7c5cff 55%,#8b5cf6) !important;color:#fff !important;border-radius:12px !important;padding-top:13px !important;padding-bottom:13px !important;box-shadow:0 10px 30px -10px rgba(124,92,255,.85);}
 .qauth .qauth-card .bg-slate-50{background:rgba(6,10,34,.6) !important;border-color:rgba(129,140,248,.18) !important;color:#a9b3d6 !important;}
 .qauth .qauth-card select{color:#c3cae6 !important;} .qauth .qauth-card select option{background:#0b1233;color:#f4f6ff;}
+.qauth .qauth-card input,.qauth .qauth-card select,.qauth .qauth-card textarea{-webkit-text-fill-color:#f4f6ff !important;caret-color:#ffffff;}
+.qauth .qauth-card input::placeholder{-webkit-text-fill-color:#8a94b8 !important;}
+.qauth .qauth-card input:-webkit-autofill,.qauth .qauth-card input:-webkit-autofill:hover,.qauth .qauth-card input:-webkit-autofill:focus,.qauth .qauth-card input:autofill{
+  -webkit-text-fill-color:#f4f6ff !important;-webkit-box-shadow:0 0 0 1000px #070c28 inset !important;box-shadow:0 0 0 1000px #070c28 inset !important;transition:background-color 9999s ease-out 0s;}
 @media (max-width:900px){.qauth{grid-template-columns:1fr;}.qauth-art{border-right:0;border-bottom:1px solid rgba(129,140,248,.14);padding:24px 18px 40px;min-height:0;}
   .qauth-copy{padding:26px 0 6px;}.qauth-copy h2{font-size:30px;}.qauth-copy p{display:none;}.qauth-arc{top:88%;}.qauth-holo{width:90%;opacity:.35;}}
 </style>
