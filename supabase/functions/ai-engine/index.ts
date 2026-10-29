@@ -1173,6 +1173,7 @@ YOU ARE TAKING OFF CIVIL, STRUCTURAL AND ARCHITECTURAL QUANTITIES. These trades 
   * plaster and paint, m2 = both faces of internal walls and the inside face of external walls, at the ceiling height you assume;
   * wall tiles in wet rooms (toilets, baths, showers, kitchens, pantries), m2 = room perimeter x an assumed 2.4 m tile height;
   * external paving, pools, stairs and railings where the plan shows them.
+- NO LEGIBLE SCALE, NO AREA TAGS, NO DIMENSIONS is still a measurable floor plan. Calibrate the scale yourself from objects of standard size drawn on the plan, in this order: a written dimension or area anywhere on the sheet (even one "10 m2" note), parking bays (2.5 m x 5.5 m), single door leaves (900 mm), lift cars (about 2.0 m x 2.0 m), stair flights (treads 300 mm), WC cubicles (about 0.9 m x 1.5 m), sports courts (badminton 13.4 m x 6.1 m, basketball 28 m x 15 m, tennis 23.77 m x 10.97 m). Write in assumptions which object you calibrated from and the scale it gives, keep confidence at 30-50 and set review_required. Never return an empty list for a floor plan because the scale or dimensions are not legible.
 - Where the specification is not on the sheet, write the item generically (e.g. "Floor finish, type as per room finish schedule (not on this sheet)") and set review_required. A row with an honest quantity, a stated assumption and a low confidence is useful to the estimator; an empty BOQ is not.
 
 1. READ THE SHEET FIRST
@@ -1246,8 +1247,34 @@ function civilUserText(drawing: any, usingSelection: boolean, selectionCount: nu
     `Disclose every assumed height, thickness or dimension in assumptions, and give an honest confidence_score per row. ${coordsInstruction}`;
 }
 
+/** A slab or screed row in m3 whose quantity is really its area (the thickness in the description was never applied). */
+function fixSlabVolumes(items: any[]): number {
+  let n = 0;
+  for (const it of items) {
+    const unit = String(it?.unit ?? "").toLowerCase().replace(/\s/g, "");
+    if (!/^(m3|m³|cum|cu\.?m)$/.test(unit)) continue;
+    const text = `${it?.description ?? ""} ${it?.technical_specification ?? ""}`;
+    if (!/slab|screed|blinding|topping|bed/i.test(text)) continue;
+    const t = text.match(/(\d{2,3})\s*mm\s*(thick|thk)/i);
+    const q = Number(it?.quantity);
+    if (!t || !(q > 0)) continue;
+    const thk = Number(t[1]) / 1000;
+    const area = Number(it?.area_value) > 0 ? Number(it.area_value) : null;
+    const formula = String(it?.quantity_formula ?? it?.calc_formula ?? "");
+    // the volume equals the area (or there is no thickness in the working): apply the thickness
+    const looksLikeArea = (area && Math.abs(q - area) < 0.5) || (!new RegExp(`0?\\.${t[1].replace(/0+$/, "")}|${t[1]}\\s*mm|/\\s*1000`).test(formula) && q > 300 && q * thk > 1);
+    if (!looksLikeArea) continue;
+    const vol = Math.round((area ?? q) * thk * 100) / 100;
+    it.quantity_basis_notes = `${it.quantity_basis_notes ?? ""} Volume recalculated: ${area ?? q} m2 x ${thk} m = ${vol} m3.`.trim();
+    it.quantity = vol; it.area_value = area ?? q; it.quantity_formula = `${area ?? q} * ${thk}`;
+    n++;
+  }
+  return n;
+}
+
 const CIVIL_PLAN_RETRY_TEXT =
-  "Your first pass returned no items for this sheet. This is a plan with a scale and/or room areas, so it IS measurable (rule 0). " +
+  "Your first pass returned no items for this sheet. It is a plan, so it IS measurable (rule 0). If no scale, area tag or dimension is legible, " +
+  "calibrate the scale from a standard object on the plan (a written area, parking bay 2.5 x 5.5 m, door leaf 900 mm, stair tread 300 mm, a sports court) and say which one you used. " +
   "Measure it now: floor finish, screed and ceiling per room from the area tags or the scaled outline; skirting per room from the scaled perimeter; " +
   "every door and window counted and grouped by scaled width; external and internal blockwork from scaled wall lengths x an assumed storey height; " +
   "plaster and paint on the wall faces; wall tiles in the wet rooms. Use generic specifications where none are printed, list every assumption, " +
@@ -2972,6 +2999,10 @@ Deno.serve(async (req: Request) => {
         const result = parsed.result as { items: any[]; analysis_notes: string; document_kind?: string; cost_optimizations?: any[]; assumptions?: any[]; review_items?: any[] };
         const scopeNote = applyTakeoffScope(result, drawing);
         if (scopeNote) result.analysis_notes = `${result.analysis_notes ?? ""}${scopeNote}`;
+        if (civil) {
+          const fixedVol = fixSlabVolumes(result.items || []);
+          if (fixedVol) result.analysis_notes = `${result.analysis_notes ?? ""} ${fixedVol} concrete or screed volume(s) were recalculated as area x thickness: the AI had written the area as the volume.`;
+        }
         const civilChoice = civil ? standardForProject(project) : undefined;
         const civilNote = civil ? applyCivilFinalize(result, await loadCivilRules(admin, civilChoice!), civilChoice) : "";
         if (civilNote) result.analysis_notes = `${result.analysis_notes ?? ""}${civilNote}`;
