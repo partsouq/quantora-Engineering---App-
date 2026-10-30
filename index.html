@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-30.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-30.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -541,6 +541,18 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
               background:radial-gradient(circle,color-mix(in srgb,var(--c) 22%,transparent),transparent 70%);pointer-events:none;opacity:.7;transition:opacity .2s;}
   .qsc:hover::after{opacity:1;}
   .qsc-go{display:inline-flex;align-items:center;gap:4px;}
+  /* 2026-10-30 fit: cards share the width equally and never push past the page edge */
+  .qsc-row{grid-template-columns:repeat(5,minmax(0,1fr)) !important;}
+  .qsd-row{grid-template-columns:repeat(4,minmax(0,1fr)) !important;}
+  .qsv{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+  .qsc,.qsd,.qsv-card{min-width:0;overflow:hidden;}
+  .qsc-h{flex-wrap:wrap;gap:10px;}
+  .qsc-n{max-width:100%;overflow:hidden;text-overflow:ellipsis;}
+  .qsc b,.qsc-d,.qsc-out,.qsd b,.qsd-d{overflow-wrap:anywhere;}
+  @media (max-width:1500px){.qsc-n{font-size:9.5px !important;letter-spacing:.04em !important;padding:4px 7px !important;}.qsc{padding:22px 18px 20px !important;}}
+  @media (max-width:1320px){.qsc-row{grid-template-columns:repeat(3,minmax(0,1fr)) !important;}.qsd-row{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}}
+  @media (max-width:900px){.qsv{grid-template-columns:1fr !important;}}
+  @media (max-width:640px){.qsc-row,.qsd-row{grid-template-columns:1fr !important;}}
   @media (max-width:1100px){.qsc-row::before{display:none;}.qsc{min-height:0;}}
   @media (max-width:1100px){.qsc-row{grid-template-columns:repeat(3,1fr);}.qsd-row{grid-template-columns:repeat(2,1fr);}}
   @media (max-width:600px){.qsc-row,.qsd-row{grid-template-columns:1fr;}}
