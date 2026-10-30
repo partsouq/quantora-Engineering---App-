@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-30.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-30.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -20055,6 +20055,171 @@ function QMeasurementRules() {
   );
 }
 
+
+// Platform alerts (2026-10-30): platform bugs the run-doctor agent found, for platform admins only.
+// Users never see these; they get a plain "we're looking into it" message instead (user_messages).
+function QAlertsView() {
+  const [rows, setRows] = useState(null);
+  const [filter, setFilter] = useState("open");
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState({});
+  const [msg, setMsg] = useState("");
+  const load = async () => {
+    let q = sb.from("admin_alerts").select("*").order("last_seen", { ascending: false }).limit(100);
+    if (filter !== "all") q = q.eq("status", filter);
+    const { data, error } = await q;
+    setRows(error ? [] : (data || []));
+  };
+  useEffect(() => { load(); }, [filter]);
+  const setStatus = async (a, status) => {
+    setBusy(a.id);
+    await sb.from("admin_alerts").update({ status, admin_note: note[a.id] ?? a.admin_note ?? null, updated_at: new Date().toISOString() }).eq("id", a.id);
+    setBusy(""); load();
+  };
+  const runNow = async () => {
+    setMsg("Checking the last 6 hours…");
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/run-doctor`, { method: "POST", headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: "{}" });
+      const j = await r.json();
+      setMsg(r.ok ? `Done: ${(j.actions || []).length} action(s).` : (j.error || "Check failed."));
+      load();
+    } catch (e) { setMsg(String(e.message || e)); }
+  };
+  const pill = (st) => ({ open: ["#fee2e2", "#991b1b", "Open"], investigating: ["#fef3c7", "#92400e", "Investigating"], fixed: ["#dcfce7", "#166534", "Fixed"], ignored: ["#e2e8f0", "#334155", "Ignored"] }[st] || ["#e2e8f0", "#334155", st]);
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {["open", "investigating", "fixed", "all"].map(f => (
+          <button key={f} onClick={() => setFilter(f)} className="text-xs font-semibold px-3 py-1.5 rounded-full border"
+            style={filter === f ? { background: "#4f46e5", color: "#fff", borderColor: "#4f46e5" } : {}}>{f[0].toUpperCase() + f.slice(1)}</button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <span className="text-xs text-slate-500">{msg}</span>
+        <button onClick={runNow} className="text-xs font-semibold px-3 py-1.5 rounded-lg border">Run check now</button>
+      </div>
+      <div className="text-[11.5px] text-slate-500">Platform bugs only. Re-runnable failures are fixed by the agent and problems with a user's own file go to that user as a message; neither shows here. The same error from several users is one alert with a count.</div>
+      {rows === null ? <div className="text-sm text-slate-500">Loading…</div> : rows.length === 0 ? (
+        <div className="bg-white border rounded-xl p-6 text-sm text-slate-500">No {filter === "all" ? "" : filter + " "}alerts.</div>
+      ) : rows.map(a => {
+        const [bg, fg, label] = pill(a.status);
+        return (
+          <div key={a.id} className="bg-white border rounded-xl p-4 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: bg, color: fg }}>{label}</span>
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full border">{a.service}</span>
+              <b className="text-sm">{a.title}</b>
+              <div style={{ flex: 1 }} />
+              <span className="text-xs text-slate-500">{a.occurrences}× · last {new Date(a.last_seen).toLocaleString()}</span>
+            </div>
+            <pre className="text-[11.5px] bg-slate-50 border rounded p-2 whitespace-pre-wrap" style={{ maxHeight: 160, overflow: "auto" }}>{(a.error_text || "").slice(0, 2000)}</pre>
+            <div className="text-xs text-slate-600">
+              {(a.examples || []).slice(-5).reverse().map((e, i) => (
+                <div key={i}>{new Date(e.at).toLocaleString()} · {e.user_email || "user"} · {e.file || "file"} · {e.source_kind}</div>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input value={note[a.id] ?? a.admin_note ?? ""} onChange={ev => setNote({ ...note, [a.id]: ev.target.value })}
+                placeholder="Note, e.g. Fixed in PR #104" className="border rounded px-2 py-1 text-xs" style={{ flex: 1, minWidth: 200 }} />
+              {a.status !== "investigating" && <button disabled={busy === a.id} onClick={() => setStatus(a, "investigating")} className="text-xs border rounded px-2 py-1">Investigating</button>}
+              {a.status !== "fixed" && <button disabled={busy === a.id} onClick={() => setStatus(a, "fixed")} className="text-xs border rounded px-2 py-1" style={{ color: "#166534" }}>Mark fixed</button>}
+              {a.status !== "ignored" && <button disabled={busy === a.id} onClick={() => setStatus(a, "ignored")} className="text-xs border rounded px-2 py-1">Ignore</button>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Messages from Quantora (2026-10-30): the run-doctor agent's plain-language messages to this user.
+// An unread message pops up over the page and stays until the user ticks "I have read this" and closes it.
+function PlatformMessages({ userId, onAction }) {
+  const [list, setList] = useState([]);
+  const [ticked, setTicked] = useState(false);
+  const [history, setHistory] = useState(false);
+  const load = async () => {
+    const { data } = await sb.from("user_messages").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(40);
+    setList(data || []);
+  };
+  useEffect(() => {
+    load(); const t = setInterval(load, 60000);
+    const open = () => { setHistory(true); load(); };
+    window.addEventListener("q-open-platform-messages", open);
+    return () => { clearInterval(t); window.removeEventListener("q-open-platform-messages", open); };
+  }, [userId]);
+  const queue = list.filter(m => m.must_read && !m.read_at).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const cur = queue[0];
+  const markRead = async (m) => {
+    setList(l => l.map(x => x.id === m.id ? { ...x, read_at: new Date().toISOString() } : x));
+    setTicked(false);
+    await sb.from("user_messages").update({ read_at: new Date().toISOString() }).eq("id", m.id);
+  };
+  const tone = (k) => k === "fixed" ? { c: "#10b981", t: "Fixed for you" } : k === "investigating" ? { c: "#6366f1", t: "We're on it" } : k === "info" ? { c: "#38bdf8", t: "For your information" } : { c: "#f59e0b", t: "Action needed" };
+  const box = (m, modal) => {
+    const tn = tone(m.kind);
+    return (
+      <div role={modal ? "alertdialog" : undefined} aria-modal={modal ? "true" : undefined} aria-labelledby={"qpm-" + m.id}
+        style={{ width: "min(600px, 92vw)", background: "var(--q-panel,#fff)", color: "var(--q-text,#0f172a)", border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 18, boxShadow: modal ? "0 30px 80px rgba(0,0,0,.45)" : "none", overflow: "hidden" }}>
+        <div style={{ padding: "20px 22px 10px", display: "flex", gap: 12 }}>
+          <div style={{ width: 42, height: 42, flex: "none", borderRadius: 12, display: "grid", placeItems: "center", color: tn.c, background: tn.c + "22", border: `1px solid ${tn.c}66`, fontWeight: 900 }}>{m.kind === "fixed" ? "✓" : m.kind === "action" ? "!" : "i"}</div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--q-text-dim,#64748b)" }}>Message from Quantora · <span style={{ color: tn.c }}>{tn.t}</span></div>
+            <div id={"qpm-" + m.id} style={{ fontSize: 19, fontWeight: 800, marginTop: 2 }}>{m.title}</div>
+            <div style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>{new Date(m.created_at).toLocaleString()}</div>
+          </div>
+        </div>
+        <div style={{ padding: "4px 22px 8px", display: "grid", gap: 10 }}>
+          {[["What happened", m.what_happened], ["What we did", m.what_we_did]].filter(x => x[1]).map(([h, t]) => (
+            <div key={h} style={{ border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 12, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: "#818cf8", marginBottom: 3 }}>{h}</div>
+              <div style={{ fontSize: 14 }}>{t}</div>
+            </div>
+          ))}
+          {(m.what_to_do || []).length > 0 && (
+            <div style={{ border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 12, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: "#818cf8", marginBottom: 3 }}>What you need to do</div>
+              <ol style={{ margin: 0, paddingLeft: 20, fontSize: 14 }}>{m.what_to_do.map((s, i) => <li key={i}>{s}</li>)}</ol>
+            </div>
+          )}
+        </div>
+        {modal && (
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, padding: "14px 22px 16px", borderTop: "1px solid var(--q-border,#e2e8f0)" }}>
+            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14, cursor: "pointer" }}>
+              <input id={"qpm-read-" + m.id} type="checkbox" checked={ticked} onChange={e => setTicked(e.target.checked)} style={{ width: 18, height: 18 }} /> I have read this message
+            </label>
+            <div style={{ flex: 1 }} />
+            {m.action_label && onAction && <button disabled={!ticked} onClick={() => { markRead(m); onAction(m.action_target || {}); }}
+              style={{ padding: "9px 14px", borderRadius: 10, fontWeight: 700, border: "1px solid var(--q-border,#cbd5e1)", background: "transparent", color: "inherit", opacity: ticked ? 1 : .5, cursor: ticked ? "pointer" : "not-allowed" }}>{m.action_label}</button>}
+            <button disabled={!ticked} onClick={() => markRead(m)}
+              style={{ padding: "9px 18px", borderRadius: 10, fontWeight: 800, border: 0, color: "#fff", background: "linear-gradient(90deg,#6366f1,#8b5cf6)", opacity: ticked ? 1 : .5, cursor: ticked ? "pointer" : "not-allowed" }}>Close</button>
+            <div style={{ width: "100%", fontSize: 11.5, color: "var(--q-text-dim,#64748b)" }}>This message stays on screen until you tick the box and close it. You can read it again under the bell → Messages from Quantora.</div>
+          </div>
+        )}
+      </div>
+    );
+  };
+  return (
+    <React.Fragment>
+      {cur && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(5,8,22,.6)", display: "grid", placeItems: "center", padding: 16 }}>
+          {box(cur, true)}
+        </div>
+      )}
+      {!cur && history && (
+        <div onClick={() => setHistory(false)} style={{ position: "fixed", inset: 0, zIndex: 89, background: "rgba(5,8,22,.5)", display: "grid", placeItems: "center", padding: 16, overflow: "auto" }}>
+          <div onClick={e => e.stopPropagation()} style={{ display: "grid", gap: 12, maxHeight: "90vh", overflow: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#fff" }}>
+              <b>Messages from Quantora</b><button onClick={() => setHistory(false)} style={{ background: "none", border: "1px solid #fff6", color: "#fff", borderRadius: 8, padding: "4px 10px", cursor: "pointer" }}>Close</button>
+            </div>
+            {list.length === 0 ? <div style={{ color: "#fff", fontSize: 14 }}>No messages yet.</div> : list.map(m => <div key={m.id}>{box(m, false)}</div>)}
+          </div>
+        </div>
+      )}
+    </React.Fragment>
+  );
+}
+
 const QADMIN_NAV = [
   { group: "Overview", key: "exec", label: "Executive Dashboard", sub: "Platform-wide, real-time overview" },
   { group: "Overview", key: "execdash", label: "Project Execution Dashboard", sub: "Cost & revenue analytics, admin assist" },
@@ -20070,6 +20235,7 @@ const QADMIN_NAV = [
   { group: "Business", key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
   { group: "Platform", key: "support", label: "Support & Feedback", sub: "What customers report, and what they want next" },
   { group: "Platform", key: "ratings", label: "User Ratings", sub: "1-5 star ratings after each step, per customer" },
+  { group: "Platform", key: "alerts", label: "Platform Alerts", sub: "Platform bugs the run-doctor agent found. Users never see these." },
   { group: "Platform", key: "health", label: "System Health", sub: "Live status of core platform services" },
   { group: "Platform", key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
   { group: "Platform", key: "compliance", label: "Compliance Rules", sub: "The authority library, by country and city" },
@@ -20713,6 +20879,15 @@ function AdminPortal({ onBack }) {
 
   const nav = QADMIN_NAV;
   const current = nav.find(n => n.key === activeView) || nav[0];
+  // red count on Platform Alerts: open alerts from the run-doctor agent
+  const [openAlerts, setOpenAlerts] = useState(0);
+  useEffect(() => {
+    let live = true;
+    const load = () => sb.from("admin_alerts").select("id", { count: "exact", head: true }).eq("status", "open")
+      .then(({ count }) => { if (live) setOpenAlerts(count || 0); });
+    load(); const t = setInterval(load, 60000);
+    return () => { live = false; clearInterval(t); };
+  }, [activeView]);
 
   // Same styled writer as the BOQ export, so an admin report and a customer BOQ
   // look like they came from the same company.
@@ -20862,7 +21037,8 @@ function AdminPortal({ onBack }) {
                   )}
                   <div className={`navitem${activeView === n.key ? " active" : ""}`}
                     onClick={() => { setActiveView(n.key); setSidebarOpen(false); }}>
-                    {QICONS[n.key]} {n.label}
+                    {QICONS[n.key] || QICONS.health} {n.label}
+                    {n.key === "alerts" && openAlerts > 0 && <span style={{ marginLeft: "auto", background: "#e11d48", color: "#fff", fontSize: 10.5, fontWeight: 800, borderRadius: 999, padding: "1px 7px" }}>{openAlerts}</span>}
                   </div>
                 </React.Fragment>
               ))}
@@ -20949,6 +21125,9 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "health" && (
               <QHealthView systemStatus={systemStatus} />
+            )}
+            {activeView === "alerts" && (
+              <QAlertsView />
             )}
             {activeView === "approvals" && (
               <QAdminOwnProjects render={(projects, open) => (
@@ -25114,6 +25293,10 @@ function MessagesBell({ isPlatformAdmin, sessionKey }) {
             ) : (
               <div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8, color: "var(--q-text,#0f172a)" }}>Messages</div>
+                <button onClick={() => { setOpen(false); window.dispatchEvent(new Event("q-open-platform-messages")); }}
+                  style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", background: "rgba(99,102,241,0.08)", border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 10, padding: "9px 10px", marginBottom: 8, fontSize: 12.5, fontWeight: 700, color: "var(--q-text,#0f172a)" }}>
+                  Messages from Quantora &rarr;<div style={{ fontSize: 11.5, fontWeight: 500, color: "var(--q-text-dim,#64748b)" }}>Fixes and steps for your runs</div>
+                </button>
                 {!loaded ? (
                   <div style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", padding: "10px 0" }}>Loading…</div>
                 ) : tickets.length === 0 ? (
@@ -33628,6 +33811,13 @@ function App() {
           {/* Keyed on the user id so signing in as someone else rebuilds the
               poller rather than showing the previous account's count. */}
           <MessagesBell isPlatformAdmin={isPlatformAdmin} sessionKey={session.user.id} />
+          <PlatformMessages key={"pm-" + session.user.id} userId={session.user.id}
+            onAction={async (t) => {
+              if (t.view === "billing") { setBillingModal({ open: true, reason: "" }); return; }
+              if (!t.project_id) return;
+              const { data: p } = await sb.from("projects").select("*").eq("id", t.project_id).maybeSingle();
+              if (p) openProject(p, ["drawings", "boq"].includes(t.view) ? t.view : undefined);
+            }} />
           <AccountMenu
             session={session}
             isPlatformAdmin={isPlatformAdmin}

@@ -2705,15 +2705,29 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    const callerClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const { data: userData, error: userErr } = await callerClient.auth.getUser();
-    if (userErr || !userData?.user) {
-      return jsonResponse({ error: "Unauthorized" }, 401);
+    // run-doctor (2026-10-30) re-runs a user's drawing after a transient failure: it calls with the
+    // service key and names the user; the run is free (admin path) and marked doctor_retry_of.
+    let doctorBody: any = null;
+    if (authHeader === `Bearer ${serviceKey}`) {
+      try { doctorBody = await req.clone().json(); } catch (_) { doctorBody = null; }
+      if (!doctorBody || doctorBody.doctor_retry !== true || !doctorBody.user_id) return jsonResponse({ error: "Unauthorized" }, 401);
     }
-    const userId = userData.user.id;
-    const userEmail = userData.user.email;
+    let userId: string, userEmail: string | undefined;
+    if (doctorBody) {
+      const { data: du } = await createClient(supabaseUrl, serviceKey).auth.admin.getUserById(doctorBody.user_id);
+      if (!du?.user) return jsonResponse({ error: "Unauthorized" }, 401);
+      userId = du.user.id; userEmail = du.user.email;
+    } else {
+      const callerClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+        global: { headers: { Authorization: authHeader } },
+      });
+      const { data: userData, error: userErr } = await callerClient.auth.getUser();
+      if (userErr || !userData?.user) {
+        return jsonResponse({ error: "Unauthorized" }, 401);
+      }
+      userId = userData.user.id;
+      userEmail = userData.user.email;
+    }
     const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
 
     const admin = createClient(supabaseUrl, serviceKey);
@@ -2731,11 +2745,12 @@ Deno.serve(async (req: Request) => {
     const body = await req.json();
     const action = body.action as string;
 
-    const isAdminOverride = body.admin_override === true;
+    const isDoctor = !!doctorBody;
+    const isAdminOverride = body.admin_override === true || isDoctor;
     let companyId: string, project: any, company: any, plan: any;
 
     if (isAdminOverride) {
-      const { data: adminRow } = await admin.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
+      const { data: adminRow } = isDoctor ? { data: { user_id: userId } } : await admin.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
       if (!adminRow) {
         return jsonResponse({ error: "Forbidden: platform admin access only." }, 403);
       }
@@ -3133,6 +3148,7 @@ Deno.serve(async (req: Request) => {
           summary: {
             item_count: safeRows.length, derived_item_count: derived.length,
             typical_detail_rows: typicalFixed,
+            ...(isDoctor && body.doctor_retry_of ? { doctor_retry_of: String(body.doctor_retry_of) } : {}),
             found_nothing: safeRows.length === 0,
             civil,
             sheet_schedules: wholeSheetTables.length ? { tables: wholeSheetTables.map((t: any) => ({ title: String(t?.title ?? "").slice(0, 120), kind: t?.kind, rows: Array.isArray(t?.rows) ? t.rows.length : 0 })),
@@ -3795,6 +3811,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
           summary: {
             item_count: safeRows.length, derived_item_count: derived.length,
             typical_detail_rows: typicalFixed,
+            ...(isDoctor && body.doctor_retry_of ? { doctor_retry_of: String(body.doctor_retry_of) } : {}),
             found_nothing: safeRows.length === 0,
             notes: safeRows.length === 0
               ? `No BOQ items were produced. Nothing countable for the systems Quantora reads (MEP and ELV — cameras, readers, detectors, luminaires, panels, cable, containment, ducting, pipework) was found in this file. If it is a civil, structural or architectural drawing, set its type to Civil, Structural or Architectural so it is measured as civil works. If it is a specification or a schedule rather than a drawing, upload it on the Specification page instead. What the AI saw: ${result.analysis_notes ?? "(no notes)"}`
