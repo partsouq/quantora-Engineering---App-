@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-30.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-30.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -12309,6 +12309,15 @@ function DrawingsTab({ project }) {
           totalItems += summary.item_count || 0;
         }
         if (blankPages === pages.length) throw new Error("Every page chosen is blank, so there was nothing to read. Check the page numbers, or upload the drawing again.");
+        // Nothing for MEP / ELV on the sheet: it may be an architectural or civil sheet uploaded under an
+        // MEP type. The engine checks it once more as a whole sheet, free, and measures it as civil works
+        // if it is one (2026-10-30: every user gets a BOQ from a floor plan, whatever type they chose).
+        if (totalItems === 0 && pages.length === 1) {
+          setTiling(t => ({ ...t, [d.id]: "Nothing for MEP / ELV found — checking if it is an architectural or civil sheet…" }));
+          await analyze(d.id, { extra: { after_empty_tiled: true } });
+          await load();
+          return;
+        }
         await load();
         alert(
           totalItems === 0
@@ -12418,7 +12427,7 @@ function DrawingsTab({ project }) {
       const confirms = {};
       for (;;) {
         try {
-          const started = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawingId, ...confirms });
+          const started = await callEngine("analyze_drawing", { project_id: project.id, drawing_id: drawingId, ...((opts && opts.extra) || {}), ...confirms });
           const summary = await pollAnalysisRun(started.run_id);
           await load();
           // A run that produced nothing is not a completion, and saying so is the
