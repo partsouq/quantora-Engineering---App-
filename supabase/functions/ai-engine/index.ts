@@ -1309,7 +1309,7 @@ function fixSlabVolumes(items: any[]): number {
 }
 
 const CIVIL_PLAN_RETRY_TEXT =
-  "Your first pass returned no items for this sheet. It is a plan, so it IS measurable (rule 0). If no scale, area tag or dimension is legible, " +
+  "Your first pass returned no items for this sheet. A plan or layout (floor plan, partition / ceiling / finishes layout, site plan) IS measurable (rule 0); for a partition layout measure each partition type by its scaled length and height. If no scale, area tag or dimension is legible, " +
   "calibrate the scale from a standard object on the plan (a written area, parking bay 2.5 x 5.5 m, door leaf 900 mm, stair tread 300 mm, a sports court) and say which one you used. " +
   "Measure it now: floor finish, screed and ceiling per room from the area tags or the scaled outline; skirting per room from the scaled perimeter; " +
   "every door and window counted and grouped by scaled width; external and internal blockwork from scaled wall lengths x an assumed storey height; " +
@@ -2317,7 +2317,7 @@ async function checkEmptyRerun(
   if (confirmRerun) return { ok: true };
   const { data: priors } = await admin
     .from("analysis_runs")
-    .select("id, status, summary")
+    .select("id, status, summary, created_at")
     .eq("drawing_id", drawingId)
     .eq("status", "completed")
     .order("created_at", { ascending: false })
@@ -2338,6 +2338,9 @@ async function checkEmptyRerun(
   // The type was changed to a civil one since that empty run, so this run is
   // read a different way and is not a repeat (the skirting plan read as Plumbing).
   if (civilNow && latest.civil !== true) return { ok: true };
+  // The empty run was made before the take-off was improved, so this run is read differently and
+  // is not a repeat (2026-10-30: villa floor plans came back empty before the floor-plan rules).
+  if (rows[0]?.created_at && new Date(rows[0].created_at).getTime() < TAKEOFF_ENGINE_UPDATED_AT) return { ok: true };
 
   return {
     ok: false,
@@ -2356,6 +2359,9 @@ async function checkEmptyRerun(
 // cross-tenant reuse would be a data leak. PROMPT_VERSION allows deliberate
 // invalidation whenever extraction logic improves.
 const PROMPT_VERSION = "2026-08-10.v2-equipment-specificity";
+// When the take-off rules last changed in a way that can turn an empty result into a BOQ: an empty run
+// before this time does not block a re-run (checkRecentEmptyRuns).
+const TAKEOFF_ENGINE_UPDATED_AT = Date.parse("2026-10-30T05:30:00Z");
 
 async function sha256Hex(input: Uint8Array | string): Promise<string> {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
@@ -2379,17 +2385,21 @@ async function findCachedRun(admin: any, cacheKey: string, companyId: string | n
   const projectIds = (companyProjects ?? []).map((p: any) => p.id);
   if (!projectIds.length) return null;
 
-  const { data: hit } = await admin
+  // An earlier run that produced no BOQ is never reused (2026-10-30): the user would get the same
+  // empty result again for the same file, however many times they ran it.
+  const { data: hits } = await admin
     .from("analysis_runs")
-    .select("id")
+    .select("id, summary")
     .eq("source_file_hash", cacheKey)
     .eq("prompt_version", PROMPT_VERSION)
     .eq("status", "completed")
     .in("project_id", projectIds)
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return hit?.id ?? null;
+    .limit(5);
+  const hit = (hits ?? []).find((h: any) => Number(h?.summary?.item_count ?? 0) > 0);
+  if (!hit) return null;
+  const { count } = await admin.from("boq_items").select("id", { count: "exact", head: true }).eq("analysis_run_id", hit.id);
+  return (count ?? 0) > 0 ? hit.id : null;
 }
 
 // Copies EVERY row including engineering_rule-derived ones, and deliberately
@@ -2871,21 +2881,32 @@ Deno.serve(async (req: Request) => {
       if (!concurrencyCheck.ok) {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
-      const { drawing_id, page_selection, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope } = body as { drawing_id: string; page_selection?: number[]; confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean };
+      const { drawing_id, page_selection, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, after_empty_tiled } = body as { drawing_id: string; page_selection?: number[]; confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean; after_empty_tiled?: boolean };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
       if (dErr || !drawing) throw new Error("Drawing not found.");
+      // 2026-10-30: a sheet read in tiles for MEP / ELV that found nothing is checked once more, free of
+      // charge, in case it is an architectural / civil sheet uploaded under an MEP type; if it is, it is
+      // measured as civil works. Allowed only straight after that empty tiled run (within 60 minutes).
+      let freeCivilCheck = false;
+      if (after_empty_tiled) {
+        const { data: lastRun } = await admin.from("analysis_runs").select("run_kind, status, summary, created_at")
+          .eq("drawing_id", drawing_id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+        freeCivilCheck = !!lastRun && lastRun.run_kind === "tiled" && lastRun.status === "completed"
+          && Number(lastRun.summary?.item_count ?? 0) === 0 && Date.now() - new Date(lastRun.created_at).getTime() < 60 * 60 * 1000;
+        if (!freeCivilCheck) return jsonResponse({ error: "Nothing to re-check for this drawing." }, 400);
+      }
 
-      const failureHistoryCheck = isAdminOverride ? { ok: true as const } : await checkRecentFailureHistory(admin, drawing_id, !!confirm_retry_after_failures);
+      const failureHistoryCheck = (isAdminOverride || freeCivilCheck) ? { ok: true as const } : await checkRecentFailureHistory(admin, drawing_id, !!confirm_retry_after_failures);
       if (!failureHistoryCheck.ok) {
         return jsonResponse({ error: failureHistoryCheck.error, requires_confirmation: true, recent_failures: failureHistoryCheck.recentFailures }, 429);
       }
 
-      const emptyRerunCheck = isAdminOverride ? { ok: true as const } : await checkEmptyRerun(admin, drawing_id, !!confirm_rerun, isCivilDrawing(drawing));
+      const emptyRerunCheck = (isAdminOverride || freeCivilCheck) ? { ok: true as const } : await checkEmptyRerun(admin, drawing_id, !!confirm_rerun, isCivilDrawing(drawing));
       if (!emptyRerunCheck.ok) {
         return jsonResponse({ error: emptyRerunCheck.error, requires_confirmation: true, confirm_field: "confirm_rerun", empty_runs: emptyRerunCheck.emptyRuns }, 429);
       }
 
-      const scopeCheck = isAdminOverride ? { ok: true as const } : checkDisciplineScope(drawing, !!confirm_out_of_scope);
+      const scopeCheck = (isAdminOverride || freeCivilCheck) ? { ok: true as const } : checkDisciplineScope(drawing, !!confirm_out_of_scope);
       if (!scopeCheck.ok) {
         return jsonResponse({ error: scopeCheck.error, requires_confirmation: true, confirm_field: "confirm_out_of_scope", discipline: scopeCheck.discipline }, 429);
       }
@@ -2902,7 +2923,7 @@ Deno.serve(async (req: Request) => {
       const hasSelection = isPdf && Array.isArray(page_selection) && page_selection.length > 0;
       const requestedPages = hasSelection ? page_selection!.length : estimatePageCount(fileBytes, isPdf);
 
-      const pageCheck = isAdminOverride ? { ok: true, current: 0, limit: null, remaining: Infinity } : await checkPlanLimit(admin, companyId, plan, company, "drawing_page", requestedPages);
+      const pageCheck = (isAdminOverride || freeCivilCheck) ? { ok: true, current: 0, limit: null, remaining: Infinity } : await checkPlanLimit(admin, companyId, plan, company, "drawing_page", requestedPages);
       if (!pageCheck.ok) {
         return jsonResponse({ error: pageLimitMessage(pageCheck, requestedPages, plan) }, 429);
       }
@@ -2945,7 +2966,7 @@ Deno.serve(async (req: Request) => {
           : MARKUP_COORDS_INSTRUCTION;
         let civil = isCivilDrawing(drawing);
         let autoTypedNote = "";
-        if (!civil && requestedPages <= 2 && (fileContent.kind === "pdf" || fileContent.kind === "image")) {
+        if (!civil && (requestedPages <= 2 || freeCivilCheck) && (fileContent.kind === "pdf" || fileContent.kind === "image")) {
           const sheet = await detectSheetKind(anthropicKey, fileContent.block);
           if (sheet && ["architectural", "structural", "civil"].includes(sheet.kind)) {
             civil = true;
@@ -2953,6 +2974,14 @@ Deno.serve(async (req: Request) => {
             await admin.from("drawings").update({ discipline: sheet.kind }).eq("id", drawing_id);
             drawing.discipline = sheet.kind;
           }
+        }
+        if (freeCivilCheck && !civil) {
+          // an MEP / ELV sheet with nothing on it: the tiled read already said so; no second paid pass
+          await admin.from("analysis_runs").update({
+            status: "completed", completed_at: new Date().toISOString(),
+            summary: { item_count: 0, found_nothing: true, notes: "Checked again as a whole sheet: it is not an architectural, structural or civil sheet, and the high-resolution read found no MEP or ELV items on it. If it is a specification or schedule, upload it on the Specification page." },
+          }).eq("id", run.id);
+          return;
         }
         const takeoffTool = civil ? CIVIL_BOQ_TOOL : BOQ_ITEM_TOOL;
         const userContent = [
@@ -3015,8 +3044,9 @@ Deno.serve(async (req: Request) => {
         // Safety net (2026-10-29): a civil plan that came back with nothing measured gets one more pass
         // that insists on measuring from the scale and the area tags. Architectural floor plans of a
         // villa came back empty because the sheet had no finish or door schedule.
-        if (civil && fileContent.kind !== "dxf" && fileContent.kind !== "ifc" && !((parsed.result?.items || []).some((it: any) => Number(it?.quantity) > 0))
-            && /\bplan\b|scale|1\s*:\s*\d{2,3}|area|sq\.?\s*m|m2|sqm/i.test(String(parsed.result?.analysis_notes ?? "") + " " + (drawing.sheet_type ?? "") + " " + (drawing.file_name ?? ""))) {
+        // 2026-10-30: every civil sheet that came back empty gets the pass (a partition layout's notes did
+        // not say "plan" and it was skipped).
+        if (civil && fileContent.kind !== "dxf" && fileContent.kind !== "ifc" && !((parsed.result?.items || []).some((it: any) => Number(it?.quantity) > 0))) {
           try {
             const retryContent = [fileContent.block, { type: "text", text: (userContent[1] as any).text + "\n\n" + CIVIL_PLAN_RETRY_TEXT }];
             const retry = await callClaude(anthropicKey, systemPrompt, retryContent, takeoffTool);
@@ -3117,8 +3147,10 @@ Deno.serve(async (req: Request) => {
                   : result.analysis_notes)),
           },
         }).eq("id", run.id);
-        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "analyze_drawing", parsed.usage, requestedPages, elapsedMs, isAdminOverride, run.id);
-        await admin.from("drawings").update({ pages_ai_processed: (drawing.pages_ai_processed ?? 0) + requestedPages }).eq("id", drawing_id);
+        // the free civil re-check after an empty tiled read is not charged a second page
+        const chargedPages = freeCivilCheck ? 0 : requestedPages;
+        await recordUsageAndBill(admin, { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing }, userId, project.id, "analyze_drawing", parsed.usage, chargedPages, elapsedMs, isAdminOverride, run.id);
+        await admin.from("drawings").update({ pages_ai_processed: (drawing.pages_ai_processed ?? 0) + chargedPages }).eq("id", drawing_id);
         if (usingSelection) {
           await admin.from("drawing_pages").update({ selected: true, ai_processed: true }).eq("drawing_id", drawing_id).in("page_number", page_selection!);
         }
