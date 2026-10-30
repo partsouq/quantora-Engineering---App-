@@ -68,8 +68,15 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const auth = req.headers.get("Authorization") ?? "";
   const admin = createClient(url, serviceKey);
-  // who may run it: the scheduler (service role) or a platform admin
-  if (auth !== `Bearer ${serviceKey}`) {
+  // who may run it: the scheduler (x-cron-secret = app_secrets.RUN_DOCTOR_SECRET, the same way
+  // welcome-cleanup is scheduled), the service role, or a platform admin
+  const cronHdr = req.headers.get("x-cron-secret") ?? "";
+  let cronOk = false;
+  if (cronHdr) {
+    const { data: sec } = await admin.from("app_secrets").select("value").eq("key", "RUN_DOCTOR_SECRET").maybeSingle();
+    cronOk = !!sec?.value && sec.value === cronHdr;
+  }
+  if (!cronOk && auth !== `Bearer ${serviceKey}`) {
     const caller = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } } });
     const { data: u } = await caller.auth.getUser();
     const { data: pa } = u?.user ? await admin.from("platform_admins").select("user_id").eq("user_id", u.user.id).maybeSingle() : { data: null };
@@ -145,8 +152,12 @@ Deno.serve(async (req) => {
         if (!dry) {
           await message(r.triggered_by, sk, r.id, r.project_id, { kind: "investigating", must_read: false, title: "Re-running your drawing",
             what_happened: `The AI service was busy when you ran ${file}.`, what_we_did: "We are running it again for you now, free.", what_to_do: ["Nothing. We'll show you a message when it's ready."] });
-          await fetch(`${url}/functions/v1/ai-engine`, { method: "POST", headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+          const res = await fetch(`${url}/functions/v1/ai-engine`, { method: "POST", headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey, "Content-Type": "application/json" },
             body: JSON.stringify({ action: "analyze_drawing", doctor_retry: true, doctor_retry_of: r.id, user_id: r.triggered_by, target_project_id: r.project_id, project_id: r.project_id, drawing_id: r.drawing_id }) }).catch(() => null);
+          if (!res || !res.ok) {                // the retry itself could not start: a platform problem, not the user's
+            const t = res ? `HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}` : "no response";
+            await alertAdmin("run-doctor", "Automatic retry could not start", t, { ...(await who(r.triggered_by)), project_id: r.project_id, file, source_kind: sk, source_id: r.id, at: r.created_at });
+          }
         }
         continue;
       }
@@ -202,5 +213,5 @@ Deno.serve(async (req) => {
     await alertAdmin("draftsman", `Draftsman job failed: ${err.split("\n").slice(-1)[0].slice(0, 90)}`, err, { ...(await who(j.created_by)), project_id: j.project_id, file, source_kind: sk, source_id: j.id, at: j.created_at });
     await message(j.created_by, sk, j.id, j.project_id, { kind: "investigating", ...INVESTIGATING });
   }
-  return json({ ok: true, dry_run: dry, since, actions: report });
+  return json({ ok: true, dry_run: dry, since, service_key_kind: serviceKey.startsWith("eyJ") ? "jwt" : "secret", actions: report });
 });
