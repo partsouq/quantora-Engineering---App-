@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-30.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-30.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -490,6 +490,72 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   /* the product tiles, dashboards and figures run the full width under the headline and the dashboard
      picture, so the two columns above stay level (2026-10-29) */
   .hero-strip{grid-column:1 / -1;margin-top:clamp(0px, 1vw, 12px);}
+
+  /* 2026-10-30: service strip and dashboards as icon cards */
+  .qsc-row{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:26px;}
+  .qsc{position:relative;display:flex;flex-direction:column;gap:6px;padding:18px 18px 16px;border-radius:16px;text-decoration:none;
+       background:linear-gradient(165deg,color-mix(in srgb,var(--c) 14%,#0d1335),#0a0f2a 70%);
+       border:1px solid color-mix(in srgb,var(--c) 38%,transparent);box-shadow:0 14px 30px rgba(0,0,0,.28);transition:transform .18s,box-shadow .18s,border-color .18s;}
+  .qsc::before{content:"";position:absolute;left:18px;right:18px;top:-1px;height:2px;border-radius:2px;background:var(--c);opacity:.9;}
+  .qsc:hover{transform:translateY(-3px);border-color:var(--c);box-shadow:0 18px 38px rgba(0,0,0,.4),0 0 0 1px color-mix(in srgb,var(--c) 40%,transparent);}
+  .qsc-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
+  .qsc-ic{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;flex:none;color:var(--c);
+          background:color-mix(in srgb,var(--c) 18%,transparent);border:1px solid color-mix(in srgb,var(--c) 45%,transparent);}
+  .qsc-n{font-size:22px;font-weight:800;color:color-mix(in srgb,var(--c) 55%,#3a4170);letter-spacing:-.02em;}
+  .qsc b{font-size:16.5px;color:#fff;font-weight:700;}
+  .qsc-d{font-size:13px;line-height:1.5;color:#aab3d8;flex:1;}
+  .qsc-t{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}
+  .qsc-t i{font-style:normal;font-size:11px;font-weight:600;color:color-mix(in srgb,var(--c) 70%,#fff);padding:3px 8px;border-radius:99px;
+           background:color-mix(in srgb,var(--c) 14%,transparent);border:1px solid color-mix(in srgb,var(--c) 30%,transparent);}
+  .qsc-go{font-size:12.5px;font-weight:700;color:var(--c);margin-top:6px;opacity:.85;}
+  .qsc:hover .qsc-go{opacity:1;}
+  .qsd-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
+  .qsd{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:14px;text-decoration:none;background:rgba(13,19,53,.8);
+       border:1px solid color-mix(in srgb,var(--c) 32%,transparent);transition:border-color .18s,transform .18s;}
+  .qsd:hover{border-color:var(--c);transform:translateY(-2px);}
+  .qsd b{display:block;font-size:15px;color:#fff;}
+  .qsd-d{display:block;font-size:12.5px;color:#9aa3cc;margin-top:2px;}
+  .qsd-go{margin-left:auto;color:var(--c);font-weight:700;}
+  .hero-strip{padding-top:30px;}
+  .qsc-head{text-align:center;max-width:980px;margin:0 auto 38px;}
+  .qsc-head p{max-width:760px;margin-left:auto !important;margin-right:auto !important;}
+  .qsc-kick{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#a5b4fc;padding:6px 14px;border-radius:99px;border:1px solid rgba(129,140,248,.4);background:rgba(30,38,96,.45);}
+  .qsc-head h3{font-size:clamp(26px,2.6vw,38px);font-weight:800;color:#fff;letter-spacing:-.02em;margin:14px 0 10px;line-height:1.15;}
+  .qsc-head p{font-size:16px;color:#aab3d8;margin:0;line-height:1.55;}
+  .qsc-row{position:relative;gap:22px !important;margin-bottom:56px !important;}
+  .qsc-row::before{content:"";position:absolute;left:8%;right:8%;top:46px;height:2px;z-index:0;background:linear-gradient(90deg,#3b82f6,#22c55e,#f59e0b,#8b5cf6,#a8a29e);opacity:.45;}
+  .qsc{z-index:1;padding:24px 22px 22px !important;gap:9px !important;min-height:300px;}
+  .qsc-ic{width:46px !important;height:46px !important;border-radius:13px !important;background:#0d1335 !important;box-shadow:0 0 0 6px rgba(10,15,42,.9),inset 0 0 0 100px color-mix(in srgb,var(--c) 18%,transparent);}
+  .qsc-n{font-size:11px !important;font-weight:800;letter-spacing:.14em;color:color-mix(in srgb,var(--c) 75%,#fff) !important;padding:4px 9px;border-radius:99px;background:color-mix(in srgb,var(--c) 14%,transparent);}
+  .qsc b{font-size:18px !important;margin-top:4px;}
+  .qsc-d{font-size:13.5px !important;}
+  .qsc-out{margin-top:6px;padding:10px 12px;border-radius:11px;font-size:13.5px;font-weight:700;color:#fff;background:rgba(255,255,255,.04);border:1px dashed color-mix(in srgb,var(--c) 45%,transparent);}
+  .qsc-out small{display:block;font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:color-mix(in srgb,var(--c) 70%,#9aa3cc);margin-bottom:3px;}
+  .hero-strip-bottom .qx-row-label{margin:0 0 14px !important;}
+  .qsd-row{gap:20px !important;margin-bottom:34px;}
+  .qsd{padding:18px 20px !important;}
+  .qsc-row::before{display:none !important;}
+  .qsc-n{font-size:10.5px !important;letter-spacing:.08em !important;text-transform:uppercase;white-space:nowrap;}
+  .qsc-hl{background:linear-gradient(90deg,#60a5fa,#a78bfa,#34d399);-webkit-background-clip:text;background-clip:text;color:transparent;}
+  .qsc::after{content:"";position:absolute;right:-30px;bottom:-30px;width:150px;height:150px;border-radius:50%;
+              background:radial-gradient(circle,color-mix(in srgb,var(--c) 22%,transparent),transparent 70%);pointer-events:none;opacity:.7;transition:opacity .2s;}
+  .qsc:hover::after{opacity:1;}
+  .qsc-go{display:inline-flex;align-items:center;gap:4px;}
+  /* 2026-10-30 fit: cards share the width equally and never push past the page edge */
+  .qsc-row{grid-template-columns:repeat(5,minmax(0,1fr)) !important;}
+  .qsd-row{grid-template-columns:repeat(4,minmax(0,1fr)) !important;}
+  .qsv{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+  .qsc,.qsd,.qsv-card{min-width:0;overflow:hidden;}
+  .qsc-h{flex-wrap:wrap;gap:10px;}
+  .qsc-n{max-width:100%;overflow:hidden;text-overflow:ellipsis;}
+  .qsc b,.qsc-d,.qsc-out,.qsd b,.qsd-d{overflow-wrap:anywhere;}
+  @media (max-width:1500px){.qsc-n{font-size:9.5px !important;letter-spacing:.04em !important;padding:4px 7px !important;}.qsc{padding:22px 18px 20px !important;}}
+  @media (max-width:1320px){.qsc-row{grid-template-columns:repeat(3,minmax(0,1fr)) !important;}.qsd-row{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}}
+  @media (max-width:900px){.qsv{grid-template-columns:1fr !important;}}
+  @media (max-width:640px){.qsc-row,.qsd-row{grid-template-columns:1fr !important;}}
+  @media (max-width:1100px){.qsc-row::before{display:none;}.qsc{min-height:0;}}
+  @media (max-width:1100px){.qsc-row{grid-template-columns:repeat(3,1fr);}.qsd-row{grid-template-columns:repeat(2,1fr);}}
+  @media (max-width:600px){.qsc-row,.qsd-row{grid-template-columns:1fr;}}
   .hero-strip .qtr-divrow-5{grid-template-columns:repeat(5,1fr);margin-bottom:22px;}
   .hero-strip .qtr-divrow-5 > .qtr-div,.hero-strip .qtr-divrow-5 > .qtr-div:nth-child(n+4){grid-column:auto;}
   .hero-strip .qtr-div{padding:14px 16px;}
@@ -1311,21 +1377,22 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
     <div class="qd-chips" aria-hidden="true"><span class="qd-chip"><i><svg class="icon" width="16" height="16" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></i>BOQ</span><span class="qd-chip"><i><svg class="icon" width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .8-3 2s1.3 1.7 3 2 3 .9 3 2.2-1.3 1.8-3 1.8c-1.4 0-2.6-.6-3-1.6M12 6.5v11"/></svg></i>Pricing</span><span class="qd-chip qd-chip-g"><i><svg class="icon" width="16" height="16" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></i>3D</span></div>
     </div>
     <div class="hero-strip">
-      <div class="qtr-divrow qtr-divrow-5">
-        <a class="qtr-div" style="--qtr-a:#3987e5;" href="#works"><b>Take-off BOQ</b><span>AI counts every item from your drawings</span></a>
-        <a class="qtr-div" style="--qtr-a:#22c55e;" href="#capabilities"><b>Design BOQ</b><span>AI Quantora Engineer designs the complete system and its BOQ, with marked-up and highlighted drawings</span></a>
-        <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#capabilities"><b>Pricing BOQ</b><span>Live supplier prices, source shown</span></a>
-        <a class="qtr-div" style="--qtr-a:#818cf8;" href="#model3d"><b>Shop drawings + 3D + schematics + markup</b><span>AI Quantora Draftsman issues drawings to your country&rsquo;s authority rules and the project specification, and reworks them on consultant comments</span></a>
-        <a class="qtr-div" style="--qtr-a:#a8a29e;" href="#works"><b>Civil take-off</b><span>Measured to the drawing scale, your country&rsquo;s approved method and the project specification, with marked-up and highlighted drawings</span></a>
+      <div class="qsc-head"><span class="qsc-kick">Five AI services, one platform</span><h3>Everything from drawing to <span class="qsc-hl">issued project</span></h3><p>Use one service or all five. Every quantity, price and drawing stays linked to the same project and the same drawings.</p></div>
+      <div class="qsc-row">
+        <a class="qsc" style="--c:#3b82f6;" href="#works"><div class="qsc-h"><span class="qsc-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span><span class="qsc-n">MEP · ELV</span></div><b>Take-off BOQ</b><span class="qsc-d">AI counts every item on your MEP, ELV and electrical drawings.</span><div class="qsc-out"><small>You get</small>Marked-up BOQ in Excel</div><span class="qsc-go">Learn more &rarr;</span></a>
+        <a class="qsc" style="--c:#22c55e;" href="#capabilities"><div class="qsc-h"><span class="qsc-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.4 6.9H22l-6 4.6 2.3 7L12 16.2 5.7 20.5 8 13.5 2 8.9h7.6z"/></svg></span><span class="qsc-n">All 33 systems</span></div><b>Design BOQ</b><span class="qsc-d">AI designs the complete system and its BOQ from your brief.</span><div class="qsc-out"><small>You get</small>Complete system + BOQ</div><span class="qsc-go">Learn more &rarr;</span></a>
+        <a class="qsc" style="--c:#f59e0b;" href="#capabilities"><div class="qsc-h"><span class="qsc-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .8-3 2s1.3 1.7 3 2 3 .9 3 2.2-1.3 1.8-3 1.8c-1.4 0-2.6-.6-3-1.6M12 6.5v11"/></svg></span><span class="qsc-n">Live market</span></div><b>Pricing BOQ</b><span class="qsc-d">Live supplier prices on every line, with the source shown.</span><div class="qsc-out"><small>You get</small>Priced BOQ with sources</div><span class="qsc-go">Learn more &rarr;</span></a>
+        <a class="qsc" style="--c:#8b5cf6;" href="#draftsman"><div class="qsc-h"><span class="qsc-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/></svg></span><span class="qsc-n">Authority rules</span></div><b>Shop drawings + 3D</b><span class="qsc-d">AI Draftsman issues shop drawings, schematics and a 3D model to your authority rules.</span><div class="qsc-out"><small>You get</small>PDF / DWG sheets + IFC</div><span class="qsc-go">Learn more &rarr;</span></a>
+        <a class="qsc" style="--c:#a8a29e;" href="#works"><div class="qsc-h"><span class="qsc-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V9l7-5 7 5v12"/><path d="M9 21v-6h6v6"/></svg></span><span class="qsc-n">Civil works</span></div><b>Civil take-off</b><span class="qsc-d">Measured to the drawing scale and your country&rsquo;s approved method.</span><div class="qsc-out"><small>You get</small>Measured civil BOQ</div><span class="qsc-go">Learn more &rarr;</span></a>
       </div>
       <div class="hero-strip-bottom">
         <div>
       <div class="qx-row-label">Four dashboards, one project</div>
-      <div class="qtr-divrow">
-        <a class="qtr-div" style="--qtr-a:#3987e5;" href="#workspaces"><b>Projects</b><span>Take-off &amp; BOQ</span></a>
-        <a class="qtr-div" style="--qtr-a:#22c55e;" href="#workspaces"><b>Commercial</b><span>Tender &amp; revenue</span></a>
-        <a class="qtr-div" style="--qtr-a:#f59e0b;" href="#workspaces"><b>Operations</b><span>Programme</span></a>
-        <a class="qtr-div" style="--qtr-a:#818cf8;" href="#draftsman"><b>Draftsman</b><span>Shop drawings</span></a>
+      <div class="qsd-row">
+        <a class="qsd" style="--c:#3b82f6;" href="#workspaces"><span class="qsc-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v10H3z"/></svg></span><span><b>Projects</b><span class="qsd-d">Drawings, take-off and BOQ</span></span><span class="qsd-go">&rarr;</span></a>
+        <a class="qsd" style="--c:#22c55e;" href="#workspaces"><span class="qsc-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg></span><span><b>Commercial</b><span class="qsd-d">Tenders, pricing and revenue</span></span><span class="qsd-go">&rarr;</span></a>
+        <a class="qsd" style="--c:#f59e0b;" href="#workspaces"><span class="qsc-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg></span><span><b>Operations</b><span class="qsd-d">Programme and site progress</span></span><span class="qsd-go">&rarr;</span></a>
+        <a class="qsd" style="--c:#8b5cf6;" href="#draftsman"><span class="qsc-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21l3-1 11-11-2-2L4 18z"/><path d="M14 6l2 2"/><path d="M15 3l6 6"/></svg></span><span><b>Draftsman</b><span class="qsd-d">Shop drawings and 3D</span></span><span class="qsd-go">&rarr;</span></a>
       </div>
         </div>
       <div class="stat-row">
