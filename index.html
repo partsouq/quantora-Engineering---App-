@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-30.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-30.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -1057,6 +1057,37 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   /* hero fine-tuning */
   .hero-grid{grid-template-columns:minmax(0,1.04fr) minmax(0,1fr);}
   .hero h1.qd-h1{font-size:clamp(36px,4.35vw,70px);}
+
+  /* 2026-10-30: the two services side by side in the hero */
+  .hero p.sub.qsv-sub{margin:0 0 22px;max-width:720px;}
+  .qsv{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:860px;margin:0 0 30px;}
+  .qsv-card{position:relative;border-radius:18px;padding:20px 20px 18px;background:linear-gradient(160deg,rgba(30,38,96,.55),rgba(12,16,44,.75));border:1px solid rgba(129,140,248,.35);box-shadow:0 18px 40px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.06);}
+  .qsv-b{border-color:rgba(52,211,153,.38);background:linear-gradient(160deg,rgba(14,70,72,.5),rgba(10,22,40,.8));}
+  .qsv-top{display:flex;gap:12px;align-items:center;margin-bottom:10px;}
+  .qsv-ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;color:#c7d2fe;background:rgba(99,102,241,.25);border:1px solid rgba(129,140,248,.45);flex:none;}
+  .qsv-b .qsv-ic{color:#a7f3d0;background:rgba(16,185,129,.2);border-color:rgba(52,211,153,.45);}
+  .qsv-k{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#8b93c9;}
+  .qsv-b .qsv-k{color:#7fc8b0;}
+  .qsv-t{font-size:21px;font-weight:700;color:#fff;letter-spacing:-.01em;}
+  .qsv-lead{font-size:14.5px;color:#c3cae8;margin:0 0 10px;line-height:1.45;}
+  .qsv ul{list-style:none;margin:0 0 14px;padding:0;display:grid;gap:7px;}
+  .qsv li{display:flex;gap:8px;align-items:flex-start;font-size:14px;line-height:1.4;color:#e4e8fb;}
+  .qsv li svg{flex:none;margin-top:3px;color:#818cf8;}
+  .qsv-b li svg{color:#34d399;}
+  .qsv-link{font-size:14px;font-weight:600;color:#a5b4fc;text-decoration:none;}
+  .qsv-b .qsv-link{color:#6ee7b7;}
+  .qsv-link:hover{text-decoration:underline;}
+  .qsv-shot{position:relative;margin:-8px -8px 14px;border-radius:12px;overflow:hidden;height:118px;border:1px solid rgba(255,255,255,.08);}
+  .qsv-shot img{width:100%;height:100%;object-fit:cover;display:block;filter:saturate(1.05);}
+  .qsv-shot::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(8,10,30,0) 40%,rgba(8,10,30,.75));}
+  .qsv-flow{position:absolute;left:10px;bottom:9px;z-index:1;font-size:12px;font-weight:700;letter-spacing:.02em;color:#fff;padding:4px 10px;border-radius:99px;background:rgba(99,102,241,.85);}
+  .qsv-b .qsv-flow{background:rgba(16,150,110,.9);}
+  .qsv-act{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+  .qsv-btn{font-size:14px;font-weight:700;color:#fff;text-decoration:none;padding:9px 16px;border-radius:10px;background:linear-gradient(90deg,#6366f1,#8b5cf6);box-shadow:0 6px 18px rgba(99,102,241,.35);}
+  .qsv-b .qsv-btn{background:linear-gradient(90deg,#059669,#10b981);box-shadow:0 6px 18px rgba(16,185,129,.3);}
+  .qsv-trust{display:flex;flex-wrap:wrap;gap:8px;margin:-8px 0 26px;max-width:860px;}
+  .qsv-trust span{font-size:12.5px;font-weight:600;color:#c7cdf0;padding:6px 11px;border-radius:99px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);}
+  @media (max-width:900px){.qsv{grid-template-columns:1fr;}}
   .qd-grad{white-space:nowrap;}
   .qd-h1b{font-size:clamp(20px,2.15vw,34px);white-space:nowrap;}
   @media (max-width:700px){.qd-grad,.qd-h1b{white-space:normal;}}
@@ -1176,10 +1207,11 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
 
   <div class="wrap hero-grid">
     <div>
-      <span class="pill qd-pill"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/></svg>Engineering Workflow Platform</span>
-      <h1 class="qd-h1">From Drawings to<br/><span class="qd-grad">Design, BOQ, Pricing &amp; 3D.</span></h1>
-      <div class="qd-h1b">One AI-powered engineering platform.</div>
-      <p class="sub qd-sub">Transform architectural, structural, civil and MEP/ELV drawings into traceable quantities, engineering BOQs and coordinated project deliverables.</p>
+      <span class="pill qd-pill"><svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/></svg>AI Take-Off &nbsp;&middot;&nbsp; AI Draftsman</span>
+      <h1 class="qd-h1">AI Take-Off &amp; BOQ<br/><span class="qd-grad">+ Shop Drawings in 3D.</span></h1>
+      <p class="sub qd-sub qsv-sub">Two AI services for MEP, ELV, electrical and civil work &mdash; on one platform.</p>
+      <div class="qsv"><div class="qsv-card qsv-a"><div class="qsv-shot"><img src="showcase/cctv-takeoff.jpg" alt="AI take-off: every device counted and marked on the drawing" loading="eager"/><span class="qsv-flow">Drawing &rarr; Marked-up BOQ</span></div><div class="qsv-top"><span class="qsv-ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span><div><div class="qsv-k">Service 1</div><div class="qsv-t">AI Take-Off &amp; BOQ</div></div></div><p class="qsv-lead">Upload MEP, ELV, electrical or civil drawings (PDF / DWG).</p><ul><li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg><span>Every device, cable, duct and pipe counted</span></li><li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg><span>A marked-up drawing behind every BOQ line</span></li><li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg><span>Priced BOQ in Excel, in minutes</span></li></ul><div class="qsv-act"><a class="qsv-btn" href="?auth=signup">Start a take-off</a><a class="qsv-link" href="#sample-boq">Sample BOQ &rarr;</a></div></div><div class="qsv-card qsv-b"><div class="qsv-shot"><img src="showcase/hvac-3d-coordination-real.jpg" alt="AI Draftsman: shop drawings and a 3D model from the architectural plan" loading="eager"/><span class="qsv-flow">Plan &rarr; Shop drawings + 3D</span></div><div class="qsv-top"><span class="qsv-ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/></svg></span><div><div class="qsv-k">Service 2</div><div class="qsv-t">AI Draftsman</div></div></div><p class="qsv-lead">Upload your architectural plan.</p><ul><li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg><span>Every system designed to the authority rules</span></li><li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg><span>Compliant shop drawings, schematics and Civil Defence set</span></li><li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg><span>Full 3D model and IFC for Revit / Navisworks</span></li></ul><div class="qsv-act"><a class="qsv-btn" href="?auth=signup">Get drawings</a><a class="qsv-link" href="#draftsman">See samples &rarr;</a></div></div></div>
+      <div class="qsv-trust"><span>33 systems</span><span>MEP &middot; ELV &middot; Electrical &middot; Civil</span><span>UAE &middot; KSA &middot; UK &middot; India &middot; Singapore rules</span><span>PDF &middot; DWG &middot; DXF &middot; IFC</span><span>Excel BOQ export</span></div>
       <div class="hero-ctas">
         <a class="btn btn-lg btn-grad qd-cta" href="?auth=signup">Start Free Trial <svg class="icon" width="15" height="15" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
         <a class="btn btn-lg btn-outline-lg qd-cta2" href="#works"><span class="qd-play"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path class="fill-solid" d="M8 5l11 7-11 7z"/></svg></span> Explore the Platform</a>
