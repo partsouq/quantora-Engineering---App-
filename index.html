@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-30.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-30.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -28865,7 +28865,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
     authority_region: "",
     area_size: initialProject && initialProject.area_size != null ? String(initialProject.area_size) : "",
     area_unit: initialProject ? (initialProject.area_unit || "sqm") : "sqm",
-    company_name: "", client_display: "", drawing_prefix: "QE", revision: "A",
+    company_name: "", client_display: "", drawing_prefix: initialProject ? (initialProject.project_ref || "") : "", revision: "A",
   });
   const [logo, setLogo] = useState(null);           // { path, dataUrl }
   const [formats, setFormats] = useState(["pdf"]);
@@ -28915,7 +28915,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
       job_name: data.job_name || s.job_name,
       company_name: data.company_name || "",
       client_display: data.client_display || "",
-      drawing_prefix: data.drawing_prefix || "QE",
+      drawing_prefix: data.drawing_prefix || s.drawing_prefix,
       revision: data.revision || "A",
     }));
     if (data.systems && data.systems.length) setChosen(data.systems);
@@ -29069,7 +29069,8 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
         project_id: p.id, job_name: f.job_name.trim(),
         company_name: f.company_name.trim() || null,
         client_display: f.client_display.trim() || null,
-        drawing_prefix: f.drawing_prefix.trim() || "QE",
+        // empty = the project number (the worker falls back to project_ref), never a fixed "QE"
+        drawing_prefix: f.drawing_prefix.trim() || p.project_ref || null,
         revision: f.revision.trim() || "A",
         logo_path: logo ? logo.path : null,
         floors_above: f.floors_above === "" ? null : parseInt(f.floors_above, 10),
@@ -29081,7 +29082,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
       if (error) throw error;
       onReady(p, { brief: true, logoPath: logo ? logo.path : null,
                    company: f.company_name.trim(), client: f.client_display.trim(),
-                   prefix: f.drawing_prefix.trim() || "QE", revision: f.revision.trim() || "A",
+                   prefix: f.drawing_prefix.trim() || p.project_ref || "", revision: f.revision.trim() || "A",
                    systems: chosen, rooms, specPages });
     } catch (e) { setErr(e.message); } finally { setBusy(""); }
   }
@@ -29162,7 +29163,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
             onChange={e => set("company_name", e.target.value)} placeholder="As it should read on the sheet" /></QdField>
           <QdField label="Client name to print" hint="Optional.">
             <input className={inp} value={f.client_display} onChange={e => set("client_display", e.target.value)} /></QdField>
-          <QdField label="Sheet number prefix" hint="QE-001, QE-002 …">
+          <QdField label="Sheet number prefix" hint="Leave as the project number so revisions keep the same drawing numbers.">
             <input className={inp} value={f.drawing_prefix} onChange={e => set("drawing_prefix", e.target.value)} /></QdField>
           <QdField label="Revision"><input className={inp} value={f.revision}
             onChange={e => set("revision", e.target.value)} /></QdField>
