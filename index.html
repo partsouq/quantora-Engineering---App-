@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-30.8"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-30.9"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -19162,10 +19162,10 @@ function ExportTab({ project }) {
 // AI Assistant chat tab
 // ---------------------------------------------------------------------------
 
-// Estima dock (2026-10-30): an assistant launcher bottom-left on every page. It opens Estima AI in a
+// Estima dock (2026-10-30): an assistant launcher bottom-right on every page. It opens Estima AI in a
 // panel, so a user can ask about a project without leaving the page they are on. It uses the same
 // engine "chat" action as the Estima AI page; inside a project it starts on that project.
-// The side menu stops short of the bottom on desktop so the launcher sits under it, not over it.
+// The side menu stops short of the bottom on desktop so the Help button (bottom-left) sits under it.
 const ESTIMA_ROBOT = (size = 26) => (
   <svg width={size} height={size} viewBox="0 0 40 40" fill="none" aria-hidden="true">
     <defs>
@@ -33963,7 +33963,7 @@ function App() {
           page name travels with the report so we know where they were. */}
       <button onClick={()=>supportOpen({ page: view.name })} title="Help and feedback"
         style={{
-          position: "fixed", right: 18, bottom: 18, zIndex: 40,
+          position: "fixed", left: "clamp(16px, 2.2vw, 44px)", bottom: 22, zIndex: 40,
           background: "#2563eb", color: "#fff", border: "none", borderRadius: 999,
           padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer",
           boxShadow: "0 6px 18px rgba(37,99,235,0.35)",
@@ -35100,7 +35100,7 @@ html:has(.qx),html:has(.qx) body{background:#f5f8fc !important}
   box-shadow:0 8px 18px -10px #1c6ce6}
 
 /* Estima dock (2026-10-30) */
-.qe-launch{position:fixed;left:clamp(16px,2.2vw,44px);bottom:16px;z-index:41;display:flex;align-items:center;gap:11px;
+.qe-launch{position:fixed;right:clamp(16px,2.2vw,44px);bottom:16px;z-index:41;display:flex;align-items:center;gap:11px;
   padding:6px 18px 6px 6px;border-radius:999px;cursor:pointer;color:#fff;font:inherit;text-align:left;
   background:linear-gradient(#141a3a,#141a3a) padding-box,linear-gradient(120deg,#22d3ee,#6366f1 45%,#a855f7) border-box;
   border:1.5px solid transparent;box-shadow:0 10px 30px -6px rgba(99,102,241,.55),0 0 0 1px rgba(255,255,255,.04);
@@ -35116,7 +35116,7 @@ html:has(.qx),html:has(.qx) body{background:#f5f8fc !important}
 .qe-eye{animation:qeBlink 5s infinite;transform-origin:center;transform-box:fill-box}
 @keyframes qePulse{0%{transform:scale(.92);opacity:.9}100%{transform:scale(1.28);opacity:0}}
 @keyframes qeBlink{0%,93%,100%{transform:scaleY(1)}96%{transform:scaleY(.15)}}
-.qe-panel{position:fixed;left:clamp(16px,2.2vw,44px);bottom:80px;z-index:41;width:min(400px,calc(100vw - 32px));height:min(580px,calc(100vh - 150px));
+.qe-panel{position:fixed;right:clamp(16px,2.2vw,44px);bottom:80px;z-index:41;width:min(400px,calc(100vw - 32px));height:min(580px,calc(100vh - 150px));
   display:flex;flex-direction:column;border-radius:20px;overflow:hidden;color:#e6e9f5;background:#0f1430;
   border:1px solid rgba(129,140,248,.28);box-shadow:0 30px 70px -10px rgba(0,0,0,.6);animation:qeIn .2s ease-out}
 @keyframes qeIn{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
@@ -35157,7 +35157,7 @@ html:has(.qx),html:has(.qx) body{background:#f5f8fc !important}
 .qe-form button:disabled{opacity:.45;cursor:not-allowed}
 @media (prefers-reduced-motion:reduce){.qe-launch .qe-ring::after,.qe-eye{animation:none}}
 @media (min-width:1024px){
-  /* the side menu stops above the Estima launcher */
+  /* the side menu stops above the Help button */
   .qx .qp-side{min-height:calc(100vh - 172px);max-height:calc(100vh - 172px)}
 }
 @media (max-width:640px){.qe-txt{display:none}.qe-launch{padding:5px}.qe-panel{bottom:76px}}
