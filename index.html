@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-30.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-31.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -5729,7 +5729,7 @@ function PagePacksCard({ compact }) {
   async function buy() {
     setBusy(true); setMsg(null);
     try {
-      // Page packs are not on Razorpay yet.
+      // Page packs are not on Dodo yet.
       setMsg({ ok: false, text: "Buying pages online is coming soon. Until then, write to support and we will add pages to your account." });
     } catch (e) { setMsg({ ok: false, text: e.message }); }
     finally { setBusy(false); }
@@ -5793,14 +5793,16 @@ function fmtLimit(n) {
 
 
 // ---------------------------------------------------------------------------
-// RAZORPAY (2026-10-24). Monthly plans and storage add-ons are Razorpay
-// Subscriptions. The browser only opens the payment; access is switched on by
-// the server once Razorpay confirms it (checkout signature or webhook).
+// DODO PAYMENTS (2026-10-31, replaces Razorpay). Monthly plans and storage
+// add-ons are Dodo subscriptions in USD. Dodo is the merchant of record, so it
+// takes cards from every country and handles tax/VAT. The browser only opens
+// Dodo's checkout page; access is switched on by the server once Dodo reports
+// the subscription (webhook, or "sync" when the customer comes back).
 // ---------------------------------------------------------------------------
-const RAZORPAY_FN_URL = `${SUPABASE_URL}/functions/v1/razorpay-billing`;
-async function callRazorpay(action, payload) {
+const PAY_FN_URL = `${SUPABASE_URL}/functions/v1/dodo-billing`;
+async function callPay(action, payload) {
   const { data: { session } } = await sb.auth.getSession();
-  const res = await fetch(RAZORPAY_FN_URL, {
+  const res = await fetch(PAY_FN_URL, {
     method: "POST",
     headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
     body: JSON.stringify({ action, ...(payload || {}) }),
@@ -5810,49 +5812,20 @@ async function callRazorpay(action, payload) {
   if (!res.ok) throw new Error(json.error || "Payment request failed. Please try again.");
   return json;
 }
-let _rzScript = null;
-function loadRazorpayCheckout() {
-  if (window.Razorpay) return Promise.resolve(true);
-  if (_rzScript) return _rzScript;
-  _rzScript = new Promise((resolve, reject) => {
-    const el = document.createElement("script");
-    el.src = "https://checkout.razorpay.com/v1/checkout.js";
-    el.onload = () => resolve(true);
-    el.onerror = () => { _rzScript = null; reject(new Error("The Razorpay payment window could not load. Check your connection or ad blocker and try again.")); };
-    document.head.appendChild(el);
-  });
-  return _rzScript;
-}
-// Starts a subscription and opens Razorpay's window. Resolves true once the
-// payment is verified, false if the customer closed the window.
 const CARD_OFF_MSG = "Card payment is not switched on for this account yet.";
-async function razorpaySubscribe(action, payload, description) {
-  // Until Razorpay is switched on (keys entered, engine deployed) say one short thing.
-  const cfg = await callRazorpay("config", {}).catch(() => null);
+// Starts a subscription and sends the customer to Dodo's checkout page.
+// Resolves true only when an existing subscription was switched in place;
+// otherwise the page leaves for Dodo and comes back with ?checkout=done.
+async function paySubscribe(action, payload) {
+  const cfg = await callPay("config", {}).catch(() => null);
   if (!cfg || !cfg.enabled) throw new Error(CARD_OFF_MSG);
-  const start = await callRazorpay(action, payload);
-  if (start.changed) return true;                      // existing subscription switched plan
-  await loadRazorpayCheckout();
-  return new Promise((resolve, reject) => {
-    const rzp = new window.Razorpay({
-      key: start.key_id,
-      subscription_id: start.subscription_id,
-      name: "Quantora Engineering",
-      description: description || start.name,
-      prefill: { email: start.email || undefined, name: start.contact_name || undefined },
-      theme: { color: "#1c6ce6" },
-      handler: async (resp) => {
-        try {
-          await callRazorpay("verify", resp);
-          window.dispatchEvent(new CustomEvent("plan-changed"));
-          resolve(true);
-        } catch (e) { reject(e); }
-      },
-      modal: { ondismiss: () => resolve(false) },
-    });
-    rzp.on("payment.failed", (r) => reject(new Error(r?.error?.description || "The payment did not go through.")));
-    rzp.open();
-  });
+  const back = `${location.origin}${location.pathname}?checkout=done`;
+  const start = await callPay(action, { ...(payload || {}), return_url: back });
+  if (start.changed) { window.dispatchEvent(new CustomEvent("plan-changed")); return true; }
+  if (!start.checkout_url) throw new Error("The payment page could not be opened. Please try again.");
+  try { sessionStorage.setItem("q_checkout_started", String(Date.now())); } catch (e) { /* private mode */ }
+  location.assign(start.checkout_url);
+  return new Promise(() => {});                       // the page is leaving
 }
 
 // Platform-admin manual plan activation (see the admin-plan edge function).
@@ -6967,10 +6940,10 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
   // Wallet top-ups (2026-08-12). The pricing page promises pay-as-you-go
   // credit for usage beyond a plan's monthly pages, so the purchase path has
   // to exist. Packs come from the credit_packs table rather than a hardcoded
-  // list, so prices can change without a redeploy. Not on Razorpay yet, so
+  // list, so prices can change without a redeploy. Not on Dodo yet, so
   // the list stays empty and the section is hidden.
   const [packs, setPacks] = useState([]);
-  // What Razorpay will actually charge (currency + price per plan), so the
+  // What Dodo will actually charge (currency + price per plan), so the
   // grid never shows a dollar price for an INR charge.
   const [rzCfg, setRzCfg] = useState(null);
   const [balanceCents, setBalanceCents] = useState(0);
@@ -7000,11 +6973,11 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
       }
       setPlans(plansData || []); setCompany(co);
       setBalanceCents(co?.credit_balance_cents ?? 0);
-      try { setRzCfg(await callRazorpay("config", {})); } catch (e) { setRzCfg(null); }
+      try { setRzCfg(await callPay("config", {})); } catch (e) { setRzCfg(null); }
       // Non-fatal: the plan grid is the primary purpose of this modal, so a
       // failure to list top-up packs must not blank the whole thing.
       try {
-        // Pay-as-you-go credit top-ups are not on Razorpay yet.
+        // Pay-as-you-go credit top-ups are not on Dodo yet.
         setPacks([]);
       } catch (packErr) {
         console.error("list_credit_packs failed:", packErr);
@@ -7023,7 +6996,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
   async function subscribe(planId) {
     setBusyPlanId(planId); setErr("");
     try {
-      const ok = await razorpaySubscribe("subscribe_plan", { plan_id: planId });
+      const ok = await paySubscribe("subscribe_plan", { plan_id: planId });
       setBusyPlanId(null);
       if (ok) { onClose && onClose(); window.dispatchEvent(new CustomEvent("profile-updated")); }
     } catch (ex) { setErr(ex.message); setBusyPlanId(null); }
@@ -7181,7 +7154,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
           </div>
         )}
 
-        {company?.billing_provider === "razorpay" && (
+        {["razorpay", "dodo"].includes(company?.billing_provider) && (
           <div className="mt-5 text-center">
             <button onClick={manageBilling} disabled={portalBusy} className="text-sm text-slate-500 underline hover:text-slate-900 disabled:opacity-50">
               {"Manage or cancel your subscription"}
@@ -20353,8 +20326,8 @@ const QADMIN_NAV = [
   { group: "Work", key: "estima", label: "Estima AI", sub: "Ask about a project's drawings, quantities and rules" },
   { group: "Business", key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
   { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
-  { group: "Business", key: "discounts", label: "Discounts", sub: "Razorpay offers and hand-granted plans" },
-  { group: "Business", key: "payments", label: "Payments", sub: "Razorpay readiness, paying customers and latest payments" },
+  { group: "Business", key: "discounts", label: "Discounts", sub: "Discount codes and hand-granted plans" },
+  { group: "Business", key: "payments", label: "Payments", sub: "Dodo Payments readiness, paying customers and latest payments" },
   { group: "Business", key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
   { group: "Platform", key: "support", label: "Support & Feedback", sub: "What customers report, and what they want next" },
   { group: "Platform", key: "ratings", label: "User Ratings", sub: "1-5 star ratings after each step, per customer" },
@@ -21043,7 +21016,7 @@ function AdminPortal({ onBack }) {
       ["Date", "Company", "Type", "Amount (USD)", "Balance After (USD)", "Description", "Payment reference"],
       ...payments.map(p => [p.date, p.company_name, p.type, p.amount_usd, p.balance_after_usd, p.description, p.payment_reference || p.stripe_payment_intent_id || ""]),
     ];
-    if (payments.length === 0) rows.push(["No wallet transactions recorded yet. Razorpay subscription payments are listed in Admin → Payments and in the Razorpay dashboard."]);
+    if (payments.length === 0) rows.push(["No wallet transactions recorded yet. Subscription payments are listed in Admin → Payments and in the Dodo dashboard."]);
     return downloadWorkbook([{ name: "Payments Received", rows }], `Quantora_Payments_Received_${new Date().toISOString().slice(0,10)}.xlsx`);
   }
 
@@ -21478,7 +21451,7 @@ function AdminQuotaControls({ company, onChanged }) {
   const [history, setHistory] = useState([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   // Manual plan activation (see the admin-plan edge function). Needed because
-  // a payment can land without a Razorpay subscription reaching us -- a failed
+  // a payment can land without a Dodo subscription reaching us -- a failed
   // webhook, a bank transfer, or a test that needs undoing.
   const [allPlans, setAllPlans] = useState([]);
   const [planChoice, setPlanChoice] = useState("");
@@ -21653,7 +21626,8 @@ function AdminQuotaControls({ company, onChanged }) {
         {company.billing_provider && (
           <div className="detail-item">
             <span>Activated by</span>
-            <b>{company.billing_provider === "razorpay" ? "Razorpay (paid online)"
+            <b>{company.billing_provider === "dodo" ? "Dodo Payments (paid online)"
+               : company.billing_provider === "razorpay" ? "Razorpay (paid online)"
                : company.billing_provider === "manual" ? "Admin — activated by hand"
                : company.billing_provider}</b>
           </div>
@@ -21722,16 +21696,16 @@ function AdminQuotaControls({ company, onChanged }) {
           {busy === "plan" ? "Applying…" : "Apply Plan"}
         </button>
       </div>
-      {company.billing_provider === "razorpay" && company.subscription_status === "active" && (
+      {["razorpay", "dodo"].includes(company.billing_provider) && company.subscription_status === "active" && (
         <div style={{ fontSize: 11.5, color: "#fcd34d", marginBottom: 8, lineHeight: 1.55 }}>
-          This company pays through Razorpay. Changing the plan here does not change what Razorpay charges them,
-          and their next payment sets the paid plan again. To stop billing, cancel the subscription in the Razorpay dashboard.
+          This company pays online. Changing the plan here does not change what Dodo charges them,
+          and their next payment sets the paid plan again. To stop billing, cancel the subscription in the Dodo dashboard.
         </div>
       )}
       <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginBottom: 10, lineHeight: 1.55 }}>
-        Razorpay sets the plan automatically when a customer subscribes. This is the route for granting
+        Dodo Payments sets the plan automatically when a customer subscribes. This is the route for granting
         access without a payment — promotions, pilots, gift cards, beta testers, goodwill. Every reason
-        here is a giveaway, so nothing lands in MRR. Payment is only ever taken through Razorpay. Access ends on its own at the date shown and the account drops back to
+        here is a giveaway, so nothing lands in MRR. Payment is only ever taken through Dodo Payments. Access ends on its own at the date shown and the account drops back to
         whatever it was on before — usually an expired trial, which leaves them blocked until they
         subscribe. The plan's page and chat limits apply throughout, and for a grant they are a single
         allowance covering the whole period rather than resetting each month — grant Individual for 30
@@ -22179,8 +22153,8 @@ function QMyProjectsView({ onOpen }) {
 }
 
 // ---------------------------------------------------------------------------
-// QPaymentsView (2026-10-25). Live readiness check against Razorpay, plus the
-// payments and webhooks that came in lately. Asks razorpay-billing ("readiness",
+// QPaymentsView (2026-10-25; Dodo Payments since 2026-10-31). Live readiness check
+// against Dodo, plus the payments and webhooks that came in lately. Asks dodo-billing ("readiness",
 // platform admins only); no key value is ever sent to the browser.
 // ---------------------------------------------------------------------------
 function qRzMoney(amount, currency) {
@@ -22194,13 +22168,25 @@ function QPaymentsView() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [checkedAt, setCheckedAt] = useState(null);
+  const [payments, setPayments] = useState([]);
+  function exportPayments() {
+    const rows = [["Date", "Company", "Email", "Description", "Status", "Amount", "Currency", "Refunded", "Tax (settlement)", "Settlement", "Settlement currency", "Card", "Payment ID", "Subscription ID"],
+      ...payments.map(x => [new Date(x.paid_at).toISOString().slice(0, 10), x.companies?.name || "", x.customer_email || "", x.description || "", x.status,
+        Number(x.amount_minor) / 100, x.currency, Number(x.refunded_minor || 0) / 100, x.tax_minor == null ? "" : Number(x.tax_minor) / 100,
+        x.settlement_minor == null ? "" : Number(x.settlement_minor) / 100, x.settlement_currency || "",
+        x.card_last_four ? `${x.card_network || ""} ${x.card_last_four}` : "", x.payment_id, x.subscription_id || ""])];
+    return downloadWorkbook([{ name: "Payments", rows }], `Quantora_Payments_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
 
   useEffect(() => { run(); }, []);
   async function run() {
     setBusy(true); setErr("");
     try {
-      const res = await callRazorpay("readiness", {});
+      const res = await callPay("readiness", {});
       setData(res);
+      // Every payment from our own records (billing_payments), newest first.
+      const { data: pays } = await sb.from("billing_payments").select("*, companies(name)").order("paid_at", { ascending: false }).limit(200);
+      setPayments(pays || []);
       setCheckedAt(new Date());
     } catch (e) {
       console.error("QPaymentsView.run failed:", e);
@@ -22209,23 +22195,23 @@ function QPaymentsView() {
     } finally { setBusy(false); }
   }
 
-  const cur = data?.currency || "INR";
+  const cur = data?.currency || "USD";
   const missingPlans = (data?.plans || []).filter(p => !(p.price > 0));
   const missingAddons = (data?.storage_addons || []).filter(a => !(a.price > 0));
   const checks = data ? [
     { key: "keys", ok: data.keys_configured && data.api_ok,
-      label: "Razorpay API keys work",
-      detail: !data.keys_configured ? "RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are not set in app_secrets."
-        : data.api_ok ? `Razorpay accepted the ${data.mode === "live" ? "live" : data.mode === "test" ? "test" : ""} keys just now.`
-        : `Razorpay refused the keys: ${data.api_error || "unknown error"}` },
+      label: "Dodo Payments API key works",
+      detail: !data.keys_configured ? "DODO_API_KEY is not set in app_secrets."
+        : data.api_ok ? `Dodo accepted the ${data.mode === "live" ? "live" : data.mode === "test" ? "test" : ""} key just now.`
+        : `Dodo refused the key: ${data.api_error || "unknown error"}` },
     { key: "mode", ok: data.mode === "live",
       label: "Live mode",
-      detail: data.mode === "live" ? "Real cards are charged." : data.mode === "test" ? "Test keys: nothing is charged. Put the live keys in app_secrets to take real payments." : "Key mode not recognised." },
+      detail: data.mode === "live" ? "Real cards are charged." : data.mode === "test" ? "Test key: nothing is charged. Put the live key in app_secrets to take real payments." : "Key mode not recognised." },
     { key: "webhook", ok: data.webhook_secret_configured,
       label: "Webhook secret set",
       detail: data.webhook_secret_configured
-        ? "Razorpay's calls to razorpay-webhook are checked against it. It must match the secret on the webhook in the Razorpay dashboard."
-        : "RAZORPAY_WEBHOOK_SECRET is not set, so plans will not switch on by themselves after payment." },
+        ? "Dodo's calls to dodo-webhook are checked against it. It must match the signing secret of the webhook in the Dodo dashboard."
+        : "DODO_WEBHOOK_SECRET is not set, so plans will not switch on by themselves after payment." },
     { key: "plans", ok: missingPlans.length === 0,
       label: `Every paid plan has a ${cur} price`,
       detail: missingPlans.length === 0
@@ -22268,11 +22254,11 @@ function QPaymentsView() {
                 {ready ? "Payments are live" : "Not taking payments yet"}
               </div>
               <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 4, lineHeight: 1.6 }}>
-                {ready ? `Customers can subscribe and pay by card, UPI or net banking in ${cur}. Plans switch on by themselves once Razorpay confirms the payment.`
+                {ready ? `Customers anywhere can subscribe by card in ${cur}; Dodo handles tax/VAT as merchant of record. Plans switch on by themselves once Dodo confirms the payment.`
                   : `${blocking.length} item${blocking.length === 1 ? "" : "s"} still blocking: ${blocking.map(c => c.label).join("; ")}.`}
               </div>
               <div style={{ fontSize: 11, color: "var(--text-dimmer)", marginTop: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                Razorpay {data.mode === "live" ? "live account" : data.mode === "test" ? "test mode" : ""} · {cur}
+                Dodo Payments {data.mode === "live" ? "live account" : data.mode === "test" ? "test mode" : ""} · {cur}
               </div>
             </div>
 
@@ -22301,9 +22287,9 @@ function QPaymentsView() {
       {data && (
         <div className="card panel" style={{ marginBottom: 16 }}>
           <div className="panel-head"><h3>Paying customers</h3>
-            <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>{(data.paying_companies || []).length} on Razorpay</span></div>
+            <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>{(data.paying_companies || []).length} on Dodo Payments</span></div>
           {(data.paying_companies || []).length === 0
-            ? <p style={{ padding: "14px 18px", fontSize: 12.5, color: "var(--text-dimmer)" }}>No customer has paid through Razorpay yet.</p>
+            ? <p style={{ padding: "14px 18px", fontSize: 12.5, color: "var(--text-dimmer)" }}>No customer has paid through Dodo Payments yet.</p>
             : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr><th style={th}>Company</th><th style={th}>Plan</th><th style={th}>Status</th><th style={th}>Paid until</th></tr></thead>
                 <tbody>{data.paying_companies.map(c => (
@@ -22316,7 +22302,28 @@ function QPaymentsView() {
 
       {data && (
         <div className="card panel" style={{ marginBottom: 16 }}>
-          <div className="panel-head"><h3>Latest Razorpay events</h3>
+          <div className="panel-head"><h3>All payments</h3>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>{payments.length} recorded</span>
+              {payments.length > 0 && <button className="btn btn-sm" onClick={exportPayments}>Export Excel</button>}
+            </div></div>
+          {payments.length === 0
+            ? <p style={{ padding: "14px 18px", fontSize: 12.5, color: "var(--text-dimmer)" }}>No payment yet. Each payment is recorded here automatically, with its invoice in Dodo.</p>
+            : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={th}>Date</th><th style={th}>Company</th><th style={th}>Description</th><th style={th}>Status</th><th style={{ ...th, textAlign: "right" }}>Amount</th><th style={th}>Payment ID</th></tr></thead>
+                <tbody>{payments.map(x => (
+                  <tr key={x.payment_id}><td style={td}>{new Date(x.paid_at).toLocaleDateString()}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{x.companies?.name || x.customer_email || "—"}</td>
+                    <td style={td}>{x.description || "—"}</td><td style={td}>{(Q_PAY_STATUS[x.status] || [x.status])[0]}</td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{qMoneyMinor(x.amount_minor, x.currency)}</td>
+                    <td style={{ ...td, fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>{x.payment_id}</td></tr>
+                ))}</tbody></table></div>}
+        </div>
+      )}
+
+      {data && (
+        <div className="card panel" style={{ marginBottom: 16 }}>
+          <div className="panel-head"><h3>Latest Dodo events</h3>
             <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>last 10 webhooks received</span></div>
           {(data.recent_events || []).length === 0
             ? <p style={{ padding: "14px 18px", fontSize: 12.5, color: "var(--text-dimmer)" }}>No webhook has arrived yet. The first one comes with the first payment.</p>
@@ -22334,21 +22341,18 @@ function QPaymentsView() {
         <div className="panel-head"><h3>What only you can do</h3></div>
         <div style={{ padding: "16px 18px", fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.75 }}>
           <p style={{ margin: "0 0 12px" }}>
-            <b style={{ color: "var(--text)" }}>Refunds and cancellations.</b> Done in the Razorpay dashboard
-            (dashboard.razorpay.com → Subscriptions or Transactions). A cancelled subscription keeps the plan
+            <b style={{ color: "var(--text)" }}>Refunds and cancellations.</b> Done in the Dodo dashboard
+            (app.dodopayments.com → Sales → Subscriptions or Transactions). A cancelled subscription keeps the plan
             until the paid month ends, then the webhook switches it off by itself.
           </p>
           <p style={{ margin: "0 0 12px" }}>
-            <b style={{ color: "var(--text)" }}>Charging in USD.</b> Razorpay takes INR only until International
-            payments is approved (Account &amp; Settings → International payments). After approval, set
-            <code style={{ padding: "1px 5px", margin: "0 3px", borderRadius: 4, background: "rgba(255,255,255,0.06)" }}>
-              app_secrets.RAZORPAY_CURRENCY = 'USD'
-            </code>.
+            <b style={{ color: "var(--text)" }}>Payouts.</b> Dodo pays out to the bank account in the Dodo dashboard
+            (Payouts). Customers pay in their own currency; Dodo converts and handles tax/VAT.
           </p>
           <p style={{ margin: 0 }}>
-            <b style={{ color: "var(--text)" }}>Keep the keys private.</b> Change them in Razorpay
-            (Account &amp; Settings → API Keys → Regenerate) and paste the new values into app_secrets
-            yourself. Never paste them into a chat or a screenshot.
+            <b style={{ color: "var(--text)" }}>Keep the keys private.</b> Make a new API key in Dodo
+            (Developer → API Keys) and paste it into app_secrets.DODO_API_KEY
+            yourself. Never paste it into a chat or a screenshot.
           </p>
         </div>
       </div>
@@ -22356,17 +22360,16 @@ function QPaymentsView() {
   );
 }
 
-// Discounts (2026-10-25). Razorpay does not let other software create
-// discounts; they are "Offers" made in the Razorpay dashboard. Until Quantora
-// has its own Razorpay discounts, this page says where to go.
+// Discounts (2026-10-25; Dodo Payments since 2026-10-31). Discount codes are
+// made in the Dodo dashboard; customers type them on Dodo's checkout page.
 function QDiscountsView() {
   return (
     <div className="card panel">
       <div className="panel-head"><h3>Discounts</h3></div>
       <div style={{ padding: "16px 18px", fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.75 }}>
         <p style={{ margin: "0 0 12px" }}>
-          Payments now go through Razorpay. Razorpay discounts are called <b style={{ color: "var(--text)" }}>Offers</b> and
-          are created in the Razorpay dashboard (dashboard.razorpay.com → Offers), not here.
+          Payments now go through Dodo Payments. Discount codes are created in the Dodo dashboard
+          (app.dodopayments.com → Products → <b style={{ color: "var(--text)" }}>Discounts</b>), and customers enter them on the checkout page.
         </p>
         <p style={{ margin: "0 0 12px" }}>
           To give one customer free or cheaper access, use <b style={{ color: "var(--text)" }}>Customers → open the company → Change plan to…</b>
@@ -22494,10 +22497,11 @@ function QHealthView({ systemStatus }) {
   const s = systemStatus || {};
   const incidents = [];
   if (!s.anthropic_key_configured) incidents.push({ service: "AI Engine", issue: "ANTHROPIC_API_KEY not configured", status: "warning" });
-  const rzOk = !!(s.razorpay_keys_configured && s.razorpay_webhook_secret_configured);
-  if (!s.razorpay_keys_configured) incidents.push({ service: "Payment Gateway", issue: "RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not configured", status: "warning" });
-  if (!s.razorpay_webhook_secret_configured) incidents.push({ service: "Payment Gateway", issue: "RAZORPAY_WEBHOOK_SECRET not configured", status: "warning" });
-  if (s.razorpay_keys_configured && s.razorpay_mode === "test") incidents.push({ service: "Payment Gateway", issue: "Razorpay is on test keys — no real payments are taken", status: "warning" });
+  // Payment gateway: Dodo Payments since 2026-10-31.
+  const rzOk = !!(s.dodo_key_configured && s.dodo_webhook_secret_configured);
+  if (!s.dodo_key_configured) incidents.push({ service: "Payment Gateway", issue: "DODO_API_KEY not configured", status: "warning" });
+  if (!s.dodo_webhook_secret_configured) incidents.push({ service: "Payment Gateway", issue: "DODO_WEBHOOK_SECRET not configured", status: "warning" });
+  if (s.dodo_key_configured && s.dodo_mode === "test") incidents.push({ service: "Payment Gateway", issue: "Dodo is on a test key — no real payments are taken", status: "warning" });
 
   return (
     <>
@@ -22520,8 +22524,8 @@ function QHealthView({ systemStatus }) {
         </div>
         <div className="card service-card">
           <div className="stop"><div className="sname"><div className="service-ic">{QICONS.revenue}</div>Payment Gateway</div>
-            <span className={rzOk && s.razorpay_mode === "live" ? "pill st-healthy" : "pill st-warning"}>{!rzOk ? "Not Configured" : s.razorpay_mode === "live" ? "Live" : "Test mode"}</span></div>
-          <div className="smeta">{rzOk ? `Razorpay ${s.razorpay_mode === "live" ? "live" : "test"} keys · webhook secret set · ${s.razorpay_currency || "INR"}` : "Razorpay keys or webhook secret missing"}</div>
+            <span className={rzOk && s.dodo_mode === "live" ? "pill st-healthy" : "pill st-warning"}>{!rzOk ? "Not Configured" : s.dodo_mode === "live" ? "Live" : "Test mode"}</span></div>
+          <div className="smeta">{rzOk ? `Dodo Payments ${s.dodo_mode === "live" ? "live" : "test"} key · webhook secret set · USD` : "Dodo API key or webhook secret missing"}</div>
         </div>
       </div>
 
@@ -23910,19 +23914,244 @@ function BillingPage({ onUpgrade }) {
          )}
       </div>
       <PlanSubscriptionCard />
+      <PaymentHistoryCard />
       <StorageCard />
       <PagePacksCard />
     </div>
   );
 }
 
-// Billing page: the monthly plan paid through Razorpay, with cancel.
+// ---------------------------------------------------------------------------
+// Payment records (2026-10-31). Every Dodo payment is kept in billing_payments
+// (written by dodo-webhook / dodo-billing "sync"), so customers have their own
+// payment history, a monthly statement and the official invoice for each payment.
+// ---------------------------------------------------------------------------
+function qMoneyMinor(minor, currency) {
+  const cur = (currency || "USD").toUpperCase();
+  try { return new Intl.NumberFormat("en-US", { style: "currency", currency: cur }).format(Number(minor || 0) / 100); }
+  catch (e) { return `${cur} ${(Number(minor || 0) / 100).toFixed(2)}`; }
+}
+const Q_PAY_STATUS = {
+  succeeded: ["Paid", "#047857", "rgba(16,185,129,.12)"],
+  refunded: ["Refunded", "#475569", "rgba(100,116,139,.14)"],
+  partially_refunded: ["Part refunded", "#475569", "rgba(100,116,139,.14)"],
+  failed: ["Failed", "#b91c1c", "rgba(239,68,68,.12)"],
+  processing: ["Processing", "#b45309", "rgba(245,158,11,.14)"],
+};
+async function qDownloadInvoice(paymentId) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(PAY_FN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action: "invoice", payment_id: paymentId }),
+  });
+  if (!res.ok) { let j = {}; try { j = await res.json(); } catch (e) {} throw new Error(j.error || "The invoice could not be downloaded."); }
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `Quantora-invoice-${paymentId}.pdf`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+// Monthly statement as a PDF, built in the browser from our own records.
+function qStatementPdf(monthKey, rows, company) {
+  if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("The PDF tool is still loading. Please try again in a moment.");
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth();
+  const [y, m] = monthKey.split("-").map(Number);
+  const monthName = new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  doc.setFillColor(11, 22, 56); doc.rect(0, 0, W, 92, "F");
+  try { doc.addImage(QUANTORA_LOGO_URI, "PNG", 40, 24, 44, 44); } catch (e) { /* logo optional */ }
+  doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(18);
+  doc.text("Quantora Engineering", 96, 46);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(165, 190, 240);
+  doc.text("www.quantoraengineering.com  ·  support@quantoraengineering.com", 96, 63);
+  doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(13);
+  doc.text("BILLING STATEMENT", W - 40, 46, { align: "right" });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.text(monthName, W - 40, 63, { align: "right" });
+  doc.setTextColor(15, 23, 42); doc.setFontSize(10);
+  doc.setFont("helvetica", "bold"); doc.text("Billed to", 40, 128);
+  doc.setFont("helvetica", "normal");
+  doc.text([company?.name || "", rows.find(r => r.customer_email)?.customer_email || ""].filter(Boolean), 40, 144);
+  doc.setFont("helvetica", "bold"); doc.text("Statement date", W - 200, 128);
+  doc.setFont("helvetica", "normal"); doc.text(new Date().toLocaleDateString("en-GB"), W - 200, 144);
+  const paid = rows.filter(r => ["succeeded", "partially_refunded"].includes(r.status));
+  const cur = (rows[0]?.currency || "USD");
+  const total = paid.reduce((n, r) => n + Number(r.amount_minor || 0) - Number(r.refunded_minor || 0), 0);
+  doc.autoTable({
+    startY: 176,
+    head: [["Date", "Description", "Service period", "Card", "Status", "Amount"]],
+    body: rows.map(r => [
+      new Date(r.paid_at).toLocaleDateString("en-GB"),
+      r.description || "Quantora subscription",
+      r.period_start && r.period_end ? `${new Date(r.period_start).toLocaleDateString("en-GB")} – ${new Date(r.period_end).toLocaleDateString("en-GB")}` : "—",
+      r.card_last_four ? `${r.card_network || "Card"} •••• ${r.card_last_four}` : "—",
+      (Q_PAY_STATUS[r.status] || [r.status])[0],
+      qMoneyMinor(r.amount_minor, r.currency) + (Number(r.refunded_minor) > 0 ? `\n(refunded ${qMoneyMinor(r.refunded_minor, r.currency)})` : ""),
+    ]),
+    styles: { fontSize: 9, cellPadding: 6, textColor: [15, 23, 42] },
+    headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [245, 248, 253] },
+    columnStyles: { 5: { halign: "right" } },
+  });
+  let yy = doc.lastAutoTable.finalY + 22;
+  doc.setFont("helvetica", "bold"); doc.setFontSize(11);
+  doc.text(`Total paid in ${monthName}: ${qMoneyMinor(total, cur)}`, W - 40, yy, { align: "right" });
+  yy += 30;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(100, 116, 139);
+  doc.text(doc.splitTextToSize("Payments are processed by Dodo Payments, our Merchant of Record, which also handles any sales tax or VAT. "
+    + "The official tax invoice for each payment can be downloaded from Billing & subscription in your Quantora account. "
+    + "This statement is a summary from our records.", W - 80), 40, yy);
+  doc.save(`Quantora-statement-${monthKey}.pdf`);
+}
+
+function PaymentHistoryCard() {
+  const [rows, setRows] = useState(null);
+  const [company, setCompany] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState(null);
+  async function load() {
+    const { data: { user } } = await sb.auth.getUser();
+    const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+    if (prof?.company_id) {
+      const { data: co } = await sb.from("companies").select("id, name").eq("id", prof.company_id).maybeSingle();
+      setCompany(co);
+      const { data } = await sb.from("billing_payments").select("*").eq("company_id", prof.company_id).order("paid_at", { ascending: false }).limit(240);
+      setRows(data || []);
+    } else setRows([]);
+  }
+  useEffect(() => { load().catch(() => setRows([])); const f = () => load().catch(() => {}); window.addEventListener("plan-changed", f); return () => window.removeEventListener("plan-changed", f); }, []);
+  if (!rows) return null;
+  const months = [];
+  rows.forEach(r => {
+    const d = new Date(r.paid_at); const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    let g = months.find(x => x.key === key); if (!g) { g = { key, rows: [] }; months.push(g); }
+    g.rows.push(r);
+  });
+  const invoice = async (id) => { setBusy(id); setMsg(null); try { await qDownloadInvoice(id); } catch (e) { setMsg(e.message); } finally { setBusy(""); } };
+  const statement = (g) => { setMsg(null); try { qStatementPdf(g.key, g.rows, company); } catch (e) { setMsg(e.message); } };
+  return (
+    <div className="qp-card">
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>Payments &amp; statements</div>
+        <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>Monthly statements and the official invoice for every payment</div>
+      </div>
+      {rows.length === 0 ? (
+        <div style={{ fontSize: 13, color: "var(--q-text-dim,#64748b)", marginTop: 10 }}>No payments yet. When you subscribe, every payment and its invoice appears here.</div>
+      ) : months.map(g => {
+        const [yy, mm] = g.key.split("-").map(Number);
+        const label = new Date(yy, mm - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+        const total = g.rows.filter(r => ["succeeded", "partially_refunded"].includes(r.status)).reduce((n, r) => n + Number(r.amount_minor) - Number(r.refunded_minor || 0), 0);
+        return (
+          <div key={g.key} style={{ marginTop: 14, border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 12, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "rgba(37,99,235,.06)", flexWrap: "wrap" }}>
+              <b style={{ fontSize: 13.5 }}>{label}</b>
+              <span style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>Total paid {qMoneyMinor(total, g.rows[0].currency)}</span>
+              <button className="qp-btn" style={{ marginLeft: "auto" }} onClick={() => statement(g)}>Download statement (PDF)</button>
+            </div>
+            {g.rows.map(r => {
+              const st = Q_PAY_STATUS[r.status] || [r.status, "#475569", "rgba(100,116,139,.14)"];
+              return (
+                <div key={r.payment_id} style={{ display: "grid", gridTemplateColumns: "minmax(90px,auto) minmax(0,1fr) auto auto auto", gap: 12, alignItems: "center", padding: "10px 14px", borderTop: "1px solid var(--q-border,#e2e8f0)", fontSize: 13 }}>
+                  <span style={{ color: "var(--q-text-dim,#64748b)" }}>{new Date(r.paid_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
+                  <span style={{ minWidth: 0 }}>
+                    <b>{r.description || "Quantora subscription"}</b>
+                    {r.card_last_four && <span style={{ color: "var(--q-text-dim,#64748b)" }}> · {r.card_network || "Card"} •••• {r.card_last_four}</span>}
+                  </span>
+                  <span style={{ fontSize: 11.5, fontWeight: 700, color: st[1], background: st[2], padding: "3px 9px", borderRadius: 99, whiteSpace: "nowrap" }}>{st[0]}</span>
+                  <b style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{qMoneyMinor(r.amount_minor, r.currency)}</b>
+                  {r.status !== "failed"
+                    ? <button className="qp-btn" onClick={() => invoice(r.payment_id)} disabled={busy === r.payment_id}>{busy === r.payment_id ? "Preparing…" : "Invoice"}</button>
+                    : <span />}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      {msg && <div style={{ marginTop: 10, fontSize: 12.5, color: "#dc2626" }}>{msg}</div>}
+    </div>
+  );
+}
+
+// The pop-up a customer sees when they come back from Dodo's checkout page.
+// "checking" while Dodo confirms, then a receipt: what was bought, amount, card,
+// next renewal, invoice. "failed" if the card did not go through.
+function PaymentResultModal({ state, onClose, onBilling }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  if (!state) return null;
+  const { stage, cfg } = state;
+  const pay = cfg?.last_payment || null;
+  const sub = cfg?.plan_subscription || null;
+  const planName = sub ? ((cfg.plans || []).find(p => p.id === sub.plan) || {}).name : null;
+  const what = pay?.description || (planName ? `${planName} plan, monthly` : "Your subscription");
+  const renew = sub?.paid_until ? new Date(sub.paid_until).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : null;
+  const ok = stage === "success", bad = stage === "failed", wait = stage === "checking" || stage === "slow";
+  const ring = ok ? "#10b981" : bad ? "#ef4444" : "#6366f1";
+  const invoice = async () => { if (!pay) return; setBusy(true); setErr(""); try { await qDownloadInvoice(pay.payment_id); } catch (e) { setErr(e.message); } finally { setBusy(false); } };
+  const row = (k, v) => v ? (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "9px 0", borderTop: "1px solid rgba(148,163,184,.18)", fontSize: 13.5 }}>
+      <span style={{ color: "var(--q-text-dim,#64748b)" }}>{k}</span><b style={{ textAlign: "right" }}>{v}</b></div>) : null;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 95, background: "rgba(5,8,22,.62)", display: "grid", placeItems: "center", padding: 16 }}>
+      <style>{`@keyframes qpPop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
+        @keyframes qpDraw{to{stroke-dashoffset:0}} @keyframes qpSpin{to{transform:rotate(360deg)}}`}</style>
+      <div role="dialog" aria-modal="true" style={{ width: "min(460px, 94vw)", background: "var(--q-panel,#fff)", color: "var(--q-text,#0f172a)", borderRadius: 22, overflow: "hidden", boxShadow: "0 30px 80px rgba(0,0,0,.45)", border: "1px solid var(--q-border,#e2e8f0)" }}>
+        <div style={{ padding: "30px 28px 18px", textAlign: "center", background: `radial-gradient(120% 90% at 50% 0%, ${ring}22, transparent 70%)` }}>
+          <div style={{ width: 76, height: 76, margin: "0 auto", borderRadius: 999, display: "grid", placeItems: "center", background: `${ring}1f`, boxShadow: `0 0 0 8px ${ring}12`, animation: wait ? "none" : "qpPop .45s ease-out both" }}>
+            {wait ? (
+              <div style={{ width: 38, height: 38, borderRadius: 999, border: `4px solid ${ring}33`, borderTopColor: ring, animation: "qpSpin .9s linear infinite" }} />
+            ) : (
+              <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                {ok ? <path d="M11 21l6 6 13-14" stroke={ring} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" style={{ strokeDasharray: 40, strokeDashoffset: 40, animation: "qpDraw .5s .25s ease-out forwards" }} />
+                    : <path d="M13 13l14 14M27 13L13 27" stroke={ring} strokeWidth="4" strokeLinecap="round" />}
+              </svg>
+            )}
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, marginTop: 16 }}>
+            {ok ? "Payment successful" : bad ? "Payment not completed" : stage === "slow" ? "Payment received" : "Confirming your payment…"}
+          </div>
+          <div style={{ fontSize: 14, color: "var(--q-text-dim,#64748b)", marginTop: 6, lineHeight: 1.55 }}>
+            {ok ? `Thank you. Your ${planName ? `${planName} plan` : what.replace(/, monthly$/, "")} is now active.`
+              : bad ? "Your card was not charged and your plan has not changed. You can try again with another card."
+              : stage === "slow" ? "Dodo has your payment. Your plan switches on within a few minutes; we'll update this page by itself."
+              : "This takes a few seconds. Please keep this page open."}
+          </div>
+        </div>
+        {ok && (
+          <div style={{ padding: "4px 28px 6px" }}>
+            {row("Amount paid", pay ? qMoneyMinor(pay.amount_minor, pay.currency) : null)}
+            {row("Paid with", pay?.card_last_four ? `${pay.card_network || "Card"} •••• ${pay.card_last_four}` : null)}
+            {row("Next renewal", renew)}
+            {row("Receipt sent to", pay?.customer_email || null)}
+            {row("Reference", pay?.payment_id || null)}
+          </div>
+        )}
+        {err && <div style={{ padding: "0 28px", fontSize: 12.5, color: "#dc2626" }}>{err}</div>}
+        <div style={{ display: "flex", gap: 10, padding: "16px 28px 24px", flexWrap: "wrap" }}>
+          {ok && pay && <button onClick={invoice} disabled={busy} style={{ flex: 1, minWidth: 130, padding: "11px 14px", borderRadius: 12, border: "1px solid var(--q-border,#cbd5e1)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>{busy ? "Preparing…" : "Download invoice"}</button>}
+          {(ok || stage === "slow") && <button onClick={() => { onClose(); onBilling && onBilling(); }} style={{ flex: 1, minWidth: 130, padding: "11px 14px", borderRadius: 12, border: "1px solid var(--q-border,#cbd5e1)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>Billing &amp; statements</button>}
+          {!wait || stage === "slow" ? (
+            <button onClick={onClose} style={{ flex: "1 1 100%", padding: "12px 14px", borderRadius: 12, border: 0, color: "#fff", fontWeight: 800, cursor: "pointer", background: ok ? "linear-gradient(90deg,#059669,#10b981)" : "linear-gradient(90deg,#4f46e5,#7c3aed)" }}>
+              {ok ? "Start working" : bad ? "Close" : "OK"}</button>
+          ) : null}
+        </div>
+        <div style={{ padding: "0 28px 18px", fontSize: 11, color: "var(--q-text-dim,#94a3b8)", textAlign: "center" }}>
+          Payments are processed securely by Dodo Payments, our Merchant of Record.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Billing page: the monthly plan paid through Dodo Payments, with cancel.
 function PlanSubscriptionCard() {
   const [cfg, setCfg] = useState(null);
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState(false);
   const [msg, setMsg] = useState(null);
-  async function load() { try { setCfg(await callRazorpay("config", {})); } catch (e) { setCfg(null); } }
+  async function load() { try { setCfg(await callPay("config", {})); } catch (e) { setCfg(null); } }
   useEffect(() => { load(); }, []);
   const sub = cfg?.plan_subscription;
   if (!sub || !sub.id) return null;
@@ -23930,7 +24159,7 @@ function PlanSubscriptionCard() {
   async function cancel() {
     setBusy(true); setMsg(null);
     try {
-      await callRazorpay("cancel", { subscription_id: sub.id });
+      await callPay("cancel", { subscription_id: sub.id });
       setMsg({ ok: true, text: `Cancelled. Your plan stays until ${until || "the end of the paid month"}, then the account moves to the free plan. Your data is kept.` });
       setAsk(false); load();
     } catch (e) { setMsg({ ok: false, text: e.message }); }
@@ -23941,9 +24170,9 @@ function PlanSubscriptionCard() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ fontSize: 16, fontWeight: 800 }}>Monthly subscription</div>
         <span style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>
-          {sub.status === "active" ? `Paid through Razorpay. Renews ${until ? `on ${until}` : "monthly"}.`
+          {sub.status === "active" ? `Paid by card. Renews ${until ? `on ${until}` : "monthly"}.`
             : sub.status === "cancelled" ? `Cancelled. Your plan stays until ${until || "the end of the paid month"}.`
-            : sub.status === "pending" || sub.status === "halted" ? "The last payment failed. Razorpay is retrying; update your card from the link in Razorpay's email."
+            : ["on_hold", "past_due", "pending", "halted"].includes(sub.status) ? "The last payment failed. Please update your card from the link in the payment email; your plan stays on while it is retried."
             : `Status: ${sub.status}`}
         </span>
         {sub.status === "active" && (ask ? (
@@ -23973,13 +24202,13 @@ function StorageCard() {
   const [msg, setMsg] = useState(null);
   const [confirmCancel, setConfirmCancel] = useState("");
   async function loadCfg() {
-    try { setCfg(await callRazorpay("config", {})); } catch (e) { setCfg({ enabled: false }); }
+    try { setCfg(await callPay("config", {})); } catch (e) { setCfg({ enabled: false }); }
   }
   useEffect(() => { loadCfg(); }, []);
   async function buy(gb) {
     setBusy(`gb${gb}`); setMsg(null);
     try {
-      const ok = await razorpaySubscribe("subscribe_storage", { gb }, `Storage +${gb} GB, monthly`);
+      const ok = await paySubscribe("subscribe_storage", { gb });
       if (ok) { setMsg({ ok: true, text: `+${gb} GB added. It may take a minute to show in your total.` }); loadCfg(); }
     } catch (e) { setMsg({ ok: false, text: e.message }); }
     finally { setBusy(""); }
@@ -23987,7 +24216,7 @@ function StorageCard() {
   async function cancel(id) {
     setBusy(id); setMsg(null);
     try {
-      await callRazorpay("cancel", { subscription_id: id });
+      await callPay("cancel", { subscription_id: id });
       setMsg({ ok: true, text: "Cancelled. The storage stays until the end of the month you have paid for." });
       setConfirmCancel(""); loadCfg();
     } catch (e) { setMsg({ ok: false, text: e.message }); }
@@ -23998,7 +24227,7 @@ function StorageCard() {
   const priceList = live && Array.isArray(cfg.storage_addons) && cfg.storage_addons.length
     ? cfg.storage_addons.map(a => ({ gb: a.gb, usd: a.price, note: a.note })) : STORAGE_ADDONS;
   const cur = live && cfg.currency === "INR" ? "₹" : "$";
-  const mine = (cfg?.storage_subscriptions || []).filter(s => ["active", "pending", "halted", "cancelled"].includes(s.status));
+  const mine = (cfg?.storage_subscriptions || []).filter(s => ["active", "pending", "on_hold", "past_due", "cancelled"].includes(s.status));
   const used = Number(st.used_bytes || 0), quota = Number(st.quota_bytes || 0);
   const pct = quota > 0 ? Math.min(100, (used / quota) * 100) : 100;
   const tone = pct >= 100 ? "#dc2626" : pct >= 80 ? "#d97706" : "#f97316";
@@ -24038,20 +24267,20 @@ function StorageCard() {
         <div style={{ marginTop: 14, borderTop: "1px solid var(--q-border,#e2e8f0)", paddingTop: 10 }}>
           <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Your storage add-ons</div>
           {mine.map(sx => (
-            <div key={sx.razorpay_subscription_id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5, padding: "6px 0" }}>
+            <div key={sx.subscription_id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5, padding: "6px 0" }}>
               <b>+{sx.addon_gb} GB</b>
               <span style={{ color: "var(--q-text-dim,#64748b)" }}>
                 {sx.status === "active" ? `Renews monthly${sx.current_end ? `, next on ${new Date(sx.current_end).toLocaleDateString()}` : ""}`
                   : sx.status === "cancelled" ? `Cancelled, kept until ${sx.current_end ? new Date(sx.current_end).toLocaleDateString() : "the end of the month"}`
                   : "Payment is being retried"}
               </span>
-              {sx.status === "active" && (confirmCancel === sx.razorpay_subscription_id ? (
+              {sx.status === "active" && (confirmCancel === sx.subscription_id ? (
                 <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                  <button className="qp-btn" onClick={() => cancel(sx.razorpay_subscription_id)} disabled={!!busy}>{busy === sx.razorpay_subscription_id ? "Cancelling…" : "Yes, cancel"}</button>
+                  <button className="qp-btn" onClick={() => cancel(sx.subscription_id)} disabled={!!busy}>{busy === sx.subscription_id ? "Cancelling…" : "Yes, cancel"}</button>
                   <button className="qp-btn" onClick={() => setConfirmCancel("")}>Keep it</button>
                 </span>
               ) : (
-                <button className="qp-btn" style={{ marginLeft: "auto" }} onClick={() => setConfirmCancel(sx.razorpay_subscription_id)}>Cancel</button>
+                <button className="qp-btn" style={{ marginLeft: "auto" }} onClick={() => setConfirmCancel(sx.subscription_id)}>Cancel</button>
               ))}
             </div>
           ))}
@@ -33864,6 +34093,47 @@ function App() {
     }
   }, []);
 
+  // Back from Dodo's checkout page (?checkout=done, plus Dodo's own
+  // subscription_id / status). Shows the payment pop-up: "confirming" while the
+  // webhook (or "sync", which asks Dodo directly) switches the plan on, then a
+  // receipt. The URL is cleaned so a refresh does not repeat it.
+  const [payResult, setPayResult] = useState(null);
+  useEffect(() => {
+    if (!session) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("checkout") !== "done") return;
+    const subId = params.get("subscription_id") || "";
+    const status = (params.get("status") || "").toLowerCase();
+    ["checkout", "subscription_id", "status", "payment_id", "email"].forEach(k => params.delete(k));
+    const rest = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (rest ? `?${rest}` : ""));
+    if (status && !["active", "succeeded", "processing", "pending"].includes(status)) {
+      setPayResult({ stage: "failed" });
+      return;
+    }
+    setPayResult({ stage: "checking" });
+    let tries = 0, stop = false;
+    const tick = async () => {
+      if (stop) return;
+      tries++;
+      try {
+        await callPay("sync", subId ? { subscription_id: subId } : {});
+        const cfg = await callPay("config", {});
+        const sub = cfg.plan_subscription;
+        if ((sub && ["active", "cancelled"].includes(sub.status)) || (cfg.storage_subscriptions || []).some(x => x.status === "active")) {
+          setPayResult({ stage: "success", cfg });
+          window.dispatchEvent(new CustomEvent("plan-changed"));
+          window.dispatchEvent(new CustomEvent("profile-updated"));
+          return;
+        }
+      } catch (e) { /* try again */ }
+      if (tries === 6) setPayResult(r => (r && r.stage === "checking") ? { stage: "slow" } : r);
+      if (tries < 30) setTimeout(tick, tries < 6 ? 2500 : 10000);
+    };
+    setTimeout(tick, 1200);
+    return () => { stop = true; };
+  }, [session]);
+
   // Real deep-link support for external pages (e.g. the marketing landing
   // page): ?auth=signup opens straight into account creation, ?auth=login
   // opens straight into sign-in. Cleans the param afterward so a refresh
@@ -33964,6 +34234,7 @@ function App() {
         isPlatformAdmin={isPlatformAdmin}
         onOpenBilling={()=>setBillingModal({ open: true, reason: "" })}
       />
+      <PaymentResultModal state={payResult} onClose={() => setPayResult(null)} onBilling={() => setView({ name: "billing" })} />
       <UpgradePlanModal open={billingModal.open} reason={billingModal.reason} focus={billingModal.focus}
         onClose={()=>setBillingModal({ open: false, reason: "" })} />
       {/* Always reachable, on every page, without hunting for a Help menu. The
