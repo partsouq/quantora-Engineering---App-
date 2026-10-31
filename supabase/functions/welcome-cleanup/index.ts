@@ -60,7 +60,7 @@ async function expiredCompanies() {
     : { data: [] as any[] };
   const adminCos = new Set((adminProfiles ?? []).map((p: any) => p.company_id));
   return (cos ?? []).filter((c: any) =>
-    !adminCos.has(c.id) && !["razorpay", "manual"].includes(String(c.billing_provider ?? "")));
+    !adminCos.has(c.id) && !["razorpay", "dodo", "manual"].includes(String(c.billing_provider ?? "")));
 }
 
 async function run(dryRun: boolean) {

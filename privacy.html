@@ -55,7 +55,7 @@ the controller of the personal data described here. Contact:
 <tr><td>Project content</td><td>Drawings and documents you upload, project details such as city, building type and scope</td><td>To perform the AI analysis you request</td></tr>
 <tr><td>Generated output</td><td>Bills of quantities, specifications, compliance notes, assistant conversations</td><td>To deliver and store your results</td></tr>
 <tr><td>Usage data</td><td>Pages processed, analyses run, timestamps, errors, approximate AI cost</td><td>To enforce plan limits, bill correctly and fix faults</td></tr>
-<tr><td>Payment data</td><td>Handled entirely by Razorpay. We receive only your plan, subscription status and an anonymised customer reference</td><td>To activate the right plan</td></tr>
+<tr><td>Payment data</td><td>Handled entirely by Dodo Payments, our Merchant of Record. We receive only your plan, subscription status and an anonymised customer reference</td><td>To activate the right plan</td></tr>
 </table>
 <p>We do not collect your card number, CVV or bank details. Those never reach our systems.</p>
 
@@ -76,7 +76,7 @@ instructions:</p>
 <tr><th>Provider</th><th>Purpose</th><th>Data involved</th></tr>
 <tr><td>Supabase</td><td>Database, file storage, authentication and server functions</td><td>All account data, drawings and generated output</td></tr>
 <tr><td>Anthropic</td><td>AI analysis of drawings and assistant responses</td><td>Drawing files and the prompts derived from your project details</td></tr>
-<tr><td>Razorpay</td><td>Payment processing</td><td>Name, email, billing address, payment details</td></tr>
+<tr><td>Dodo Payments</td><td>Merchant of Record: payment processing, billing and sales tax / VAT</td><td>Name, email, billing address, payment details</td></tr>
 <tr><td>GitHub Pages</td><td>Hosting of our public website</td><td>Standard web request logs</td></tr>
 </table>
 <p>We may also disclose data where legally required, or to protect our rights, safety or property.

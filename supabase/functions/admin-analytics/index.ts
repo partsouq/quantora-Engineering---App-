@@ -304,7 +304,7 @@ Deno.serve(async (req: Request) => {
     // -----------------------------------------------------------------
     if (action === "system_status") {
       const [{ data: secrets }, { count: companiesCount }, { count: projectsCount }, { count: drawingsCount }, { data: storageTotals }] = await Promise.all([
-        admin.from("app_secrets").select("key, value").in("key", ["ANTHROPIC_API_KEY", "RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET", "RAZORPAY_CURRENCY"]),
+        admin.from("app_secrets").select("key, value").in("key", ["ANTHROPIC_API_KEY", "RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET", "RAZORPAY_CURRENCY", "DODO_API_KEY", "DODO_WEBHOOK_SECRET", "DODO_MODE"]),
         admin.from("companies").select("id", { count: "exact", head: true }),
         admin.from("projects").select("id", { count: "exact", head: true }),
         admin.from("drawings").select("id", { count: "exact", head: true }),
@@ -328,6 +328,11 @@ Deno.serve(async (req: Request) => {
         razorpay_webhook_secret_configured: has("RAZORPAY_WEBHOOK_SECRET"),
         razorpay_mode: razorpayMode,
         razorpay_currency: (secretVal["RAZORPAY_CURRENCY"] || "USD").toUpperCase(),
+        // Dodo Payments (2026-10-31): the payment gateway now.
+        dodo_key_configured: has("DODO_API_KEY"),
+        dodo_webhook_secret_configured: has("DODO_WEBHOOK_SECRET"),
+        dodo_mode: !has("DODO_API_KEY") ? null
+          : (secretVal["DODO_MODE"] || "").toLowerCase() === "test" || secretVal["DODO_API_KEY"].startsWith("dodo_test") ? "test" : "live",
         companies_count: companiesCount ?? 0,
         projects_count: projectsCount ?? 0,
         drawings_count: drawingsCount ?? 0,
