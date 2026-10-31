@@ -14,10 +14,11 @@
 //   subscribe_storage  — { gb, return_url }      -> { checkout_url }
 //   sync               — after returning from checkout: re-read my subscriptions from Dodo
 //   cancel             — { subscription_id } cancels at the end of the paid month
+//   invoice            — { payment_id } -> the official invoice PDF from Dodo (my company's payments only)
 //   readiness          — platform admins: keys, API check, recent events, paying companies
 // ===========================================================================
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { applySubscription, dodo, loadKeys, type DodoKeys } from "./dodo.ts";
+import { applySubscription, dodo, loadKeys, recordPayment, type DodoKeys } from "./dodo.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -124,6 +125,9 @@ Deno.serve(async (req) => {
         .select("addon_gb, dodo_subscription_id, status, current_end").eq("company_id", companyId)
         .not("dodo_subscription_id", "is", null)
         .in("status", ["active", "pending", "on_hold", "past_due", "paused", "cancelled"]);
+      const { data: lastPay } = await admin.from("billing_payments")
+        .select("payment_id, description, status, amount_minor, currency, card_network, card_last_four, paid_at, period_end, customer_email")
+        .eq("company_id", companyId).order("paid_at", { ascending: false }).limit(1).maybeSingle();
       return json({
         enabled: !!keys,
         provider: "dodo",
@@ -132,9 +136,10 @@ Deno.serve(async (req) => {
           .map((p: any) => ({ id: p.id, name: p.name, price: Number(p.price_usd) })),
         storage_addons: (addons ?? []).map((a: any) => ({ gb: a.gb, price: Number(a.price_usd), note: a.note })),
         plan_subscription: company?.billing_provider === "dodo" ? {
-          id: company.dodo_subscription_id, status: company.subscription_status, paid_until: company.paid_until,
+          id: company.dodo_subscription_id, plan: company.plan, status: company.subscription_status, paid_until: company.paid_until,
         } : null,
         storage_subscriptions: (storageSubs ?? []).map((s: any) => ({ ...s, subscription_id: s.dodo_subscription_id })),
+        last_payment: lastPay ?? null,
       });
     }
 
@@ -209,6 +214,13 @@ Deno.serve(async (req) => {
         if (!sub) continue;
         if (sub.metadata?.company_id && String(sub.metadata.company_id) !== companyId) continue;
         notes.push(await applySubscription(admin, sub));
+        // Its payments into our records too, so the receipt can show straight away.
+        const pays = await dodo(keys, `/payments?subscription_id=${encodeURIComponent(id)}&page_size=5`).catch(() => null);
+        for (const pp of pays?.items ?? []) {
+          if (!["succeeded", "failed"].includes(String(pp.status))) continue;
+          const full = await dodo(keys, `/payments/${pp.payment_id}`).catch(() => pp);
+          notes.push(await recordPayment(admin, full, sub));
+        }
       }
       return json({ ok: true, notes });
     }
@@ -222,6 +234,18 @@ Deno.serve(async (req) => {
       const updated = await dodo(keys, `/subscriptions/${subId}`, { method: "PATCH", body: { cancel_at_next_billing_date: true } });
       await applySubscription(admin, updated?.subscription_id ? updated : { ...sub, cancel_at_next_billing_date: true });
       return json({ ok: true, status: "cancelled", ends: sub.next_billing_date ?? null });
+    }
+
+    if (action === "invoice") {
+      const payId = String(body.payment_id ?? "");
+      const { data: mine } = await admin.from("billing_payments").select("payment_id, company_id").eq("payment_id", payId).maybeSingle();
+      if (!mine || mine.company_id !== companyId) return json({ error: "This invoice belongs to another account." }, 403);
+      const res = await fetch(`${keys.base}/invoices/payments/${encodeURIComponent(payId)}`,
+        { headers: { Authorization: `Bearer ${keys.apiKey}`, Accept: "application/pdf" } });
+      if (!res.ok) return json({ error: "The invoice is not ready yet. Please try again in a minute." }, 502);
+      return new Response(await res.arrayBuffer(), { status: 200, headers: {
+        ...cors, "content-type": "application/pdf",
+        "content-disposition": `attachment; filename="Quantora-invoice-${payId}.pdf"` } });
     }
 
     return json({ error: `Unknown action: ${action}` }, 400);

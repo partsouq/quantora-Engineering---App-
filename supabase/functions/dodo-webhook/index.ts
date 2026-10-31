@@ -14,10 +14,10 @@
 //
 // Dodo dashboard -> Developer -> Webhooks -> Add endpoint:
 //   URL: https://<project>.supabase.co/functions/v1/dodo-webhook
-//   Events: all subscription.* and payment.* events
+//   Events: all subscription.*, payment.* and refund.* events
 // ===========================================================================
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { applySubscription, dodo, loadKeys, verifyWebhook } from "./dodo.ts";
+import { applySubscription, dodo, loadKeys, recordPayment, verifyWebhook } from "./dodo.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   { auth: { persistSession: false } });
@@ -51,10 +51,21 @@ Deno.serve(async (req) => {
     if (type.startsWith("subscription.")) {
       const note = await applySubscription(admin, event.data);
       console.log(`dodo-webhook ${type}: ${note}`);
-    } else if (type === "payment.succeeded" && event?.data?.subscription_id) {
-      // A renewal or first payment: re-read the subscription so paid_until moves on.
-      const sub = await dodo(keys, `/subscriptions/${event.data.subscription_id}`).catch(() => null);
-      if (sub) console.log(`dodo-webhook ${type}: ${await applySubscription(admin, sub)}`);
+    } else if (type.startsWith("payment.")) {
+      // Every payment goes into our records (statement + invoices). A succeeded
+      // renewal also moves paid_until on, by re-reading the subscription.
+      const pay = event.data;
+      const subId = pay?.subscription_id ?? (pay?.subscription_ids ?? [])[0];
+      const sub = subId ? await dodo(keys, `/subscriptions/${subId}`).catch(() => null) : null;
+      if (type === "payment.succeeded" && sub) console.log(`dodo-webhook ${type}: ${await applySubscription(admin, sub)}`);
+      if (["payment.succeeded", "payment.failed"].includes(type)) console.log(`dodo-webhook ${type}: ${await recordPayment(admin, pay, sub ?? undefined)}`);
+    } else if (type === "refund.succeeded" && event?.data?.payment_id) {
+      const pay = await dodo(keys, `/payments/${event.data.payment_id}`).catch(() => null);
+      if (pay) {
+        const refunded = (pay.refunds ?? []).filter((r: any) => r.status === "succeeded")
+          .reduce((n: number, r: any) => n + Number(r.amount ?? 0), 0) || Number(event.data.amount ?? pay.total_amount ?? 0);
+        console.log(`dodo-webhook ${type}: ${await recordPayment(admin, pay, undefined, refunded)}`);
+      }
     }
     return new Response(JSON.stringify({ received: true }), { status: 200, headers: { "content-type": "application/json" } });
   } catch (err) {

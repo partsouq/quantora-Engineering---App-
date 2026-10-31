@@ -155,3 +155,46 @@ export async function applySubscription(admin: any, sub: any): Promise<string> {
   }
   return `unknown item ${map.item}`;
 }
+
+/**
+ * Keep a Dodo payment in our own records (billing_payments): this is what the
+ * customer's payment history and monthly statement are built from.
+ * `sub` is the payment's subscription when known, to name what was bought.
+ */
+export async function recordPayment(admin: any, pay: any, sub?: any, refundedMinor?: number): Promise<string> {
+  if (!pay?.payment_id) return "no payment";
+  const subId = String(pay.subscription_id ?? (pay.subscription_ids ?? [])[0] ?? sub?.subscription_id ?? "") || null;
+  let item: string | null = null, description: string | null = null;
+  const productId = sub?.product_id ?? null;
+  if (productId) {
+    const { data: map } = await admin.from("dodo_products").select("item").eq("product_id", productId).maybeSingle();
+    item = map?.item ?? null;
+  }
+  if (item) {
+    const [kind, ref] = item.split(":");
+    if (kind === "plan") {
+      const { data: plan } = await admin.from("plans").select("name").eq("id", ref).maybeSingle();
+      description = `${plan?.name ?? ref} plan, monthly`;
+    } else if (kind === "storage") description = `Storage +${ref} GB, monthly`;
+  }
+  const companyId = await companyOf(admin, { metadata: pay.metadata?.company_id ? pay.metadata : sub?.metadata, customer: pay.customer });
+  const period = (pay.service_periods ?? [])[0] ?? null;
+  const { data: old } = await admin.from("billing_payments").select("refunded_minor, description, item").eq("payment_id", pay.payment_id).maybeSingle();
+  const total = Number(pay.total_amount ?? 0);
+  const refunded = refundedMinor ?? Number(old?.refunded_minor ?? 0);
+  const status = refunded > 0 ? (refunded >= total ? "refunded" : "partially_refunded") : String(pay.status ?? "succeeded");
+  const row = {
+    payment_id: pay.payment_id, provider: "dodo", company_id: companyId || null, subscription_id: subId,
+    item: item ?? old?.item ?? null, description: description ?? old?.description ?? "Quantora subscription",
+    status, amount_minor: total, currency: String(pay.currency ?? "USD"),
+    tax_minor: pay.settlement_tax ?? null, settlement_minor: pay.settlement_amount ?? null,
+    settlement_currency: pay.settlement_currency ?? null, refunded_minor: refunded,
+    card_network: pay.card_network ?? null, card_last_four: pay.card_last_four ?? null,
+    customer_email: pay.customer?.email ?? null, invoice_id: pay.invoice_id ?? null,
+    period_start: period?.starts_at ?? null, period_end: period?.ends_at ?? null,
+    paid_at: pay.created_at ?? new Date().toISOString(), updated_at: new Date().toISOString(),
+  };
+  const { error } = await admin.from("billing_payments").upsert(row, { onConflict: "payment_id" });
+  if (error) throw error;
+  return `payment ${pay.payment_id} ${status} ${total / 100} ${row.currency}`;
+}

@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-31.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-10-31.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -22168,6 +22168,15 @@ function QPaymentsView() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [checkedAt, setCheckedAt] = useState(null);
+  const [payments, setPayments] = useState([]);
+  function exportPayments() {
+    const rows = [["Date", "Company", "Email", "Description", "Status", "Amount", "Currency", "Refunded", "Tax (settlement)", "Settlement", "Settlement currency", "Card", "Payment ID", "Subscription ID"],
+      ...payments.map(x => [new Date(x.paid_at).toISOString().slice(0, 10), x.companies?.name || "", x.customer_email || "", x.description || "", x.status,
+        Number(x.amount_minor) / 100, x.currency, Number(x.refunded_minor || 0) / 100, x.tax_minor == null ? "" : Number(x.tax_minor) / 100,
+        x.settlement_minor == null ? "" : Number(x.settlement_minor) / 100, x.settlement_currency || "",
+        x.card_last_four ? `${x.card_network || ""} ${x.card_last_four}` : "", x.payment_id, x.subscription_id || ""])];
+    return downloadWorkbook([{ name: "Payments", rows }], `Quantora_Payments_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
 
   useEffect(() => { run(); }, []);
   async function run() {
@@ -22175,6 +22184,9 @@ function QPaymentsView() {
     try {
       const res = await callPay("readiness", {});
       setData(res);
+      // Every payment from our own records (billing_payments), newest first.
+      const { data: pays } = await sb.from("billing_payments").select("*, companies(name)").order("paid_at", { ascending: false }).limit(200);
+      setPayments(pays || []);
       setCheckedAt(new Date());
     } catch (e) {
       console.error("QPaymentsView.run failed:", e);
@@ -22284,6 +22296,27 @@ function QPaymentsView() {
                   <tr key={c.id}><td style={{ ...td, fontWeight: 600 }}>{c.name}</td><td style={td}>{((data.plans || []).find(x => x.id === c.plan) || {}).name || c.plan}</td>
                     <td style={td}>{c.subscription_status || "—"}</td>
                     <td style={td}>{c.paid_until ? new Date(c.paid_until).toLocaleDateString() : "—"}</td></tr>
+                ))}</tbody></table></div>}
+        </div>
+      )}
+
+      {data && (
+        <div className="card panel" style={{ marginBottom: 16 }}>
+          <div className="panel-head"><h3>All payments</h3>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>{payments.length} recorded</span>
+              {payments.length > 0 && <button className="btn btn-sm" onClick={exportPayments}>Export Excel</button>}
+            </div></div>
+          {payments.length === 0
+            ? <p style={{ padding: "14px 18px", fontSize: 12.5, color: "var(--text-dimmer)" }}>No payment yet. Each payment is recorded here automatically, with its invoice in Dodo.</p>
+            : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={th}>Date</th><th style={th}>Company</th><th style={th}>Description</th><th style={th}>Status</th><th style={{ ...th, textAlign: "right" }}>Amount</th><th style={th}>Payment ID</th></tr></thead>
+                <tbody>{payments.map(x => (
+                  <tr key={x.payment_id}><td style={td}>{new Date(x.paid_at).toLocaleDateString()}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{x.companies?.name || x.customer_email || "—"}</td>
+                    <td style={td}>{x.description || "—"}</td><td style={td}>{(Q_PAY_STATUS[x.status] || [x.status])[0]}</td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{qMoneyMinor(x.amount_minor, x.currency)}</td>
+                    <td style={{ ...td, fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>{x.payment_id}</td></tr>
                 ))}</tbody></table></div>}
         </div>
       )}
@@ -23881,8 +23914,233 @@ function BillingPage({ onUpgrade }) {
          )}
       </div>
       <PlanSubscriptionCard />
+      <PaymentHistoryCard />
       <StorageCard />
       <PagePacksCard />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Payment records (2026-10-31). Every Dodo payment is kept in billing_payments
+// (written by dodo-webhook / dodo-billing "sync"), so customers have their own
+// payment history, a monthly statement and the official invoice for each payment.
+// ---------------------------------------------------------------------------
+function qMoneyMinor(minor, currency) {
+  const cur = (currency || "USD").toUpperCase();
+  try { return new Intl.NumberFormat("en-US", { style: "currency", currency: cur }).format(Number(minor || 0) / 100); }
+  catch (e) { return `${cur} ${(Number(minor || 0) / 100).toFixed(2)}`; }
+}
+const Q_PAY_STATUS = {
+  succeeded: ["Paid", "#047857", "rgba(16,185,129,.12)"],
+  refunded: ["Refunded", "#475569", "rgba(100,116,139,.14)"],
+  partially_refunded: ["Part refunded", "#475569", "rgba(100,116,139,.14)"],
+  failed: ["Failed", "#b91c1c", "rgba(239,68,68,.12)"],
+  processing: ["Processing", "#b45309", "rgba(245,158,11,.14)"],
+};
+async function qDownloadInvoice(paymentId) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(PAY_FN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action: "invoice", payment_id: paymentId }),
+  });
+  if (!res.ok) { let j = {}; try { j = await res.json(); } catch (e) {} throw new Error(j.error || "The invoice could not be downloaded."); }
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `Quantora-invoice-${paymentId}.pdf`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+// Monthly statement as a PDF, built in the browser from our own records.
+function qStatementPdf(monthKey, rows, company) {
+  if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("The PDF tool is still loading. Please try again in a moment.");
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth();
+  const [y, m] = monthKey.split("-").map(Number);
+  const monthName = new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  doc.setFillColor(11, 22, 56); doc.rect(0, 0, W, 92, "F");
+  try { doc.addImage(QUANTORA_LOGO_URI, "PNG", 40, 24, 44, 44); } catch (e) { /* logo optional */ }
+  doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(18);
+  doc.text("Quantora Engineering", 96, 46);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(165, 190, 240);
+  doc.text("www.quantoraengineering.com  ·  support@quantoraengineering.com", 96, 63);
+  doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(13);
+  doc.text("BILLING STATEMENT", W - 40, 46, { align: "right" });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.text(monthName, W - 40, 63, { align: "right" });
+  doc.setTextColor(15, 23, 42); doc.setFontSize(10);
+  doc.setFont("helvetica", "bold"); doc.text("Billed to", 40, 128);
+  doc.setFont("helvetica", "normal");
+  doc.text([company?.name || "", rows.find(r => r.customer_email)?.customer_email || ""].filter(Boolean), 40, 144);
+  doc.setFont("helvetica", "bold"); doc.text("Statement date", W - 200, 128);
+  doc.setFont("helvetica", "normal"); doc.text(new Date().toLocaleDateString("en-GB"), W - 200, 144);
+  const paid = rows.filter(r => ["succeeded", "partially_refunded"].includes(r.status));
+  const cur = (rows[0]?.currency || "USD");
+  const total = paid.reduce((n, r) => n + Number(r.amount_minor || 0) - Number(r.refunded_minor || 0), 0);
+  doc.autoTable({
+    startY: 176,
+    head: [["Date", "Description", "Service period", "Card", "Status", "Amount"]],
+    body: rows.map(r => [
+      new Date(r.paid_at).toLocaleDateString("en-GB"),
+      r.description || "Quantora subscription",
+      r.period_start && r.period_end ? `${new Date(r.period_start).toLocaleDateString("en-GB")} – ${new Date(r.period_end).toLocaleDateString("en-GB")}` : "—",
+      r.card_last_four ? `${r.card_network || "Card"} •••• ${r.card_last_four}` : "—",
+      (Q_PAY_STATUS[r.status] || [r.status])[0],
+      qMoneyMinor(r.amount_minor, r.currency) + (Number(r.refunded_minor) > 0 ? `\n(refunded ${qMoneyMinor(r.refunded_minor, r.currency)})` : ""),
+    ]),
+    styles: { fontSize: 9, cellPadding: 6, textColor: [15, 23, 42] },
+    headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [245, 248, 253] },
+    columnStyles: { 5: { halign: "right" } },
+  });
+  let yy = doc.lastAutoTable.finalY + 22;
+  doc.setFont("helvetica", "bold"); doc.setFontSize(11);
+  doc.text(`Total paid in ${monthName}: ${qMoneyMinor(total, cur)}`, W - 40, yy, { align: "right" });
+  yy += 30;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(100, 116, 139);
+  doc.text(doc.splitTextToSize("Payments are processed by Dodo Payments, our Merchant of Record, which also handles any sales tax or VAT. "
+    + "The official tax invoice for each payment can be downloaded from Billing & subscription in your Quantora account. "
+    + "This statement is a summary from our records.", W - 80), 40, yy);
+  doc.save(`Quantora-statement-${monthKey}.pdf`);
+}
+
+function PaymentHistoryCard() {
+  const [rows, setRows] = useState(null);
+  const [company, setCompany] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState(null);
+  async function load() {
+    const { data: { user } } = await sb.auth.getUser();
+    const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+    if (prof?.company_id) {
+      const { data: co } = await sb.from("companies").select("id, name").eq("id", prof.company_id).maybeSingle();
+      setCompany(co);
+      const { data } = await sb.from("billing_payments").select("*").eq("company_id", prof.company_id).order("paid_at", { ascending: false }).limit(240);
+      setRows(data || []);
+    } else setRows([]);
+  }
+  useEffect(() => { load().catch(() => setRows([])); const f = () => load().catch(() => {}); window.addEventListener("plan-changed", f); return () => window.removeEventListener("plan-changed", f); }, []);
+  if (!rows) return null;
+  const months = [];
+  rows.forEach(r => {
+    const d = new Date(r.paid_at); const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    let g = months.find(x => x.key === key); if (!g) { g = { key, rows: [] }; months.push(g); }
+    g.rows.push(r);
+  });
+  const invoice = async (id) => { setBusy(id); setMsg(null); try { await qDownloadInvoice(id); } catch (e) { setMsg(e.message); } finally { setBusy(""); } };
+  const statement = (g) => { setMsg(null); try { qStatementPdf(g.key, g.rows, company); } catch (e) { setMsg(e.message); } };
+  return (
+    <div className="qp-card">
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>Payments &amp; statements</div>
+        <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>Monthly statements and the official invoice for every payment</div>
+      </div>
+      {rows.length === 0 ? (
+        <div style={{ fontSize: 13, color: "var(--q-text-dim,#64748b)", marginTop: 10 }}>No payments yet. When you subscribe, every payment and its invoice appears here.</div>
+      ) : months.map(g => {
+        const [yy, mm] = g.key.split("-").map(Number);
+        const label = new Date(yy, mm - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+        const total = g.rows.filter(r => ["succeeded", "partially_refunded"].includes(r.status)).reduce((n, r) => n + Number(r.amount_minor) - Number(r.refunded_minor || 0), 0);
+        return (
+          <div key={g.key} style={{ marginTop: 14, border: "1px solid var(--q-border,#e2e8f0)", borderRadius: 12, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "rgba(37,99,235,.06)", flexWrap: "wrap" }}>
+              <b style={{ fontSize: 13.5 }}>{label}</b>
+              <span style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>Total paid {qMoneyMinor(total, g.rows[0].currency)}</span>
+              <button className="qp-btn" style={{ marginLeft: "auto" }} onClick={() => statement(g)}>Download statement (PDF)</button>
+            </div>
+            {g.rows.map(r => {
+              const st = Q_PAY_STATUS[r.status] || [r.status, "#475569", "rgba(100,116,139,.14)"];
+              return (
+                <div key={r.payment_id} style={{ display: "grid", gridTemplateColumns: "minmax(90px,auto) minmax(0,1fr) auto auto auto", gap: 12, alignItems: "center", padding: "10px 14px", borderTop: "1px solid var(--q-border,#e2e8f0)", fontSize: 13 }}>
+                  <span style={{ color: "var(--q-text-dim,#64748b)" }}>{new Date(r.paid_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
+                  <span style={{ minWidth: 0 }}>
+                    <b>{r.description || "Quantora subscription"}</b>
+                    {r.card_last_four && <span style={{ color: "var(--q-text-dim,#64748b)" }}> · {r.card_network || "Card"} •••• {r.card_last_four}</span>}
+                  </span>
+                  <span style={{ fontSize: 11.5, fontWeight: 700, color: st[1], background: st[2], padding: "3px 9px", borderRadius: 99, whiteSpace: "nowrap" }}>{st[0]}</span>
+                  <b style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{qMoneyMinor(r.amount_minor, r.currency)}</b>
+                  {r.status !== "failed"
+                    ? <button className="qp-btn" onClick={() => invoice(r.payment_id)} disabled={busy === r.payment_id}>{busy === r.payment_id ? "Preparing…" : "Invoice"}</button>
+                    : <span />}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      {msg && <div style={{ marginTop: 10, fontSize: 12.5, color: "#dc2626" }}>{msg}</div>}
+    </div>
+  );
+}
+
+// The pop-up a customer sees when they come back from Dodo's checkout page.
+// "checking" while Dodo confirms, then a receipt: what was bought, amount, card,
+// next renewal, invoice. "failed" if the card did not go through.
+function PaymentResultModal({ state, onClose, onBilling }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  if (!state) return null;
+  const { stage, cfg } = state;
+  const pay = cfg?.last_payment || null;
+  const sub = cfg?.plan_subscription || null;
+  const planName = sub ? ((cfg.plans || []).find(p => p.id === sub.plan) || {}).name : null;
+  const what = pay?.description || (planName ? `${planName} plan, monthly` : "Your subscription");
+  const renew = sub?.paid_until ? new Date(sub.paid_until).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : null;
+  const ok = stage === "success", bad = stage === "failed", wait = stage === "checking" || stage === "slow";
+  const ring = ok ? "#10b981" : bad ? "#ef4444" : "#6366f1";
+  const invoice = async () => { if (!pay) return; setBusy(true); setErr(""); try { await qDownloadInvoice(pay.payment_id); } catch (e) { setErr(e.message); } finally { setBusy(false); } };
+  const row = (k, v) => v ? (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "9px 0", borderTop: "1px solid rgba(148,163,184,.18)", fontSize: 13.5 }}>
+      <span style={{ color: "var(--q-text-dim,#64748b)" }}>{k}</span><b style={{ textAlign: "right" }}>{v}</b></div>) : null;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 95, background: "rgba(5,8,22,.62)", display: "grid", placeItems: "center", padding: 16 }}>
+      <style>{`@keyframes qpPop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
+        @keyframes qpDraw{to{stroke-dashoffset:0}} @keyframes qpSpin{to{transform:rotate(360deg)}}`}</style>
+      <div role="dialog" aria-modal="true" style={{ width: "min(460px, 94vw)", background: "var(--q-panel,#fff)", color: "var(--q-text,#0f172a)", borderRadius: 22, overflow: "hidden", boxShadow: "0 30px 80px rgba(0,0,0,.45)", border: "1px solid var(--q-border,#e2e8f0)" }}>
+        <div style={{ padding: "30px 28px 18px", textAlign: "center", background: `radial-gradient(120% 90% at 50% 0%, ${ring}22, transparent 70%)` }}>
+          <div style={{ width: 76, height: 76, margin: "0 auto", borderRadius: 999, display: "grid", placeItems: "center", background: `${ring}1f`, boxShadow: `0 0 0 8px ${ring}12`, animation: wait ? "none" : "qpPop .45s ease-out both" }}>
+            {wait ? (
+              <div style={{ width: 38, height: 38, borderRadius: 999, border: `4px solid ${ring}33`, borderTopColor: ring, animation: "qpSpin .9s linear infinite" }} />
+            ) : (
+              <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                {ok ? <path d="M11 21l6 6 13-14" stroke={ring} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" style={{ strokeDasharray: 40, strokeDashoffset: 40, animation: "qpDraw .5s .25s ease-out forwards" }} />
+                    : <path d="M13 13l14 14M27 13L13 27" stroke={ring} strokeWidth="4" strokeLinecap="round" />}
+              </svg>
+            )}
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, marginTop: 16 }}>
+            {ok ? "Payment successful" : bad ? "Payment not completed" : stage === "slow" ? "Payment received" : "Confirming your payment…"}
+          </div>
+          <div style={{ fontSize: 14, color: "var(--q-text-dim,#64748b)", marginTop: 6, lineHeight: 1.55 }}>
+            {ok ? `Thank you. Your ${planName ? `${planName} plan` : what.replace(/, monthly$/, "")} is now active.`
+              : bad ? "Your card was not charged and your plan has not changed. You can try again with another card."
+              : stage === "slow" ? "Dodo has your payment. Your plan switches on within a few minutes; we'll update this page by itself."
+              : "This takes a few seconds. Please keep this page open."}
+          </div>
+        </div>
+        {ok && (
+          <div style={{ padding: "4px 28px 6px" }}>
+            {row("Amount paid", pay ? qMoneyMinor(pay.amount_minor, pay.currency) : null)}
+            {row("Paid with", pay?.card_last_four ? `${pay.card_network || "Card"} •••• ${pay.card_last_four}` : null)}
+            {row("Next renewal", renew)}
+            {row("Receipt sent to", pay?.customer_email || null)}
+            {row("Reference", pay?.payment_id || null)}
+          </div>
+        )}
+        {err && <div style={{ padding: "0 28px", fontSize: 12.5, color: "#dc2626" }}>{err}</div>}
+        <div style={{ display: "flex", gap: 10, padding: "16px 28px 24px", flexWrap: "wrap" }}>
+          {ok && pay && <button onClick={invoice} disabled={busy} style={{ flex: 1, minWidth: 130, padding: "11px 14px", borderRadius: 12, border: "1px solid var(--q-border,#cbd5e1)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>{busy ? "Preparing…" : "Download invoice"}</button>}
+          {(ok || stage === "slow") && <button onClick={() => { onClose(); onBilling && onBilling(); }} style={{ flex: 1, minWidth: 130, padding: "11px 14px", borderRadius: 12, border: "1px solid var(--q-border,#cbd5e1)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>Billing &amp; statements</button>}
+          {!wait || stage === "slow" ? (
+            <button onClick={onClose} style={{ flex: "1 1 100%", padding: "12px 14px", borderRadius: 12, border: 0, color: "#fff", fontWeight: 800, cursor: "pointer", background: ok ? "linear-gradient(90deg,#059669,#10b981)" : "linear-gradient(90deg,#4f46e5,#7c3aed)" }}>
+              {ok ? "Start working" : bad ? "Close" : "OK"}</button>
+          ) : null}
+        </div>
+        <div style={{ padding: "0 28px 18px", fontSize: 11, color: "var(--q-text-dim,#94a3b8)", textAlign: "center" }}>
+          Payments are processed securely by Dodo Payments, our Merchant of Record.
+        </div>
+      </div>
     </div>
   );
 }
@@ -33836,8 +34094,10 @@ function App() {
   }, []);
 
   // Back from Dodo's checkout page (?checkout=done, plus Dodo's own
-  // subscription_id / status). The webhook normally switches the plan on within
-  // seconds; "sync" asks Dodo directly in case it is slower. Then the URL is cleaned.
+  // subscription_id / status). Shows the payment pop-up: "confirming" while the
+  // webhook (or "sync", which asks Dodo directly) switches the plan on, then a
+  // receipt. The URL is cleaned so a refresh does not repeat it.
+  const [payResult, setPayResult] = useState(null);
   useEffect(() => {
     if (!session) return;
     const params = new URLSearchParams(window.location.search);
@@ -33848,10 +34108,10 @@ function App() {
     const rest = params.toString();
     window.history.replaceState({}, "", window.location.pathname + (rest ? `?${rest}` : ""));
     if (status && !["active", "succeeded", "processing", "pending"].includes(status)) {
-      setBillingBanner({ type: "cancel", text: "The payment did not go through, so your plan was not changed. You can try again from Plans." });
+      setPayResult({ stage: "failed" });
       return;
     }
-    setBillingBanner({ type: "success", text: "Payment received. Switching your plan on…" });
+    setPayResult({ stage: "checking" });
     let tries = 0, stop = false;
     const tick = async () => {
       if (stop) return;
@@ -33861,14 +34121,14 @@ function App() {
         const cfg = await callPay("config", {});
         const sub = cfg.plan_subscription;
         if ((sub && ["active", "cancelled"].includes(sub.status)) || (cfg.storage_subscriptions || []).some(x => x.status === "active")) {
-          setBillingBanner({ type: "success", text: "Payment successful. Your plan is active." });
+          setPayResult({ stage: "success", cfg });
           window.dispatchEvent(new CustomEvent("plan-changed"));
           window.dispatchEvent(new CustomEvent("profile-updated"));
           return;
         }
       } catch (e) { /* try again */ }
-      if (tries < 8) setTimeout(tick, 2500);
-      else setBillingBanner({ type: "success", text: "Payment received. Your plan will switch on within a few minutes; refresh the page if it hasn't." });
+      if (tries === 6) setPayResult(r => (r && r.stage === "checking") ? { stage: "slow" } : r);
+      if (tries < 30) setTimeout(tick, tries < 6 ? 2500 : 10000);
     };
     setTimeout(tick, 1200);
     return () => { stop = true; };
@@ -33974,6 +34234,7 @@ function App() {
         isPlatformAdmin={isPlatformAdmin}
         onOpenBilling={()=>setBillingModal({ open: true, reason: "" })}
       />
+      <PaymentResultModal state={payResult} onClose={() => setPayResult(null)} onBilling={() => setView({ name: "billing" })} />
       <UpgradePlanModal open={billingModal.open} reason={billingModal.reason} focus={billingModal.focus}
         onClose={()=>setBillingModal({ open: false, reason: "" })} />
       {/* Always reachable, on every page, without hunting for a Help menu. The
