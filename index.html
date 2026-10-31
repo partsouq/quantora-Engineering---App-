@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-10-31.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -11765,6 +11765,15 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
   ];
   const currentLabel = NAV.flatMap(g => g[1]).find(t => t[0] === tab)?.[1] || "Overview";
 
+  // The section list stops above the fixed Help button (bottom-left) wherever the page is
+  // scrolled, and scrolls inside itself, so Export / Estima AI are never hidden under Help.
+  const sideRef = useRef(null);
+  useEffect(() => {
+    const fit = () => { const a = sideRef.current; if (!a) return;
+      a.style.maxHeight = Math.max(240, window.innerHeight - Math.max(16, a.getBoundingClientRect().top) - 84) + "px"; };
+    fit(); window.addEventListener("scroll", fit, { passive: true }); window.addEventListener("resize", fit);
+    return () => { window.removeEventListener("scroll", fit); window.removeEventListener("resize", fit); };
+  }, []);
   const NavList = () => (
     <nav className="text-sm">
       {NAV.map(([group, items]) => (
@@ -11819,7 +11828,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
       <div className="flex gap-6 items-start">
         {/* Docked from 768px up. Below that the strip above carries the same
             sections, so navigation is never hidden behind a button. */}
-        <aside className="qws-side w-56 shrink-0 bg-white border rounded-2xl py-2 sticky top-4">
+        <aside ref={sideRef} className="qws-side w-56 shrink-0 bg-white border rounded-2xl py-2 sticky top-4">
           <NavList />
         </aside>
         {navOpen && (
@@ -12582,6 +12591,21 @@ function DrawingsTab({ project }) {
     <div className="space-y-6">
       <div className="bg-white border rounded-xl p-5 qup">
         <h3 className="font-semibold mb-3 qup-h">Upload Drawings<span>Pick the discipline, tick the systems, then add your files</span></h3>
+        {/* The three steps, in plain words: new users signed up, uploaded (or not) and stopped,
+            because the next step was buried in the text below. */}
+        <div className="qup-steps" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 14 }}>
+          {[["1", "Pick the discipline", "ELV, Electrical, HVAC, Plumbing, Fire, Civil…"],
+            ["2", "Choose your PDF and click Upload", "One floor per sheet works best"],
+            ["3", "Click \u201cAnalyze with AI\u201d", "Your take-off and BOQ appear in minutes"]].map(([n, t, d]) => (
+            <div key={n} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", borderRadius: 12,
+              border: "1px solid rgba(96,165,250,.35)", background: "rgba(37,99,235,.08)" }}>
+              <span style={{ flexShrink: 0, width: 24, height: 24, borderRadius: 999, background: "#2563eb", color: "#fff",
+                fontSize: 12, fontWeight: 800, display: "grid", placeItems: "center" }}>{n}</span>
+              <span style={{ minWidth: 0 }}><b style={{ display: "block", fontSize: 13 }}>{t}</b>
+                <span style={{ fontSize: 11.5, opacity: .75 }}>{d}</span></span>
+            </div>
+          ))}
+        </div>
         {err && (
           <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2 mb-3" style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between" }}>
             <span style={{ minWidth: 0, wordBreak: "break-word" }}>{err}</span>
@@ -12619,14 +12643,17 @@ function DrawingsTab({ project }) {
               ))}
             </div>
             <datalist id="qfl-floors">{projectFloorNames(project).map(n => <option key={n} value={n} />)}</datalist>
-            <button onClick={upload} disabled={uploading} className="mt-3 text-xs bg-slate-900 text-white px-3 py-2 rounded-lg font-semibold hover:bg-slate-800 disabled:opacity-50">
+            <button onClick={upload} disabled={uploading} className="mt-3 text-sm text-white px-4 py-2 rounded-lg font-bold disabled:opacity-50" style={{ background: "#2563eb" }}>
               {uploading ? (stdStatus || "Uploading…") : `Upload ${pendingFiles.length} file(s)`}
             </button>
           </div>
         )}
         {stdSummary && <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 mb-2">{stdSummary}</div>}
-        <div className="text-xs text-slate-600 mb-1"><b>Every PDF is brought to the standard automatically when you upload it:</b> CAD drawings are kept as they are, scanned sheets are cleaned up (upright, white background, dark lines) and blank pages are removed — then it is analysed. Best results: the PDF exported straight from CAD, one floor per sheet.</div>
+        <details className="text-xs" style={{ marginTop: 4 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 600, opacity: .8 }}>File types and how drawings are read</summary>
+        <div className="text-xs text-slate-600 mb-1 mt-2"><b>Every PDF is brought to the standard automatically when you upload it:</b> CAD drawings are kept as they are, scanned sheets are cleaned up (upright, white background, dark lines) and blank pages are removed — then it is analysed. Best results: the PDF exported straight from CAD, one floor per sheet.</div>
         <div className="text-xs text-slate-400">You can select multiple files at once — e.g. every floor plan for one discipline, or a full drawing set. Specifications and requirement documents belong on the Specification page, not here. Accepted: PDF, PNG/JPG (scanned or photographed drawings), DWG, DXF, Revit (.rvt), IFC. AI analysis runs directly on PDF, image, <strong>DXF</strong>, and <strong>IFC</strong> files — for DXF and IFC, the AI reads the actual underlying CAD/BIM exchange-format data (entities, layers, blocks for DXF; building elements for IFC), not a rendered picture, so it works from your real design data rather than a visual guess. It's still an AI-based read of that data (not a hard deterministic parser), and on-drawing markup positions aren't available for DXF/IFC since there's no page image to place a marker on — markup is only shown for PDF/image-based analyses. DWG and Revit (.rvt) itself are closed, proprietary formats with no free/reliable parser — they upload and store now, and you can unlock AI analysis for them by attaching a PDF or image export of the same drawing (one click "Export"/"Print to PDF" in any CAD/BIM tool, or export to IFC instead if your tool supports it) using the "Attach export" control shown next to each one below.</div>
+        </details>
         <div className="mt-3">
           <button onClick={analyzeAllPending} disabled={anyAiCallInFlight} className="text-xs bg-slate-900 text-white px-3 py-2 rounded-lg font-semibold hover:bg-slate-800 disabled:opacity-50">Analyze All Un-analyzed Drawings</button>
           <span className="text-xs text-slate-400 ml-2">Runs AI analysis on every uploaded drawing that hasn't been analyzed yet, one at a time, so a full drawing set produces one complete project BOQ without clicking "Analyze" on each file individually.</span>
@@ -35200,7 +35227,9 @@ select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102
   min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qproj-stats div b{display:block;font-size:15px;font-weight:800;color:var(--q-text,#0f172a);line-height:1.2}
 @media (min-width:768px){
-  .qws-side{display:block}
+  /* the section list scrolls inside itself and stops above the fixed Help button (bottom-left),
+     so its last items (Export, Estima AI) are never hidden under it */
+  .qws-side{display:block;overflow-y:auto;scrollbar-width:thin}
   .qws-strip{display:none}
   .qws-sections-btn{display:none}
 }

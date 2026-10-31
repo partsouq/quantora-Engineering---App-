@@ -1917,7 +1917,17 @@ function acceptedCategory(c: any): string {
   const k = String(c ?? "other").trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (DB_SYSTEM_CATEGORIES.has(k)) return k;
   if (CATEGORY_ALIASES[k]) return CATEGORY_ALIASES[k];
-  for (const [alias, cat] of Object.entries(CATEGORY_ALIASES)) if (k.includes(alias)) return cat;
+  // Whole words only, longest match first: "access_control_system" -> access_control and
+  // "fire_alarm_system" -> fire_alarm. (Matching any substring sent "access..." to hvac via
+  // "ac", "space..." to public_address via "pa", and "spare_parts" to public_address.)
+  const w = k.split("_").filter(Boolean);
+  for (let n = w.length; n >= 1; n--) {
+    for (let i = 0; i + n <= w.length; i++) {
+      const p = w.slice(i, i + n).join("_");
+      if (DB_SYSTEM_CATEGORIES.has(p)) return p;
+      if (CATEGORY_ALIASES[p]) return CATEGORY_ALIASES[p];
+    }
+  }
   return "other";
 }
 function sanitizeBoqRow(row: any): any {
