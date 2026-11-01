@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.18"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.19"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4279,6 +4279,45 @@ try {
     navigator.serviceWorker.register("/sw.js").then(r => { qSwReg = r; }).catch(() => {});
   }
 } catch (_) {}
+// Real push (works with the app closed). Subscribes this browser/phone and stores its address.
+let qPushOn = false;
+function qB64ToBytes(b64) {
+  const pad = "=".repeat((4 - b64.length % 4) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
+}
+async function qPushSubscribe() {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || Notification.permission !== "granted") return false;
+    const reg = qSwReg || await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+    const { data: { session } } = await sb.auth.getSession(); if (!session) return false;
+    const call = async (action) => {
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/push-notify`, { method: "POST",
+        headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ action }) });
+      return r.json();
+    };
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const k = await call("public_key"); if (!k || !k.public_key) return false;
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: qB64ToBytes(k.public_key) });
+    }
+    const j = sub.toJSON();
+    const { error } = await sb.from("push_subscriptions").upsert({ user_id: session.user.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, user_agent: navigator.userAgent.slice(0, 200) }, { onConflict: "endpoint" });
+    if (error) return false;
+    qPushOn = true; return true;
+  } catch (_) { return false; }
+}
+async function qPushTest() {
+  try {
+    const { data: { session } } = await sb.auth.getSession(); if (!session) return null;
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/push-notify`, { method: "POST",
+      headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ action: "test" }) });
+    return await r.json();
+  } catch (_) { return null; }
+}
 function qNotifyAsk() {
   try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {}); } catch (_) {}
 }
@@ -26676,6 +26715,7 @@ function AdminLiveChatWatcher({ onOpen }) {
   const [soundOn, setSoundOn] = useState(false);
   const [banner, setBanner] = useState(null);          // { text, at }
   const [hideAsk, setHideAsk] = useState(false);
+  const [pushOk, setPushOk] = useState(false);
   useEffect(() => { qLiveTrack({ admin: true, at: Date.now() }); }, []);
   useEffect(() => {
     const h = () => setSoundOn(true);
@@ -26691,14 +26731,20 @@ function AdminLiveChatWatcher({ onOpen }) {
   }, [banner]);
   const enable = async () => {
     qAudioUnlock(); setSoundOn(true);
-    try { if ("Notification" in window && Notification.permission !== "granted") setPerm(await Notification.requestPermission()); } catch (_) {}
+    let p = perm;
+    try { if ("Notification" in window && Notification.permission !== "granted") { p = await Notification.requestPermission(); setPerm(p); } } catch (_) {}
     qChime();
+    if (p === "granted" || (typeof Notification !== "undefined" && Notification.permission === "granted")) {
+      const ok = await qPushSubscribe(); setPushOk(ok);
+      if (ok) qPushTest();
+    }
   };
+  useEffect(() => { (async () => { if (perm === "granted") setPushOk(await qPushSubscribe()); })(); }, []);
   useEffect(() => {
     const alert = (txt) => {
       const msg = txt || "A customer is waiting in Live Chat.";
       qChime();
-      qNotify("New chat message", msg, { tag: "q-live-" + Date.now(), whenUnfocused: true });
+      if (!qPushOn) qNotify("New chat message", msg, { tag: "q-live-" + Date.now(), whenUnfocused: true });   // with push on, the server's notification already arrives
       setBanner({ text: msg, at: Date.now() });
     };
     const off = qLiveListen((p) => { if (p.to === "admin" && p.ticket_id) { window.dispatchEvent(new CustomEvent("q-live-chat", { detail: p })); alert("A customer just wrote in Live Chat."); } });
@@ -26719,7 +26765,7 @@ function AdminLiveChatWatcher({ onOpen }) {
     check(); const id = setInterval(check, 20000);
     return () => { off(); clearInterval(id); };
   }, []);
-  const needAsk = !hideAsk && (perm === "default" || perm === "denied" || !soundOn);
+  const needAsk = !hideAsk && (perm === "default" || perm === "denied" || !soundOn || (perm === "granted" && !pushOk && "PushManager" in window));
   const goChat = () => { setBanner(null); try { window.dispatchEvent(new CustomEvent("q-open-admin-view", { detail: "livechat" })); } catch (_) {} if (onOpen) onOpen(); };
   return (<>
     {banner && (

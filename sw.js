@@ -11,3 +11,15 @@ self.addEventListener("notificationclick", (e) => {
     if (self.clients.openWindow) return self.clients.openWindow("/");
   })());
 });
+
+// Real push: arrives from the server even when no Quantora window is open.
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { title: "Quantora", body: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(d.title || "Quantora", {
+    body: d.body || "A customer is waiting in Live Chat.",
+    icon: "/icon192.png", badge: "/icon192.png",
+    tag: d.tag || "q-push", renotify: true, requireInteraction: true, vibrate: [200, 100, 200],
+    data: { url: d.url || "/" },
+  }));
+});
