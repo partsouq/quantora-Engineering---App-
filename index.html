@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.13"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.14"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -20979,6 +20979,7 @@ const QADMIN_NAV = [
   { group: "Business", key: "discounts", label: "Discounts", sub: "Discount codes and hand-granted plans" },
   { group: "Business", key: "payments", label: "Payments", sub: "Dodo Payments readiness, paying customers and latest payments" },
   { group: "Business", key: "ai", label: "AI Usage", sub: "Requests, tokens, cost, and processing" },
+  { group: "Platform", key: "livechat", label: "Live Chat", sub: "Talk to customers in real time — replies appear as Quantora Team" },
   { group: "Platform", key: "support", label: "Support & Feedback", sub: "What customers report, and what they want next" },
   { group: "Platform", key: "ratings", label: "User Ratings", sub: "1-5 star ratings after each step, per customer" },
   { group: "Platform", key: "alerts", label: "Platform Alerts", sub: "Platform bugs the run-doctor agent found. Users never see these." },
@@ -21862,6 +21863,9 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "revenue" && (
               <QRevenueView overview={overview} trial={trial} subscriptionMix={reportsData?.subscription_mix || []} />
+            )}
+            {activeView === "livechat" && (
+              <QLiveChatAdmin companyNameById={companyNameById} />
             )}
             {activeView === "support" && (
               <QSupportView companyNameById={companyNameById} />
@@ -26435,6 +26439,305 @@ function PulseBar() {
 // hundred rows behind RLS on a minute timer, and a dropped subscription that
 // silently stops delivering is a worse failure than a slightly late badge.
 const SUPPORT_POLL_MS = 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Live chat with the Quantora team (2026-11-01). A real person, not the AI.
+// Threads are ordinary support tickets (kind "help", category "live_chat") and
+// their messages, so every chat is kept with the rest of support. Speed comes
+// from a Supabase realtime channel: a message sends a tiny "ticket N changed"
+// signal (never the text) and the other side reloads it under its own access
+// rules; the presence on the same channel says whether the team is online.
+// Polling stays underneath, so a blocked socket only makes it slower.
+// ---------------------------------------------------------------------------
+const Q_LIVE_CATEGORY = "live_chat";
+let qLiveCh = null, qLiveSubs = new Set(), qLivePresence = { admins: 0 }, qLiveTracked = null;
+function qLiveChannel() {
+  if (qLiveCh) return qLiveCh;
+  try {
+    qLiveCh = sb.channel("q-live-support", { config: { broadcast: { self: false }, presence: { key: "u" + Math.random().toString(36).slice(2, 10) } } });
+    qLiveCh.on("broadcast", { event: "chat" }, ({ payload }) => { qLiveSubs.forEach(fn => { try { fn(payload || {}); } catch (_) {} }); });
+    qLiveCh.on("presence", { event: "sync" }, () => {
+      try {
+        const st = qLiveCh.presenceState() || {};
+        qLivePresence.admins = Object.values(st).flat().filter(p => p && p.admin).length;
+        qLiveSubs.forEach(fn => { try { fn({ presence: true }); } catch (_) {} });
+      } catch (_) {}
+    });
+    qLiveCh.subscribe((status) => { if (status === "SUBSCRIBED" && qLiveTracked) { try { qLiveCh.track(qLiveTracked); } catch (_) {} } });
+  } catch (e) { console.warn("Live chat channel not available, polling only:", e); qLiveCh = null; }
+  return qLiveCh;
+}
+function qLiveTrack(meta) { qLiveTracked = meta; const ch = qLiveChannel(); try { ch && ch.track(meta); } catch (_) {} }
+function qLiveSignal(payload) { const ch = qLiveChannel(); try { ch && ch.send({ type: "broadcast", event: "chat", payload }); } catch (_) {} }
+function qLiveListen(fn) { qLiveChannel(); qLiveSubs.add(fn); return () => qLiveSubs.delete(fn); }
+function qChime() {
+  try {
+    const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    const ctx = new C(), o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = "sine"; o.frequency.setValueAtTime(880, ctx.currentTime); o.frequency.setValueAtTime(1320, ctx.currentTime + 0.12);
+    g.gain.setValueAtTime(0.0001, ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+    o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.4); setTimeout(() => { try { ctx.close(); } catch (_) {} }, 600);
+  } catch (_) {}
+}
+async function qLiveUpload(file, userId) {
+  const safe = String(file.name || "screenshot.png").replace(/[^A-Za-z0-9._-]/g, "_").slice(-80);
+  const path = `${userId}/chat_${Date.now()}_${safe}`;
+  const { error } = await sb.storage.from("support").upload(path, file);
+  if (error) throw new Error(`Could not attach ${file.name}: ${error.message}`);
+  return path;
+}
+function QLiveAttachment({ path }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => { sb.storage.from("support").createSignedUrl(path, 600).then(({ data }) => setUrl(data && data.signedUrl)).catch(() => {}); }, [path]);
+  return url ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="attachment" style={{ maxWidth: 200, maxHeight: 140, borderRadius: 8, display: "block", marginTop: 6 }} /></a>
+    : <span style={{ fontSize: 11.5, opacity: .7 }}>Screenshot attached</span>;
+}
+function QLiveMessages({ ticket, messages, mineIsAdmin }) {
+  const endRef = useRef(null);
+  const first = ticket ? { id: "__first__", from_admin: false, body: ticket.message || "", created_at: ticket.created_at, attachments: ticket.screenshots || [] } : null;
+  const all = (first && first.body ? [first] : []).concat(messages || []);
+  useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ block: "end" }); } catch (_) {} }, [all.length]);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {all.map(m => {
+        const mine = mineIsAdmin ? m.from_admin : !m.from_admin;
+        return (
+          <div key={m.id} style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start" }}>
+            <div style={{ maxWidth: "85%", padding: "8px 12px", borderRadius: 14, fontSize: 13.5, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
+              background: mine ? "#2563eb" : "rgba(148,163,184,.16)", color: mine ? "#fff" : "inherit",
+              borderBottomRightRadius: mine ? 4 : 14, borderBottomLeftRadius: mine ? 14 : 4 }}>
+              {m.body}
+              {(m.attachments || []).map(p => <QLiveAttachment key={p} path={p} />)}
+            </div>
+            <div style={{ fontSize: 10.5, opacity: .6, marginTop: 2 }}>
+              {m.from_admin ? "Quantora Team" : (mineIsAdmin ? (ticket && ticket.contact_email) || "Customer" : "You")} · {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </div>
+          </div>
+        );
+      })}
+      <div ref={endRef} />
+    </div>
+  );
+}
+function QLiveComposer({ onSend, placeholder, busy }) {
+  const [text, setText] = useState("");
+  const [file, setFile] = useState(null);
+  const fileRef = useRef(null);
+  const send = async () => { const t = text.trim(); if (!t && !file) return; const ok = await onSend(t, file); if (ok !== false) { setText(""); setFile(null); if (fileRef.current) fileRef.current.value = ""; } };
+  return (
+    <div style={{ borderTop: "1px solid rgba(148,163,184,.2)", padding: 10, display: "grid", gap: 6 }}>
+      {file && <div style={{ fontSize: 11.5, opacity: .8 }}>📎 {file.name} <button type="button" onClick={() => setFile(null)} style={{ border: 0, background: "transparent", color: "#f87171", cursor: "pointer" }}>remove</button></div>}
+      <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+        <textarea rows={2} value={text} onChange={e => setText(e.target.value)} placeholder={placeholder}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          style={{ flex: 1, minWidth: 0, resize: "none", borderRadius: 10, border: "1px solid rgba(148,163,184,.4)", background: "transparent", color: "inherit", padding: "8px 10px", fontSize: 13.5 }} />
+        <label title="Attach a screenshot" style={{ cursor: "pointer", padding: "8px 9px", borderRadius: 10, border: "1px solid rgba(148,163,184,.4)", fontSize: 14 }}>📎
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => setFile(e.target.files && e.target.files[0] || null)} /></label>
+        <button type="button" onClick={send} disabled={busy} style={{ padding: "9px 14px", borderRadius: 10, border: 0, background: "#2563eb", color: "#fff", fontWeight: 800, cursor: "pointer", opacity: busy ? .6 : 1 }}>Send</button>
+      </div>
+    </div>
+  );
+}
+
+// The customer's side: a button and a chat panel, on every page.
+function LiveChatWidget({ session, pageName }) {
+  const [open, setOpen] = useState(false);
+  const [ticket, setTicket] = useState(null);
+  const [msgs, setMsgs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [online, setOnline] = useState(qLivePresence.admins > 0);
+  const openRef = useRef(false); openRef.current = open;
+  const userId = session && session.user && session.user.id;
+  async function load() {
+    if (!userId) return;
+    try {
+      const { data: t } = await sb.from("support_tickets").select("*").eq("user_id", userId).eq("kind", "help").eq("category", Q_LIVE_CATEGORY)
+        .neq("status", "resolved").order("created_at", { ascending: false }).limit(1);
+      const tk = (t && t[0]) || null;
+      setTicket(tk);
+      if (tk) {
+        const { data: m } = await sb.from("support_messages").select("*").eq("ticket_id", tk.id).order("created_at", { ascending: true }).limit(500);
+        setMsgs(m || []);
+        if (openRef.current) { try { await sb.rpc("mark_support_thread_read", { p_ticket_id: tk.id }); } catch (_) {} }
+      } else setMsgs([]);
+    } catch (e) { console.warn("live chat load failed:", e); }
+  }
+  useEffect(() => { load(); }, [userId]);
+  useEffect(() => { const id = setInterval(load, open ? 5000 : 30000); return () => clearInterval(id); }, [open, userId]);
+  useEffect(() => qLiveListen((p) => {
+    if (p.presence) { setOnline(qLivePresence.admins > 0); return; }
+    if (p.to === "customer" && ticket && p.ticket_id === ticket.id) {
+      load();
+      if (!openRef.current || document.hidden) { qChime(); qNotify("Quantora Team replied", "Open the chat to read the reply."); }
+    }
+  }), [ticket && ticket.id]);
+  useEffect(() => { qLiveChannel(); }, []);
+  const unread = msgs.filter(m => m.from_admin && !m.read_by_customer_at).length;
+  async function send(text, file) {
+    setBusy(true); setErr("");
+    try {
+      const { user, companyId } = await supportIdentity();
+      const paths = file ? [await qLiveUpload(file, user.id)] : [];
+      let tk = ticket;
+      if (!tk) {
+        const { data, error } = await sb.from("support_tickets").insert({
+          user_id: user.id, company_id: companyId, contact_email: user.email || null, kind: "help", category: Q_LIVE_CATEGORY,
+          message: text || "(screenshot)", screenshots: paths, page_context: `live chat · ${pageName || ""} · ${location.pathname}${location.hash || ""}`.slice(0, 200), status: "new",
+        }).select().single();
+        if (error) throw error;
+        tk = data; setTicket(data);
+      } else {
+        const { error } = await sb.from("support_messages").insert({ ticket_id: tk.id, sender_user_id: user.id, from_admin: false, body: text || "(screenshot)", attachments: paths });
+        if (error) throw error;
+      }
+      qLiveSignal({ to: "admin", ticket_id: tk.id });
+      await load();
+      return true;
+    } catch (e) { setErr(e.message || "Could not send that."); return false; } finally { setBusy(false); }
+  }
+  if (!userId) return null;
+  return (
+    <>
+      <button type="button" onClick={() => { setOpen(o => !o); if (!open && ticket) sb.rpc("mark_support_thread_read", { p_ticket_id: ticket.id }).then(load).catch(() => {}); }}
+        title="Chat with the Quantora team — real people"
+        style={{ position: "fixed", right: "clamp(16px, 2.2vw, 44px)", bottom: 86, zIndex: 41, display: "flex", alignItems: "center", gap: 8,
+          padding: "9px 14px", borderRadius: 999, border: "1px solid rgba(16,185,129,.55)", cursor: "pointer", color: "#fff", fontWeight: 800, fontSize: 13,
+          background: "linear-gradient(135deg,#059669,#0d9488)", boxShadow: "0 10px 28px -6px rgba(16,185,129,.55)" }}>
+        <span style={{ width: 9, height: 9, borderRadius: 999, background: online ? "#86efac" : "#cbd5e1", boxShadow: online ? "0 0 0 3px rgba(134,239,172,.35)" : "none" }} />
+        {open ? "Close chat" : "Chat with our team"}
+        {unread > 0 && !open && <span style={{ marginLeft: 2, minWidth: 18, height: 18, borderRadius: 999, background: "#ef4444", fontSize: 11, display: "grid", placeItems: "center", padding: "0 5px" }}>{unread}</span>}
+      </button>
+      {open && (
+        <div style={{ position: "fixed", right: "clamp(16px, 2.2vw, 44px)", bottom: 136, zIndex: 42, width: "min(380px, calc(100vw - 32px))", height: "min(520px, calc(100vh - 170px))",
+          display: "grid", gridTemplateRows: "auto 1fr auto", borderRadius: 16, overflow: "hidden", background: "var(--q-surface, #0d1736)", color: "var(--q-text, #e2e8f0)",
+          border: "1px solid rgba(16,185,129,.45)", boxShadow: "0 24px 60px rgba(0,0,0,.45)" }}>
+          <div style={{ padding: "12px 14px", background: "linear-gradient(135deg,rgba(5,150,105,.35),rgba(13,148,136,.2))", borderBottom: "1px solid rgba(148,163,184,.2)" }}>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>Quantora Team</div>
+            <div style={{ fontSize: 12, opacity: .85, marginTop: 2 }}>
+              {online ? "● Online now — a real person will answer you here" : "Real people, not the AI. We reply here as soon as we can, and you get a notification."}
+            </div>
+          </div>
+          <div style={{ overflowY: "auto", padding: 12 }}>
+            {!ticket && <div style={{ fontSize: 13, opacity: .85, lineHeight: 1.55 }}>Hi! Tell us what you need — a question about your BOQ, a drawing that did not read as expected, or anything else. Attach a screenshot if it helps.</div>}
+            {ticket && <QLiveMessages ticket={ticket} messages={msgs} mineIsAdmin={false} />}
+            {err && <div style={{ color: "#f87171", fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+          </div>
+          <QLiveComposer onSend={send} busy={busy} placeholder="Type your message…" />
+        </div>
+      )}
+    </>
+  );
+}
+
+// The team's side, running wherever an admin has Quantora open: marks the team online, and the
+// moment a customer writes, plays a chime, pops out on the computer and shows a toast.
+function AdminLiveChatWatcher({ onOpen }) {
+  const seen = useRef(new Set());
+  useEffect(() => { qLiveTrack({ admin: true, at: Date.now() }); }, []);
+  useEffect(() => {
+    const alert = (txt) => { qChime(); qNotify("New chat message", txt || "A customer is waiting in Live Chat."); qActivity({ phase: "toast", id: qActId(), label: "New live chat message", message: txt || "Open Admin → Live Chat to reply." }); };
+    const off = qLiveListen((p) => { if (p.to === "admin" && p.ticket_id) { window.dispatchEvent(new CustomEvent("q-live-chat", { detail: p })); alert("A customer just wrote in Live Chat."); } });
+    // fallback: unread customer messages in live chats, every 20 s
+    const check = async () => {
+      try {
+        const { data: t } = await sb.from("support_tickets").select("id, contact_email, message, created_at, status").eq("kind", "help").eq("category", Q_LIVE_CATEGORY).neq("status", "resolved").order("created_at", { ascending: false }).limit(50);
+        const ids = (t || []).map(x => x.id); if (!ids.length) return;
+        const { data: m } = await sb.from("support_messages").select("id, ticket_id, from_admin, read_by_admin_at").in("ticket_id", ids).eq("from_admin", false).is("read_by_admin_at", null);
+        const fresh = (m || []).filter(x => !seen.current.has(x.id));
+        const newTickets = (t || []).filter(x => x.status === "new" && !seen.current.has("t" + x.id));
+        fresh.forEach(x => seen.current.add(x.id)); newTickets.forEach(x => seen.current.add("t" + x.id));
+        if (seen.current.size && (fresh.length || newTickets.length) && seen.current.__primed) alert(`${fresh.length + newTickets.length} unread live chat message(s).`);
+        seen.current.__primed = true;
+        window.dispatchEvent(new CustomEvent("q-live-chat", { detail: {} }));
+      } catch (_) {}
+    };
+    check(); const id = setInterval(check, 20000);
+    return () => { off(); clearInterval(id); };
+  }, []);
+  return null;
+}
+
+// Admin → Live Chat: every open chat on the left, the conversation on the right.
+function QLiveChatAdmin({ companyNameById }) {
+  const [tickets, setTickets] = useState([]);
+  const [msgs, setMsgs] = useState({});
+  const [sel, setSel] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [showResolved, setShowResolved] = useState(false);
+  const [err, setErr] = useState("");
+  async function load() {
+    try {
+      let q = sb.from("support_tickets").select("*").eq("kind", "help").eq("category", Q_LIVE_CATEGORY).order("created_at", { ascending: false }).limit(100);
+      if (!showResolved) q = q.neq("status", "resolved");
+      const { data: t } = await q;
+      setTickets(t || []);
+      const ids = (t || []).map(x => x.id);
+      if (ids.length) {
+        const { data: m } = await sb.from("support_messages").select("*").in("ticket_id", ids).order("created_at", { ascending: true }).limit(2000);
+        const by = {}; (m || []).forEach(x => { (by[x.ticket_id] ||= []).push(x); }); setMsgs(by);
+      } else setMsgs({});
+    } catch (e) { setErr(e.message || "Could not load chats."); }
+  }
+  useEffect(() => { load(); const id = setInterval(load, 5000); const on = () => load(); window.addEventListener("q-live-chat", on); return () => { clearInterval(id); window.removeEventListener("q-live-chat", on); }; }, [showResolved]);
+  useEffect(() => { if (sel) Promise.resolve(sb.rpc("mark_support_thread_read", { p_ticket_id: sel })).catch(() => {}); }, [sel, (msgs[sel] || []).length]);
+  const unreadOf = (id) => (msgs[id] || []).filter(m => !m.from_admin && !m.read_by_admin_at).length + 0;
+  const t = tickets.find(x => x.id === sel) || null;
+  async function reply(text, file) {
+    if (!t) return false;
+    setBusy(true); setErr("");
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const paths = file ? [await qLiveUpload(file, user.id)] : [];
+      const { error } = await sb.from("support_messages").insert({ ticket_id: t.id, sender_user_id: user.id, from_admin: true, body: text || "(screenshot)", attachments: paths });
+      if (error) throw error;
+      if (t.status === "new") { try { await sb.from("support_tickets").update({ status: "in_progress" }).eq("id", t.id); } catch (_) {} }
+      qLiveSignal({ to: "customer", ticket_id: t.id });
+      await load(); return true;
+    } catch (e) { setErr(e.message || "Could not send."); return false; } finally { setBusy(false); }
+  }
+  async function resolve() { if (!t) return; try { await sb.from("support_tickets").update({ status: "resolved", resolved_at: new Date().toISOString() }).eq("id", t.id); setSel(null); load(); } catch (e) { setErr(e.message); } }
+  const last = (x) => { const m = msgs[x.id] || []; return m.length ? m[m.length - 1] : { body: x.message, created_at: x.created_at, from_admin: false }; };
+  return (
+    <div className="card panel" style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 320px) minmax(0, 1fr)", minHeight: 520 }}>
+        <div style={{ borderRight: "1px solid rgba(148,163,184,.2)", overflowY: "auto", maxHeight: 640 }}>
+          <div style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid rgba(148,163,184,.15)" }}>
+            <b style={{ flex: 1 }}>Live chats</b>
+            <label style={{ fontSize: 11.5, opacity: .8, display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={showResolved} onChange={e => setShowResolved(e.target.checked)} /> resolved</label>
+          </div>
+          {tickets.length === 0 && <div style={{ padding: 14, fontSize: 13, opacity: .7 }}>No live chats yet. When a customer writes, it appears here with a chime and a pop-out.</div>}
+          {tickets.map(x => {
+            const u = unreadOf(x.id) + (x.status === "new" && !(msgs[x.id] || []).some(m => m.from_admin) ? 1 : 0), l = last(x);
+            return (
+              <div key={x.id} onClick={() => setSel(x.id)} style={{ padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid rgba(148,163,184,.1)", background: sel === x.id ? "rgba(37,99,235,.18)" : "transparent" }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <b style={{ fontSize: 13, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(companyNameById && companyNameById[x.company_id]) || x.contact_email || "Customer"}</b>
+                  {u > 0 && <span style={{ minWidth: 18, height: 18, borderRadius: 999, background: "#ef4444", color: "#fff", fontSize: 11, display: "grid", placeItems: "center", padding: "0 5px" }}>{u}</span>}
+                </div>
+                <div style={{ fontSize: 12, opacity: .75, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.from_admin ? "You: " : ""}{l.body}</div>
+                <div style={{ fontSize: 10.5, opacity: .55 }}>{new Date(l.created_at).toLocaleString()} {x.status === "resolved" ? "· resolved" : ""}</div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto", minHeight: 520, maxHeight: 640 }}>
+          {!t ? <div style={{ padding: 20, opacity: .7, fontSize: 13 }}>Choose a chat on the left.</div> : <>
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.2)", display: "flex", gap: 10, alignItems: "center" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <b>{(companyNameById && companyNameById[t.company_id]) || "Customer"}</b>
+                <div style={{ fontSize: 12, opacity: .7 }}>{t.contact_email} · {t.page_context}</div>
+              </div>
+              <button type="button" onClick={resolve} style={{ padding: "6px 12px", borderRadius: 9, border: "1px solid rgba(16,185,129,.6)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>Mark resolved</button>
+            </div>
+            <div style={{ overflowY: "auto", padding: 14 }}><QLiveMessages ticket={t} messages={msgs[t.id] || []} mineIsAdmin={true} /></div>
+            <div>{err && <div style={{ color: "#f87171", fontSize: 12.5, padding: "0 12px" }}>{err}</div>}<QLiveComposer onSend={reply} busy={busy} placeholder="Reply as Quantora Team…" /></div>
+          </>}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function useSupportThreads(isAdmin, sessionKey) {
   const [tickets, setTickets] = useState([]);
@@ -35396,6 +35699,7 @@ function App() {
           boxShadow: "0 6px 18px rgba(37,99,235,0.35)",
         }}>Help</button>
       <EstimaDock currentProject={view.name === "project" ? view.project : null} />
+      {isPlatformAdmin ? <AdminLiveChatWatcher /> : <LiveChatWidget session={session} pageName={view.name} />}
       <ActivityCenter onOpenProject={(p, tab) => setView({ name: "project", project: p, tab })} />
       <PulseBar />
       <SupportModal open={!!supportCtx} initial={supportCtx} onClose={()=>setSupportCtx(null)} />
