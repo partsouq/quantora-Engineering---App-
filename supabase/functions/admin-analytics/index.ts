@@ -504,6 +504,60 @@ Deno.serve(async (req: Request) => {
     // current BOQ) and Draftsman (design jobs, systems, drawings produced, value of the designed
     // BOQ). Every table is read in pages of 1000 so no row is cut off.
     // -----------------------------------------------------------------
+    // -----------------------------------------------------------------
+    // View a customer's BOQ, read only (2026-11-01). The current take-off BOQ (each drawing's newest
+    // completed take-off revision) and the BOQ of the newest finished Draftsman job, with the sheet
+    // and floor each line came from. Nothing here writes.
+    // -----------------------------------------------------------------
+    if (action === "project_boq") {
+      const projectId = body?.project_id as string | undefined;
+      if (!projectId) return jsonResponse({ error: "project_id is required." }, 400);
+      const page = async (table: string, cols: string, f: (q: any) => any) => {
+        const out: any[] = [];
+        for (let from = 0; ; from += 1000) {
+          const { data, error } = await f(admin.from(table).select(cols)).range(from, from + 999);
+          if (error) throw error;
+          out.push(...(data ?? []));
+          if (!data || data.length < 1000) break;
+        }
+        return out;
+      };
+      const [{ data: proj }, drawings, runs, jobs] = await Promise.all([
+        admin.from("projects").select("id, project_name, project_ref, city, country, currency, company_id").eq("id", projectId).maybeSingle(),
+        page("drawings", "id, file_name, floor_label, discipline, page_count", (q) => q.eq("project_id", projectId)),
+        page("analysis_runs", "id, drawing_id, revision_number, status, run_kind, summary, created_at", (q) => q.eq("project_id", projectId)),
+        page("draftsman_jobs", "id, status, systems, analysis_run_id, finished_at, created_at", (q) => q.eq("project_id", projectId)),
+      ]);
+      if (!proj) return jsonResponse({ error: "Project not found." }, 404);
+      const { data: co } = await admin.from("companies").select("name").eq("id", proj.company_id).maybeSingle();
+      const isDesign = (k: string) => /^design/.test(k || "");
+      const designRunIds = new Set(jobs.map((j: any) => j.analysis_run_id).filter(Boolean));
+      const top: Record<string, number> = {};
+      for (const r of runs) {
+        if (!r.drawing_id || r.status !== "completed" || isDesign(r.run_kind) || designRunIds.has(r.id)) continue;
+        top[r.drawing_id] = Math.max(top[r.drawing_id] ?? 0, r.revision_number ?? 0);
+      }
+      const runInfo: Record<string, any> = {};
+      for (const r of runs) runInfo[r.id] = { page: r.summary?.page_number ?? null, label: r.summary?.page_label ?? null, at: r.created_at };
+      const cols = "id, drawing_id, analysis_run_id, revision_number, system_category, floor_label, description, quantity, unit, location, quantity_source_type, confidence_score, unit_cost_cents";
+      const items = await page("boq_items", cols, (q) => q.eq("project_id", projectId));
+      const drawingName: Record<string, any> = {};
+      for (const d of drawings) drawingName[d.id] = d;
+      const takeoff = items.filter((it: any) => it.drawing_id && top[it.drawing_id] != null && it.revision_number === top[it.drawing_id]
+        && !designRunIds.has(it.analysis_run_id) && !isDesign(runs.find((r: any) => r.id === it.analysis_run_id)?.run_kind))
+        .map((it: any) => ({ ...it, file_name: drawingName[it.drawing_id]?.file_name ?? "", sheet: runInfo[it.analysis_run_id]?.page ?? null,
+          sheet_label: runInfo[it.analysis_run_id]?.label ?? null }));
+      const doneJobs = jobs.filter((j: any) => j.status === "done" && j.analysis_run_id)
+        .sort((a: any, b: any) => String(b.finished_at || b.created_at).localeCompare(String(a.finished_at || a.created_at)));
+      const lastJob = doneJobs[0] || null;
+      const draftsman = lastJob ? items.filter((it: any) => it.analysis_run_id === lastJob.analysis_run_id) : [];
+      return jsonResponse({
+        project: { ...proj, company_name: co?.name ?? "" },
+        drawings: drawings.map((d: any) => ({ id: d.id, file_name: d.file_name, floor_label: d.floor_label, page_count: d.page_count, revision: top[d.id] ?? null })),
+        takeoff, draftsman, draftsman_job: lastJob ? { id: lastJob.id, systems: lastJob.systems, finished_at: lastJob.finished_at } : null,
+      });
+    }
+
     if (action === "project_monitoring") {
       const all = async (table: string, cols: string, filter?: (q: any) => any) => {
         const out: any[] = [];

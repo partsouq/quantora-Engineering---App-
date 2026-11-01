@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.13"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -23041,6 +23041,7 @@ function QProjectsView(props) {
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
   const [days, setDays] = useState("all");
+  const [viewBoq, setViewBoq] = useState(null);     // { id, prefer }
   useEffect(() => {
     callAdminAnalytics("project_monitoring", {}).then(setData).catch(e => setErr(e.message || "Could not load projects."));
   }, []);
@@ -23110,7 +23111,7 @@ function QProjectsView(props) {
                 <th className="num">BOQ lines</th><th className="num">BOQ value</th><th>Last activity</th></tr></thead>
               <tbody>{tk.length === 0 ? <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No projects match.</td></tr> : tk.map(r => (
                 <tr key={r.project_id}>
-                  <td className="name">{r.project_ref ? <span style={{ opacity: .7 }}>{r.project_ref} · </span> : null}{r.project_name}<div style={{ fontSize: 11 }}><span style={{ opacity: .6 }}>{r.location} · </span>{status(r)}</div></td>
+                  <td className="name">{r.project_ref ? <span style={{ opacity: .7 }}>{r.project_ref} · </span> : null}{r.project_name}<div style={{ fontSize: 11 }}><span style={{ opacity: .6 }}>{r.location} · </span>{status(r)}</div><div style={{ marginTop: 4 }}><button type="button" onClick={() => setViewBoq({ id: r.project_id, prefer: "takeoff" })} style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 8, border: "1px solid rgba(96,165,250,.55)", background: "rgba(37,99,235,.15)", color: "inherit", cursor: "pointer" }}>View BOQ</button></div></td>
                   <td>{r.company_name}</td><td className="num">{r.drawings}</td><td className="num">{r.sheets_in_files}</td><td className="num">{r.sheets_read}</td>
                   <td className="num">{qNum(r.boq_lines)}</td><td className="num">{money(r)}</td><td style={{ whiteSpace: "nowrap" }}>{fmtD(r.last_at)}<div style={{ fontSize: 11, opacity: .6 }}>started {fmtD(r.created_at)}</div></td>
                 </tr>))}</tbody>
@@ -23133,7 +23134,7 @@ function QProjectsView(props) {
                 <th className="num">BOQ lines</th><th className="num">Value</th><th>Last activity</th></tr></thead>
               <tbody>{ds.length === 0 ? <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No projects match.</td></tr> : ds.map(r => (
                 <tr key={r.project_id}>
-                  <td className="name">{r.project_ref ? <span style={{ opacity: .7 }}>{r.project_ref} · </span> : null}{r.project_name}<div style={{ fontSize: 11 }}><span style={{ opacity: .6 }}>{r.location} · </span>{status(r)}</div></td>
+                  <td className="name">{r.project_ref ? <span style={{ opacity: .7 }}>{r.project_ref} · </span> : null}{r.project_name}<div style={{ fontSize: 11 }}><span style={{ opacity: .6 }}>{r.location} · </span>{status(r)}</div><div style={{ marginTop: 4 }}><button type="button" onClick={() => setViewBoq({ id: r.project_id, prefer: "draftsman" })} style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 8, border: "1px solid rgba(96,165,250,.55)", background: "rgba(37,99,235,.15)", color: "inherit", cursor: "pointer" }}>View BOQ</button></div></td>
                   <td>{r.company_name}</td><td className="num">{r.jobs}</td>
                   <td style={{ maxWidth: 200, whiteSpace: "normal", fontSize: 12 }}>{(r.systems || []).map(x => String(x).toUpperCase()).join(" · ") || "—"}</td>
                   <td className="num">{r.drawings_out}</td><td className="num">{qNum(r.boq_lines)}</td><td className="num">{money(r)}</td>
@@ -23144,7 +23145,75 @@ function QProjectsView(props) {
         </>
       )}
       {tab === "cost" && <QProjectsCostView {...props} />}
+      {viewBoq && <AdminBoqViewer projectId={viewBoq.id} prefer={viewBoq.prefer} onClose={() => setViewBoq(null)} />}
     </>
+  );
+}
+
+// A customer's BOQ, read only, for the admin team (2026-11-01). Nothing here can change it.
+function AdminBoqViewer({ projectId, prefer, onClose }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [tab, setTab] = useState(prefer || "takeoff");
+  const [q, setQ] = useState("");
+  useEffect(() => { callAdminAnalytics("project_boq", { project_id: projectId }).then(r => { setData(r); if (!r.takeoff.length && r.draftsman.length) setTab("draftsman"); if (r.takeoff.length && !r.draftsman.length) setTab("takeoff"); }).catch(e => setErr(e.message || "Could not load the BOQ.")); }, [projectId]);
+  const rows = data ? (tab === "draftsman" ? data.draftsman : data.takeoff) : [];
+  const shown = rows.filter(r => !q || `${r.description} ${r.system_category} ${r.floor_label} ${r.location || ""}`.toLowerCase().includes(q.toLowerCase()));
+  const counted = (r) => (r.quantity_source_type || "physical_count") !== "legend_reference" && r.quantity_source_type !== "typical_detail_reference";
+  const groups = {};
+  shown.forEach(r => { const f = r.floor_label || "No floor"; const sy = r.system_category || "other"; ((groups[f] ||= {})[sy] ||= []).push(r); });
+  const floorOrder = (f) => /basement/i.test(f) ? 0 : /ground/i.test(f) ? 1 : /mezz/i.test(f) ? 2 : /roof/i.test(f) ? 99 : 10;
+  const sheets = new Set(rows.map(r => `${r.drawing_id}|${r.sheet}`)).size;
+  const cell = { padding: "6px 8px", borderBottom: "1px solid rgba(148,163,184,.15)", fontSize: 12.5, verticalAlign: "top" };
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(2,6,23,.65)", display: "grid", placeItems: "center", padding: 16 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(1100px, 100%)", maxHeight: "92vh", display: "grid", gridTemplateRows: "auto auto 1fr", borderRadius: 16,
+        background: "var(--q-surface, #0d1736)", border: "1px solid rgba(96,165,250,.35)", boxShadow: "0 30px 80px rgba(0,0,0,.55)", color: "inherit", overflow: "hidden" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(148,163,184,.2)", display: "flex", gap: 12, alignItems: "flex-start" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 17, fontWeight: 800 }}>{data ? <>{data.project.project_ref ? `${data.project.project_ref} · ` : ""}{data.project.project_name}</> : "BOQ"}
+              <span style={{ marginLeft: 10, fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999, background: "rgba(148,163,184,.18)", verticalAlign: "middle" }}>VIEW ONLY</span></div>
+            {data && <div style={{ fontSize: 12.5, opacity: .7, marginTop: 3 }}>{data.project.company_name} · {[data.project.city, data.project.country].filter(Boolean).join(", ")}</div>}
+          </div>
+          <button type="button" onClick={onClose} style={{ border: "1px solid rgba(148,163,184,.4)", background: "transparent", color: "inherit", borderRadius: 9, padding: "6px 12px", cursor: "pointer", fontWeight: 700 }}>Close</button>
+        </div>
+        <div style={{ padding: "10px 20px", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", borderBottom: "1px solid rgba(148,163,184,.12)" }}>
+          {data && [["takeoff", `Take-off BOQ (${data.takeoff.length})`], ["draftsman", `Draftsman BOQ (${data.draftsman.length})`]].map(([k, l]) => (
+            <button key={k} type="button" onClick={() => setTab(k)} style={{ padding: "6px 12px", borderRadius: 9, fontSize: 12.5, fontWeight: 700, cursor: "pointer", color: "inherit",
+              border: "1px solid " + (tab === k ? "rgba(96,165,250,.7)" : "rgba(148,163,184,.25)"), background: tab === k ? "rgba(37,99,235,.22)" : "transparent" }}>{l}</button>
+          ))}
+          {data && <span style={{ fontSize: 12, opacity: .75 }}>{rows.filter(counted).length} counted lines · {Object.keys(groups).length} floor{Object.keys(groups).length === 1 ? "" : "s"}{tab === "takeoff" ? ` · ${sheets} sheet${sheets === 1 ? "" : "s"}` : ""}</span>}
+          <span style={{ flex: 1 }} />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search lines…" style={{ padding: "6px 10px", borderRadius: 9, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "inherit", fontSize: 12.5, minWidth: 200 }} />
+        </div>
+        <div style={{ overflowY: "auto", padding: "6px 20px 18px" }}>
+          {err && <div style={{ color: "#fb7185", padding: 12 }}>{err}</div>}
+          {!data && !err && <div style={{ opacity: .7, padding: 12 }}>Loading the BOQ…</div>}
+          {data && !rows.length && <div style={{ opacity: .7, padding: 12 }}>No BOQ lines yet for this project.</div>}
+          {data && Object.keys(groups).sort((a, b) => floorOrder(a) - floorOrder(b) || a.localeCompare(b)).map(f => (
+            <div key={f} style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, margin: "4px 0 6px" }}>{f}</div>
+              {Object.keys(groups[f]).sort().map(sy => (
+                <div key={sy} style={{ marginBottom: 10, border: "1px solid rgba(148,163,184,.18)", borderRadius: 10, overflow: "hidden" }}>
+                  <div style={{ padding: "6px 10px", fontSize: 12, fontWeight: 800, letterSpacing: ".04em", background: "rgba(148,163,184,.08)" }}>{SYSTEM_LABEL(sy) || sy}</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                    <colgroup><col style={{ width: "54%" }} /><col style={{ width: "10%" }} /><col style={{ width: "8%" }} /><col style={{ width: "28%" }} /></colgroup>
+                    <thead><tr style={{ fontSize: 11, opacity: .65, textAlign: "left" }}><th style={cell}>Description</th><th style={{ ...cell, textAlign: "right" }}>Qty</th><th style={cell}>Unit</th><th style={cell}>{tab === "takeoff" ? "Sheet" : "Location"}</th></tr></thead>
+                    <tbody>{groups[f][sy].map(r => (
+                      <tr key={r.id} style={{ opacity: counted(r) ? 1 : .5 }}>
+                        <td style={cell}>{r.description}{!counted(r) && <span style={{ marginLeft: 6, fontSize: 11, color: "#fcd34d" }}>reference, not counted</span>}</td>
+                        <td style={{ ...cell, textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{Number(r.quantity || 0).toLocaleString()}</td>
+                        <td style={cell}>{r.unit}</td>
+                        <td style={{ ...cell, fontSize: 11.5, opacity: .8 }}>{tab === "takeoff" ? (r.sheet_label || (r.sheet ? `Sheet ${r.sheet}` : r.file_name)) : (r.location || "—")}</td>
+                      </tr>))}</tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
