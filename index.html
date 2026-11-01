@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.13"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.15"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -5990,7 +5990,7 @@ async function pollAnalysisRun(runId, { intervalMs = 4000, maxWaitMs = 7 * 60 * 
     netFails = 0;
     if (row.status === "completed") {
       const k = row.run_kind || "";
-      qStepDone(row.change_reason && !/of the same set$/.test(row.change_reason) ? "rework" : /^design_(drawing|system)$/.test(k) ? "design" : k === "design_ifc" ? "draftsman" : "takeoff", row.project_id);
+      if (k !== "quotation_compliance") qStepDone(row.change_reason && !/of the same set$/.test(row.change_reason) ? "rework" : /^design_(drawing|system)$/.test(k) ? "design" : k === "design_ifc" ? "draftsman" : "takeoff", row.project_id);
       return row.summary || {};
     }
     if (row.status === "failed") throw new Error(row.error_message || "AI analysis failed.");
@@ -12212,6 +12212,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
       ["vendors", "Vendors & Suppliers"],
       ["rfq", "RFQ Packages"],
       ["comparison", "Comparison"],
+      ["qcompliance", "Quotation Compliance"],
       ["approvals", "Approvals"],
     ]],
     ["Analysis", [
@@ -12347,6 +12348,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
           {tab === "vendors"       && <VendorsTab project={project} />}
           {tab === "rfq"           && <RfqPackagesTab project={project} />}
           {tab === "comparison"    && <ComparisonTab project={project} />}
+          {tab === "qcompliance"   && <QuotationComplianceTab project={project} />}
           {tab === "approvals"     && <ApprovalsTab project={project} onOpenTab={setTab} />}
           {tab === "drawings"      && <DrawingsTab project={project} />}
           {tab === "design"        && <DesignTab project={project} />}
@@ -26032,6 +26034,7 @@ function BoqAccuracyBar({ project, itemCount }) {
 //     survives a page refresh and covers work started on another tab).
 // ---------------------------------------------------------------------------
 const Q_ACT_LABEL = {
+  quotation_compliance: "Quotation compliance",
   analyze_drawing: "Take-off", analyze_drawing_tiled: "Take-off", analyze_drawings_combined: "Combined take-off",
   classify_pages: "Reading drawing pages", design_system: "System design", rework: "Re-analysis",
   price_boq: "BOQ pricing", generate_design: "Design drawings", analyze_document: "Tender document analysis",
@@ -26435,6 +26438,209 @@ function PulseBar() {
 // hundred rows behind RLS on a minute timer, and a dropped subscription that
 // silently stops delivering is a worse failure than a slightly late badge.
 const SUPPORT_POLL_MS = 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Quotation compliance (2026-11-01). Upload a specification -- or a purchase request -- and the
+// supplier quotations; the AI reads them together and shows, for every requirement and every
+// quotation, what was asked (quoted from the spec / PR), what was offered (quoted from the
+// quotation), the verdict and the reason, plus the question to send the supplier.
+// ---------------------------------------------------------------------------
+const QC_VERDICT = {
+  compliant:   { label: "Compliant",   bg: "rgba(16,185,129,.16)", fg: "#34d399", icon: "✓" },
+  deviation:   { label: "Deviation",   bg: "rgba(245,158,11,.16)", fg: "#fbbf24", icon: "!" },
+  not_offered: { label: "Not offered", bg: "rgba(244,63,94,.16)",  fg: "#fb7185", icon: "✕" },
+  unclear:     { label: "Unclear",     bg: "rgba(148,163,184,.18)", fg: "#cbd5e1", icon: "?" },
+};
+const QC_OVERALL = {
+  compliant: { label: "Compliant", fg: "#34d399", bg: "rgba(16,185,129,.16)" },
+  partially_compliant: { label: "Partially compliant", fg: "#fbbf24", bg: "rgba(245,158,11,.16)" },
+  non_compliant: { label: "Not compliant", fg: "#fb7185", bg: "rgba(244,63,94,.16)" },
+};
+async function qcPrepareFile(file) {
+  // A spreadsheet quotation is turned into text here, so the AI reads the cells exactly.
+  const lower = String(file.name || "").toLowerCase();
+  if (/\.(xlsx|xls|xlsm)$/.test(lower) && window.XLSX) {
+    const wb = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const csv = wb.SheetNames.map(n => `# Sheet: ${n}\n` + window.XLSX.utils.sheet_to_csv(wb.Sheets[n])).join("\n\n");
+    return new File([csv], file.name.replace(/\.(xlsx|xls|xlsm)$/i, ".csv"), { type: "text/csv" });
+  }
+  return file;
+}
+function QcResult({ run }) {
+  const s = run.summary || {}, r = s.result || {};
+  const [onlyIssues, setOnlyIssues] = useState(false);
+  const vendors = (r.vendors || []).slice().sort((a, b) => a.quotation_no - b.quotation_no);
+  const byKey = {};
+  (r.results || []).forEach(x => { byKey[`${x.requirement_id}|${x.quotation_no}`] = x; });
+  const reqs = (r.requirements || []).filter(q => !onlyIssues || vendors.some(v => (byKey[`${q.id}|${v.quotation_no}`] || {}).verdict !== "compliant"));
+  const countFor = (v) => { const c = { compliant: 0, deviation: 0, not_offered: 0, unclear: 0 }; (r.results || []).forEach(x => { if (x.quotation_no === v.quotation_no) c[x.verdict] = (c[x.verdict] || 0) + 1; }); return c; };
+  const exportCsv = () => {
+    const esc = (t) => `"${String(t ?? "").replace(/"/g, '""')}"`;
+    const rows = [["Ref", "Item", "Requirement", "Quantity", ...vendors.flatMap(v => [`${v.vendor_name} verdict`, `${v.vendor_name} offered`, `${v.vendor_name} reason`, `${v.vendor_name} clarification`])]];
+    (r.requirements || []).forEach(q => rows.push([q.ref, q.item, q.requirement, q.quantity, ...vendors.flatMap(v => { const x = byKey[`${q.id}|${v.quotation_no}`] || {}; return [QC_VERDICT[x.verdict]?.label || "", x.offered, x.reason, x.clarification]; })]));
+    const blob = new Blob(["﻿" + rows.map(rw => rw.map(esc).join(",")).join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `Quotation-compliance-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  };
+  const cell = { padding: "10px 12px", borderBottom: "1px solid rgba(148,163,184,.14)", verticalAlign: "top", fontSize: 12.5, lineHeight: 1.45 };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>{s.title || r.base_title || s.base_name}</div>
+          <div style={{ fontSize: 12.5, opacity: .7, marginTop: 2 }}>{s.mode === "pr" ? "Purchase request" : "Specification"}: {s.base_name} · {vendors.length} quotation{vendors.length === 1 ? "" : "s"} · {(r.requirements || []).length} requirements checked</div>
+        </div>
+        <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={onlyIssues} onChange={e => setOnlyIssues(e.target.checked)} /> Show only what does not comply</label>
+        <button type="button" onClick={exportCsv} className="text-xs font-semibold border px-3 py-2 rounded-lg">Export to Excel (CSV)</button>
+      </div>
+      {r.summary && <div style={{ padding: "12px 14px", borderRadius: 12, background: "rgba(59,130,246,.08)", border: "1px solid rgba(96,165,250,.3)", fontSize: 13, lineHeight: 1.55, marginBottom: 14 }}><b>Summary.</b> {r.summary}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(vendors.length, 3) || 1}, minmax(0,1fr))`, gap: 12, marginBottom: 16 }}>
+        {vendors.map(v => { const o = QC_OVERALL[v.overall] || QC_OVERALL.partially_compliant, c = countFor(v); return (
+          <div key={v.quotation_no} style={{ padding: 14, borderRadius: 14, border: `1px solid ${o.fg}55`, background: "rgba(15,23,52,.35)" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <b style={{ flex: 1, minWidth: 0, fontSize: 14 }}>{v.vendor_name}</b>
+              <span style={{ fontSize: 11.5, fontWeight: 800, padding: "3px 9px", borderRadius: 999, color: o.fg, background: o.bg }}>{o.label}</span>
+            </div>
+            <div style={{ fontSize: 12, opacity: .7, marginTop: 3 }}>{[v.reference, v.total && `${v.currency || ""} ${v.total}`.trim()].filter(Boolean).join(" · ")}</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+              {Object.entries(QC_VERDICT).map(([k, m]) => c[k] ? <span key={k} style={{ fontSize: 11.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, color: m.fg, background: m.bg }}>{m.icon} {c[k]} {m.label.toLowerCase()}</span> : null)}
+            </div>
+            {v.overall_reason && <div style={{ fontSize: 12.5, marginTop: 8, lineHeight: 1.45, opacity: .9 }}>{v.overall_reason}</div>}
+            {v.exclusions && <div style={{ fontSize: 12, marginTop: 6, color: "#fca5a5" }}><b>Exclusions:</b> {v.exclusions}</div>}
+            {v.extra_items && <div style={{ fontSize: 12, marginTop: 4, opacity: .8 }}><b>Not asked for:</b> {v.extra_items}</div>}
+          </div>); })}
+      </div>
+      <div style={{ overflowX: "auto", border: "1px solid rgba(148,163,184,.2)", borderRadius: 12 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 300 + vendors.length * 260 }}>
+          <thead><tr style={{ textAlign: "left", fontSize: 11.5, opacity: .75 }}>
+            <th style={{ ...cell, width: 300 }}>{s.mode === "pr" ? "Purchase request line" : "Specification requirement"}</th>
+            {vendors.map(v => <th key={v.quotation_no} style={cell}>{v.vendor_name}</th>)}
+          </tr></thead>
+          <tbody>{reqs.map(q => (
+            <tr key={q.id}>
+              <td style={cell}>
+                <div style={{ fontWeight: 700 }}>{q.ref ? <span style={{ opacity: .6 }}>{q.ref} · </span> : null}{q.item}</div>
+                <div style={{ marginTop: 4, fontStyle: "italic", opacity: .85 }}>“{q.requirement}”</div>
+                {(q.quantity || q.page) && <div style={{ fontSize: 11.5, opacity: .6, marginTop: 4 }}>{[q.quantity && `Qty: ${q.quantity}`, q.page && `page ${q.page}`].filter(Boolean).join(" · ")}</div>}
+              </td>
+              {vendors.map(v => { const x = byKey[`${q.id}|${v.quotation_no}`] || { verdict: "unclear", reason: "Not assessed." }, m = QC_VERDICT[x.verdict] || QC_VERDICT.unclear; return (
+                <td key={v.quotation_no} style={{ ...cell, background: x.verdict === "compliant" ? "transparent" : m.bg.replace(".16", ".06") }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 800, padding: "2px 8px", borderRadius: 999, color: m.fg, background: m.bg }}>{m.icon} {m.label}</span>
+                  {x.offered && <div style={{ marginTop: 6 }}><span style={{ opacity: .6 }}>Offered: </span>“{x.offered}”{x.quotation_page ? <span style={{ opacity: .55 }}> (p. {x.quotation_page})</span> : null}</div>}
+                  {(x.quantity_offered || x.unit_price || x.line_total) && <div style={{ fontSize: 11.5, opacity: .7, marginTop: 3 }}>{[x.quantity_offered && `Qty ${x.quantity_offered}`, x.unit_price && `Rate ${x.unit_price}`, x.line_total && `Total ${x.line_total}`].filter(Boolean).join(" · ")}</div>}
+                  <div style={{ marginTop: 5 }}><span style={{ opacity: .6 }}>Why: </span>{x.reason}</div>
+                  {x.clarification && <div style={{ marginTop: 5, fontSize: 12, color: "#93c5fd" }}>Ask the supplier: {x.clarification}</div>}
+                </td>); })}
+            </tr>))}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function QuotationComplianceTab({ project }) {
+  const [mode, setMode] = useState("spec");
+  const [title, setTitle] = useState("");
+  const [base, setBase] = useState(null);
+  const [quotes, setQuotes] = useState([]);          // [{ file, vendor }]
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [runs, setRuns] = useState([]);
+  const [open, setOpen] = useState(null);
+  async function load() {
+    const { data } = await sb.from("analysis_runs").select("id, status, summary, error_message, created_at").eq("project_id", project.id).eq("run_kind", "quotation_compliance").order("created_at", { ascending: false }).limit(20);
+    setRuns(data || []);
+    if (!open && data && data[0] && data[0].status === "completed") setOpen(data[0].id);
+  }
+  useEffect(() => { load(); }, [project.id]);
+  const addQuotes = (files) => { const list = Array.from(files || []); setQuotes(q => [...q, ...list.map(f => ({ file: f, vendor: f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").slice(0, 40) }))].slice(0, 5)); };
+  async function run() {
+    setErr("");
+    if (!base) { setErr(mode === "pr" ? "Add the purchase request first." : "Add the specification first."); return; }
+    if (!quotes.length) { setErr("Add at least one quotation."); return; }
+    try {
+      const stamp = Date.now();
+      const up = async (file, i) => {
+        const f = await qcPrepareFile(file);
+        const safe = String(f.name).replace(/[^A-Za-z0-9._-]/g, "_").slice(-90);
+        const path = `${project.id}/compliance/${stamp}/${i}_${safe}`;
+        const { error } = await sb.storage.from("drawings").upload(path, f);
+        if (error) throw new Error(`Could not upload ${file.name}: ${error.message}`);
+        return { path, name: f.name };
+      };
+      setBusy("Uploading the documents…");
+      const b = await up(base, 0);
+      const qs = [];
+      for (let i = 0; i < quotes.length; i++) qs.push({ ...(await up(quotes[i].file, i + 1)), vendor: quotes[i].vendor });
+      setBusy("Reading the documents and checking every requirement… this takes 1–3 minutes.");
+      const started = await callEngine("quotation_compliance", { project_id: project.id, mode, base: b, quotes: qs, title: title.trim() || null });
+      await load();
+      await pollAnalysisRun(started.run_id, { maxWaitMs: 9 * 60 * 1000 });
+      setOpen(started.run_id); await load();
+      setBase(null); setQuotes([]); setTitle("");
+    } catch (e) { setErr(e.message || "The check could not be completed."); await load(); }
+    finally { setBusy(""); }
+  }
+  const current = runs.find(x => x.id === open);
+  const box = { border: "1.5px dashed rgba(148,163,184,.45)", borderRadius: 12, padding: 14, display: "grid", gap: 8 };
+  return (
+    <div className="space-y-5">
+      <div className="bg-white border rounded-xl p-5">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 260 }}>
+            <div style={{ fontSize: 18, fontWeight: 800 }}>Quotation compliance</div>
+            <div style={{ fontSize: 13, opacity: .7, marginTop: 2 }}>Upload the specification or purchase request and the supplier quotations. Quantora checks every requirement against every quotation and tells you what does not comply, and why.</div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[["spec", "Specification vs quotations"], ["pr", "Purchase request vs quotations"]].map(([k, l]) => (
+              <button key={k} type="button" onClick={() => { setMode(k); setBase(null); }} style={{ padding: "8px 12px", borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: "pointer", color: "inherit",
+                border: "1px solid " + (mode === k ? "rgba(96,165,250,.8)" : "rgba(148,163,184,.3)"), background: mode === k ? "rgba(37,99,235,.2)" : "transparent" }}>{l}</button>))}
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.4fr)", gap: 14, marginTop: 16 }}>
+          <div style={box}>
+            <b style={{ fontSize: 13.5 }}>1. {mode === "pr" ? "Purchase request (PR)" : "Specification"}</b>
+            <span style={{ fontSize: 12, opacity: .7 }}>{mode === "pr" ? "PDF, image or Excel. Each line is checked: item, specification, brand, quantity." : "PDF. The clauses a supplier's offer can be checked against are picked out."}</span>
+            <input type="file" accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv" onChange={e => setBase(e.target.files && e.target.files[0] || null)} />
+            {base && <span style={{ fontSize: 12.5 }}>📄 {base.name}</span>}
+            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Name this check (optional), e.g. ELV package — 3 suppliers"
+              style={{ padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "inherit", fontSize: 12.5 }} />
+          </div>
+          <div style={box}>
+            <b style={{ fontSize: 13.5 }}>2. Supplier quotations (up to 5)</b>
+            <span style={{ fontSize: 12, opacity: .7 }}>PDF, image or Excel. Name each supplier so the result reads clearly.</span>
+            <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv" onChange={e => { addQuotes(e.target.files); e.target.value = ""; }} disabled={quotes.length >= 5} />
+            {quotes.map((q, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 12, opacity: .7, width: 22 }}>{i + 1}.</span>
+                <input value={q.vendor} onChange={e => setQuotes(qs => qs.map((x, j) => j === i ? { ...x, vendor: e.target.value } : x))}
+                  style={{ flex: 1, minWidth: 0, padding: "6px 9px", borderRadius: 8, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "inherit", fontSize: 12.5 }} />
+                <span style={{ fontSize: 11.5, opacity: .6, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.file.name}</span>
+                <button type="button" onClick={() => setQuotes(qs => qs.filter((_, j) => j !== i))} style={{ border: 0, background: "transparent", color: "#f87171", cursor: "pointer" }}>✕</button>
+              </div>))}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14, flexWrap: "wrap" }}>
+          <button type="button" onClick={run} disabled={!!busy} className="text-white text-sm font-bold px-5 py-2.5 rounded-lg" style={{ background: busy ? "#334155" : "#2563eb" }}>{busy ? "Checking…" : "Check compliance"}</button>
+          {busy && <span style={{ fontSize: 12.5, opacity: .8 }}>{busy}</span>}
+          {err && <span style={{ fontSize: 12.5, color: "#f87171" }}>{err}</span>}
+        </div>
+      </div>
+      {runs.length > 0 && (
+        <div className="bg-white border rounded-xl p-5">
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+            {runs.map(x => (
+              <button key={x.id} type="button" onClick={() => setOpen(x.id)} style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12, cursor: "pointer", color: "inherit",
+                border: "1px solid " + (open === x.id ? "rgba(96,165,250,.8)" : "rgba(148,163,184,.3)"), background: open === x.id ? "rgba(37,99,235,.18)" : "transparent" }}>
+                {(x.summary && (x.summary.title || x.summary.base_name)) || "Check"} · {new Date(x.created_at).toLocaleDateString()} {x.status === "processing" ? "· running" : x.status === "failed" ? "· failed" : ""}
+              </button>))}
+          </div>
+          {current && current.status === "completed" && current.summary && current.summary.result && <QcResult run={current} />}
+          {current && current.status === "failed" && <div style={{ color: "#f87171", fontSize: 13 }}>{current.error_message}</div>}
+          {current && current.status === "processing" && <div style={{ fontSize: 13, opacity: .8 }}>Still checking… the result appears here when it is ready.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function useSupportThreads(isAdmin, sessionKey) {
   const [tickets, setTickets] = useState([]);
