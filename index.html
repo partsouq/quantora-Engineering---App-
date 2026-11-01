@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -22849,7 +22849,122 @@ function QDiscountsView() {
   );
 }
 
-function QProjectsView({ perProject, companyNameById, pipeline }) {
+// Project Monitoring (2026-11-01): Take-off & BOQ projects and Draftsman projects, each with its
+// own rows, totals and filters; the earlier AI-cost table stays as the third tab.
+function QProjectsView(props) {
+  const [tab, setTab] = useState("takeoff");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [q, setQ] = useState("");
+  const [days, setDays] = useState("all");
+  useEffect(() => {
+    callAdminAnalytics("project_monitoring", {}).then(setData).catch(e => setErr(e.message || "Could not load projects."));
+  }, []);
+  const since = days === "all" ? null : Date.now() - Number(days) * 86400000;
+  // Value: the project's priced estimate (selling price) where there is one; otherwise the
+  // priced BOQ lines; otherwise a dash.
+  const est = {};
+  ((props.pipeline && props.pipeline.per_project_pipeline) || []).forEach(x => { if (x.is_priced) est[x.project_id] = x; });
+  const withValue = (r) => est[r.project_id] ? { ...r, value_cents: est[r.project_id].selling_price_cents, currency: est[r.project_id].currency || r.currency } : r;
+  const pick = (rows) => (rows || []).map(withValue).filter(r =>
+    (!since || new Date(r.last_at || r.created_at || 0).getTime() >= since) &&
+    (!q || `${r.project_name} ${r.project_ref || ""} ${r.company_name} ${r.location}`.toLowerCase().includes(q.toLowerCase())));
+  const tk = pick(data && data.takeoff), ds = pick(data && data.draftsman);
+  const fmtD = (x) => x ? new Date(x).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "—";
+  const money = (r) => r.value_cents ? `${qAmt(r.value_cents)} ${r.currency}` : "—";
+  const byCur = (rows) => {
+    const m = {};
+    rows.forEach(r => { if (r.value_cents) m[r.currency] = (m[r.currency] || 0) + r.value_cents; });
+    const k = Object.keys(m);
+    return k.length ? k.map(c => `${qAmt(m[c])} ${c}`).join(" · ") : "—";
+  };
+  const sum = (rows, f) => rows.reduce((a, r) => a + Number(r[f] || 0), 0);
+  const tabBtn = (key, label, n) => (
+    <button key={key} type="button" onClick={() => setTab(key)}
+      style={{ padding: "8px 14px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer",
+        border: "1px solid " + (tab === key ? "rgba(96,165,250,.7)" : "rgba(148,163,184,.25)"),
+        background: tab === key ? "rgba(37,99,235,.22)" : "transparent", color: "inherit" }}>
+      {label}{n != null ? <span style={{ marginLeft: 8, opacity: .75 }}>{n}</span> : null}
+    </button>
+  );
+  const status = (r) => r.failed && !r.done ? <span style={{ color: "#fb7185" }}>Failed</span>
+    : r.jobs != null ? (r.done ? <span style={{ color: "#34d399" }}>{r.done} done</span> : <span style={{ color: "#fbbf24" }}>In progress</span>)
+    : r.boq_lines ? <span style={{ color: "#34d399" }}>BOQ ready</span> : r.runs ? <span style={{ color: "#fbbf24" }}>Read, no BOQ lines</span> : <span style={{ opacity: .7 }}>Uploaded, not read</span>;
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        {tabBtn("takeoff", "Take-off & BOQ", data ? (data.takeoff || []).length : null)}
+        {tabBtn("draftsman", "Draftsman", data ? (data.draftsman || []).length : null)}
+        {tabBtn("cost", "AI cost per project", null)}
+        <span style={{ flex: 1 }} />
+        {tab !== "cost" && <>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search project or customer…"
+            style={{ padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "inherit", fontSize: 13, minWidth: 220 }} />
+          <select value={days} onChange={e => setDays(e.target.value)}
+            style={{ padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "inherit", fontSize: 13 }}>
+            <option value="7" style={{ color: "#0f172a" }}>Last 7 days</option>
+            <option value="30" style={{ color: "#0f172a" }}>Last 30 days</option>
+            <option value="90" style={{ color: "#0f172a" }}>Last 90 days</option>
+            <option value="all" style={{ color: "#0f172a" }}>All time</option>
+          </select>
+        </>}
+      </div>
+      {err && <div className="card panel" style={{ color: "#fb7185" }}>{err}</div>}
+      {tab !== "cost" && !data && !err && <div className="card panel" style={{ opacity: .7 }}>Loading projects…</div>}
+      {tab === "takeoff" && data && (
+        <>
+          <div className="kpi-row">
+            <div className="card kpi"><div className="lbl">Take-off projects</div><div className="big">{tk.length}</div><div className="delta flat">with drawings uploaded</div></div>
+            <div className="card kpi"><div className="lbl">Drawings uploaded</div><div className="big">{qNum(sum(tk, "drawings"))}</div><div className="delta flat">{qNum(sum(tk, "sheets_in_files"))} sheets inside them</div></div>
+            <div className="card kpi"><div className="lbl">Sheets read</div><div className="big">{qNum(sum(tk, "sheets_read"))}</div><div className="delta flat">counted against plans</div></div>
+            <div className="card kpi"><div className="lbl">BOQ value</div><div className="big" style={{ fontSize: 20 }}>{byCur(tk)}</div><div className="delta flat">{qNum(sum(tk, "boq_lines"))} BOQ lines · priced projects only</div></div>
+          </div>
+          <div className="card panel">
+            <div className="panel-head"><h3>Take-off & BOQ projects</h3><span className="tag">{tk.length} projects</span></div>
+            <div className="table-wrap"><table>
+              <thead><tr><th>Project</th><th>Customer</th><th className="num">Drawings</th><th className="num">Sheets in files</th><th className="num">Sheets read</th>
+                <th className="num">BOQ lines</th><th className="num">BOQ value</th><th>Last activity</th></tr></thead>
+              <tbody>{tk.length === 0 ? <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No projects match.</td></tr> : tk.map(r => (
+                <tr key={r.project_id}>
+                  <td className="name">{r.project_ref ? <span style={{ opacity: .7 }}>{r.project_ref} · </span> : null}{r.project_name}<div style={{ fontSize: 11 }}><span style={{ opacity: .6 }}>{r.location} · </span>{status(r)}</div></td>
+                  <td>{r.company_name}</td><td className="num">{r.drawings}</td><td className="num">{r.sheets_in_files}</td><td className="num">{r.sheets_read}</td>
+                  <td className="num">{qNum(r.boq_lines)}</td><td className="num">{money(r)}</td><td style={{ whiteSpace: "nowrap" }}>{fmtD(r.last_at)}<div style={{ fontSize: 11, opacity: .6 }}>started {fmtD(r.created_at)}</div></td>
+                </tr>))}</tbody>
+            </table></div>
+          </div>
+        </>
+      )}
+      {tab === "draftsman" && data && (
+        <>
+          <div className="kpi-row">
+            <div className="card kpi"><div className="lbl">Draftsman projects</div><div className="big">{ds.length}</div><div className="delta flat">with a design job</div></div>
+            <div className="card kpi"><div className="lbl">Design jobs</div><div className="big">{qNum(sum(ds, "jobs"))}</div><div className="delta flat">{qNum(sum(ds, "done"))} done · {qNum(sum(ds, "failed"))} failed</div></div>
+            <div className="card kpi"><div className="lbl">Drawings produced</div><div className="big">{qNum(sum(ds, "drawings_out"))}</div><div className="delta flat">PDF / DXF sheets delivered</div></div>
+            <div className="card kpi"><div className="lbl">Designed BOQ value</div><div className="big" style={{ fontSize: 20 }}>{byCur(ds)}</div><div className="delta flat">{qNum(sum(ds, "boq_lines"))} BOQ lines · priced projects only</div></div>
+          </div>
+          <div className="card panel">
+            <div className="panel-head"><h3>Draftsman projects</h3><span className="tag">{ds.length} projects</span></div>
+            <div className="table-wrap"><table>
+              <thead><tr><th>Project</th><th>Customer</th><th className="num">Design jobs</th><th>Systems</th><th className="num">Drawings produced</th>
+                <th className="num">BOQ lines</th><th className="num">Value</th><th>Last activity</th></tr></thead>
+              <tbody>{ds.length === 0 ? <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No projects match.</td></tr> : ds.map(r => (
+                <tr key={r.project_id}>
+                  <td className="name">{r.project_ref ? <span style={{ opacity: .7 }}>{r.project_ref} · </span> : null}{r.project_name}<div style={{ fontSize: 11 }}><span style={{ opacity: .6 }}>{r.location} · </span>{status(r)}</div></td>
+                  <td>{r.company_name}</td><td className="num">{r.jobs}</td>
+                  <td style={{ maxWidth: 200, whiteSpace: "normal", fontSize: 12 }}>{(r.systems || []).map(x => String(x).toUpperCase()).join(" · ") || "—"}</td>
+                  <td className="num">{r.drawings_out}</td><td className="num">{qNum(r.boq_lines)}</td><td className="num">{money(r)}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{fmtD(r.last_at)}<div style={{ fontSize: 11, opacity: .6 }}>started {fmtD(r.created_at)}</div></td>
+                </tr>))}</tbody>
+            </table></div>
+          </div>
+        </>
+      )}
+      {tab === "cost" && <QProjectsCostView {...props} />}
+    </>
+  );
+}
+
+function QProjectsCostView({ perProject, companyNameById, pipeline }) {
   const list = (perProject || []).slice().sort((a, b) => (b.actual_cost_cents || 0) - (a.actual_cost_cents || 0));
   // Join in what each project is actually worth. A project that has no
   // estimate simply shows a dash -- AI cost and bid value are different
