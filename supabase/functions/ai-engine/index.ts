@@ -2585,6 +2585,52 @@ const BOQ_PRICE_TOOL = {
   },
 };
 
+
+// Quotation compliance: the specification / purchase request against each supplier quotation.
+const QUOTE_COMPLIANCE_TOOL = {
+  name: "record_quotation_compliance",
+  description: "Record every requirement, each quotation's overall result, and a verdict for every requirement against every quotation.",
+  input_schema: {
+    type: "object",
+    properties: {
+      base_title: { type: "string", description: "Title of the specification / purchase request as printed." },
+      summary: { type: "string", description: "Three or four sentences: which quotation is closest to compliant and the main gaps." },
+      requirements: { type: "array", items: { type: "object", properties: {
+        id: { type: "string", description: "R1, R2, ..." },
+        ref: { type: "string", description: "Clause number or PR line number as printed." },
+        item: { type: "string", description: "Short name of what is required." },
+        requirement: { type: "string", description: "The requirement in the document's own words." },
+        quantity: { type: "string", description: "Required quantity and unit, if stated." },
+        page: { type: "integer" },
+      }, required: ["id", "item", "requirement"] } },
+      vendors: { type: "array", items: { type: "object", properties: {
+        quotation_no: { type: "integer", description: "1-based, as numbered in the input." },
+        vendor_name: { type: "string" },
+        reference: { type: "string", description: "Quotation number / date as printed." },
+        currency: { type: "string" },
+        total: { type: "string", description: "Grand total exactly as printed." },
+        overall: { type: "string", enum: ["compliant", "partially_compliant", "non_compliant"] },
+        overall_reason: { type: "string" },
+        exclusions: { type: "string", description: "Exclusions and conditions stated in the quotation." },
+        extra_items: { type: "string", description: "Items offered that were not asked for." },
+      }, required: ["quotation_no", "vendor_name", "overall"] } },
+      results: { type: "array", items: { type: "object", properties: {
+        requirement_id: { type: "string" },
+        quotation_no: { type: "integer" },
+        verdict: { type: "string", enum: ["compliant", "deviation", "not_offered", "unclear"] },
+        offered: { type: "string", description: "What the quotation offers, in its own words (brand, model, rating, quantity)." },
+        reason: { type: "string" },
+        quantity_offered: { type: "string" },
+        unit_price: { type: "string" },
+        line_total: { type: "string" },
+        quotation_page: { type: "integer" },
+        clarification: { type: "string", description: "Question to send the supplier, if a gap can be cleared." },
+      }, required: ["requirement_id", "quotation_no", "verdict", "reason"] } },
+    },
+    required: ["requirements", "vendors", "results"],
+  },
+};
+
 async function callClaude(apiKey: string, systemPrompt: string, userContent: any[], tool: any = BOQ_ITEM_TOOL, maxTokens = MAX_OUTPUT_TOKENS, purpose: "drawing" | "design" = "drawing") {
   const overallDeadline = Date.now() + CALL_TIMEOUT_MS;
   const requestBody = JSON.stringify({
@@ -2661,7 +2707,8 @@ async function callClaude(apiKey: string, systemPrompt: string, userContent: any
   const isClassification = tool === PAGE_CLASSIFICATION_TOOL;
   const isLegend = tool === TILE_LEGEND_TOOL;
   const isTables = tool === SCHEDULE_TOOL;
-  const expectedArrayKey = isClassification ? "pages" : isLegend ? "legend_entries" : isTables ? "tables" : "items";
+  const isCompliance = tool === QUOTE_COMPLIANCE_TOOL;
+  const expectedArrayKey = isClassification ? "pages" : isLegend ? "legend_entries" : isTables ? "tables" : isCompliance ? "results" : "items";
 
   if (data.stop_reason === "max_tokens") {
     const err = new Error(
@@ -2669,6 +2716,8 @@ async function callClaude(apiKey: string, systemPrompt: string, userContent: any
         ? `Reading this sheet's symbol legend produced more output than fits in a single AI response (hit the ${maxTokens.toLocaleString()}-token output limit). The legend was rejected rather than used half-read.`
         : isClassification
         ? `This drawing package has too many pages to classify in a single AI response (hit the ${maxTokens.toLocaleString()}-token output limit), so the page list came back incomplete and was rejected rather than saved with pages missing. Please split the package into smaller files before uploading.`
+        : isCompliance
+        ? `This comparison produced more detail than fits in one AI response, so it was not saved half-done. Check fewer quotations at a time (two or three), or split a long specification into its sections.`
         : purpose === "design"
         // A design run has no drawing, so telling the customer to split one is
         // advice they cannot act on. This is what wiqarbaig was shown.
@@ -4238,6 +4287,89 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
       });
 
       return jsonResponse({ run_id: run.id, background: true, status: "processing", drawings_included: fetched.length, skipped });
+    }
+
+    // -----------------------------------------------------------------
+    // Quotation compliance (2026-11-01). A specification -- or a purchase request -- and up to five
+    // supplier quotations, read together: every requirement against every quotation, with the
+    // requirement quoted from the specification / PR, what the quotation offers quoted from the
+    // quotation, a verdict and the reason. Runs in the background; the result is the run's summary.
+    // -----------------------------------------------------------------
+    if (action === "quotation_compliance") {
+      const mode = body.mode === "pr" ? "pr" : "spec";
+      const base = body.base as { path: string; name: string } | undefined;
+      const quotes = (Array.isArray(body.quotes) ? body.quotes : []).slice(0, 5) as { path: string; name: string; vendor?: string }[];
+      const ownPath = (p: any) => typeof p === "string" && p.startsWith(`${project.id}/compliance/`) && !p.includes("..");
+      if (!base || !ownPath(base.path)) return jsonResponse({ error: mode === "pr" ? "Upload the purchase request first." : "Upload the specification first." }, 400);
+      if (!quotes.length || !quotes.every((q) => ownPath(q.path))) return jsonResponse({ error: "Upload at least one quotation." }, 400);
+      const gate = await checkConcurrencyGate(admin, companyId);
+      if (!gate.ok) return jsonResponse({ error: gate.error }, 429);
+
+      const { data: run, error: runErr } = await admin.from("analysis_runs").insert({
+        project_id: project.id, drawing_id: null, revision_number: 1, status: "processing", triggered_by: userId,
+        is_admin_assisted: isAdminOverride, prompt_version: PROMPT_VERSION, run_kind: "quotation_compliance",
+        summary: { mode, title: String(body.title ?? "").slice(0, 120) || null, base_name: base.name, quote_names: quotes.map((q) => q.vendor || q.name) },
+      }).select().single();
+      if (runErr) throw runErr;
+
+      runInBackground(async () => {
+        const t0 = Date.now();
+        const fileBlock = async (path: string, name: string) => {
+          const { data: blob, error } = await admin.storage.from("drawings").download(path);
+          if (error || !blob) throw new Error(`Could not read ${name} from storage.`);
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          if (bytes.length > MAX_FILE_BYTES) throw new Error(`${name} is ${(bytes.length / 1048576).toFixed(1)} MB, over the ${MAX_FILE_BYTES / 1048576} MB limit.`);
+          const lower = name.toLowerCase();
+          if (lower.endsWith(".csv") || lower.endsWith(".txt")) {
+            const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes).slice(0, 200_000);
+            return { bytes: bytes.length, block: { type: "text", text: `--- ${name} (spreadsheet as text) ---\n${text}` } };
+          }
+          return { bytes: bytes.length, block: buildFileContentBlock(name, bytes).block };
+        };
+        const content: any[] = [];
+        let total = 0;
+        const b = await fileBlock(base.path, base.name); total += b.bytes;
+        content.push({ type: "text", text: `DOCUMENT 0 -- ${mode === "pr" ? "PURCHASE REQUEST" : "SPECIFICATION"}: ${base.name}` }, b.block);
+        for (let i = 0; i < quotes.length; i++) {
+          const q = await fileBlock(quotes[i].path, quotes[i].name); total += q.bytes;
+          content.push({ type: "text", text: `QUOTATION ${i + 1}${quotes[i].vendor ? ` from ${quotes[i].vendor}` : ""}: ${quotes[i].name}` }, q.block);
+        }
+        if (total > 30 * 1048576) throw new Error("These files together are over 30 MB. Check fewer quotations at a time.");
+        content.push({ type: "text", text:
+          (mode === "pr"
+            ? `Check each quotation against the PURCHASE REQUEST (document 0). Every PR line is a requirement: item, description / specification, brand or model if named, quantity and unit. `
+            : `Check each quotation against the SPECIFICATION (document 0). Take the requirements that a supplier's offer can be checked against: products, ratings, standards, certifications, brands / approved equals, origin, warranty, quantities where stated. Group the specification into at most 60 checkable requirements -- the ones a procurement engineer would actually check. `) +
+          `Then for EVERY requirement and EVERY quotation give a verdict. Quote the requirement's own words from document 0 and what the quotation actually offers in its own words, with page numbers. ` +
+          `Say why in one or two plain sentences. List anything a quotation offers that the ${mode === "pr" ? "purchase request" : "specification"} did not ask for, and anything it excludes. Project: ${project.project_name}, ${project.city ?? ""} ${project.country ?? ""}.` });
+
+        const out = await callClaude(anthropicKey,
+          `You are a senior procurement and technical evaluation engineer for a contractor, checking supplier quotations for compliance.\n\n` +
+          `Rules:\n1. Use only what is written in the documents. Quote the exact words. Never assume a product complies because the brand is good.\n` +
+          `2. Verdicts: compliant (meets it), deviation (offered but differs: lower rating, different brand without approved-equal, different quantity, missing certification...), ` +
+          `not_offered (the quotation does not include it), unclear (the quotation does not say enough to tell).\n` +
+          `3. Quantities: compare required vs offered; a shortfall is a deviation. Prices: copy the unit price and line total as printed, never compute a missing one.\n` +
+          `4. Origin, certification and standard requirements are strict: failing one is a deviation even if every technical value matches.\n` +
+          `5. Where a gap can be cleared with the supplier, write the clarification question to ask them.\n` +
+          `6. The overall result per quotation: compliant only if every requirement is compliant; partially_compliant if most are; non_compliant if key requirements fail or are not offered.`,
+          content, QUOTE_COMPLIANCE_TOOL, 24000, "design");
+        const r = out.result ?? out;
+        const counts = (Array.isArray(r.vendors) ? r.vendors : []).map((v: any, i: number) => {
+          const rows = (r.results ?? []).filter((x: any) => Number(x.quotation_no) === i + 1);
+          const c: Record<string, number> = { compliant: 0, deviation: 0, not_offered: 0, unclear: 0 };
+          rows.forEach((x: any) => { c[x.verdict] = (c[x.verdict] ?? 0) + 1; });
+          return c;
+        });
+        await admin.from("analysis_runs").update({
+          status: "completed", completed_at: new Date().toISOString(),
+          summary: { mode, title: String(body.title ?? "").slice(0, 120) || null, base_name: base.name, quote_names: quotes.map((q) => q.vendor || q.name),
+            result: r, counts, item_count: (r.requirements ?? []).length },
+        }).eq("id", run.id);
+        const usage = out.usage ?? { input_tokens: 0, output_tokens: 0 };
+        await recordUsageAndBill(admin, { companyId, billing: isAdminOverride ? "admin_comp" : "free_quota" }, userId, project.id, "quotation_compliance", usage, null, Date.now() - t0, isAdminOverride, run.id);
+      }, async (err) => {
+        await admin.from("analysis_runs").update({ status: "failed", error_message: describeError(err) }).eq("id", run.id);
+      });
+      return jsonResponse({ run_id: run.id, status: "processing", background: true });
     }
 
     if (action === "chat") {
