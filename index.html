@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4177,6 +4177,139 @@ async function suggestPlanPages(pdf, drawingId) {
   const pages = all.filter(n => !skipped.includes(n)).slice(0, MAX_AUTO_TILED_PAGES);
   return { pages, skipped, labels };
 }
+
+// ---------------------------------------------------------------------------
+// Sheet check (2026-11-01). Before a file with several sheets is read, the user sees every
+// sheet (picture, title, floor), which ones will be read and why some are skipped, and how
+// many sheets their plan has left -- so a trial user never gets half a BOQ by surprise, and
+// each sheet's quantities are filed under its own floor.
+// ---------------------------------------------------------------------------
+function qFloorFromText(t) {
+  const u = String(t || "").toUpperCase();
+  let m;
+  if ((m = u.match(/\bBASEMENT\s*(\d+)?\b|\bB(\d)\s+FLOOR\b/))) return "Basement" + (m[1] || m[2] ? " " + (m[1] || m[2]) : "");
+  if (/\bGROUND\b|\bG\.?F\.?\s+(PLAN|LAYOUT)\b/.test(u)) return "Ground Floor";
+  if (/\bMEZZANINE\b/.test(u)) return "Mezzanine";
+  if (/\bROOF\b/.test(u)) return "Roof";
+  const words = { FIRST: 1, SECOND: 2, THIRD: 3, FOURTH: 4, FIFTH: 5, SIXTH: 6, SEVENTH: 7, EIGHTH: 8, NINTH: 9, TENTH: 10 };
+  if ((m = u.match(/\b(FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TENTH)\s+FLOOR\b/))) return ["", "First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Ninth", "Tenth"][words[m[1]]] + " Floor";
+  if ((m = u.match(/\b(\d{1,2})(ST|ND|RD|TH)\s+FLOOR\b/))) return `Level ${m[1]}`;
+  if ((m = u.match(/\bLEVEL\s*(\d{1,2})\b/))) return `Level ${m[1]}`;
+  return "";
+}
+
+async function qSheetFacts(pdf, drawingId) {
+  const total = pdf.numPages || 1;
+  const sug = await suggestPlanPages(pdf, drawingId);
+  const sheets = [];
+  for (let n = 1; n <= total && n <= 40; n++) {
+    let text = "";
+    try { const tc = await (await pdf.getPage(n)).getTextContent(); text = tc.items.map(x => x.str).join(" "); } catch (_) {}
+    const lab = sug.labels[n] || "";
+    const kind = /\b(PART|ENLARGED)\s+PLAN\b/i.test(lab) ? "part" : /\b(MASTER|OVERALL)\s+PLAN\b/i.test(lab) ? "master" : "sheet";
+    // a short title: the classified label, else the first "… FLOOR … PLAN/LAYOUT" phrase on the sheet
+    let title = lab && lab.length > 12 ? lab : "";
+    if (!title) {
+      const m = text.toUpperCase().replace(/\s+/g, " ").match(/[A-Z0-9 \-]{0,30}(FLOOR|LEVEL|ROOF|BASEMENT)[A-Z0-9 \-()]{0,40}(PLAN|LAYOUT)[A-Z0-9 \-()]{0,20}/);
+      title = m ? m[0].trim().replace(/\s+/g, " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
+        .replace(/\b(Elv|Mep|Hvac|Cctv|Fcu|Ahu|Ict|Bms|Pa|Ff|Fa)\b/g, w => w.toUpperCase()).replace(/\)[^()]*$/, ")") : "";
+    }
+    sheets.push({ n, title: title || `Sheet ${n}`, kind, floor: qFloorFromText(lab) || qFloorFromText(title) || qFloorFromText(text.slice(0, 4000)),
+      read: sug.pages.includes(n), skippedWhy: sug.skipped.includes(n) ? "Master plan: shows the same devices as its part plans" : "" });
+  }
+  return sheets;
+}
+
+function SheetCheckModal({ state, onClose }) {
+  const { pdf, drawing, project, sheets: initial, minutesPerSheet, usage } = state;
+  const [sheets, setSheets] = useState(initial);
+  const [thumbs, setThumbs] = useState({});
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      for (const s of initial.slice(0, 24)) {
+        try {
+          const page = await pdf.getPage(s.n);
+          const vp0 = page.getViewport({ scale: 1 });
+          const vp = page.getViewport({ scale: 260 / vp0.width });
+          const c = document.createElement("canvas"); c.width = vp.width; c.height = vp.height;
+          await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+          if (!alive) return;
+          const url = c.toDataURL("image/jpeg", 0.7);
+          setThumbs(t => ({ ...t, [s.n]: url }));
+        } catch (_) {}
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+  const chosen = sheets.filter(s => s.read);
+  const left = usage && usage.limit != null ? Math.max(0, usage.limit - usage.used) : null;
+  const short = left != null && usage.hardLimit && chosen.length > left;
+  const tooMany = chosen.length > MAX_AUTO_TILED_PAGES;
+  const floors = [...new Set([...(projectFloorNames(project) || []), ...sheets.map(s => s.floor).filter(Boolean), drawing.floor_label].filter(Boolean))];
+  const set = (n, patch) => setSheets(ss => ss.map(s => s.n === n ? { ...s, ...patch } : s));
+  const start = () => onClose({ pages: chosen.map(s => s.n), floors: Object.fromEntries(chosen.map(s => [s.n, s.floor || drawing.floor_label || ""])),
+    labels: Object.fromEntries(sheets.map(s => [s.n, s.title])) });
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 85, background: "rgba(2,6,23,.6)", display: "grid", placeItems: "center", padding: 16 }}>
+      <div style={{ width: "min(1040px, 100%)", maxHeight: "92vh", display: "grid", gridTemplateRows: "auto 1fr auto", borderRadius: 18,
+        background: "var(--q-surface, #0d1736)", border: "1px solid rgba(96,165,250,.35)", boxShadow: "0 30px 80px rgba(0,0,0,.55)", color: "inherit" }}>
+        <div style={{ padding: "18px 22px 12px", borderBottom: "1px solid rgba(148,163,184,.2)" }}>
+          <div style={{ fontSize: 18, fontWeight: 800 }}>Choose the sheets to read</div>
+          <div style={{ fontSize: 13, opacity: .75, marginTop: 4 }}>
+            {drawing.file_name} has <b>{sheets.length}</b> sheets. The ticked sheets are read one after another into <b>one BOQ</b>, each under its own floor.
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10, fontSize: 12.5 }}>
+            <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(37,99,235,.18)", border: "1px solid rgba(96,165,250,.5)" }}><b>{chosen.length}</b> selected</span>
+            <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(148,163,184,.12)" }}>about <b>{Math.max(1, Math.round(chosen.length * minutesPerSheet))}</b> min</span>
+            {left != null && <span style={{ padding: "4px 10px", borderRadius: 999, background: short ? "rgba(244,63,94,.16)" : "rgba(16,185,129,.14)", border: "1px solid " + (short ? "#f43f5e" : "rgba(16,185,129,.5)") }}>
+              Your plan: <b>{left}</b> sheet{left === 1 ? "" : "s"} left</span>}
+          </div>
+          {short && (
+            <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.55)", fontSize: 13, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ flex: 1, minWidth: 240 }}>This set needs <b>{chosen.length}</b> sheets and your plan has <b>{left}</b> left. Untick sheets to keep the most important {left}, or choose a plan to read the complete set.</span>
+              <button type="button" onClick={() => { onClose(null); window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message: `Reading this drawing set needs ${chosen.length} sheets; your plan has ${left} left.` } })); }}
+                style={{ padding: "7px 14px", borderRadius: 10, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>See plans</button>
+            </div>
+          )}
+          {tooMany && <div style={{ marginTop: 8, fontSize: 12.5, color: "#fda4af" }}>Up to {MAX_AUTO_TILED_PAGES} sheets per run: untick {chosen.length - MAX_AUTO_TILED_PAGES}, and run the rest next.</div>}
+        </div>
+        <div style={{ overflowY: "auto", padding: 16, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12 }}>
+          {sheets.map(s => (
+            <div key={s.n} style={{ borderRadius: 14, padding: 10, border: "1.5px solid " + (s.read ? "#3b82f6" : "rgba(148,163,184,.25)"), background: s.read ? "rgba(37,99,235,.08)" : "transparent", opacity: s.read ? 1 : .7 }}>
+              <div onClick={() => set(s.n, { read: !s.read })} style={{ cursor: "pointer", height: 130, borderRadius: 9, background: "#fff", display: "grid", placeItems: "center", overflow: "hidden" }}>
+                {thumbs[s.n] ? <img src={thumbs[s.n]} alt="" style={{ maxWidth: "100%", maxHeight: "100%" }} /> : <span style={{ color: "#64748b", fontSize: 12 }}>Sheet {s.n}</span>}
+              </div>
+              <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={s.read} onChange={() => set(s.n, { read: !s.read })} style={{ marginTop: 3, accentColor: "#2563eb" }} />
+                <span style={{ minWidth: 0 }}><b style={{ fontSize: 12.5, display: "block" }}>Sheet {s.n}</b>
+                  <span style={{ fontSize: 12, opacity: .8, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={s.title}>{s.title}</span></span>
+              </label>
+              {s.skippedWhy && !s.read && <div style={{ fontSize: 11, color: "#fcd34d", marginTop: 4 }}>{s.skippedWhy}</div>}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                <span style={{ fontSize: 11, opacity: .7 }}>Floor</span>
+                <select value={s.floor || drawing.floor_label || ""} onChange={e => set(s.n, { floor: e.target.value })} disabled={!s.read}
+                  style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "4px 6px", borderRadius: 7, border: "1px solid rgba(148,163,184,.4)", background: "transparent", color: "inherit" }}>
+                  {floors.map(f => <option key={f} value={f} style={{ color: "#0f172a" }}>{f}</option>)}
+                </select>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: "12px 22px", borderTop: "1px solid rgba(148,163,184,.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, opacity: .7 }}>{state.admin ? "Admin Assist: free to the customer, not counted against their plan." : "Each sheet counts as one sheet of your plan, however many passes it takes to read."}</span>
+          <span style={{ display: "flex", gap: 8 }}>
+            <button type="button" onClick={() => onClose(null)} style={{ padding: "9px 16px", borderRadius: 10, border: "1px solid rgba(148,163,184,.45)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+            <button type="button" onClick={start} disabled={!chosen.length || short || tooMany}
+              style={{ padding: "9px 18px", borderRadius: 10, border: 0, background: (!chosen.length || short || tooMany) ? "rgba(37,99,235,.35)" : "#2563eb", color: "#fff", fontWeight: 800, cursor: (!chosen.length || short || tooMany) ? "not-allowed" : "pointer" }}>
+              Start reading {chosen.length} sheet{chosen.length === 1 ? "" : "s"}</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 // Everything needed to decide how to read a page, and to explain the decision.
 function assessPageForAnalysis(viewportAtScale1) {
@@ -12368,6 +12501,8 @@ function DrawingsTab({ project }) {
   // workflow is exactly how a customer ends up with a security layout whose BOQ
   // contains no cameras at all.
   const [tiling, setTiling] = useState({});
+  const [sheetCheck, setSheetCheck] = useState(null);   // the "choose the sheets" panel, open while it waits for the user
+  const askSheets = (st) => new Promise(resolve => setSheetCheck({ ...st, resolve }));
 
   async function analyzeAuto(d) {
     setErr("");
@@ -12390,6 +12525,7 @@ function DrawingsTab({ project }) {
 
     let pdf, assessment, sheetKind = "vector";
     let pageLabels = {};       // sheet labels (master / part plan …), sent with each sheet for its notes
+    let pageFloors = {};       // the floor each sheet belongs to, chosen in the sheet check
     try {
       setTiling(t => ({ ...t, [d.id]: "Checking drawing…" }));
       pdf = await openStoredPdf(d.analysis_source_path || d.storage_path);
@@ -12422,7 +12558,7 @@ function DrawingsTab({ project }) {
         // the first run rather than starting a second for the same drawing.
         for (let i = 0; i < pages.length; i++) {
           const pageNumber = pages[i];
-          const label = pages.length > 1 ? ` (sheet ${i + 1} of ${pages.length})` : "";
+          const label = pages.length > 1 ? ` (sheet ${i + 1} of ${pages.length}${pageFloors && pageFloors[pageNumber] ? " · " + pageFloors[pageNumber] : ""})` : "";
           // Same standard for every sheet: blank pages skipped, scans cleaned up first.
           const kind = (await inspectPdfPage(await pdf.getPage(pageNumber))).kind;
           if (kind === "empty") { blankPages++; continue; }
@@ -12470,6 +12606,7 @@ function DrawingsTab({ project }) {
               started = await callEngine("analyze_drawing_tiled", {
                 project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages, ...tileConfirms,
                 ...(batchRev ? { batch_revision: batchRev } : {}), ...(pageLabels && pageLabels[pageNumber] ? { page_label: pageLabels[pageNumber] } : {}),
+                ...(pageFloors && pageFloors[pageNumber] ? { page_floor: pageFloors[pageNumber] } : {}),
               });
               break;
             } catch (ex) {
@@ -12550,46 +12687,37 @@ function DrawingsTab({ project }) {
     const totalPages = pdf.numPages || 1;
     let pages = [1];
     if (totalPages > 1) {
+      // 2026-11-01: the sheet check -- every sheet with its picture, title and floor, master plans
+      // that repeat the part plans left out, and the sheets left in the plan shown up front.
       setTiling(t => ({ ...t, [d.id]: "Looking at the sheets in this file…" }));
-      const sug = await suggestPlanPages(pdf, d.id);
-      pageLabels = sug.labels;
-      const answer = window.prompt(
-        `This file has ${totalPages} sheets. All of them are read in one go, into one BOQ.\n\n` +
-        (sug.skipped.length
-          ? `Sheets ${sug.skipped.join(", ")} are master / key plans that repeat the part plans, so they are left out to avoid counting devices twice.\n\n`
-          : "") +
-        `Sheets to read (change the list if needed, e.g. "2,3,5-9"). Up to ${MAX_AUTO_TILED_PAGES} per run:`,
-        sug.pages.join(",")
+      let usage = null;
+      try {
+        const u = await callBilling("usage_summary");
+        if (u && u.pages) usage = { used: Number(u.pages.used || 0), limit: u.pages.limit, hardLimit: !!(u.plan && u.plan.is_trial) || !(Number(u.credit_balance_cents || 0) > 0) };
+      } catch (_) { /* no usage figure: the server still checks the limit */ }
+      const sheets = await qSheetFacts(pdf, d.id);
+      setTiling(t => ({ ...t, [d.id]: null }));
+      const pick = await askSheets({ pdf, drawing: d, project, sheets, usage, minutesPerSheet: 3 });
+      if (!pick || !pick.pages.length) return;
+      pages = pick.pages;
+      pageLabels = pick.labels || {};
+      pageFloors = pick.floors || {};
+    } else {
+      const totalCalls = assessment.calls;
+      const ok = window.confirm(
+        (sheetKind === "scan"
+          ? `This is a scanned ${assessment.sheetName} sheet, not a CAD export.\n\n` +
+            `Quantora will first clean it up to the same standard as a CAD drawing — white background, dark sharp lines — ` +
+            `then read it at ${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles. ` +
+            `For the most exact count, upload the PDF exported from CAD instead.\n\n`
+          : `This is a ${assessment.sheetName} sheet.\n\n` +
+            `Read whole, it would come through at about ${assessment.wholeSheetPxPerMm.toFixed(1)} pixels per millimetre — ` +
+            `too coarse for device symbols like cameras and readers to be counted. Quantora will instead read it at ` +
+            `${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles.\n\n`) +
+        `This takes a few minutes and uses ${totalCalls} AI passes. It still counts as 1 page against your plan.\n\nStart?`
       );
-      if (answer === null) { setTiling(t => ({ ...t, [d.id]: null })); return; }
-      pages = parsePageList(answer, totalPages);
-      if (!pages.length) {
-        setTiling(t => ({ ...t, [d.id]: null }));
-        setErr(`Could not read "${answer}" as page numbers for a ${totalPages}-page file.`);
-        return;
-      }
-      if (pages.length > MAX_AUTO_TILED_PAGES) {
-        setTiling(t => ({ ...t, [d.id]: null }));
-        setErr(`That is ${pages.length} pages. Please run at most ${MAX_AUTO_TILED_PAGES} at a time — each large sheet takes several minutes to read properly.`);
-        return;
-      }
+      if (!ok) { setTiling(t => ({ ...t, [d.id]: null })); return; }
     }
-
-    const totalCalls = assessment.calls * pages.length;
-    const ok = window.confirm(
-      (sheetKind === "scan"
-        ? `This is a scanned ${assessment.sheetName} sheet, not a CAD export.\n\n` +
-          `Quantora will first clean it up to the same standard as a CAD drawing — white background, dark sharp lines — ` +
-          `then read it at ${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles. ` +
-          `For the most exact count, upload the PDF exported from CAD instead.\n\n`
-        : `This is a ${assessment.sheetName} sheet.\n\n` +
-          `Read whole, it would come through at about ${assessment.wholeSheetPxPerMm.toFixed(1)} pixels per millimetre — ` +
-          `too coarse for device symbols like cameras and readers to be counted. Quantora will instead read it at ` +
-          `${assessment.tilePxPerMm.toFixed(1)} pixels per millimetre, as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles.\n\n`) +
-      `${pages.length === 1 ? "This takes a few minutes" : `${pages.length} sheets, a few minutes each`} and uses ${totalCalls} AI passes. ` +
-      `It still counts as ${pages.length} page${pages.length === 1 ? "" : "s"} against your plan.\n\nStart?`
-    );
-    if (!ok) { setTiling(t => ({ ...t, [d.id]: null })); return; }
 
     await runTiled(pages);
   }
@@ -12942,6 +13070,9 @@ function DrawingsTab({ project }) {
         ))}
       </div>
 
+      {sheetCheck && (
+        <SheetCheckModal state={sheetCheck} onClose={(res) => { const r = sheetCheck.resolve; setSheetCheck(null); r(res); }} />
+      )}
       {classifyDrawing && (
         <ClassifyAndSelectModal
           project={project}
@@ -19461,7 +19592,7 @@ function ChatTab({ project }) {
 // runs the same steps for an admin: same sheet check, same tiles, same readers.
 // Anything it cannot do (no PDF engine, file not readable, a civil sheet)
 // falls back to the whole-sheet read, as the customer path does.
-async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus }) {
+async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askSheets }) {
   const say = onStatus || (() => {});
   const whole = async () => {
     say("Reading the whole sheet with AI…");
@@ -19487,13 +19618,25 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus }) {
     return whole();
   }
   if (!assessment.needsTiling && sheetKind !== "scan") return whole();
-  const n = Math.min(pdf.numPages || 1, MAX_AUTO_TILED_PAGES);
-  let total = 0, read = 0, tilesUsed = 0;
-  for (let pn = 1; pn <= n; pn++) {
+  // 2026-11-01: the same sheet check as the customer's button -- master plans that repeat the
+  // part plans left out, every sheet in ONE revision (one BOQ), each sheet under its own floor.
+  let pages = [1], floors = {}, labels = {};
+  if ((pdf.numPages || 1) > 1) {
+    say("Looking at the sheets in this file…");
+    const sheets = await qSheetFacts(pdf, drawing.id);
+    const pick = askSheets ? await askSheets({ pdf, drawing, project: {}, sheets, usage: null, minutesPerSheet: 3, admin: true })
+      : { pages: sheets.filter(s => s.read).map(s => s.n), floors: Object.fromEntries(sheets.map(s => [s.n, s.floor || drawing.floor_label || ""])), labels: Object.fromEntries(sheets.map(s => [s.n, s.title])) };
+    if (!pick || !pick.pages.length) throw new Error("No sheets chosen.");
+    pages = pick.pages; floors = pick.floors || {}; labels = pick.labels || {};
+  }
+  const n = pages.length;
+  let total = 0, read = 0, tilesUsed = 0, batchRev = null;
+  for (let i = 0; i < n; i++) {
+    const pn = pages[i];
     const pg = await pdf.getPage(pn);
     const kind = (await inspectPdfPage(pg)).kind;
     if (kind === "empty") continue;
-    const label = n > 1 ? ` (sheet ${pn} of ${n})` : "";
+    const label = n > 1 ? ` (sheet ${i + 1} of ${n} · page ${pn}${floors[pn] ? " · " + floors[pn] : ""})` : "";
     const { tiles, grid } = await renderAndUploadTiles(pdf, pn, projectId, drawing.id,
       (p) => say(p.phase === "render" ? `Rendering row ${p.row}/${p.rows}${label}…` : `Uploading ${p.done}/${p.total}${label}…`),
       { cleanScan: kind === "scan" });
@@ -19512,7 +19655,9 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus }) {
     const started = await callEngine("analyze_drawing_tiled", {
       ...payload, drawing_id: drawing.id, page_number: pn, tiles, grid,
       reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages,
+      ...(batchRev ? { batch_revision: batchRev } : {}), ...(labels[pn] ? { page_label: labels[pn] } : {}), ...(floors[pn] ? { page_floor: floors[pn] } : {}),
     });
+    if (!batchRev && started && started.revision_number) batchRev = started.revision_number;
     const summary = await pollAnalysisRun(started.run_id);
     total += summary.item_count || 0; read++; tilesUsed += tiles.length;
   }
@@ -19536,6 +19681,8 @@ function AdminAssistPanel() {
   const [progress, setProgress] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [sheetCheck, setSheetCheck] = useState(null);   // the same "choose the sheets" panel the customer sees
+  const askSheets = (st) => new Promise(resolve => setSheetCheck({ ...st, resolve }));
 
   useEffect(() => {
     callAdminAnalytics("list_companies", {})
@@ -19577,7 +19724,7 @@ function AdminAssistPanel() {
       // synchronous round trip.
       if (actionType === "analyze_drawing") {
         const drawing = drawings.find(d => d.id === drawingId) || { id: drawingId };
-        out = await adminAnalyzeDrawing({ drawing, projectId, payload, onStatus: setProgress });
+        out = await adminAnalyzeDrawing({ drawing, projectId, payload, onStatus: setProgress, askSheets });
       } else if (actionType === "classify_pages") {
         const started = await callEngine("classify_pages", { ...payload, drawing_id: drawingId });
         out = started.cached ? started : await pollClassification(drawingId);
@@ -19601,6 +19748,7 @@ function AdminAssistPanel() {
 
   return (
     <div>
+      {sheetCheck && <SheetCheckModal state={sheetCheck} onClose={(res) => { const r = sheetCheck.resolve; setSheetCheck(null); r(res); }} />}
       <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg p-3 mb-5">
         Admin Assist runs real AI work directly on a customer's actual project — completely free to them, and it never touches their trial or plan quota (even if their trial has expired or their plan is maxed out). Use this to unblock a stuck customer, or to run a live demo on a real account for a prospect. Every run here is still logged and tagged "admin-assisted" in the cost analytics above for your own visibility.
       </div>
