@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.5"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4212,9 +4212,9 @@ async function qSheetFacts(pdf, drawingId) {
     if (!title) {
       const m = text.toUpperCase().replace(/\s+/g, " ").match(/[A-Z0-9 \-]{0,30}(FLOOR|LEVEL|ROOF|BASEMENT)[A-Z0-9 \-()]{0,40}(PLAN|LAYOUT)[A-Z0-9 \-()]{0,20}/);
       title = m ? m[0].trim().replace(/\s+/g, " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
-        .replace(/\b(Elv|Mep|Hvac|Cctv|Fcu|Ahu|Ict|Bms|Pa|Ff|Fa)\b/g, w => w.toUpperCase()) : "";
+        .replace(/\b(Elv|Mep|Hvac|Cctv|Fcu|Ahu|Ict|Bms|Pa|Ff|Fa)\b/g, w => w.toUpperCase()).replace(/\)[^()]*$/, ")") : "";
     }
-    sheets.push({ n, title: title || `Sheet ${n}`, kind, floor: qFloorFromText(lab + " " + title + " " + text.slice(0, 4000)),
+    sheets.push({ n, title: title || `Sheet ${n}`, kind, floor: qFloorFromText(lab) || qFloorFromText(title) || qFloorFromText(text.slice(0, 4000)),
       read: sug.pages.includes(n), skippedWhy: sug.skipped.includes(n) ? "Master plan: shows the same devices as its part plans" : "" });
   }
   return sheets;
@@ -4297,7 +4297,7 @@ function SheetCheckModal({ state, onClose }) {
           ))}
         </div>
         <div style={{ padding: "12px 22px", borderTop: "1px solid rgba(148,163,184,.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12, opacity: .7 }}>Each sheet counts as one sheet of your plan, however many passes it takes to read.</span>
+          <span style={{ fontSize: 12, opacity: .7 }}>{state.admin ? "Admin Assist: free to the customer, not counted against their plan." : "Each sheet counts as one sheet of your plan, however many passes it takes to read."}</span>
           <span style={{ display: "flex", gap: 8 }}>
             <button type="button" onClick={() => onClose(null)} style={{ padding: "9px 16px", borderRadius: 10, border: "1px solid rgba(148,163,184,.45)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>Cancel</button>
             <button type="button" onClick={start} disabled={!chosen.length || short || tooMany}
@@ -19592,7 +19592,7 @@ function ChatTab({ project }) {
 // runs the same steps for an admin: same sheet check, same tiles, same readers.
 // Anything it cannot do (no PDF engine, file not readable, a civil sheet)
 // falls back to the whole-sheet read, as the customer path does.
-async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus }) {
+async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askSheets }) {
   const say = onStatus || (() => {});
   const whole = async () => {
     say("Reading the whole sheet with AI…");
@@ -19618,13 +19618,25 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus }) {
     return whole();
   }
   if (!assessment.needsTiling && sheetKind !== "scan") return whole();
-  const n = Math.min(pdf.numPages || 1, MAX_AUTO_TILED_PAGES);
-  let total = 0, read = 0, tilesUsed = 0;
-  for (let pn = 1; pn <= n; pn++) {
+  // 2026-11-01: the same sheet check as the customer's button -- master plans that repeat the
+  // part plans left out, every sheet in ONE revision (one BOQ), each sheet under its own floor.
+  let pages = [1], floors = {}, labels = {};
+  if ((pdf.numPages || 1) > 1) {
+    say("Looking at the sheets in this file…");
+    const sheets = await qSheetFacts(pdf, drawing.id);
+    const pick = askSheets ? await askSheets({ pdf, drawing, project: {}, sheets, usage: null, minutesPerSheet: 3, admin: true })
+      : { pages: sheets.filter(s => s.read).map(s => s.n), floors: Object.fromEntries(sheets.map(s => [s.n, s.floor || drawing.floor_label || ""])), labels: Object.fromEntries(sheets.map(s => [s.n, s.title])) };
+    if (!pick || !pick.pages.length) throw new Error("No sheets chosen.");
+    pages = pick.pages; floors = pick.floors || {}; labels = pick.labels || {};
+  }
+  const n = pages.length;
+  let total = 0, read = 0, tilesUsed = 0, batchRev = null;
+  for (let i = 0; i < n; i++) {
+    const pn = pages[i];
     const pg = await pdf.getPage(pn);
     const kind = (await inspectPdfPage(pg)).kind;
     if (kind === "empty") continue;
-    const label = n > 1 ? ` (sheet ${pn} of ${n})` : "";
+    const label = n > 1 ? ` (sheet ${i + 1} of ${n} · page ${pn}${floors[pn] ? " · " + floors[pn] : ""})` : "";
     const { tiles, grid } = await renderAndUploadTiles(pdf, pn, projectId, drawing.id,
       (p) => say(p.phase === "render" ? `Rendering row ${p.row}/${p.rows}${label}…` : `Uploading ${p.done}/${p.total}${label}…`),
       { cleanScan: kind === "scan" });
@@ -19643,7 +19655,9 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus }) {
     const started = await callEngine("analyze_drawing_tiled", {
       ...payload, drawing_id: drawing.id, page_number: pn, tiles, grid,
       reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages,
+      ...(batchRev ? { batch_revision: batchRev } : {}), ...(labels[pn] ? { page_label: labels[pn] } : {}), ...(floors[pn] ? { page_floor: floors[pn] } : {}),
     });
+    if (!batchRev && started && started.revision_number) batchRev = started.revision_number;
     const summary = await pollAnalysisRun(started.run_id);
     total += summary.item_count || 0; read++; tilesUsed += tiles.length;
   }
@@ -19667,6 +19681,8 @@ function AdminAssistPanel() {
   const [progress, setProgress] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [sheetCheck, setSheetCheck] = useState(null);   // the same "choose the sheets" panel the customer sees
+  const askSheets = (st) => new Promise(resolve => setSheetCheck({ ...st, resolve }));
 
   useEffect(() => {
     callAdminAnalytics("list_companies", {})
@@ -19708,7 +19724,7 @@ function AdminAssistPanel() {
       // synchronous round trip.
       if (actionType === "analyze_drawing") {
         const drawing = drawings.find(d => d.id === drawingId) || { id: drawingId };
-        out = await adminAnalyzeDrawing({ drawing, projectId, payload, onStatus: setProgress });
+        out = await adminAnalyzeDrawing({ drawing, projectId, payload, onStatus: setProgress, askSheets });
       } else if (actionType === "classify_pages") {
         const started = await callEngine("classify_pages", { ...payload, drawing_id: drawingId });
         out = started.cached ? started : await pollClassification(drawingId);
@@ -19732,6 +19748,7 @@ function AdminAssistPanel() {
 
   return (
     <div>
+      {sheetCheck && <SheetCheckModal state={sheetCheck} onClose={(res) => { const r = sheetCheck.resolve; setSheetCheck(null); r(res); }} />}
       <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg p-3 mb-5">
         Admin Assist runs real AI work directly on a customer's actual project — completely free to them, and it never touches their trial or plan quota (even if their trial has expired or their plan is maxed out). Use this to unblock a stuck customer, or to run a live demo on a real account for a prospect. Every run here is still logged and tagged "admin-assisted" in the cost analytics above for your own visibility.
       </div>
