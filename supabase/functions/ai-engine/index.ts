@@ -764,6 +764,19 @@ function estimatePageCount(bytes: Uint8Array, isPdf: boolean): number {
   return 1;
 }
 
+// The exact number of sheets in a PDF (2026-11-01). The text search above can miss pages kept in
+// compressed object streams and count a 40-sheet set as 1, so pdf-lib reads the page tree; the
+// text search is used only if pdf-lib cannot open the file.
+async function countPdfPages(bytes: Uint8Array, isPdf: boolean): Promise<number> {
+  if (!isPdf) return 1;
+  try {
+    const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+    const n = doc.getPageCount();
+    if (n > 0) return n;
+  } catch (_) { /* fall back below */ }
+  return estimatePageCount(bytes, true);
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   return encodeBase64(bytes);
 }
@@ -2070,6 +2083,10 @@ function manualGrantExpired(company: any): boolean {
   return Number.isFinite(ends) && ends <= Date.now();
 }
 
+// Credit held in the wallet for each sheet read beyond the plan (a large sheet costs about $1.80 at
+// pay-as-you-go rates; the wallet is charged the real cost when the sheet finishes).
+const WALLET_SHEET_CENTS = 200;
+
 async function checkPlanLimit(
   admin: any,
   companyId: string,
@@ -2128,6 +2145,16 @@ async function checkPlanLimit(
   }
   const { data: co } = await admin.from("companies").select("credit_balance_cents").eq("id", companyId).maybeSingle();
   const creditBalanceCents = co?.credit_balance_cents ?? 0;
+  // 2026-11-01: a balance of a few cents used to open the door to any number of sheets. Each sheet
+  // beyond the plan now needs WALLET_SHEET_CENTS of credit in the wallet before it starts.
+  if (dimension === "drawing_page") {
+    const beyondPlan = Math.min(requestedUnits, current + requestedUnits - maxValue);
+    const walletSheets = Math.floor(creditBalanceCents / WALLET_SHEET_CENTS);
+    if (beyondPlan <= walletSheets) {
+      return { ok: true, current, limit: maxValue, remaining: trueRemaining, billing: "wallet", creditBalanceCents };
+    }
+    return { ok: false, current, limit: maxValue, remaining: trueRemaining, creditBalanceCents };
+  }
   if (creditBalanceCents > 0) {
     return { ok: true, current, limit: maxValue, remaining: trueRemaining, billing: "wallet", creditBalanceCents };
   }
@@ -2683,11 +2710,11 @@ function pageLimitMessage(check: { current: number; limit: number | null; remain
     }
     return `Your ${days}-day free trial includes ${check.limit} AI-processed pages total (${check.current}/${check.limit} used, ${check.remaining} remaining). This request needs ${requestedPages} pages — please select fewer pages, or upgrade to a paid plan to continue.`;
   }
-  if (check.current >= check.limit) {
-    const balance = ((check.creditBalanceCents ?? 0) / 100).toFixed(2);
-    return `You've used your plan's included AI page allowance (${check.current}/${check.limit} pages) and your pay-as-you-go credit balance is $${balance}. Add credits to keep processing pages, or upgrade your plan.`;
-  }
-  return `Your plan includes ${check.limit} AI-processed pages/month (${check.current}/${check.limit} used, ${check.remaining} remaining). This request needs ${requestedPages} pages — please select fewer pages, add pay-as-you-go credits, or upgrade your plan.`;
+  const walletSheets = Math.floor((check.creditBalanceCents ?? 0) / WALLET_SHEET_CENTS);
+  const canRead = check.remaining + walletSheets;
+  return `This needs ${requestedPages} sheet${requestedPages === 1 ? "" : "s"}. You have ${check.remaining} sheet${check.remaining === 1 ? "" : "s"} left in your plan`
+    + (walletSheets ? ` and pay-as-you-go credit for ${walletSheets} more` : "")
+    + ` — ${canRead} in total. Choose ${canRead ? `up to ${canRead}` : "fewer"} sheets, add pay-as-you-go credit, or upgrade your plan.`;
 }
 
 function reworkLimitMessage(check: { current: number; limit: number | null }) {
@@ -2852,7 +2879,7 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ cached: false, total_pages: 1, pages: [{ page_number: 1, detected_system_category: drawing.discipline ?? "general" }] });
       }
 
-      const estimatedPages = estimatePageCount(fileBytes, true);
+      const estimatedPages = await countPdfPages(fileBytes, true);
       if (estimatedPages > MAX_CLASSIFY_PAGES) {
         return jsonResponse({ error: `This drawing package has an estimated ${estimatedPages} pages, which is over the ${MAX_CLASSIFY_PAGES}-page classification limit. Please split it into smaller packages before uploading.` }, 400);
       }
@@ -2946,7 +2973,7 @@ Deno.serve(async (req: Request) => {
       const isPdf = drawing.file_name.toLowerCase().endsWith(".pdf");
 
       const hasSelection = isPdf && Array.isArray(page_selection) && page_selection.length > 0;
-      const requestedPages = hasSelection ? page_selection!.length : estimatePageCount(fileBytes, isPdf);
+      const requestedPages = hasSelection ? page_selection!.length : await countPdfPages(fileBytes, isPdf);
 
       const pageCheck = (isAdminOverride || freeCivilCheck) ? { ok: true, current: 0, limit: null, remaining: Infinity } : await checkPlanLimit(admin, companyId, plan, company, "drawing_page", requestedPages);
       if (!pageCheck.ok) {
@@ -2982,7 +3009,9 @@ Deno.serve(async (req: Request) => {
             processingBytes = await extractSelectedPages(fileBytes, page_selection!);
             usingSelection = true;
           } catch (splitErr) {
-            console.error("pdf-lib page split failed, falling back to full document:", splitErr);
+            // Reading the whole file here would read more sheets than were counted, so stop instead.
+            console.error("pdf-lib page split failed:", splitErr);
+            throw new Error("The chosen sheets could not be separated from this PDF. Nothing was charged. Please try again, or upload the sheets as separate files.");
           }
         }
         const fileContent = buildFileContentBlock(drawing.file_name, processingBytes);
@@ -3914,7 +3943,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
       const isPdf = drawing.file_name.toLowerCase().endsWith(".pdf");
 
       const hasSelection = isPdf && Array.isArray(page_selection) && page_selection.length > 0;
-      const requestedPages = hasSelection ? page_selection!.length : estimatePageCount(fileBytes, isPdf);
+      const requestedPages = hasSelection ? page_selection!.length : await countPdfPages(fileBytes, isPdf);
 
       const pageCheck = isAdminOverride ? { ok: true, current: 0, limit: null, remaining: Infinity } : await checkPlanLimit(admin, companyId, plan, company, "drawing_page", requestedPages);
       if (!pageCheck.ok) {
@@ -3943,7 +3972,9 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
             processingBytes = await extractSelectedPages(fileBytes, page_selection!);
             usingSelection = true;
           } catch (splitErr) {
-            console.error("pdf-lib page split failed, falling back to full document:", splitErr);
+            // Reading the whole file here would read more sheets than were counted, so stop instead.
+            console.error("pdf-lib page split failed:", splitErr);
+            throw new Error("The chosen sheets could not be separated from this PDF. Nothing was charged. Please try again, or upload the sheets as separate files.");
           }
         }
         const fileContent = buildFileContentBlock(drawing.file_name, processingBytes);
@@ -4097,7 +4128,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         if (bytes.length > MAX_FILE_BYTES) { skipped.push({ file_name: d.file_name, reason: `File is over the ${MAX_FILE_BYTES / 1024 / 1024}MB per-file limit for AI processing.` }); continue; }
         const nameForContent = useExport ? (d.analysis_source_type === "pdf" ? `${d.file_name}.pdf` : `${d.file_name}.jpg`) : d.file_name;
         const content = buildFileContentBlock(nameForContent, bytes);
-        fetched.push({ drawing: d, bytes, content, pages: estimatePageCount(bytes, content.kind === "pdf") });
+        fetched.push({ drawing: d, bytes, content, pages: await countPdfPages(bytes, content.kind === "pdf") });
       }
       if (fetched.length < 2) {
         return jsonResponse({ error: "Fewer than 2 of the selected drawings could be read for combined analysis.", skipped }, 400);

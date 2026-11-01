@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.9"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4220,6 +4220,26 @@ async function qSheetFacts(pdf, drawingId) {
   return sheets;
 }
 
+// What the user can read right now, in sheets (2026-11-01): sheets left in the plan, plus -- for a
+// paid plan -- the sheets the pay-as-you-go credit covers. Same figure the server checks
+// (ai-engine WALLET_SHEET_CENTS), so the screen and the server always agree.
+const Q_WALLET_SHEET_CENTS = 200;
+async function qSheetAllowance() {
+  try {
+    const u = await callBilling("usage_summary");
+    if (!u || !u.pages) return null;
+    const isTrial = !!(u.plan && u.plan.is_trial);
+    const used = Number(u.pages.used || 0), limit = u.pages.limit;
+    if (limit == null) return { used, limit: null, left: null, walletSheets: 0, total: Infinity, isTrial };
+    const left = Math.max(0, limit - used);
+    const walletSheets = isTrial ? 0 : Math.floor(Number(u.credit_balance_cents || 0) / Q_WALLET_SHEET_CENTS);
+    return { used, limit, left, walletSheets, total: left + walletSheets, isTrial, hardLimit: true };
+  } catch (_) { return null; }   // no figure: the server still checks every sheet
+}
+function qOpenBilling(message, focus) {
+  try { window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message, focus } })); } catch (_) {}
+}
+
 // Sheets of a set not sent yet (2026-11-01): kept in this browser so a closed tab or a
 // sleeping laptop can pick up where it stopped, into the same BOQ. Per-viewer convenience only;
 // the server still checks every sheet.
@@ -4281,7 +4301,10 @@ function SheetCheckModal({ state, onClose }) {
   }, []);
   const chosen = sheets.filter(s => s.read);
   const left = usage && usage.limit != null ? Math.max(0, usage.limit - usage.used) : null;
-  const short = left != null && usage.hardLimit && chosen.length > left;
+  const wallet = (usage && usage.walletSheets) || 0;
+  const capacity = left == null ? Infinity : left + wallet;
+  const short = left != null && chosen.length > capacity;
+  const fromWallet = left != null && !short && chosen.length > left ? chosen.length - left : 0;
   const tooMany = chosen.length > MAX_AUTO_TILED_PAGES;
   const floors = [...new Set([...(projectFloorNames(project) || []), ...sheets.map(s => s.floor).filter(Boolean), drawing.floor_label].filter(Boolean))];
   const set = (n, patch) => setSheets(ss => ss.map(s => s.n === n ? { ...s, ...patch } : s));
@@ -4294,19 +4317,32 @@ function SheetCheckModal({ state, onClose }) {
         <div style={{ padding: "18px 22px 12px", borderBottom: "1px solid rgba(148,163,184,.2)" }}>
           <div style={{ fontSize: 18, fontWeight: 800 }}>Choose the sheets to read</div>
           <div style={{ fontSize: 13, opacity: .75, marginTop: 4 }}>
-            {drawing.file_name} has <b>{sheets.length}</b> sheets. The ticked sheets are read one after another into <b>one BOQ</b>, each under its own floor.
+            {drawing.file_name} has <b>{sheets.length}</b> sheets. Each sheet counts as one sheet of your plan. The ticked sheets are read into <b>one BOQ</b>{state.small ? "" : ", each under its own floor"}.
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10, fontSize: 12.5 }}>
             <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(37,99,235,.18)", border: "1px solid rgba(96,165,250,.5)" }}><b>{chosen.length}</b> selected</span>
             <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(148,163,184,.12)" }}>about <b>{Math.max(2, Math.round(chosen.length * 0.5 + 2))}</b> min</span>
             {left != null && <span style={{ padding: "4px 10px", borderRadius: 999, background: short ? "rgba(244,63,94,.16)" : "rgba(16,185,129,.14)", border: "1px solid " + (short ? "#f43f5e" : "rgba(16,185,129,.5)") }}>
-              Your plan: <b>{left}</b> sheet{left === 1 ? "" : "s"} left</span>}
+              Your plan: <b>{left}</b> sheet{left === 1 ? "" : "s"} left{wallet ? <> + <b>{wallet}</b> pay-as-you-go</> : null}</span>}
           </div>
           {short && (
-            <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.55)", fontSize: 13, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-              <span style={{ flex: 1, minWidth: 240 }}>This set needs <b>{chosen.length}</b> sheets and your plan has <b>{left}</b> left. Untick sheets to keep the most important {left}, or choose a plan to read the complete set.</span>
-              <button type="button" onClick={() => { onClose(null); window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message: `Reading this drawing set needs ${chosen.length} sheets; your plan has ${left} left.` } })); }}
-                style={{ padding: "7px 14px", borderRadius: 10, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>See plans</button>
+            <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.55)", fontSize: 13, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ flex: 1, minWidth: 240 }}>
+                {usage.isTrial
+                  ? <>This set needs <b>{chosen.length}</b> sheets and your Welcome Pack has <b>{left}</b> left. {left ? <>Untick sheets to keep the most important {left}, or choose a plan to read the complete set.</> : <>Choose a plan to read it.</>}</>
+                  : <>This set needs <b>{chosen.length}</b> sheets. You have <b>{left}</b> left in your plan{wallet ? <> and pay-as-you-go credit for <b>{wallet}</b> more</> : null} — <b>{capacity}</b> in total. {capacity ? <>Untick {chosen.length - capacity} sheet{chosen.length - capacity === 1 ? "" : "s"}, or add credit to read them all.</> : <>Add pay-as-you-go credit or upgrade your plan to read it.</>}</>}
+              </span>
+              {!usage.isTrial && (
+                <button type="button" onClick={() => { onClose(null); qOpenBilling(`This set needs ${chosen.length} sheets; you can read ${capacity} now. Add pay-as-you-go credit to read the rest.`, "wallet"); }}
+                  style={{ padding: "7px 14px", borderRadius: 10, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>Add credit</button>
+              )}
+              <button type="button" onClick={() => { onClose(null); qOpenBilling(`Reading this drawing set needs ${chosen.length} sheets; you can read ${capacity} now.`); }}
+                style={{ padding: "7px 14px", borderRadius: 10, border: usage.isTrial ? 0 : "1px solid rgba(245,158,11,.7)", background: usage.isTrial ? "#f59e0b" : "transparent", color: usage.isTrial ? "#1f1300" : "inherit", fontWeight: 800, cursor: "pointer" }}>{usage.isTrial ? "See plans" : "Upgrade plan"}</button>
+            </div>
+          )}
+          {fromWallet > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12.5, color: "#fcd34d" }}>
+              {fromWallet} sheet{fromWallet === 1 ? "" : "s"} beyond your plan will be paid from your pay-as-you-go credit (about $1.80 each for a large sheet).
             </div>
           )}
           {tooMany && <div style={{ marginTop: 8, fontSize: 12.5, color: "#fda4af" }}>Up to {MAX_AUTO_TILED_PAGES} sheets per run: untick {chosen.length - MAX_AUTO_TILED_PAGES}, and run the rest next.</div>}
@@ -4323,18 +4359,19 @@ function SheetCheckModal({ state, onClose }) {
                   <span style={{ fontSize: 12, opacity: .8, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={s.title}>{s.title}</span></span>
               </label>
               {s.skippedWhy && !s.read && <div style={{ fontSize: 11, color: "#fcd34d", marginTop: 4 }}>{s.skippedWhy}</div>}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+              {!state.small && <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
                 <span style={{ fontSize: 11, opacity: .7 }}>Floor</span>
                 <select value={s.floor || drawing.floor_label || ""} onChange={e => set(s.n, { floor: e.target.value })} disabled={!s.read}
                   style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "4px 6px", borderRadius: 7, border: "1px solid rgba(148,163,184,.4)", background: "transparent", color: "inherit" }}>
                   {floors.map(f => <option key={f} value={f} style={{ color: "#0f172a" }}>{f}</option>)}
                 </select>
-              </div>
+              </div>}
             </div>
           ))}
         </div>
         <div style={{ padding: "12px 22px", borderTop: "1px solid rgba(148,163,184,.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12, opacity: .7 }}><b>Keep this tab open for about {Math.max(1, Math.round(chosen.length * 0.5))} min</b> while the sheets are prepared; after that you can close it and the reading carries on.{" "}
+          <span style={{ fontSize: 12, opacity: .7 }}>{state.small ? <><b>The ticked sheets are read together</b> into one BOQ.{" "}</>
+              : <><b>Keep this tab open for about {Math.max(1, Math.round(chosen.length * 0.5))} min</b> while the sheets are prepared; after that you can close it and the reading carries on.{" "}</>}
             {state.admin ? "Admin Assist: free to the customer." : "Each sheet counts as one sheet of your plan."}</span>
           <span style={{ display: "flex", gap: 8 }}>
             <button type="button" onClick={() => onClose(null)} style={{ padding: "9px 16px", borderRadius: 10, border: "1px solid rgba(148,163,184,.45)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>Cancel</button>
@@ -12464,8 +12501,13 @@ function DrawingsTab({ project }) {
         try { fileHash = await hashFile(original); } catch (hashErr) { console.error("file hash failed (non-fatal):", hashErr); }
         const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
         if (upErr) throw upErr;
+        // 2026-11-01: sheets in the file, counted now, so the limit is shown before Analyze.
+        let sheetCount = null;
+        if (fileType === "pdf" && window.pdfjsLib) {
+          try { const doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise; sheetCount = doc.numPages || null; try { doc.destroy(); } catch (_) {} } catch (_) {}
+        }
         const { error: insErr } = await sb.from("drawings").insert({
-          project_id: project.id, file_name: file.name, storage_path: path, file_type: fileType,
+          project_id: project.id, file_name: file.name, storage_path: path, file_type: fileType, page_count: sheetCount,
           discipline, floor_label: (floorLabel || "").trim() || null, uploaded_by: user.id, file_hash: fileHash,
           takeoff_systems: scopeSystems, takeoff_custom: scopeCustom, sheet_type: sheetType || null,
         });
@@ -12542,6 +12584,8 @@ function DrawingsTab({ project }) {
   const [sheetCheck, setSheetCheck] = useState(null);   // the "choose the sheets" panel, open while it waits for the user
   const askSheets = (st) => new Promise(resolve => setSheetCheck({ ...st, resolve }));
   const [, setPendTick] = useState(0);   // a set that stopped part-way shows "Send the rest"
+  const [allow, setAllow] = useState(null);   // sheets the user can read now (plan + pay-as-you-go)
+  useEffect(() => { let alive = true; qSheetAllowance().then(a => { if (alive) setAllow(a); }); return () => { alive = false; }; }, [drawings.length, Object.keys(runs).length]);
   useEffect(() => { const on = () => setPendTick(t => t + 1); window.addEventListener("q-set-pending", on); return () => window.removeEventListener("q-set-pending", on); }, []);
 
   async function analyzeAuto(d, resume) {
@@ -12734,14 +12778,27 @@ function DrawingsTab({ project }) {
       // the PAGE can predict. Only the attempt reveals it.
       setTiling(t => ({ ...t, [d.id]: null }));
       const tileCount = assessment.grid.cols * assessment.grid.rows;
+      // 2026-11-01: a file of several small sheets (A3/A4) is counted and chosen sheet by sheet
+      // too -- never read whole beyond what the plan allows.
+      let chosenSmall = null;
+      if ((pdf.numPages || 1) > 1) {
+        setTiling(t => ({ ...t, [d.id]: "Looking at the sheets in this file…" }));
+        const usage = await qSheetAllowance();
+        const sheets = await qSheetFacts(pdf, d.id);
+        setTiling(t => ({ ...t, [d.id]: null }));
+        const pick = await askSheets({ pdf, drawing: d, project, sheets, usage, minutesPerSheet: 1, small: true });
+        if (!pick || !pick.pages.length) return;
+        chosenSmall = pick.pages;
+      }
       await analyze(d.id, {
+        ...(chosenSmall && chosenSmall.length < (pdf.numPages || 1) ? { extra: { page_selection: chosenSmall } } : {}),
         onTruncated: async (msg) => {
           // A 1x1 grid is one request with the same output ceiling. Offering it
           // would spend the customer's money to fail identically.
           if (tileCount < 2) { setErr(msg); return; }
           const n = Math.min(pdf.numPages || 1, MAX_AUTO_TILED_PAGES);
-          const pages = [];
-          for (let i = 1; i <= n; i++) pages.push(i);
+          const pages = chosenSmall ? chosenSmall.slice(0, MAX_AUTO_TILED_PAGES) : [];
+          if (!chosenSmall) for (let i = 1; i <= n; i++) pages.push(i);
           const ok = window.confirm(
             `${msg}\n\n` +
             `Quantora can read this sheet as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles instead. ` +
@@ -12763,11 +12820,7 @@ function DrawingsTab({ project }) {
       // 2026-11-01: the sheet check -- every sheet with its picture, title and floor, master plans
       // that repeat the part plans left out, and the sheets left in the plan shown up front.
       setTiling(t => ({ ...t, [d.id]: "Looking at the sheets in this file…" }));
-      let usage = null;
-      try {
-        const u = await callBilling("usage_summary");
-        if (u && u.pages) usage = { used: Number(u.pages.used || 0), limit: u.pages.limit, hardLimit: !!(u.plan && u.plan.is_trial) || !(Number(u.credit_balance_cents || 0) > 0) };
-      } catch (_) { /* no usage figure: the server still checks the limit */ }
+      const usage = await qSheetAllowance();
       const sheets = await qSheetFacts(pdf, d.id);
       setTiling(t => ({ ...t, [d.id]: null }));
       const pick = await askSheets({ pdf, drawing: d, project, sheets, usage, minutesPerSheet: 3 });
@@ -13109,6 +13162,22 @@ function DrawingsTab({ project }) {
                 )}
               </div>
             </div>
+            {d.page_count > 1 && !runs[d.id] && !tiling[d.id] && (() => {
+              const n = d.page_count, can = allow ? allow.total : null, over = can != null && can < n;
+              return (
+                <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 10, fontSize: 12.5, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+                  background: over ? "rgba(245,158,11,.12)" : "rgba(59,130,246,.08)", border: "1px solid " + (over ? "rgba(245,158,11,.55)" : "rgba(96,165,250,.35)") }}>
+                  <span style={{ flex: 1, minWidth: 220 }}>
+                    <b>{n} sheets in this file.</b> Each sheet counts as one sheet of your plan.{" "}
+                    {can == null || can === Infinity ? "You choose which sheets to read when you press Analyze."
+                      : over ? <>You can read <b>{can}</b> now{allow.isTrial ? " with your Welcome Pack" : allow.walletSheets ? ` (${allow.left} in your plan + ${allow.walletSheets} pay-as-you-go)` : " in your plan"}: choose {can ? `up to ${can} sheets` : "a plan"} when you press Analyze{allow.isTrial ? ", or choose a plan to read them all" : ", or add credit to read them all"}.</>
+                      : <>You can read <b>{can}</b> now — enough for all of them.</>}
+                  </span>
+                  {over && <button type="button" onClick={() => qOpenBilling(`${d.file_name} has ${n} sheets; you can read ${can} now.`, allow.isTrial ? undefined : "wallet")}
+                    style={{ padding: "6px 12px", borderRadius: 9, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>{allow.isTrial ? "See plans" : "Add credit"}</button>}
+                </div>
+              );
+            })()}
             {(() => {
               const pend = !tiling[d.id] && qSetPendingGet(d.id);
               const top = runs[d.id] && runs[d.id][0];
@@ -34776,7 +34845,7 @@ function App() {
   // surface the upgrade modal automatically instead of leaving the user
   // stuck at a bare alert().
   useEffect(() => {
-    function onLimit(e) { setBillingModal({ open: true, reason: e.detail?.message || "You've reached your plan's usage limit." }); }
+    function onLimit(e) { setBillingModal({ open: true, reason: e.detail?.message || "You've reached your plan's usage limit.", ...(e.detail?.focus ? { focus: e.detail.focus } : {}) }); }
     window.addEventListener("plan-limit-reached", onLimit);
     return () => window.removeEventListener("plan-limit-reached", onLimit);
   }, []);
