@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4255,6 +4255,22 @@ function qSetPendingPut(id, v) {
   try { if (v && v.pending && v.pending.length) localStorage.setItem(Q_SET_KEY(id), JSON.stringify({ ...v, at: Date.now() })); else localStorage.removeItem(Q_SET_KEY(id)); } catch (_) {}
   try { window.dispatchEvent(new CustomEvent("q-set-pending")); } catch (_) {}
 }
+// Sheets of a set run side by side, at most Q_SET_PARALLEL at a time (the server allows 5 per account,
+// one is left for anything else the user starts). Each sent sheet is followed until it finishes.
+const Q_SET_PARALLEL = 4;
+function qSetTrack(list, runId) {
+  const e = { id: runId, done: false };
+  e.p = pollAnalysisRun(runId).catch(err => ({ item_count: 0, failed: err })).then(r => { e.done = true; return r; });
+  list.push(e);
+}
+async function qSetWaitSlot(list, onWait) {
+  while (list.filter(e => !e.done).length >= Q_SET_PARALLEL) {
+    if (onWait) onWait();
+    await Promise.race(list.filter(e => !e.done).map(e => e.p));
+  }
+}
+const qSleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 // Pop-out notification on the computer (2026-11-01): shown when the Quantora tab is minimised or
 // behind other windows, so a user doing other work sees "all sheets sent" and "BOQ ready".
 function qNotifyAsk() {
@@ -4904,7 +4920,7 @@ async function renderScheduleCrops(pdf, pageNumber, projectId, drawingId, zones)
     if (!boxes.length) return [];
     const base = page.getViewport({ scale: 1 });
     // tables in the title strip / legend first, then the biggest; tiny grids on the plan last
-    const inZ = (b) => (zones || []).some(z => (b.x0 + b.x1) / 2 >= z.x0 && (b.x0 + b.x1) / 2 <= z.x1 && (b.y0 + b.y1) / 2 >= z.y0 && (b.y0 + b.y1) / 2 <= z.y1);
+    const inZ = (b) => (zones || []).some(z => z.kind !== "other_part" && (b.x0 + b.x1) / 2 >= z.x0 && (b.x0 + b.x1) / 2 <= z.x1 && (b.y0 + b.y1) / 2 >= z.y0 && (b.y0 + b.y1) / 2 <= z.y1);
     const area = (b) => (b.x1 - b.x0) * (b.y1 - b.y0);
     boxes = boxes.filter(b => b.image || area(b) > 0.002 || inZ(b)).sort((p, q) => (inZ(q) - inZ(p)) || (area(q) - area(p)));
     // The AI sees at most about 1500 px across, so each table gets its own image at that width and,
@@ -5179,6 +5195,53 @@ function readCameraTagsSafe(page, zones) {
 // with a leader to the line ("300x50 mm SECURITY CABLE TRAY"). Every line of that colour on the plan is
 // then measured; a route drawn as two parallel edges (a tray) is measured once along its centre. The
 // sheet's own scale turns it into metres. Returns [{ description, colour, metres, double }] or [].
+// Part plans and their match line (2026-11-01). A floor drawn on several part plans shows the
+// neighbouring part beyond its match line ("PART -1 | PART -2"). That strip is counted on its own
+// sheet, so on this sheet it is a zone where nothing is counted or measured -- otherwise every device
+// and every metre of trunking near the line is in the BOQ twice.
+async function qMatchLineZones(page, sheetLabel) {
+  try {
+    const vp = page.getViewport({ scale: 1 }), W = vp.width, H = vp.height;
+    const tc = await page.getTextContent();
+    const items = [];
+    let own = null;
+    const ownRe = /PART\s*PLAN\s*[-–]?\s*0?(\d{1,2})\b/i;
+    if (sheetLabel && ownRe.test(sheetLabel)) own = Number(ownRe.exec(sheetLabel)[1]);
+    for (const it of tc.items) {
+      const t = String(it.str || "").trim(); if (!t) continue;
+      if (own == null && ownRe.test(t)) own = Number(ownRe.exec(t)[1]);
+      const m = /^PART\s*[-–]?\s*0?(\d{1,2})$/i.exec(t); if (!m) continue;
+      const tr = it.transform, nl = Math.hypot(tr[0], tr[1]) || 1, ux = tr[0] / nl, uy = tr[1] / nl, hh = it.height || nl;
+      const cs = [[0, 0], [it.width, 0], [it.width, hh], [0, hh]].map(([a, b]) => vp.convertToViewportPoint(tr[4] + ux * a - uy * b, tr[5] + uy * a + ux * b));
+      items.push({ n: Number(m[1]), x: cs.reduce((a, p) => a + p[0], 0) / 4 / W, y: cs.reduce((a, p) => a + p[1], 0) / 4 / H });
+    }
+    if (own == null || items.length < 2) return [];
+    const lines = [];     // { axis, at, ownSide: -1|1, other }
+    for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+      const a = items[i], b = items[j];
+      if (a.n === b.n || (a.n !== own && b.n !== own)) continue;
+      const dx = Math.abs(a.x - b.x) * W, dy = Math.abs(a.y - b.y) * H;
+      if (Math.hypot(dx, dy) > 0.04 * Math.max(W, H)) continue;
+      const mine = a.n === own ? a : b, other = a.n === own ? b : a;
+      if (dx >= dy) lines.push({ axis: "x", at: (a.x + b.x) / 2, ownSide: mine.x < other.x ? -1 : 1, other: other.n });
+      else lines.push({ axis: "y", at: (a.y + b.y) / 2, ownSide: mine.y < other.y ? -1 : 1, other: other.n });
+    }
+    const out = [], done = new Set();
+    for (const L of lines) {
+      const key = `${L.axis}|${L.ownSide}|${Math.round(L.at * 50)}`;
+      if (done.has(key)) continue; done.add(key);
+      const same = lines.filter(q => q.axis === L.axis && q.ownSide === L.ownSide && Math.abs(q.at - L.at) < 0.02);
+      const at = same.reduce((a, q) => a + q.at, 0) / same.length;
+      const z = L.axis === "x"
+        ? (L.ownSide < 0 ? { x0: at, x1: 1, y0: 0, y1: 1 } : { x0: 0, x1: at, y0: 0, y1: 1 })
+        : (L.ownSide < 0 ? { x0: 0, x1: 1, y0: at, y1: 1 } : { x0: 0, x1: 1, y0: 0, y1: at });
+      if ((z.x1 - z.x0) * (z.y1 - z.y0) > 0.6) continue;     // not a believable match line
+      out.push({ ...z, kind: "other_part", label: `Part ${L.other} beyond the match line, counted on its own sheet`, axis: L.axis, at, ownSide: L.ownSide });
+    }
+    return out;
+  } catch (e) { console.warn("Match line not read:", e); return []; }
+}
+
 const ROUTE_RE = /\b(CONDUIT|CABLE\s*TRAY|TRAY|TRUNKING|LADDER|BASKET|RACEWAY|BUSBAR|BUSWAY|BUS\s*DUCT|WIREWAY|(?:SUPPLY|RETURN|EXHAUST|EXTRACT|FRESH|TRANSFER|KITCHEN|SMOKE)\s*(?:AIR\s*)?DUCT(?:WORK)?|AIR\s*DUCT(?:WORK)?|CHEMIN DE C[AÂ]BLES|GOULOTTE|CANALETA|BANDEJA)\b|حامل كابلات|مجرى كابلات|أنبوب/i;
 const NEUTRAL = (c) => { const [r, g, b] = c.split(",").map(Number); return Math.max(r, g, b) - Math.min(r, g, b) < 25; };
 const PAPER_MM = { A0: 1189, A1: 841, A2: 594, A3: 420, A4: 297 };
@@ -5211,7 +5274,23 @@ async function measureRoutes(page, OPS, zones) {
   const pageMm = Math.max(W, H) * 25.4 / 72;
   const ratio = paper && PAPER_MM[paper] ? PAPER_MM[paper] / pageMm : 1;
   const toM = (frac) => frac * Math.max(W, H) * 25.4 / 72 * ratio * scale / 1000;     // a length in page-width fractions
+  const cut = (zones || []).filter(z => z.kind === "other_part" && z.axis);
+  zones = (zones || []).filter(z => z.kind !== "other_part");
   const inZone = (p) => (zones || []).some(z => p[0] >= z.x0 && p[0] <= z.x1 && p[1] >= z.y0 && p[1] <= z.y1);
+  // keep only the part of a segment on this sheet's own side of every match line
+  const clipToOwn = (s) => {
+    let a = s.a, b = s.b;
+    for (const z of cut) {
+      const k = z.axis === "x" ? 0 : 1;
+      const keep = (p) => z.ownSide < 0 ? p[k] <= z.at : p[k] >= z.at;
+      const ka = keep(a), kb = keep(b);
+      if (!ka && !kb) return null;
+      if (ka && kb) continue;
+      const t = (z.at - a[k]) / ((b[k] - a[k]) || 1e-12), m = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      if (ka) b = m; else a = m;
+    }
+    return a === s.a && b === s.b ? s : { ...s, a, b };
+  };
   const ol = await page.getOperatorList();
   let ctm = [1, 0, 0, 1, 0, 0], stroke = "0,0,0", fill = "0,0,0"; const st = [];
   const mul = (a, b) => [a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1], a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3], a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]];
@@ -5252,6 +5331,21 @@ async function measureRoutes(page, OPS, zones) {
     } else if (fn === OPS.endPath) pend = null;
   }
   const len = (s) => Math.hypot((s.a[0]-s.b[0]) * W, (s.a[1]-s.b[1]) * H) / Math.max(W, H);
+  // CAD exports often stroke the same edge twice (a hair apart): count each edge once
+  {
+    const tolX = 0.35 / W, tolY = 0.35 / H, grid = new Map(), keepS = [];
+    const cellOf = (p) => `${Math.round(p[0] / (tolX * 4))}|${Math.round(p[1] / (tolY * 4))}`;
+    const near = (p, q) => Math.abs(p[0] - q[0]) < tolX && Math.abs(p[1] - q[1]) < tolY;
+    for (const sg of segs.slice().sort((p, q) => len(q) - len(p))) {
+      const ka = cellOf(sg.a), list = [];
+      const [cx, cy] = ka.split("|").map(Number);
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) list.push(...(grid.get(`${cx + i}|${cy + j}`) || []));
+      if (list.some(o => o.col === sg.col && ((near(o.a, sg.a) && near(o.b, sg.b)) || (near(o.a, sg.b) && near(o.b, sg.a))))) continue;
+      keepS.push(sg);
+      for (const p of [sg.a, sg.b]) { const k = cellOf(p); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(sg); }
+    }
+    segs.length = 0; for (const sg of keepS) segs.push(sg);
+  }
   // colours of filled areas on the plan (coverage wedges) are not route colours
   const areaCols = {};
   for (const f of fills) if (f.size > 0.01 && !inZone(f.c)) areaCols[f.col] = (areaCols[f.col] || 0) + 1;
@@ -5271,8 +5365,41 @@ async function measureRoutes(page, OPS, zones) {
     }
     for (const f of fills) if (!NEUTRAL(f.col) && Math.abs(f.c[1] - cy) < h * 1.5 && f.c[0] <= t.x0 + 0.002 && f.c[0] > t.x0 - 0.06) fovCols.add(f.col);
   }
-  const coloured = segs.filter(s => !NEUTRAL(s.col) && !shapeCol(s.col));
+  // a run that ends inside the title strip / legend loses only the part inside it, not the whole run
+  const trimOut = (s) => {
+    let a = s.a, b = s.b;
+    for (const z of zones || []) {
+      const ia = a[0] >= z.x0 && a[0] <= z.x1 && a[1] >= z.y0 && a[1] <= z.y1, ib = b[0] >= z.x0 && b[0] <= z.x1 && b[1] >= z.y0 && b[1] <= z.y1;
+      if (ia && ib) return null;
+      if (!ia && !ib) continue;
+      const pin = ia ? a : b, pout = ia ? b : a;
+      let lo = 0, hi = 1;      // fraction from pout to pin; find the zone edge
+      for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2, q = [pout[0] + (pin[0]-pout[0]) * m, pout[1] + (pin[1]-pout[1]) * m];
+        if (q[0] >= z.x0 && q[0] <= z.x1 && q[1] >= z.y0 && q[1] <= z.y1) hi = m; else lo = m; }
+      const e = [pout[0] + (pin[0]-pout[0]) * lo, pout[1] + (pin[1]-pout[1]) * lo];
+      if (ia) a = e; else b = e;
+    }
+    return a === s.a && b === s.b ? s : { ...s, a, b };
+  };
+  const coloured = segs.filter(s => !NEUTRAL(s.col) && !shapeCol(s.col)).map(clipToOwn).filter(Boolean).map(trimOut).filter(Boolean);
   const black = segs.filter(s => s.col === "0,0,0");
+  // where a note's leader ends: follow it from the words round its bends to the line it points at
+  const leaderEnds = (t) => {
+    const pad = 0.004, inb = (p) => p[0] >= t.x0 - pad && p[0] <= t.x1 + pad && p[1] >= t.y0 - pad && p[1] <= t.y1 + pad;
+    const ends = [];
+    const tol = 0.0015, near = (p, q) => Math.abs(p[0]-q[0]) < tol && Math.abs(p[1]-q[1]) < tol;
+    for (const s0 of black) {
+      const ia = inb(s0.a), ib = inb(s0.b); if (ia === ib) continue;
+      let end = ia ? s0.b : s0.a; const seen = new Set([s0]);
+      for (let step = 0; step < 6; step++) {
+        const nx = black.filter(q => !seen.has(q) && (near(q.a, end) || near(q.b, end)));
+        if (nx.length !== 1) break;
+        seen.add(nx[0]); end = near(nx[0].a, end) ? nx[0].b : nx[0].a;
+      }
+      ends.push(end);
+    }
+    return ends;
+  };
   // the colour each note names
   const colourFor = (t) => {
     const cy = (t.y0 + t.y1) / 2, h = Math.max(t.y1 - t.y0, 0.004);
@@ -5288,20 +5415,7 @@ async function measureRoutes(page, OPS, zones) {
       return Object.keys(c).sort((p, q) => c[q] - c[p])[0] || null;
     }
     // a note on the plan: follow its black leader to the line it points at
-    const pad = 0.004, inb = (p) => p[0] >= t.x0 - pad && p[0] <= t.x1 + pad && p[1] >= t.y0 - pad && p[1] <= t.y1 + pad;
-    const ends = [];
-    const tol = 0.0015, near = (p, q) => Math.abs(p[0]-q[0]) < tol && Math.abs(p[1]-q[1]) < tol;
-    for (const s0 of black) {
-      const ia = inb(s0.a), ib = inb(s0.b); if (ia === ib) continue;
-      // follow the leader round its bends to the end that touches the line
-      let end = ia ? s0.b : s0.a; const seen = new Set([s0]);
-      for (let step = 0; step < 6; step++) {
-        const nx = black.filter(q => !seen.has(q) && (near(q.a, end) || near(q.b, end)));
-        if (nx.length !== 1) break;
-        seen.add(nx[0]); end = near(nx[0].a, end) ? nx[0].b : nx[0].a;
-      }
-      ends.push(end);
-    }
+    const ends = leaderEnds(t);
     const c = {};
     for (const e of ends) for (const s of coloured) {
       const dx = s.b[0] - s.a[0], dy = s.b[1] - s.a[1], l2 = dx * dx + dy * dy || 1e-12;
@@ -5348,14 +5462,53 @@ async function measureRoutes(page, OPS, zones) {
     if (named.has(v.col) || usedDesc.has(v.desc.toUpperCase())) continue;
     named.set(v.col, v.desc); usedDesc.add(v.desc.toUpperCase());
   }
+  // the gap between a segment and its nearest parallel neighbour, in points (null: none within 12 pt)
+  const gapOf = (s, S) => {
+    const ux = (s.b[0]-s.a[0]) * W, uy = (s.b[1]-s.a[1]) * H, n = Math.hypot(ux, uy) || 1;
+    const mx = (s.a[0]+s.b[0]) / 2 * W, my = (s.a[1]+s.b[1]) / 2 * H;
+    let best = null;
+    for (const o of S) {
+      if (o === s) continue;
+      const vx = (o.b[0]-o.a[0]) * W, vy = (o.b[1]-o.a[1]) * H, m = Math.hypot(vx, vy);
+      if (m < 1 || Math.abs((ux * vy - uy * vx) / (n * m)) > 0.02) continue;
+      const dp = Math.abs((mx - o.a[0]*W) * vy / m - (my - o.a[1]*H) * vx / m);
+      const tt = ((mx - o.a[0]*W) * vx + (my - o.a[1]*H) * vy) / m;
+      if (dp > 0.3 && dp < 12 && tt > -1 && tt < m + 1 && (best == null || dp < best)) best = dp;
+    }
+    return best;
+  };
+  const ptPerMm = Math.max(W, H) / (pageMm * ratio);     // points per millimetre of paper at the stated scale
   const out = [];
   for (const [col, description] of named) {
     const S = coloured.filter(s => s.col === col && !inZone(s.a) && !inZone(s.b) && len(s) > 0.0003);
     if (!S.length) continue;
+    const double = pairedShare(col) > 0.6;     // a tray drawn as two edges: measured once along its centre
     let total = 0;
-    for (const sg of S) total += len(sg);
-    const double = pairedShare(col) > 0.85;     // a tray drawn as two edges: measured once along its centre
-    out.push({ description, colour: col, metres: Math.round(toM(double ? total / 2 : total)), double, scale: `1:${scale}${paper ? " @ " + paper : ""}` });
+    if (double) {
+      // 2026-11-01: only the edges that have their partner at the tray's own width count. Leaders, single
+      // conduits and other lines drawn in the same colour are not trunking.
+      const w = /(\d{2,4})\s*(?:MM)?\s*[X×]\s*(\d{2,4})/i.exec(description) || /(\d{2,4})\s*MM\b/i.exec(description);
+      const want = w ? Number(w[1]) / scale * ptPerMm : null;      // the tray's width on the paper, in points
+      // walk along each edge: the stretches with a partner edge at the tray's width beside them count
+      const lo = want ? want * 0.5 : 0.3, hi = want ? want * 1.6 : 12;
+      for (const sg of S) {
+        const Lpt = len(sg) * Math.max(W, H), n = Math.max(2, Math.min(60, Math.round(Lpt / 8)));
+        const ux = (sg.b[0]-sg.a[0]) * W, uy = (sg.b[1]-sg.a[1]) * H, un = Math.hypot(ux, uy) || 1;
+        const near = S.filter(o => o !== sg && Math.abs((ux * (o.b[1]-o.a[1]) * H - uy * (o.b[0]-o.a[0]) * W) / (un * (Math.hypot((o.b[0]-o.a[0]) * W, (o.b[1]-o.a[1]) * H) || 1))) <= 0.02);
+        let hit = 0;
+        for (let i = 0; i < n; i++) {
+          const t = (i + 0.5) / n, px = (sg.a[0] + (sg.b[0]-sg.a[0]) * t) * W, py = (sg.a[1] + (sg.b[1]-sg.a[1]) * t) * H;
+          if (near.some(o => {
+            const vx = (o.b[0]-o.a[0]) * W, vy = (o.b[1]-o.a[1]) * H, m = Math.hypot(vx, vy); if (m < 1) return false;
+            const dp = Math.abs((px - o.a[0]*W) * vy / m - (py - o.a[1]*H) * vx / m), tt = ((px - o.a[0]*W) * vx + (py - o.a[1]*H) * vy) / m;
+            return dp >= lo && dp <= hi && tt >= -0.5 && tt <= m + 0.5;
+          })) hit++;
+        }
+        total += len(sg) * hit / n;
+      }
+      total /= 2;
+    } else for (const sg of S) total += len(sg);
+    out.push({ description, colour: col, metres: Math.round(toM(total)), double, scale: `1:${scale}${paper ? " @ " + paper : ""}` });
   }
   return out;
 }
@@ -5429,6 +5582,12 @@ async function renderAndUploadTiles(pdf, pageNumber, projectId, drawingId, onPro
 
       if (tileLooksBlank(canvas)) {
         blankSkipped++;
+        canvas.width = 0; canvas.height = 0;
+        continue;
+      }
+      // wholly beyond a match line: that part of the floor is read on its own sheet
+      const fx0 = x0 / fullW, fx1 = x1 / fullW, fy0 = bandY0 / fullH, fy1 = bandY1 / fullH;
+      if ((opts.skipRects || []).some(z => fx0 >= z.x0 - 0.002 && fx1 <= z.x1 + 0.002 && fy0 >= z.y0 - 0.002 && fy1 <= z.y1 + 0.002)) {
         canvas.width = 0; canvas.height = 0;
         continue;
       }
@@ -5713,13 +5872,17 @@ async function callEngine(action, payload) {
     else qActivity({ phase: "error", id: actId, label: actLabel, message: json.error || "AI engine request failed" });
   }
   if (!res.ok) {
-    if (res.status === 429) {
+    // "already running at once" / "at full capacity" is the server being busy, not a plan limit:
+    // the caller waits and tries again, and the plans screen is never shown for it (2026-11-01)
+    const busy = res.status === 429 && /running at once|full capacity/i.test(String(json.error || ""));
+    if (res.status === 429 && !busy) {
       // Let any listening UI (the upgrade modal) know the plan cap was hit,
       // in addition to still throwing so existing callers' error handling
       // (alerts, etc.) keeps working unchanged.
       window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message: json.error } }));
     }
     const err = new Error(json.error || "AI engine request failed");
+    if (busy) err.busy = true;
     // requires_confirmation (2026-08-10, later still): checkRecentFailureHistory's
     // cost-protection gate on the backend returns this instead of a plain error
     // when a drawing has already timed out repeatedly -- attached onto the thrown
@@ -12650,6 +12813,8 @@ function DrawingsTab({ project }) {
           // Same standard for every sheet: blank pages skipped, scans cleaned up first.
           const kind = (await inspectPdfPage(await pdf.getPage(pageNumber))).kind;
           if (kind === "empty") { blankPages++; pendingLeft = pendingLeft.filter(n => n !== pageNumber); continue; }
+          const matchZones = await qMatchLineZones(await pdf.getPage(pageNumber), pageLabels && pageLabels[pageNumber]);
+          if (matchZones.length) console.log(`Sheet ${pageNumber}: match line(s)`, matchZones);
           const { tiles, grid, blankSkipped, plannedTiles } = await renderAndUploadTiles(
             pdf, pageNumber, project.id, d.id,
             (p) => setTiling(t => ({
@@ -12658,7 +12823,7 @@ function DrawingsTab({ project }) {
                 ? `${kind === "scan" ? "Cleaning up scan" : "Rendering"} row ${p.row}/${p.rows}${label}…`
                 : `Uploading ${p.done}/${p.total}${label}…`,
             })),
-            { cleanScan: kind === "scan" }
+            { cleanScan: kind === "scan", skipRects: matchZones }
           );
           if (kind === "scan") scannedPages++;
           if (blankSkipped) console.log(`Sheet ${pageNumber}: skipped ${blankSkipped} of ${plannedTiles} tiles as blank.`);
@@ -12666,7 +12831,7 @@ function DrawingsTab({ project }) {
           // title strip, legend, schedules, typical details: found from the PDF itself, never counted or marked
           setTiling(t => ({ ...t, [d.id]: `Finding the title block and legend${label}…` }));
           const refZones = (await detectReferenceZonesSafe(await pdf.getPage(pageNumber)))
-            .map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label }));
+            .map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label })).concat(matchZones);
           if (refZones.length) console.log(`Sheet ${pageNumber}: reference zones`, refZones);
           // cameras counted from their own tags on the plan: exact count, exact positions
           const camRead = await readCameraTagsSafe(await pdf.getPage(pageNumber), refZones);
@@ -12679,6 +12844,7 @@ function DrawingsTab({ project }) {
           // tray and conduit measured from the drawing's own lines, named by its legend / notes
           setTiling(t => ({ ...t, [d.id]: `Measuring tray and conduit${label}…` }));
           const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pageNumber), refZones);
+          const zonesOut = refZones.map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label }));
           if (measuredRoutes.length) console.log(`Sheet ${pageNumber}: measured`, measuredRoutes);
           setTiling(t => ({ ...t, [d.id]: `Reading the sheet's schedules${label}…` }));
           const scheduleImages = await renderScheduleCrops(pdf, pageNumber, project.id, d.id, refZones);
@@ -12688,16 +12854,22 @@ function DrawingsTab({ project }) {
           // abandoned. It now offers the same choice the single-sheet path
           // does, keyed by the gate's own field so a second gate cannot loop.
           const tileConfirms = {};
-          let started;
+          let started, busyTries = 0;
+          if (isSet) await qSetWaitSlot(sentRuns, () => setTiling(t => ({ ...t, [d.id]: `Waiting for a sheet to finish before sending the next${label}… keep this tab open` })));
           for (;;) {
             try {
               started = await callEngine("analyze_drawing_tiled", {
-                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages, ...tileConfirms,
+                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: zonesOut, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages, ...tileConfirms,
                 ...(batchRev ? { batch_revision: batchRev } : {}), ...(pageLabels && pageLabels[pageNumber] ? { page_label: pageLabels[pageNumber] } : {}),
                 ...(pageFloors && pageFloors[pageNumber] ? { page_floor: pageFloors[pageNumber] } : {}),
               });
               break;
             } catch (ex) {
+              if (ex.busy && busyTries++ < 30) {
+                setTiling(t => ({ ...t, [d.id]: `The server is busy — sending again in a moment${label}… keep this tab open` }));
+                await qSleep(20000);
+                continue;
+              }
               if (ex.requiresConfirmation && !tileConfirms[ex.confirmField] &&
                   window.confirm(`${ex.message}\n\nClick OK to continue anyway, or Cancel to stop here.`)) {
                 tileConfirms[ex.confirmField] = true;
@@ -12710,7 +12882,7 @@ function DrawingsTab({ project }) {
           // A set: the server reads each sheet as soon as it is sent, beside the others, while this
           // tab prepares the next one. Once every sheet is sent the tab can be closed.
           if (isSet) {
-            sentRuns.push(started.run_id);
+            qSetTrack(sentRuns, started.run_id);
             pendingLeft = pendingLeft.filter(n => n !== pageNumber);
             qSetPendingPut(d.id, { rev: batchRev, pending: pendingLeft, floors: pageFloors, labels: pageLabels, total: (resume && resume.total) || pages.length });
             if (!pendingLeft.length) qSendingGuard(false);
@@ -12722,7 +12894,7 @@ function DrawingsTab({ project }) {
         if (sentRuns.length) {
           setTiling(t => ({ ...t, [d.id]: `All ${sentRuns.length} sheets sent. The server is reading them now — you can close this tab or carry on working; the BOQ is ready in a few minutes.` }));
           qActivity({ phase: "toast", id: qActId(), label: `All ${sentRuns.length} sheets sent`, message: "The server is reading them now. You can close this tab; the BOQ shows when it is ready." });
-          const sums = await Promise.all(sentRuns.map(id => pollAnalysisRun(id).catch(e => ({ item_count: 0, failed: e }))));
+          const sums = await Promise.all(sentRuns.map(e => e.p));
           totalItems += sums.reduce((a, x) => a + (x.item_count || 0), 0);
           const failed = sums.filter(x => x.failed).length;
           if (failed === sums.length) throw sums[0].failed;
@@ -19800,29 +19972,41 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
     const kind = (await inspectPdfPage(pg)).kind;
     if (kind === "empty") continue;
     const label = n > 1 ? ` (sheet ${i + 1} of ${n} · page ${pn}${floors[pn] ? " · " + floors[pn] : ""})` : "";
+    const matchZones = await qMatchLineZones(await pdf.getPage(pn), labels[pn]);
     const { tiles, grid } = await renderAndUploadTiles(pdf, pn, projectId, drawing.id,
       (p) => say(p.phase === "render" ? `Rendering row ${p.row}/${p.rows}${label}…` : `Uploading ${p.done}/${p.total}${label}…`),
-      { cleanScan: kind === "scan" });
+      { cleanScan: kind === "scan", skipRects: matchZones });
     say(`Finding the title block, legend, tags and routes${label}…`);
     const refZones = (await detectReferenceZonesSafe(await pdf.getPage(pn)))
-      .map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label }));
+      .map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label })).concat(matchZones);
     const camRead = await readCameraTagsSafe(await pdf.getPage(pn), refZones);
     const taggedCameras = camRead.cams.length >= 3
       ? { schedule: camRead.schedule, cams: camRead.cams.map(c => ({ n: c.n, tag: c.tag, type: c.type, x: +c.x.toFixed(5), y: +c.y.toFixed(5) })) }
       : null;
     const taggedDevices = (camRead.devices || []).map(dv => ({ kind: dv.kind, tag: dv.tag, n: dv.n, x: +dv.x.toFixed(5), y: +dv.y.toFixed(5) }));
     const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pn), refZones);
+    const zonesOut = refZones.map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label }));
     say(`Reading the sheet's schedules${label}…`);
     const scheduleImages = await renderScheduleCrops(pdf, pn, projectId, drawing.id, refZones);
     say(n > 1 ? `Sending to the server${label}… keep this tab open until every sheet is sent` : `Reading ${tiles.length} tiles with AI${label}…`);
-    const started = await callEngine("analyze_drawing_tiled", {
+    if (n > 1) await qSetWaitSlot(sent, () => say(`Waiting for a sheet to finish before sending the next${label}… keep this tab open`));
+    let started;
+    for (let busyTries = 0; ; busyTries++) {
+      try {
+    started = await callEngine("analyze_drawing_tiled", {
       ...payload, drawing_id: drawing.id, page_number: pn, tiles, grid,
-      reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages,
+      reference_zones: zonesOut, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages,
       ...(batchRev ? { batch_revision: batchRev } : {}), ...(labels[pn] ? { page_label: labels[pn] } : {}), ...(floors[pn] ? { page_floor: floors[pn] } : {}),
     });
+        break;
+      } catch (ex) {
+        if (ex.busy && busyTries < 30) { say(`The server is busy — sending again in a moment${label}…`); await qSleep(20000); continue; }
+        throw ex;
+      }
+    }
     if (!batchRev && started && started.revision_number) batchRev = started.revision_number;
     read++; tilesUsed += tiles.length;
-    if (n > 1) { sent.push(started.run_id); continue; }
+    if (n > 1) { qSetTrack(sent, started.run_id); continue; }
     const summary = await pollAnalysisRun(started.run_id);
     total += summary.item_count || 0;
   }
@@ -19830,7 +20014,7 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
   if (sent.length) {
     say(`All ${sent.length} sheets sent. The server is reading them now — you can close this tab; the BOQ is ready in a few minutes.`);
     qNotify(`All ${sent.length} sheets sent`, `${drawing.file_name || "Drawing"}: the server is reading them now.`);
-    const sums = await Promise.all(sent.map(id => pollAnalysisRun(id).catch(e => ({ item_count: 0, failed: e }))));
+    const sums = await Promise.all(sent.map(e => e.p));
     total += sums.reduce((a, x) => a + (x.item_count || 0), 0);
     if (sums.every(x => x.failed)) throw sums[0].failed;
     qNotify("BOQ ready", `${drawing.file_name || "Drawing"}: ${total} BOQ lines.`);
