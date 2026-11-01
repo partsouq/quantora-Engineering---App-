@@ -26615,7 +26615,7 @@ function LiveChatWidget({ session, pageName }) {
           <div style={{ padding: "12px 14px", background: "linear-gradient(135deg,rgba(5,150,105,.35),rgba(13,148,136,.2))", borderBottom: "1px solid rgba(148,163,184,.2)" }}>
             <div style={{ fontWeight: 800, fontSize: 15 }}>Quantora Team</div>
             <div style={{ fontSize: 12, opacity: .85, marginTop: 2 }}>
-              {online ? "● Online now — a real person will answer you here" : "Real people, not the AI. We reply here as soon as we can, and you get a notification."}
+              {online ? "● Online now — a real person will answer you here" : (ticket ? "Our team has been notified and will reply here shortly. You'll get a notification when we answer." : "Real people, not the AI. Write to us and our team is notified straight away.")}
             </div>
           </div>
           <div style={{ overflowY: "auto", padding: 12 }}>
