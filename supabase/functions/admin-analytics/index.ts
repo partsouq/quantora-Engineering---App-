@@ -498,6 +498,90 @@ Deno.serve(async (req: Request) => {
     // an unpriced project is not a zero-value project, and reporting it
     // as one would drag the averages down with fiction.
     // -----------------------------------------------------------------
+    // -----------------------------------------------------------------
+    // Project Monitoring (2026-11-01): one row per project, in two views --
+    // Take-off & BOQ (drawings uploaded, sheets in them, sheets read, BOQ lines and value of the
+    // current BOQ) and Draftsman (design jobs, systems, drawings produced, value of the designed
+    // BOQ). Every table is read in pages of 1000 so no row is cut off.
+    // -----------------------------------------------------------------
+    if (action === "project_monitoring") {
+      const all = async (table: string, cols: string, filter?: (q: any) => any) => {
+        const out: any[] = [];
+        for (let from = 0; ; from += 1000) {
+          let q = admin.from(table).select(cols).range(from, from + 999);
+          if (filter) q = filter(q);
+          const { data, error } = await q;
+          if (error) throw error;
+          out.push(...(data ?? []));
+          if (!data || data.length < 1000) break;
+        }
+        return out;
+      };
+      const [companies, projects, drawings, runs, items, jobs, usage] = await Promise.all([
+        all("companies", "id, name, plan"),
+        all("projects", "id, company_id, project_name, project_ref, city, country, currency, status, created_at"),
+        all("drawings", "id, project_id, page_count, created_at"),
+        all("analysis_runs", "id, project_id, drawing_id, revision_number, status, run_kind, created_at"),
+        all("boq_items", "project_id, drawing_id, analysis_run_id, revision_number, quantity, unit_cost_cents"),
+        all("draftsman_jobs", "id, project_id, status, systems, outputs, analysis_run_id, created_at, finished_at"),
+        all("ai_usage", "project_id, action, page_count, actual_cost_cents, is_admin_assisted", q => q.in("action", PAGE_ACTIONS)),
+      ]);
+      const companyName: Record<string, string> = {};
+      for (const c of companies) companyName[c.id] = c.name;
+      const runKind: Record<string, string> = {};
+      for (const r of runs) runKind[r.id] = r.run_kind || "";
+      const isDesignRun = (k: string) => /^design/.test(k || "");
+      const draftsmanRunIds = new Set(jobs.map((j: any) => j.analysis_run_id).filter(Boolean));
+
+      // the drawing's current BOQ = its newest completed take-off revision
+      const topRev: Record<string, number> = {};
+      for (const r of runs) {
+        if (!r.drawing_id || r.status !== "completed" || isDesignRun(r.run_kind)) continue;
+        topRev[r.drawing_id] = Math.max(topRev[r.drawing_id] ?? 0, r.revision_number ?? 0);
+      }
+      const tk: Record<string, any> = {}, ds: Record<string, any> = {};
+      const T = (pid: string) => (tk[pid] ??= { drawings: 0, sheets_in_files: 0, sheets_read: 0, runs: 0, boq_lines: 0, value_cents: 0, first_at: null, last_at: null });
+      const D = (pid: string) => (ds[pid] ??= { jobs: 0, done: 0, failed: 0, systems: new Set<string>(), drawings_out: 0, boq_lines: 0, value_cents: 0, first_at: null, last_at: null });
+      const seen = (o: any, at: string) => { if (!at) return; if (!o.first_at || at < o.first_at) o.first_at = at; if (!o.last_at || at > o.last_at) o.last_at = at; };
+      for (const d of drawings) { const o = T(d.project_id); o.drawings++; o.sheets_in_files += Number(d.page_count || 1); seen(o, d.created_at); }
+      for (const r of runs) {
+        if (!r.project_id || isDesignRun(r.run_kind) || draftsmanRunIds.has(r.id)) continue;
+        if (r.status === "completed") { const o = T(r.project_id); o.runs++; seen(o, r.created_at); }
+      }
+      for (const u of usage) {
+        if (!u.project_id || u.action === "page_refund") continue;
+        T(u.project_id).sheets_read += Number(u.page_count || 0);
+      }
+      for (const it of items) {
+        const val = Number(it.quantity || 0) * Number(it.unit_cost_cents || 0);
+        if (it.analysis_run_id && draftsmanRunIds.has(it.analysis_run_id)) { const o = D(it.project_id); o.boq_lines++; o.value_cents += val; continue; }
+        if (!it.drawing_id || isDesignRun(runKind[it.analysis_run_id])) continue;
+        if ((it.revision_number ?? 0) !== topRev[it.drawing_id]) continue;
+        const o = T(it.project_id); o.boq_lines++; o.value_cents += val;
+      }
+      for (const j of jobs) {
+        const o = D(j.project_id); o.jobs++;
+        if (j.status === "done") o.done++; else if (j.status === "failed") o.failed++;
+        for (const s of j.systems ?? []) o.systems.add(String(s));
+        const outs = Array.isArray(j.outputs) ? j.outputs : [];
+        o.drawings_out += outs.filter((f: any) => /\.(pdf|dxf|dwg)$/i.test(String(f?.name || ""))).length;
+        seen(o, j.created_at); if (j.finished_at) seen(o, j.finished_at);
+      }
+      const proj: Record<string, any> = {};
+      for (const p of projects) proj[p.id] = p;
+      const row = (pid: string, o: any) => {
+        const p = proj[pid] || {};
+        return { project_id: pid, project_name: p.project_name || "(deleted project)", project_ref: p.project_ref || null,
+          company_id: p.company_id || null, company_name: companyName[p.company_id] || "—", location: [p.city, p.country].filter(Boolean).join(", "),
+          currency: p.currency || "AED", created_at: p.created_at || o.first_at, ...o };
+      };
+      const takeoff = Object.entries(tk).filter(([, o]: any) => o.drawings || o.runs).map(([pid, o]) => row(pid, o))
+        .sort((a: any, b: any) => String(b.last_at || "").localeCompare(String(a.last_at || "")));
+      const draftsman = Object.entries(ds).filter(([, o]: any) => o.jobs).map(([pid, o]: any) => row(pid, { ...o, systems: [...o.systems] }))
+        .sort((a: any, b: any) => String(b.last_at || "").localeCompare(String(a.last_at || "")));
+      return jsonResponse({ generated_at: new Date().toISOString(), takeoff, draftsman });
+    }
+
     if (action === "pipeline_overview") {
       const [
         { data: companies },

@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4220,6 +4220,63 @@ async function qSheetFacts(pdf, drawingId) {
   return sheets;
 }
 
+// What the user can read right now, in sheets (2026-11-01): sheets left in the plan, plus -- for a
+// paid plan -- the sheets the pay-as-you-go credit covers. Same figure the server checks
+// (ai-engine WALLET_SHEET_CENTS), so the screen and the server always agree.
+const Q_WALLET_SHEET_CENTS = 200;
+async function qSheetAllowance() {
+  try {
+    const u = await callBilling("usage_summary");
+    if (!u || !u.pages) return null;
+    const isTrial = !!(u.plan && u.plan.is_trial);
+    const used = Number(u.pages.used || 0), limit = u.pages.limit;
+    if (limit == null) return { used, limit: null, left: null, walletSheets: 0, total: Infinity, isTrial };
+    const left = Math.max(0, limit - used);
+    const walletSheets = isTrial ? 0 : Math.floor(Number(u.credit_balance_cents || 0) / Q_WALLET_SHEET_CENTS);
+    return { used, limit, left, walletSheets, total: left + walletSheets, isTrial, hardLimit: true };
+  } catch (_) { return null; }   // no figure: the server still checks every sheet
+}
+function qOpenBilling(message, focus) {
+  try { window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message, focus } })); } catch (_) {}
+}
+
+// Sheets of a set not sent yet (2026-11-01): kept in this browser so a closed tab or a
+// sleeping laptop can pick up where it stopped, into the same BOQ. Per-viewer convenience only;
+// the server still checks every sheet.
+const Q_SET_KEY = (id) => "q_set_pending_" + id;
+function qSetPendingGet(id) {
+  try {
+    const v = JSON.parse(localStorage.getItem(Q_SET_KEY(id)) || "null");
+    if (!v || !Array.isArray(v.pending) || !v.pending.length || Date.now() - (v.at || 0) > 3 * 86400000) return null;
+    return v;
+  } catch (_) { return null; }
+}
+function qSetPendingPut(id, v) {
+  try { if (v && v.pending && v.pending.length) localStorage.setItem(Q_SET_KEY(id), JSON.stringify({ ...v, at: Date.now() })); else localStorage.removeItem(Q_SET_KEY(id)); } catch (_) {}
+  try { window.dispatchEvent(new CustomEvent("q-set-pending")); } catch (_) {}
+}
+// Pop-out notification on the computer (2026-11-01): shown when the Quantora tab is minimised or
+// behind other windows, so a user doing other work sees "all sheets sent" and "BOQ ready".
+function qNotifyAsk() {
+  try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {}); } catch (_) {}
+}
+function qNotify(title, body) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted" || !document.hidden) return;
+    const n = new Notification(title, { body, icon: "/icon192.png", tag: "q-" + title });
+    n.onclick = () => { try { window.focus(); n.close(); } catch (_) {} };
+  } catch (_) {}
+}
+// "Leave anyway?" while sheets are still being prepared in this tab.
+let qSendingSets = 0;
+function qSendingGuard(on) {
+  qSendingSets = Math.max(0, qSendingSets + (on ? 1 : -1));
+  if (!window.__qLeaveGuard) {
+    window.__qLeaveGuard = (e) => { if (qSendingSets > 0) { e.preventDefault(); e.returnValue = "Sheets are still being sent. Leave anyway?"; return e.returnValue; } };
+    window.addEventListener("beforeunload", window.__qLeaveGuard);
+  }
+}
+
 function SheetCheckModal({ state, onClose }) {
   const { pdf, drawing, project, sheets: initial, minutesPerSheet, usage } = state;
   const [sheets, setSheets] = useState(initial);
@@ -4244,12 +4301,15 @@ function SheetCheckModal({ state, onClose }) {
   }, []);
   const chosen = sheets.filter(s => s.read);
   const left = usage && usage.limit != null ? Math.max(0, usage.limit - usage.used) : null;
-  const short = left != null && usage.hardLimit && chosen.length > left;
+  const wallet = (usage && usage.walletSheets) || 0;
+  const capacity = left == null ? Infinity : left + wallet;
+  const short = left != null && chosen.length > capacity;
+  const fromWallet = left != null && !short && chosen.length > left ? chosen.length - left : 0;
   const tooMany = chosen.length > MAX_AUTO_TILED_PAGES;
   const floors = [...new Set([...(projectFloorNames(project) || []), ...sheets.map(s => s.floor).filter(Boolean), drawing.floor_label].filter(Boolean))];
   const set = (n, patch) => setSheets(ss => ss.map(s => s.n === n ? { ...s, ...patch } : s));
-  const start = () => onClose({ pages: chosen.map(s => s.n), floors: Object.fromEntries(chosen.map(s => [s.n, s.floor || drawing.floor_label || ""])),
-    labels: Object.fromEntries(sheets.map(s => [s.n, s.title])) });
+  const start = () => (qNotifyAsk(), onClose({ pages: chosen.map(s => s.n), floors: Object.fromEntries(chosen.map(s => [s.n, s.floor || drawing.floor_label || ""])),
+    labels: Object.fromEntries(sheets.map(s => [s.n, s.title])) }));
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 85, background: "rgba(2,6,23,.6)", display: "grid", placeItems: "center", padding: 16 }}>
       <div style={{ width: "min(1040px, 100%)", maxHeight: "92vh", display: "grid", gridTemplateRows: "auto 1fr auto", borderRadius: 18,
@@ -4257,19 +4317,32 @@ function SheetCheckModal({ state, onClose }) {
         <div style={{ padding: "18px 22px 12px", borderBottom: "1px solid rgba(148,163,184,.2)" }}>
           <div style={{ fontSize: 18, fontWeight: 800 }}>Choose the sheets to read</div>
           <div style={{ fontSize: 13, opacity: .75, marginTop: 4 }}>
-            {drawing.file_name} has <b>{sheets.length}</b> sheets. The ticked sheets are read one after another into <b>one BOQ</b>, each under its own floor.
+            {drawing.file_name} has <b>{sheets.length}</b> sheets. Each sheet counts as one sheet of your plan. The ticked sheets are read into <b>one BOQ</b>{state.small ? "" : ", each under its own floor"}.
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10, fontSize: 12.5 }}>
             <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(37,99,235,.18)", border: "1px solid rgba(96,165,250,.5)" }}><b>{chosen.length}</b> selected</span>
-            <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(148,163,184,.12)" }}>about <b>{Math.max(1, Math.round(chosen.length * minutesPerSheet))}</b> min</span>
+            <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(148,163,184,.12)" }}>about <b>{Math.max(2, Math.round(chosen.length * 0.5 + 2))}</b> min</span>
             {left != null && <span style={{ padding: "4px 10px", borderRadius: 999, background: short ? "rgba(244,63,94,.16)" : "rgba(16,185,129,.14)", border: "1px solid " + (short ? "#f43f5e" : "rgba(16,185,129,.5)") }}>
-              Your plan: <b>{left}</b> sheet{left === 1 ? "" : "s"} left</span>}
+              Your plan: <b>{left}</b> sheet{left === 1 ? "" : "s"} left{wallet ? <> + <b>{wallet}</b> pay-as-you-go</> : null}</span>}
           </div>
           {short && (
-            <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.55)", fontSize: 13, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-              <span style={{ flex: 1, minWidth: 240 }}>This set needs <b>{chosen.length}</b> sheets and your plan has <b>{left}</b> left. Untick sheets to keep the most important {left}, or choose a plan to read the complete set.</span>
-              <button type="button" onClick={() => { onClose(null); window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message: `Reading this drawing set needs ${chosen.length} sheets; your plan has ${left} left.` } })); }}
-                style={{ padding: "7px 14px", borderRadius: 10, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>See plans</button>
+            <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.55)", fontSize: 13, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ flex: 1, minWidth: 240 }}>
+                {usage.isTrial
+                  ? <>This set needs <b>{chosen.length}</b> sheets and your Welcome Pack has <b>{left}</b> left. {left ? <>Untick sheets to keep the most important {left}, or choose a plan to read the complete set.</> : <>Choose a plan to read it.</>}</>
+                  : <>This set needs <b>{chosen.length}</b> sheets. You have <b>{left}</b> left in your plan{wallet ? <> and pay-as-you-go credit for <b>{wallet}</b> more</> : null} — <b>{capacity}</b> in total. {capacity ? <>Untick {chosen.length - capacity} sheet{chosen.length - capacity === 1 ? "" : "s"}, or add credit to read them all.</> : <>Add pay-as-you-go credit or upgrade your plan to read it.</>}</>}
+              </span>
+              {!usage.isTrial && (
+                <button type="button" onClick={() => { onClose(null); qOpenBilling(`This set needs ${chosen.length} sheets; you can read ${capacity} now. Add pay-as-you-go credit to read the rest.`, "wallet"); }}
+                  style={{ padding: "7px 14px", borderRadius: 10, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>Add credit</button>
+              )}
+              <button type="button" onClick={() => { onClose(null); qOpenBilling(`Reading this drawing set needs ${chosen.length} sheets; you can read ${capacity} now.`); }}
+                style={{ padding: "7px 14px", borderRadius: 10, border: usage.isTrial ? 0 : "1px solid rgba(245,158,11,.7)", background: usage.isTrial ? "#f59e0b" : "transparent", color: usage.isTrial ? "#1f1300" : "inherit", fontWeight: 800, cursor: "pointer" }}>{usage.isTrial ? "See plans" : "Upgrade plan"}</button>
+            </div>
+          )}
+          {fromWallet > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12.5, color: "#fcd34d" }}>
+              {fromWallet} sheet{fromWallet === 1 ? "" : "s"} beyond your plan will be paid from your pay-as-you-go credit (about $1.80 each for a large sheet).
             </div>
           )}
           {tooMany && <div style={{ marginTop: 8, fontSize: 12.5, color: "#fda4af" }}>Up to {MAX_AUTO_TILED_PAGES} sheets per run: untick {chosen.length - MAX_AUTO_TILED_PAGES}, and run the rest next.</div>}
@@ -4286,18 +4359,20 @@ function SheetCheckModal({ state, onClose }) {
                   <span style={{ fontSize: 12, opacity: .8, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={s.title}>{s.title}</span></span>
               </label>
               {s.skippedWhy && !s.read && <div style={{ fontSize: 11, color: "#fcd34d", marginTop: 4 }}>{s.skippedWhy}</div>}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+              {!state.small && <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
                 <span style={{ fontSize: 11, opacity: .7 }}>Floor</span>
                 <select value={s.floor || drawing.floor_label || ""} onChange={e => set(s.n, { floor: e.target.value })} disabled={!s.read}
                   style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "4px 6px", borderRadius: 7, border: "1px solid rgba(148,163,184,.4)", background: "transparent", color: "inherit" }}>
                   {floors.map(f => <option key={f} value={f} style={{ color: "#0f172a" }}>{f}</option>)}
                 </select>
-              </div>
+              </div>}
             </div>
           ))}
         </div>
         <div style={{ padding: "12px 22px", borderTop: "1px solid rgba(148,163,184,.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12, opacity: .7 }}>{state.admin ? "Admin Assist: free to the customer, not counted against their plan." : "Each sheet counts as one sheet of your plan, however many passes it takes to read."}</span>
+          <span style={{ fontSize: 12, opacity: .7 }}>{state.small ? <><b>The ticked sheets are read together</b> into one BOQ.{" "}</>
+              : <><b>Keep this tab open for about {Math.max(1, Math.round(chosen.length * 0.5))} min</b> while the sheets are prepared; after that you can close it and the reading carries on.{" "}</>}
+            {state.admin ? "Admin Assist: free to the customer." : "Each sheet counts as one sheet of your plan."}</span>
           <span style={{ display: "flex", gap: 8 }}>
             <button type="button" onClick={() => onClose(null)} style={{ padding: "9px 16px", borderRadius: 10, border: "1px solid rgba(148,163,184,.45)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>Cancel</button>
             <button type="button" onClick={start} disabled={!chosen.length || short || tooMany}
@@ -5752,7 +5827,7 @@ async function pollAnalysisRun(runId, { intervalMs = 4000, maxWaitMs = 7 * 60 * 
     netFails = 0;
     if (row.status === "completed") {
       const k = row.run_kind || "";
-      qStepDone(row.change_reason ? "rework" : /^design_(drawing|system)$/.test(k) ? "design" : k === "design_ifc" ? "draftsman" : "takeoff", row.project_id);
+      qStepDone(row.change_reason && !/of the same set$/.test(row.change_reason) ? "rework" : /^design_(drawing|system)$/.test(k) ? "design" : k === "design_ifc" ? "draftsman" : "takeoff", row.project_id);
       return row.summary || {};
     }
     if (row.status === "failed") throw new Error(row.error_message || "AI analysis failed.");
@@ -12426,8 +12501,13 @@ function DrawingsTab({ project }) {
         try { fileHash = await hashFile(original); } catch (hashErr) { console.error("file hash failed (non-fatal):", hashErr); }
         const { error: upErr } = await sb.storage.from("drawings").upload(path, file);
         if (upErr) throw upErr;
+        // 2026-11-01: sheets in the file, counted now, so the limit is shown before Analyze.
+        let sheetCount = null;
+        if (fileType === "pdf" && window.pdfjsLib) {
+          try { const doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise; sheetCount = doc.numPages || null; try { doc.destroy(); } catch (_) {} } catch (_) {}
+        }
         const { error: insErr } = await sb.from("drawings").insert({
-          project_id: project.id, file_name: file.name, storage_path: path, file_type: fileType,
+          project_id: project.id, file_name: file.name, storage_path: path, file_type: fileType, page_count: sheetCount,
           discipline, floor_label: (floorLabel || "").trim() || null, uploaded_by: user.id, file_hash: fileHash,
           takeoff_systems: scopeSystems, takeoff_custom: scopeCustom, sheet_type: sheetType || null,
         });
@@ -12503,8 +12583,12 @@ function DrawingsTab({ project }) {
   const [tiling, setTiling] = useState({});
   const [sheetCheck, setSheetCheck] = useState(null);   // the "choose the sheets" panel, open while it waits for the user
   const askSheets = (st) => new Promise(resolve => setSheetCheck({ ...st, resolve }));
+  const [, setPendTick] = useState(0);   // a set that stopped part-way shows "Send the rest"
+  const [allow, setAllow] = useState(null);   // sheets the user can read now (plan + pay-as-you-go)
+  useEffect(() => { let alive = true; qSheetAllowance().then(a => { if (alive) setAllow(a); }); return () => { alive = false; }; }, [drawings.length, Object.keys(runs).length]);
+  useEffect(() => { const on = () => setPendTick(t => t + 1); window.addEventListener("q-set-pending", on); return () => window.removeEventListener("q-set-pending", on); }, []);
 
-  async function analyzeAuto(d) {
+  async function analyzeAuto(d, resume) {
     setErr("");
     const isPdf = d.file_type === "pdf" || d.analysis_source_type === "pdf";
 
@@ -12548,20 +12632,24 @@ function DrawingsTab({ project }) {
 
     // Defined here so both the planned high-resolution path below and the
     // truncation fallback just above can run exactly the same take-off.
-    async function runTiled(pages) {
+    async function runTiled(pages, startRev) {
       let totalItems = 0;
       let totalBlankSkipped = 0;
       let blankPages = 0, scannedPages = 0;
-      let batchRev = null;     // every sheet after the first joins the first sheet's revision: one BOQ for the set
+      let batchRev = startRev || null;     // every sheet after the first joins the first sheet's revision: one BOQ for the set
+      const sentRuns = [];     // sheets of a set handed to the server, read there side by side
+      const isSet = pages.length > 1 || !!startRev;
+      let pendingLeft = pages.slice();
+      if (isSet) { qSendingGuard(true); if (!startRev) qSetPendingPut(d.id, null); }
       try {
         // Sequential, not parallel: ai-engine's findInFlightRun would hand back
         // the first run rather than starting a second for the same drawing.
         for (let i = 0; i < pages.length; i++) {
           const pageNumber = pages[i];
-          const label = pages.length > 1 ? ` (sheet ${i + 1} of ${pages.length}${pageFloors && pageFloors[pageNumber] ? " · " + pageFloors[pageNumber] : ""})` : "";
+          const label = isSet ? ` (sheet ${i + 1} of ${pages.length}${pageFloors && pageFloors[pageNumber] ? " · " + pageFloors[pageNumber] : ""})` : "";
           // Same standard for every sheet: blank pages skipped, scans cleaned up first.
           const kind = (await inspectPdfPage(await pdf.getPage(pageNumber))).kind;
-          if (kind === "empty") { blankPages++; continue; }
+          if (kind === "empty") { blankPages++; pendingLeft = pendingLeft.filter(n => n !== pageNumber); continue; }
           const { tiles, grid, blankSkipped, plannedTiles } = await renderAndUploadTiles(
             pdf, pageNumber, project.id, d.id,
             (p) => setTiling(t => ({
@@ -12594,7 +12682,7 @@ function DrawingsTab({ project }) {
           if (measuredRoutes.length) console.log(`Sheet ${pageNumber}: measured`, measuredRoutes);
           setTiling(t => ({ ...t, [d.id]: `Reading the sheet's schedules${label}…` }));
           const scheduleImages = await renderScheduleCrops(pdf, pageNumber, project.id, d.id, refZones);
-          setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
+          setTiling(t => ({ ...t, [d.id]: isSet ? `Sending to the server${label}… keep this tab open until every sheet is sent` : `Reading ${tiles.length} tiles with AI${label}…` }));
           // The high-resolution path had no confirmation loop at all: a
           // cost-protection gate came back as a flat error and the sheet was
           // abandoned. It now offers the same choice the single-sheet path
@@ -12619,8 +12707,27 @@ function DrawingsTab({ project }) {
             }
           }
           if (!batchRev && started && started.revision_number) batchRev = started.revision_number;
+          // A set: the server reads each sheet as soon as it is sent, beside the others, while this
+          // tab prepares the next one. Once every sheet is sent the tab can be closed.
+          if (isSet) {
+            sentRuns.push(started.run_id);
+            pendingLeft = pendingLeft.filter(n => n !== pageNumber);
+            qSetPendingPut(d.id, { rev: batchRev, pending: pendingLeft, floors: pageFloors, labels: pageLabels, total: (resume && resume.total) || pages.length });
+            if (!pendingLeft.length) qSendingGuard(false);
+            continue;
+          }
           const summary = await pollAnalysisRun(started.run_id);
           totalItems += summary.item_count || 0;
+        }
+        if (sentRuns.length) {
+          setTiling(t => ({ ...t, [d.id]: `All ${sentRuns.length} sheets sent. The server is reading them now — you can close this tab or carry on working; the BOQ is ready in a few minutes.` }));
+          qActivity({ phase: "toast", id: qActId(), label: `All ${sentRuns.length} sheets sent`, message: "The server is reading them now. You can close this tab; the BOQ shows when it is ready." });
+          const sums = await Promise.all(sentRuns.map(id => pollAnalysisRun(id).catch(e => ({ item_count: 0, failed: e }))));
+          totalItems += sums.reduce((a, x) => a + (x.item_count || 0), 0);
+          const failed = sums.filter(x => x.failed).length;
+          if (failed === sums.length) throw sums[0].failed;
+          if (failed) setErr(`${failed} of ${sums.length} sheets could not be read. Run those sheets again from the sheet check; the others are in the BOQ.`);
+          qActivity({ phase: "toast", id: qActId(), label: "BOQ ready", message: `${d.file_name}: ${sums.length - failed} sheet${sums.length - failed === 1 ? "" : "s"}, ${totalItems} BOQ lines.` });
         }
         if (blankPages === pages.length) throw new Error("Every page chosen is blank, so there was nothing to read. Check the page numbers, or upload the drawing again.");
         // Nothing for MEP / ELV on the sheet: it may be an architectural or civil sheet uploaded under an
@@ -12646,10 +12753,20 @@ function DrawingsTab({ project }) {
         ) + (scannedPages ? `\n\n${scannedPages} scanned sheet${scannedPages === 1 ? " was" : "s were"} cleaned up first (white background, dark lines) so they read like a CAD print. A CAD PDF export still gives the most exact count.` : "")
           + (blankPages ? `\n\n${blankPages} blank page${blankPages === 1 ? " was" : "s were"} skipped.` : "");
       } catch (ex) {
-        setErr(ex.message);
+        setErr(isSet && pendingLeft.length && pendingLeft.length < pages.length
+          ? `${ex.message}\n\n${pendingLeft.length} sheet${pendingLeft.length === 1 ? " was" : "s were"} not sent. Use "Send the rest" on the drawing to finish the set.` : ex.message);
       } finally {
+        if (isSet && pendingLeft.length) qSendingGuard(false);
+        if (isSet && pendingLeft.length === pages.length && !startRev) qSetPendingPut(d.id, null);   // nothing sent: nothing to resume
         setTiling(t => ({ ...t, [d.id]: null }));
       }
+    }
+
+    // Picking up a set that stopped part-way: the sheets not sent yet, into the same BOQ.
+    if (resume && resume.pending && resume.pending.length) {
+      pageLabels = resume.labels || {}; pageFloors = resume.floors || {};
+      await runTiled(resume.pending, resume.rev);
+      return;
     }
 
     // A scanned sheet is never read whole: it is cleaned up and read at high
@@ -12661,14 +12778,27 @@ function DrawingsTab({ project }) {
       // the PAGE can predict. Only the attempt reveals it.
       setTiling(t => ({ ...t, [d.id]: null }));
       const tileCount = assessment.grid.cols * assessment.grid.rows;
+      // 2026-11-01: a file of several small sheets (A3/A4) is counted and chosen sheet by sheet
+      // too -- never read whole beyond what the plan allows.
+      let chosenSmall = null;
+      if ((pdf.numPages || 1) > 1) {
+        setTiling(t => ({ ...t, [d.id]: "Looking at the sheets in this file…" }));
+        const usage = await qSheetAllowance();
+        const sheets = await qSheetFacts(pdf, d.id);
+        setTiling(t => ({ ...t, [d.id]: null }));
+        const pick = await askSheets({ pdf, drawing: d, project, sheets, usage, minutesPerSheet: 1, small: true });
+        if (!pick || !pick.pages.length) return;
+        chosenSmall = pick.pages;
+      }
       await analyze(d.id, {
+        ...(chosenSmall && chosenSmall.length < (pdf.numPages || 1) ? { extra: { page_selection: chosenSmall } } : {}),
         onTruncated: async (msg) => {
           // A 1x1 grid is one request with the same output ceiling. Offering it
           // would spend the customer's money to fail identically.
           if (tileCount < 2) { setErr(msg); return; }
           const n = Math.min(pdf.numPages || 1, MAX_AUTO_TILED_PAGES);
-          const pages = [];
-          for (let i = 1; i <= n; i++) pages.push(i);
+          const pages = chosenSmall ? chosenSmall.slice(0, MAX_AUTO_TILED_PAGES) : [];
+          if (!chosenSmall) for (let i = 1; i <= n; i++) pages.push(i);
           const ok = window.confirm(
             `${msg}\n\n` +
             `Quantora can read this sheet as ${assessment.grid.cols} x ${assessment.grid.rows} overlapping tiles instead. ` +
@@ -12690,11 +12820,7 @@ function DrawingsTab({ project }) {
       // 2026-11-01: the sheet check -- every sheet with its picture, title and floor, master plans
       // that repeat the part plans left out, and the sheets left in the plan shown up front.
       setTiling(t => ({ ...t, [d.id]: "Looking at the sheets in this file…" }));
-      let usage = null;
-      try {
-        const u = await callBilling("usage_summary");
-        if (u && u.pages) usage = { used: Number(u.pages.used || 0), limit: u.pages.limit, hardLimit: !!(u.plan && u.plan.is_trial) || !(Number(u.credit_balance_cents || 0) > 0) };
-      } catch (_) { /* no usage figure: the server still checks the limit */ }
+      const usage = await qSheetAllowance();
       const sheets = await qSheetFacts(pdf, d.id);
       setTiling(t => ({ ...t, [d.id]: null }));
       const pick = await askSheets({ pdf, drawing: d, project, sheets, usage, minutesPerSheet: 3 });
@@ -13036,6 +13162,40 @@ function DrawingsTab({ project }) {
                 )}
               </div>
             </div>
+            {d.page_count > 1 && !runs[d.id] && !tiling[d.id] && (() => {
+              const n = d.page_count, can = allow ? allow.total : null, over = can != null && can < n;
+              return (
+                <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 10, fontSize: 12.5, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+                  background: over ? "rgba(245,158,11,.12)" : "rgba(59,130,246,.08)", border: "1px solid " + (over ? "rgba(245,158,11,.55)" : "rgba(96,165,250,.35)") }}>
+                  <span style={{ flex: 1, minWidth: 220 }}>
+                    <b>{n} sheets in this file.</b> Each sheet counts as one sheet of your plan.{" "}
+                    {can == null || can === Infinity ? "You choose which sheets to read when you press Analyze."
+                      : over ? <>You can read <b>{can}</b> now{allow.isTrial ? " with your Welcome Pack" : allow.walletSheets ? ` (${allow.left} in your plan + ${allow.walletSheets} pay-as-you-go)` : " in your plan"}: choose {can ? `up to ${can} sheets` : "a plan"} when you press Analyze{allow.isTrial ? ", or choose a plan to read them all" : ", or add credit to read them all"}.</>
+                      : <>You can read <b>{can}</b> now — enough for all of them.</>}
+                  </span>
+                  {over && <button type="button" onClick={() => qOpenBilling(`${d.file_name} has ${n} sheets; you can read ${can} now.`, allow.isTrial ? undefined : "wallet")}
+                    style={{ padding: "6px 12px", borderRadius: 9, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>{allow.isTrial ? "See plans" : "Add credit"}</button>}
+                </div>
+              );
+            })()}
+            {(() => {
+              const pend = !tiling[d.id] && qSetPendingGet(d.id);
+              const top = runs[d.id] && runs[d.id][0];
+              if (!pend || (top && top.revision_number !== pend.rev)) return null;
+              return (
+                <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.55)",
+                  display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13 }}>
+                  <span style={{ flex: 1, minWidth: 220 }}>
+                    <b>{pend.pending.length} of {pend.total || pend.pending.length} sheets were not sent</b> — the page was closed before they were sent.
+                    The sheets already sent are in the BOQ; send the rest to complete it.
+                  </span>
+                  <button type="button" onClick={() => analyzeAuto(d, pend)} disabled={anyAiCallInFlight}
+                    style={{ padding: "7px 14px", borderRadius: 10, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>Send the rest</button>
+                  <button type="button" onClick={() => qSetPendingPut(d.id, null)}
+                    style={{ padding: "7px 10px", borderRadius: 10, border: "1px solid rgba(148,163,184,.45)", background: "transparent", color: "inherit", fontWeight: 600, cursor: "pointer" }}>Dismiss</button>
+                </div>
+              );
+            })()}
             {expandedHistory === d.id && runs[d.id] && (
               <div className="mt-3 bg-slate-50 rounded-lg overflow-x-auto">
                 <table className="w-full text-xs">
@@ -19631,6 +19791,9 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
   }
   const n = pages.length;
   let total = 0, read = 0, tilesUsed = 0, batchRev = null;
+  const sent = [];
+  if (n > 1) qSendingGuard(true);
+  try {
   for (let i = 0; i < n; i++) {
     const pn = pages[i];
     const pg = await pdf.getPage(pn);
@@ -19651,15 +19814,26 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
     const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pn), refZones);
     say(`Reading the sheet's schedules${label}…`);
     const scheduleImages = await renderScheduleCrops(pdf, pn, projectId, drawing.id, refZones);
-    say(`Reading ${tiles.length} tiles with AI${label}…`);
+    say(n > 1 ? `Sending to the server${label}… keep this tab open until every sheet is sent` : `Reading ${tiles.length} tiles with AI${label}…`);
     const started = await callEngine("analyze_drawing_tiled", {
       ...payload, drawing_id: drawing.id, page_number: pn, tiles, grid,
       reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages,
       ...(batchRev ? { batch_revision: batchRev } : {}), ...(labels[pn] ? { page_label: labels[pn] } : {}), ...(floors[pn] ? { page_floor: floors[pn] } : {}),
     });
     if (!batchRev && started && started.revision_number) batchRev = started.revision_number;
+    read++; tilesUsed += tiles.length;
+    if (n > 1) { sent.push(started.run_id); continue; }
     const summary = await pollAnalysisRun(started.run_id);
-    total += summary.item_count || 0; read++; tilesUsed += tiles.length;
+    total += summary.item_count || 0;
+  }
+  } finally { if (n > 1) qSendingGuard(false); }
+  if (sent.length) {
+    say(`All ${sent.length} sheets sent. The server is reading them now — you can close this tab; the BOQ is ready in a few minutes.`);
+    qNotify(`All ${sent.length} sheets sent`, `${drawing.file_name || "Drawing"}: the server is reading them now.`);
+    const sums = await Promise.all(sent.map(id => pollAnalysisRun(id).catch(e => ({ item_count: 0, failed: e }))));
+    total += sums.reduce((a, x) => a + (x.item_count || 0), 0);
+    if (sums.every(x => x.failed)) throw sums[0].failed;
+    qNotify("BOQ ready", `${drawing.file_name || "Drawing"}: ${total} BOQ lines.`);
   }
   if (!read) throw new Error("Every page of this drawing is blank, so there was nothing to read.");
   return { item_count: total, pages_processed: read, method: `high resolution, ${tilesUsed} tiles` };
@@ -22675,7 +22849,122 @@ function QDiscountsView() {
   );
 }
 
-function QProjectsView({ perProject, companyNameById, pipeline }) {
+// Project Monitoring (2026-11-01): Take-off & BOQ projects and Draftsman projects, each with its
+// own rows, totals and filters; the earlier AI-cost table stays as the third tab.
+function QProjectsView(props) {
+  const [tab, setTab] = useState("takeoff");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [q, setQ] = useState("");
+  const [days, setDays] = useState("all");
+  useEffect(() => {
+    callAdminAnalytics("project_monitoring", {}).then(setData).catch(e => setErr(e.message || "Could not load projects."));
+  }, []);
+  const since = days === "all" ? null : Date.now() - Number(days) * 86400000;
+  // Value: the project's priced estimate (selling price) where there is one; otherwise the
+  // priced BOQ lines; otherwise a dash.
+  const est = {};
+  ((props.pipeline && props.pipeline.per_project_pipeline) || []).forEach(x => { if (x.is_priced) est[x.project_id] = x; });
+  const withValue = (r) => est[r.project_id] ? { ...r, value_cents: est[r.project_id].selling_price_cents, currency: est[r.project_id].currency || r.currency } : r;
+  const pick = (rows) => (rows || []).map(withValue).filter(r =>
+    (!since || new Date(r.last_at || r.created_at || 0).getTime() >= since) &&
+    (!q || `${r.project_name} ${r.project_ref || ""} ${r.company_name} ${r.location}`.toLowerCase().includes(q.toLowerCase())));
+  const tk = pick(data && data.takeoff), ds = pick(data && data.draftsman);
+  const fmtD = (x) => x ? new Date(x).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "—";
+  const money = (r) => r.value_cents ? `${qAmt(r.value_cents)} ${r.currency}` : "—";
+  const byCur = (rows) => {
+    const m = {};
+    rows.forEach(r => { if (r.value_cents) m[r.currency] = (m[r.currency] || 0) + r.value_cents; });
+    const k = Object.keys(m);
+    return k.length ? k.map(c => `${qAmt(m[c])} ${c}`).join(" · ") : "—";
+  };
+  const sum = (rows, f) => rows.reduce((a, r) => a + Number(r[f] || 0), 0);
+  const tabBtn = (key, label, n) => (
+    <button key={key} type="button" onClick={() => setTab(key)}
+      style={{ padding: "8px 14px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer",
+        border: "1px solid " + (tab === key ? "rgba(96,165,250,.7)" : "rgba(148,163,184,.25)"),
+        background: tab === key ? "rgba(37,99,235,.22)" : "transparent", color: "inherit" }}>
+      {label}{n != null ? <span style={{ marginLeft: 8, opacity: .75 }}>{n}</span> : null}
+    </button>
+  );
+  const status = (r) => r.failed && !r.done ? <span style={{ color: "#fb7185" }}>Failed</span>
+    : r.jobs != null ? (r.done ? <span style={{ color: "#34d399" }}>{r.done} done</span> : <span style={{ color: "#fbbf24" }}>In progress</span>)
+    : r.boq_lines ? <span style={{ color: "#34d399" }}>BOQ ready</span> : r.runs ? <span style={{ color: "#fbbf24" }}>Read, no BOQ lines</span> : <span style={{ opacity: .7 }}>Uploaded, not read</span>;
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        {tabBtn("takeoff", "Take-off & BOQ", data ? (data.takeoff || []).length : null)}
+        {tabBtn("draftsman", "Draftsman", data ? (data.draftsman || []).length : null)}
+        {tabBtn("cost", "AI cost per project", null)}
+        <span style={{ flex: 1 }} />
+        {tab !== "cost" && <>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search project or customer…"
+            style={{ padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "inherit", fontSize: 13, minWidth: 220 }} />
+          <select value={days} onChange={e => setDays(e.target.value)}
+            style={{ padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "inherit", fontSize: 13 }}>
+            <option value="7" style={{ color: "#0f172a" }}>Last 7 days</option>
+            <option value="30" style={{ color: "#0f172a" }}>Last 30 days</option>
+            <option value="90" style={{ color: "#0f172a" }}>Last 90 days</option>
+            <option value="all" style={{ color: "#0f172a" }}>All time</option>
+          </select>
+        </>}
+      </div>
+      {err && <div className="card panel" style={{ color: "#fb7185" }}>{err}</div>}
+      {tab !== "cost" && !data && !err && <div className="card panel" style={{ opacity: .7 }}>Loading projects…</div>}
+      {tab === "takeoff" && data && (
+        <>
+          <div className="kpi-row">
+            <div className="card kpi"><div className="lbl">Take-off projects</div><div className="big">{tk.length}</div><div className="delta flat">with drawings uploaded</div></div>
+            <div className="card kpi"><div className="lbl">Drawings uploaded</div><div className="big">{qNum(sum(tk, "drawings"))}</div><div className="delta flat">{qNum(sum(tk, "sheets_in_files"))} sheets inside them</div></div>
+            <div className="card kpi"><div className="lbl">Sheets read</div><div className="big">{qNum(sum(tk, "sheets_read"))}</div><div className="delta flat">counted against plans</div></div>
+            <div className="card kpi"><div className="lbl">BOQ value</div><div className="big" style={{ fontSize: 20 }}>{byCur(tk)}</div><div className="delta flat">{qNum(sum(tk, "boq_lines"))} BOQ lines · priced projects only</div></div>
+          </div>
+          <div className="card panel">
+            <div className="panel-head"><h3>Take-off & BOQ projects</h3><span className="tag">{tk.length} projects</span></div>
+            <div className="table-wrap"><table>
+              <thead><tr><th>Project</th><th>Customer</th><th className="num">Drawings</th><th className="num">Sheets in files</th><th className="num">Sheets read</th>
+                <th className="num">BOQ lines</th><th className="num">BOQ value</th><th>Last activity</th></tr></thead>
+              <tbody>{tk.length === 0 ? <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No projects match.</td></tr> : tk.map(r => (
+                <tr key={r.project_id}>
+                  <td className="name">{r.project_ref ? <span style={{ opacity: .7 }}>{r.project_ref} · </span> : null}{r.project_name}<div style={{ fontSize: 11 }}><span style={{ opacity: .6 }}>{r.location} · </span>{status(r)}</div></td>
+                  <td>{r.company_name}</td><td className="num">{r.drawings}</td><td className="num">{r.sheets_in_files}</td><td className="num">{r.sheets_read}</td>
+                  <td className="num">{qNum(r.boq_lines)}</td><td className="num">{money(r)}</td><td style={{ whiteSpace: "nowrap" }}>{fmtD(r.last_at)}<div style={{ fontSize: 11, opacity: .6 }}>started {fmtD(r.created_at)}</div></td>
+                </tr>))}</tbody>
+            </table></div>
+          </div>
+        </>
+      )}
+      {tab === "draftsman" && data && (
+        <>
+          <div className="kpi-row">
+            <div className="card kpi"><div className="lbl">Draftsman projects</div><div className="big">{ds.length}</div><div className="delta flat">with a design job</div></div>
+            <div className="card kpi"><div className="lbl">Design jobs</div><div className="big">{qNum(sum(ds, "jobs"))}</div><div className="delta flat">{qNum(sum(ds, "done"))} done · {qNum(sum(ds, "failed"))} failed</div></div>
+            <div className="card kpi"><div className="lbl">Drawings produced</div><div className="big">{qNum(sum(ds, "drawings_out"))}</div><div className="delta flat">PDF / DXF sheets delivered</div></div>
+            <div className="card kpi"><div className="lbl">Designed BOQ value</div><div className="big" style={{ fontSize: 20 }}>{byCur(ds)}</div><div className="delta flat">{qNum(sum(ds, "boq_lines"))} BOQ lines · priced projects only</div></div>
+          </div>
+          <div className="card panel">
+            <div className="panel-head"><h3>Draftsman projects</h3><span className="tag">{ds.length} projects</span></div>
+            <div className="table-wrap"><table>
+              <thead><tr><th>Project</th><th>Customer</th><th className="num">Design jobs</th><th>Systems</th><th className="num">Drawings produced</th>
+                <th className="num">BOQ lines</th><th className="num">Value</th><th>Last activity</th></tr></thead>
+              <tbody>{ds.length === 0 ? <tr><td colSpan="8" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>No projects match.</td></tr> : ds.map(r => (
+                <tr key={r.project_id}>
+                  <td className="name">{r.project_ref ? <span style={{ opacity: .7 }}>{r.project_ref} · </span> : null}{r.project_name}<div style={{ fontSize: 11 }}><span style={{ opacity: .6 }}>{r.location} · </span>{status(r)}</div></td>
+                  <td>{r.company_name}</td><td className="num">{r.jobs}</td>
+                  <td style={{ maxWidth: 200, whiteSpace: "normal", fontSize: 12 }}>{(r.systems || []).map(x => String(x).toUpperCase()).join(" · ") || "—"}</td>
+                  <td className="num">{r.drawings_out}</td><td className="num">{qNum(r.boq_lines)}</td><td className="num">{money(r)}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{fmtD(r.last_at)}<div style={{ fontSize: 11, opacity: .6 }}>started {fmtD(r.created_at)}</div></td>
+                </tr>))}</tbody>
+            </table></div>
+          </div>
+        </>
+      )}
+      {tab === "cost" && <QProjectsCostView {...props} />}
+    </>
+  );
+}
+
+function QProjectsCostView({ perProject, companyNameById, pipeline }) {
   const list = (perProject || []).slice().sort((a, b) => (b.actual_cost_cents || 0) - (a.actual_cost_cents || 0));
   // Join in what each project is actually worth. A project that has no
   // estimate simply shows a dash -- AI cost and bid value are different
@@ -25524,10 +25813,11 @@ function ActivityCenter({ onOpenProject }) {
   const known = useRef({});                        // server key -> last status, to notice changes
 
   const pushToast = (t) => {
+    qNotify(t.title, t.sub || "Open Quantora to see it.");   // pop-out on the computer when the tab is not in front
     setToasts(ts => [...ts.filter(x => x.key !== t.key), t].slice(-3));
     setTimeout(() => setToasts(ts => ts.filter(x => x.key !== t.key)), 9000);
   };
-  const pushError = (e) => { if (qActSeen("err:" + e.key)) return; setErrors(es => [...es.filter(x => x.key !== e.key), e].slice(-3)); };
+  const pushError = (e) => { if (qActSeen("err:" + e.key)) return; qNotify(e.title, e.message || ""); setErrors(es => [...es.filter(x => x.key !== e.key), e].slice(-3)); };
   const dismissError = (key) => { qActSeen("err:" + key, true); setErrors(es => es.filter(x => x.key !== key)); };
 
   // Instant events from the request helpers.
@@ -25550,6 +25840,8 @@ function ActivityCenter({ onOpenProject }) {
         pushError({ key: d.id, title: `${d.label || "Request"} could not start`, message: d.message || "Something went wrong." });
       } else if (d.phase === "refresh") {
         setOpen(true); poll();
+      } else if (d.phase === "toast") {
+        pushToast({ key: d.id, title: d.label, sub: d.message || "" });
       }
     };
     window.addEventListener("q-activity", on);
@@ -34668,7 +34960,7 @@ function App() {
   // surface the upgrade modal automatically instead of leaving the user
   // stuck at a bare alert().
   useEffect(() => {
-    function onLimit(e) { setBillingModal({ open: true, reason: e.detail?.message || "You've reached your plan's usage limit." }); }
+    function onLimit(e) { setBillingModal({ open: true, reason: e.detail?.message || "You've reached your plan's usage limit.", ...(e.detail?.focus ? { focus: e.detail.focus } : {}) }); }
     window.addEventListener("plan-limit-reached", onLimit);
     return () => window.removeEventListener("plan-limit-reached", onLimit);
   }, []);
