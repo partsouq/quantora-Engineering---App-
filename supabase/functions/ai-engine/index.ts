@@ -3200,8 +3200,9 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
 
-      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes, tagged_devices: rawDevices, schedule_images: rawSchedImgs } = body as {
+      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes, tagged_devices: rawDevices, schedule_images: rawSchedImgs, batch_revision, page_label } = body as {
         drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any; measured_routes?: any; tagged_devices?: any; schedule_images?: any;
+        batch_revision?: number; page_label?: string;
         confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean;
       };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
@@ -3265,11 +3266,17 @@ Deno.serve(async (req: Request) => {
       }
 
       const { data: priorRuns } = await admin.from("analysis_runs").select("revision_number").eq("drawing_id", drawing_id).order("revision_number", { ascending: false }).limit(1);
-      const nextRevision = (priorRuns && priorRuns[0]?.revision_number ? priorRuns[0].revision_number : 0) + 1;
+      const topRevision = priorRuns && priorRuns[0]?.revision_number ? priorRuns[0].revision_number : 0;
+      // Several sheets of one PDF read in one go (2026-11-01): every sheet after the first joins the
+      // first sheet's revision, so the BOQ (which shows a drawing's latest revision) holds ALL the
+      // sheets read together, not only the last one. Accepted only for the drawing's newest revision.
+      const joinBatch = Number.isInteger(batch_revision) && batch_revision! > 0 && batch_revision === topRevision;
+      const nextRevision = joinBatch ? topRevision : topRevision + 1;
 
       const { data: run, error: runErr } = await admin.from("analysis_runs").insert({
         project_id: project.id, drawing_id, revision_number: nextRevision, status: "processing", triggered_by: userId,
         is_admin_assisted: isAdminOverride, prompt_version: PROMPT_VERSION, run_kind: "tiled",
+        change_reason: joinBatch ? `Sheet ${Math.max(1, Number(page_number) || 1)} of the same set` : null,
       }).select().single();
       if (runErr) throw runErr;
 
@@ -3595,6 +3602,9 @@ Deno.serve(async (req: Request) => {
             item_count: safeRows.length,
             derived_item_count: derived.length,
             tiled: true,
+            page_number: pageNo,
+            page_label: page_label ? String(page_label).slice(0, 120) : null,
+            batch_sheet: joinBatch,
             tile_count: tiles.length,
             empty_tiles: emptyTiles,
             duplicates_merged: removed,
