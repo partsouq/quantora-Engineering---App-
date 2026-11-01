@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.17"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.18"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4273,6 +4273,12 @@ const qSleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // Pop-out notification on the computer (2026-11-01): shown when the Quantora tab is minimised or
 // behind other windows, so a user doing other work sees "all sheets sent" and "BOQ ready".
+let qSwReg = null;
+try {
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("/sw.js").then(r => { qSwReg = r; }).catch(() => {});
+  }
+} catch (_) {}
 function qNotifyAsk() {
   try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {}); } catch (_) {}
 }
@@ -4282,7 +4288,10 @@ function qNotify(title, body, opts) {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     // Normally only when Quantora is not in front; live chat also alerts when the window is open but not focused.
     if (!document.hidden && !(o.whenUnfocused && !document.hasFocus())) return;
-    const n = new Notification(title, { body, icon: "/icon192.png", tag: o.tag || ("q-" + title), renotify: !!o.tag });
+    const opt = { body, icon: "/icon192.png", badge: "/icon192.png", tag: o.tag || ("q-" + title), renotify: !!o.tag, vibrate: [200, 100, 200] };
+    // Phones only allow pop-ups through the service worker; computers can use either.
+    if (qSwReg) { qSwReg.showNotification(title, opt).catch(() => {}); return; }
+    const n = new Notification(title, opt);
     n.onclick = () => { try { window.focus(); n.close(); } catch (_) {} };
   } catch (_) {}
 }
