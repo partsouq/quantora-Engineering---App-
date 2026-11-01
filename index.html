@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.8"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.9"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4235,6 +4235,18 @@ function qSetPendingPut(id, v) {
   try { if (v && v.pending && v.pending.length) localStorage.setItem(Q_SET_KEY(id), JSON.stringify({ ...v, at: Date.now() })); else localStorage.removeItem(Q_SET_KEY(id)); } catch (_) {}
   try { window.dispatchEvent(new CustomEvent("q-set-pending")); } catch (_) {}
 }
+// Pop-out notification on the computer (2026-11-01): shown when the Quantora tab is minimised or
+// behind other windows, so a user doing other work sees "all sheets sent" and "BOQ ready".
+function qNotifyAsk() {
+  try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {}); } catch (_) {}
+}
+function qNotify(title, body) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted" || !document.hidden) return;
+    const n = new Notification(title, { body, icon: "/icon192.png", tag: "q-" + title });
+    n.onclick = () => { try { window.focus(); n.close(); } catch (_) {} };
+  } catch (_) {}
+}
 // "Leave anyway?" while sheets are still being prepared in this tab.
 let qSendingSets = 0;
 function qSendingGuard(on) {
@@ -4273,8 +4285,8 @@ function SheetCheckModal({ state, onClose }) {
   const tooMany = chosen.length > MAX_AUTO_TILED_PAGES;
   const floors = [...new Set([...(projectFloorNames(project) || []), ...sheets.map(s => s.floor).filter(Boolean), drawing.floor_label].filter(Boolean))];
   const set = (n, patch) => setSheets(ss => ss.map(s => s.n === n ? { ...s, ...patch } : s));
-  const start = () => onClose({ pages: chosen.map(s => s.n), floors: Object.fromEntries(chosen.map(s => [s.n, s.floor || drawing.floor_label || ""])),
-    labels: Object.fromEntries(sheets.map(s => [s.n, s.title])) });
+  const start = () => (qNotifyAsk(), onClose({ pages: chosen.map(s => s.n), floors: Object.fromEntries(chosen.map(s => [s.n, s.floor || drawing.floor_label || ""])),
+    labels: Object.fromEntries(sheets.map(s => [s.n, s.title])) }));
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 85, background: "rgba(2,6,23,.6)", display: "grid", placeItems: "center", padding: 16 }}>
       <div style={{ width: "min(1040px, 100%)", maxHeight: "92vh", display: "grid", gridTemplateRows: "auto 1fr auto", borderRadius: 18,
@@ -12671,6 +12683,7 @@ function DrawingsTab({ project }) {
           const failed = sums.filter(x => x.failed).length;
           if (failed === sums.length) throw sums[0].failed;
           if (failed) setErr(`${failed} of ${sums.length} sheets could not be read. Run those sheets again from the sheet check; the others are in the BOQ.`);
+          qActivity({ phase: "toast", id: qActId(), label: "BOQ ready", message: `${d.file_name}: ${sums.length - failed} sheet${sums.length - failed === 1 ? "" : "s"}, ${totalItems} BOQ lines.` });
         }
         if (blankPages === pages.length) throw new Error("Every page chosen is blank, so there was nothing to read. Check the page numbers, or upload the drawing again.");
         // Nothing for MEP / ELV on the sheet: it may be an architectural or civil sheet uploaded under an
@@ -19747,9 +19760,11 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
   } finally { if (n > 1) qSendingGuard(false); }
   if (sent.length) {
     say(`All ${sent.length} sheets sent. The server is reading them now — you can close this tab; the BOQ is ready in a few minutes.`);
+    qNotify(`All ${sent.length} sheets sent`, `${drawing.file_name || "Drawing"}: the server is reading them now.`);
     const sums = await Promise.all(sent.map(id => pollAnalysisRun(id).catch(e => ({ item_count: 0, failed: e }))));
     total += sums.reduce((a, x) => a + (x.item_count || 0), 0);
     if (sums.every(x => x.failed)) throw sums[0].failed;
+    qNotify("BOQ ready", `${drawing.file_name || "Drawing"}: ${total} BOQ lines.`);
   }
   if (!read) throw new Error("Every page of this drawing is blank, so there was nothing to read.");
   return { item_count: total, pages_processed: read, method: `high resolution, ${tilesUsed} tiles` };
@@ -25614,10 +25629,11 @@ function ActivityCenter({ onOpenProject }) {
   const known = useRef({});                        // server key -> last status, to notice changes
 
   const pushToast = (t) => {
+    qNotify(t.title, t.sub || "Open Quantora to see it.");   // pop-out on the computer when the tab is not in front
     setToasts(ts => [...ts.filter(x => x.key !== t.key), t].slice(-3));
     setTimeout(() => setToasts(ts => ts.filter(x => x.key !== t.key)), 9000);
   };
-  const pushError = (e) => { if (qActSeen("err:" + e.key)) return; setErrors(es => [...es.filter(x => x.key !== e.key), e].slice(-3)); };
+  const pushError = (e) => { if (qActSeen("err:" + e.key)) return; qNotify(e.title, e.message || ""); setErrors(es => [...es.filter(x => x.key !== e.key), e].slice(-3)); };
   const dismissError = (key) => { qActSeen("err:" + key, true); setErrors(es => es.filter(x => x.key !== key)); };
 
   // Instant events from the request helpers.
