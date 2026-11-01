@@ -538,7 +538,7 @@ function stripPositionsInPanels(items: any[], panels: { x0: number; y0: number; 
           it.quantity = now;
           it.quantity_basis_notes = [
             it.quantity_basis_notes,
-            `Reduced from ${was} to ${now}: ${droppedHere} of the reported position(s) fell inside a legend, key plan or title block, where a symbol is a reference and not an installed device.`,
+            `Reduced from ${was} to ${now}: ${droppedHere} of the reported position(s) fell inside a legend, key plan or title block, or beyond this part plan's match line (counted on its own sheet).`,
           ].filter(Boolean).join(" ");
         }
       }
@@ -3476,8 +3476,9 @@ Deno.serve(async (req: Request) => {
             return c > a && d > b ? `${z.label || z.kind || "reference panel"}: x ${pct(a)}-${pct(c)}, y ${pct(b)}-${pct(d)}` : null;
           }).filter(Boolean);
           const zoneText = zl.length
-            ? `\n\nREFERENCE AREAS OF THIS IMAGE, measured from the drawing file itself -- title block, legend, schedules, typical details, header band. ` +
-              `NOTHING inside them is an installed device: do not count it, do not give it a position, and do not record their table rows ` +
+            ? `\n\nREFERENCE AREAS OF THIS IMAGE, measured from the drawing file itself -- title block, legend, schedules, typical details, header band, ` +
+              `and the plan beyond a part-plan match line ("PART -1 | PART -2"), which belongs to another sheet of the set and is counted there. ` +
+              `NOTHING inside them is counted on this sheet: do not count it, do not give it a position, do not measure runs inside it, and do not record their table rows ` +
               `as quantities.\n- ${zl.join("\n- ")}`
             : "";
           const content = [tb.block, { type: "text", text: prompt + zoneText }];
