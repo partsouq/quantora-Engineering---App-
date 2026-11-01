@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.6"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.7"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4261,7 +4261,7 @@ function SheetCheckModal({ state, onClose }) {
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10, fontSize: 12.5 }}>
             <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(37,99,235,.18)", border: "1px solid rgba(96,165,250,.5)" }}><b>{chosen.length}</b> selected</span>
-            <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(148,163,184,.12)" }}>about <b>{Math.max(1, Math.round(chosen.length * minutesPerSheet))}</b> min</span>
+            <span style={{ padding: "4px 10px", borderRadius: 999, background: "rgba(148,163,184,.12)" }}>about <b>{Math.max(2, Math.round(chosen.length * 0.5 + 2))}</b> min</span>
             {left != null && <span style={{ padding: "4px 10px", borderRadius: 999, background: short ? "rgba(244,63,94,.16)" : "rgba(16,185,129,.14)", border: "1px solid " + (short ? "#f43f5e" : "rgba(16,185,129,.5)") }}>
               Your plan: <b>{left}</b> sheet{left === 1 ? "" : "s"} left</span>}
           </div>
@@ -4297,7 +4297,8 @@ function SheetCheckModal({ state, onClose }) {
           ))}
         </div>
         <div style={{ padding: "12px 22px", borderTop: "1px solid rgba(148,163,184,.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12, opacity: .7 }}>{state.admin ? "Admin Assist: free to the customer, not counted against their plan." : "Each sheet counts as one sheet of your plan, however many passes it takes to read."}</span>
+          <span style={{ fontSize: 12, opacity: .7 }}><b>Keep this tab open for about {Math.max(1, Math.round(chosen.length * 0.5))} min</b> while the sheets are prepared; after that you can close it and the reading carries on.{" "}
+            {state.admin ? "Admin Assist: free to the customer." : "Each sheet counts as one sheet of your plan."}</span>
           <span style={{ display: "flex", gap: 8 }}>
             <button type="button" onClick={() => onClose(null)} style={{ padding: "9px 16px", borderRadius: 10, border: "1px solid rgba(148,163,184,.45)", background: "transparent", color: "inherit", fontWeight: 700, cursor: "pointer" }}>Cancel</button>
             <button type="button" onClick={start} disabled={!chosen.length || short || tooMany}
@@ -5752,7 +5753,7 @@ async function pollAnalysisRun(runId, { intervalMs = 4000, maxWaitMs = 7 * 60 * 
     netFails = 0;
     if (row.status === "completed") {
       const k = row.run_kind || "";
-      qStepDone(row.change_reason ? "rework" : /^design_(drawing|system)$/.test(k) ? "design" : k === "design_ifc" ? "draftsman" : "takeoff", row.project_id);
+      qStepDone(row.change_reason && !/of the same set$/.test(row.change_reason) ? "rework" : /^design_(drawing|system)$/.test(k) ? "design" : k === "design_ifc" ? "draftsman" : "takeoff", row.project_id);
       return row.summary || {};
     }
     if (row.status === "failed") throw new Error(row.error_message || "AI analysis failed.");
@@ -12553,6 +12554,7 @@ function DrawingsTab({ project }) {
       let totalBlankSkipped = 0;
       let blankPages = 0, scannedPages = 0;
       let batchRev = null;     // every sheet after the first joins the first sheet's revision: one BOQ for the set
+      const sentRuns = [];     // sheets of a set handed to the server, read there side by side
       try {
         // Sequential, not parallel: ai-engine's findInFlightRun would hand back
         // the first run rather than starting a second for the same drawing.
@@ -12594,7 +12596,7 @@ function DrawingsTab({ project }) {
           if (measuredRoutes.length) console.log(`Sheet ${pageNumber}: measured`, measuredRoutes);
           setTiling(t => ({ ...t, [d.id]: `Reading the sheet's schedules${label}…` }));
           const scheduleImages = await renderScheduleCrops(pdf, pageNumber, project.id, d.id, refZones);
-          setTiling(t => ({ ...t, [d.id]: `Reading ${tiles.length} tiles with AI${label}…` }));
+          setTiling(t => ({ ...t, [d.id]: pages.length > 1 ? `Sending to the server${label}… keep this tab open until every sheet is sent` : `Reading ${tiles.length} tiles with AI${label}…` }));
           // The high-resolution path had no confirmation loop at all: a
           // cost-protection gate came back as a flat error and the sheet was
           // abandoned. It now offers the same choice the single-sheet path
@@ -12619,8 +12621,20 @@ function DrawingsTab({ project }) {
             }
           }
           if (!batchRev && started && started.revision_number) batchRev = started.revision_number;
+          // A set: the server reads each sheet as soon as it is sent, beside the others, while this
+          // tab prepares the next one. Once every sheet is sent the tab can be closed.
+          if (pages.length > 1) { sentRuns.push(started.run_id); continue; }
           const summary = await pollAnalysisRun(started.run_id);
           totalItems += summary.item_count || 0;
+        }
+        if (sentRuns.length) {
+          setTiling(t => ({ ...t, [d.id]: `All ${sentRuns.length} sheets sent. The server is reading them now — you can close this tab or carry on working; the BOQ is ready in a few minutes.` }));
+          qActivity({ phase: "toast", id: qActId(), label: `All ${sentRuns.length} sheets sent`, message: "The server is reading them now. You can close this tab; the BOQ shows when it is ready." });
+          const sums = await Promise.all(sentRuns.map(id => pollAnalysisRun(id).catch(e => ({ item_count: 0, failed: e }))));
+          totalItems += sums.reduce((a, x) => a + (x.item_count || 0), 0);
+          const failed = sums.filter(x => x.failed).length;
+          if (failed === sums.length) throw sums[0].failed;
+          if (failed) setErr(`${failed} of ${sums.length} sheets could not be read. Run those sheets again from the sheet check; the others are in the BOQ.`);
         }
         if (blankPages === pages.length) throw new Error("Every page chosen is blank, so there was nothing to read. Check the page numbers, or upload the drawing again.");
         // Nothing for MEP / ELV on the sheet: it may be an architectural or civil sheet uploaded under an
@@ -19631,6 +19645,7 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
   }
   const n = pages.length;
   let total = 0, read = 0, tilesUsed = 0, batchRev = null;
+  const sent = [];
   for (let i = 0; i < n; i++) {
     const pn = pages[i];
     const pg = await pdf.getPage(pn);
@@ -19651,15 +19666,23 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
     const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pn), refZones);
     say(`Reading the sheet's schedules${label}…`);
     const scheduleImages = await renderScheduleCrops(pdf, pn, projectId, drawing.id, refZones);
-    say(`Reading ${tiles.length} tiles with AI${label}…`);
+    say(n > 1 ? `Sending to the server${label}… keep this tab open until every sheet is sent` : `Reading ${tiles.length} tiles with AI${label}…`);
     const started = await callEngine("analyze_drawing_tiled", {
       ...payload, drawing_id: drawing.id, page_number: pn, tiles, grid,
       reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages,
       ...(batchRev ? { batch_revision: batchRev } : {}), ...(labels[pn] ? { page_label: labels[pn] } : {}), ...(floors[pn] ? { page_floor: floors[pn] } : {}),
     });
     if (!batchRev && started && started.revision_number) batchRev = started.revision_number;
+    read++; tilesUsed += tiles.length;
+    if (n > 1) { sent.push(started.run_id); continue; }
     const summary = await pollAnalysisRun(started.run_id);
-    total += summary.item_count || 0; read++; tilesUsed += tiles.length;
+    total += summary.item_count || 0;
+  }
+  if (sent.length) {
+    say(`All ${sent.length} sheets sent. The server is reading them now — you can close this tab; the BOQ is ready in a few minutes.`);
+    const sums = await Promise.all(sent.map(id => pollAnalysisRun(id).catch(e => ({ item_count: 0, failed: e }))));
+    total += sums.reduce((a, x) => a + (x.item_count || 0), 0);
+    if (sums.every(x => x.failed)) throw sums[0].failed;
   }
   if (!read) throw new Error("Every page of this drawing is blank, so there was nothing to read.");
   return { item_count: total, pages_processed: read, method: `high resolution, ${tilesUsed} tiles` };
@@ -25550,6 +25573,8 @@ function ActivityCenter({ onOpenProject }) {
         pushError({ key: d.id, title: `${d.label || "Request"} could not start`, message: d.message || "Something went wrong." });
       } else if (d.phase === "refresh") {
         setOpen(true); poll();
+      } else if (d.phase === "toast") {
+        pushToast({ key: d.id, title: d.label, sub: d.message || "" });
       }
     };
     window.addEventListener("q-activity", on);

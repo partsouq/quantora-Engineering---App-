@@ -2087,8 +2087,8 @@ async function checkPlanLimit(
     let current = 0;
     if (ids.length) {
       const { count } = await admin.from("analysis_runs").select("id", { count: "exact", head: true })
-        .in("drawing_id", ids).not("change_reason", "is", null).eq("is_admin_assisted", false);
-      current = count ?? 0;
+        .in("drawing_id", ids).not("change_reason", "is", null).not("change_reason", "like", "Sheet % of the same set").eq("is_admin_assisted", false);
+      current = count ?? 0;   // the extra sheets of one set are not reworks, so they never use up the rework allowance
     }
     return { ok: current + requestedUnits <= maxRework, current, limit: maxRework, remaining: Math.max(0, maxRework - current) };
   }
@@ -3255,12 +3255,23 @@ Deno.serve(async (req: Request) => {
       // it took to read it. The extra tiles are our cost of doing the job
       // properly, not something to bill the customer twice for.
       const requestedPages = 1;
-      const pageCheck = isAdminOverride ? { ok: true, current: 0, limit: null, remaining: Infinity } : await checkPlanLimit(admin, companyId, plan, company, "drawing_page", requestedPages);
+      // A sheet set (2026-11-01, later): the browser sends each prepared sheet straight away, so
+      // several sheets of one drawing are read at the same time. Sheets still being read are not in
+      // the usage yet, so they are counted here -- a plan limit cannot be passed by sending fast.
+      const isSetSheet = Number.isInteger(batch_revision) && batch_revision! > 0;
+      let inFlightSheets = 0;
+      if (isSetSheet && !isAdminOverride) {
+        const { count } = await admin.from("analysis_runs").select("id", { count: "exact", head: true })
+          .eq("drawing_id", drawing_id).eq("status", "processing").gte("created_at", new Date(Date.now() - INFLIGHT_WINDOW_MS).toISOString());
+        inFlightSheets = count ?? 0;
+      }
+      const pageCheck = isAdminOverride ? { ok: true, current: 0, limit: null, remaining: Infinity } : await checkPlanLimit(admin, companyId, plan, company, "drawing_page", requestedPages + inFlightSheets);
       if (!pageCheck.ok) {
-        return jsonResponse({ error: pageLimitMessage(pageCheck, requestedPages, plan) }, 429);
+        return jsonResponse({ error: pageLimitMessage(pageCheck, requestedPages + inFlightSheets, plan) }, 429);
       }
 
-      const alreadyRunning = await findInFlightRun(admin, drawing_id);
+      // a sheet of a set is meant to run beside the set's other sheets, so it is never folded into one
+      const alreadyRunning = isSetSheet ? null : await findInFlightRun(admin, drawing_id);
       if (alreadyRunning) {
         return jsonResponse({
           run_id: alreadyRunning.id, revision_number: alreadyRunning.revision_number,
@@ -3634,7 +3645,9 @@ Deno.serve(async (req: Request) => {
           { companyId, billing: pageCheck.billing === "wallet" ? "wallet" : legacyUsage.billing },
           userId, project.id, "analyze_drawing_tiled", totalUsage, requestedPages, Date.now() - startTime, isAdminOverride, run.id
         );
-        await admin.from("drawings").update({ pages_ai_processed: (drawing.pages_ai_processed ?? 0) + requestedPages }).eq("id", drawing_id);
+        // read fresh: other sheets of the same set may have finished meanwhile
+        const { data: freshDrawing } = await admin.from("drawings").select("pages_ai_processed").eq("id", drawing_id).maybeSingle();
+        await admin.from("drawings").update({ pages_ai_processed: (freshDrawing?.pages_ai_processed ?? drawing.pages_ai_processed ?? 0) + requestedPages }).eq("id", drawing_id);
 
         // The results are saved, so the tile images have done their job. Left
         // behind they would accumulate in the customer's own storage folder
