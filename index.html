@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -5452,13 +5452,28 @@ async function xlDownloadStyled(sheetDefs, filename, meta) {
 
 async function callEngine(action, payload) {
   try { clearUsageCache(); } catch (_) {}   // an engine call changes pages used
-  const { data: { session } } = await sb.auth.getSession();
-  const res = await fetch(FN_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
-    body: JSON.stringify({ action, ...payload }),
-  });
-  const json = await res.json();
+  // Live activity: the panel shows this the moment it is sent (see ActivityCenter).
+  const actLabel = Q_ACT_LABEL[action], actId = actLabel ? qActId() : null;
+  if (actId) qActivity({ phase: "start", id: actId, label: actLabel,
+    expect: action === "analyze_drawing_tiled" ? Q_ACT_EXPECT.tiled : action === "classify_pages" ? Q_ACT_EXPECT.classify : Q_ACT_EXPECT.takeoff });
+  let res, json;
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    res = await fetch(FN_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ action, ...payload }),
+    });
+    json = await res.json();
+  } catch (netErr) {
+    if (actId) qActivity({ phase: "error", id: actId, label: actLabel, message: "The request did not reach the server. Check your connection and try again." });
+    throw netErr;
+  }
+  if (actId) {
+    if (res.ok) qActivity({ phase: json && json.run_id ? "accepted" : "done", id: actId, runId: json && json.run_id, label: json && json.run_id ? undefined : actLabel });
+    else if (res.status === 429 || json.requires_confirmation) qActivity({ phase: "done", id: actId, label: null });   // the plan / confirmation dialogs handle these
+    else qActivity({ phase: "error", id: actId, label: actLabel, message: json.error || "AI engine request failed" });
+  }
   if (!res.ok) {
     if (res.status === 429) {
       // Let any listening UI (the upgrade modal) know the plan cap was hit,
@@ -8254,6 +8269,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
   });
   // The currency follows the country until the person picks one themselves.
   const [currencyTouched, setCurrencyTouched] = useState(!!(existingProject && existingProject.currency));
+  const [sysTab, setSysTab] = useState("ELV");            // the discipline open in the systems picker
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   // An existing project may hold a type that predates the list -- including one
@@ -8564,54 +8580,73 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
             </span>
           </div>
           <p className="text-[11px] text-slate-400 mt-1 mb-3">
-            Pick what this project covers. Use “All” on a discipline, then untick what is not in scope.
+            Use Quick add for a usual package, or open a discipline and tick its systems.
           </p>
-          {/* 2026-10-27: civil, structural and architectural works sit beside
-              MEP and ELV, so a project can say it includes them. */}
-          {[["MEP & ELV", Object.entries(SYSTEM_GROUPS).filter(([g]) => g !== "Other")],
-            ["Civil & architectural — measured in m, m², m³, kg", Object.entries(PROJECT_CIVIL_GROUPS)]].map(([band, groups]) => (
-          <div key={band} style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", margin: "4px 0 6px", color: "var(--q-text-dim,#94a3b8)" }}>{band}</div>
-          <div className="grid gap-3 md:grid-cols-2">
-            {groups.map(([group, systems]) => {
-              const picked = systems.filter(sy => (form.required_systems || []).includes(sy));
-              const all = picked.length === systems.length;
-              const setGroup = on => setForm(f => {
-                const cur = new Set(f.required_systems || []);
-                systems.forEach(sy => on ? cur.add(sy) : cur.delete(sy));
-                return { ...f, required_systems: [...cur] };
-              });
-              return (
-                <div key={group} className="rounded-xl border p-3" style={picked.length ? { borderColor: "rgba(57,135,229,.55)", background: "rgba(57,135,229,.06)" } : undefined}>
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-xs font-bold">{group} <span className="font-normal text-slate-400">· {picked.length}/{systems.length}</span></div>
-                    <div className="flex gap-1">
-                      <button type="button" onClick={() => setGroup(true)} disabled={all}
-                        className="text-[11px] font-semibold px-2 py-0.5 rounded border disabled:opacity-40">All</button>
-                      <button type="button" onClick={() => setGroup(false)} disabled={!picked.length}
-                        className="text-[11px] font-semibold px-2 py-0.5 rounded border disabled:opacity-40">None</button>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {systems.map(sy => {
-                      const on = (form.required_systems || []).includes(sy);
-                      return (
-                        <button key={sy} type="button" onClick={() => toggleSystem(sy)} aria-pressed={on}
-                          className="text-xs px-2.5 py-1 rounded-full border inline-flex items-center gap-1"
-                          style={on ? { background: "#3987e5", borderColor: "#3987e5", color: "#fff", fontWeight: 600 }
-                                    : { color: "var(--q-text-dim,#475569)" }}>
-                          <span style={{ width: 12, display: "inline-block", textAlign: "center" }}>{on ? "\u2713" : "+"}</span>
-                          {SYSTEM_LABEL(sy)}
-                        </button>
-                      );
-                    })}
-                  </div>
+          {/* 2026-11-01: one discipline at a time, as tabs with a count, its systems in a tidy
+              A-Z checklist; quick packages fill the usual sets in one click. */}
+          {(() => {
+            const GROUPS = { ...Object.fromEntries(Object.entries(SYSTEM_GROUPS).filter(([g]) => g !== "Other")), ...PROJECT_CIVIL_GROUPS };
+            const sel = new Set(form.required_systems || []);
+            const setMany = (list, on) => setForm(f => { const cur = new Set(f.required_systems || []); list.forEach(x => on ? cur.add(x) : cur.delete(x)); return { ...f, required_systems: [...cur] }; });
+            const PRESETS = [
+              ["ELV package", SYSTEM_GROUPS["ELV"]],
+              ["Fire & life safety", SYSTEM_GROUPS["Fire"].concat(["lighting"])],
+              ["Full MEP", [].concat(SYSTEM_GROUPS["Electrical"], SYSTEM_GROUPS["Mechanical (HVAC)"], SYSTEM_GROUPS["Plumbing"], SYSTEM_GROUPS["Fire"])],
+              ["MEP + ELV", [].concat(...Object.entries(SYSTEM_GROUPS).filter(([g]) => g !== "Other").map(([, v]) => v))],
+              ["Fit-out", PROJECT_CIVIL_GROUPS["Architectural & Fit-out"]],
+            ];
+            const list = (GROUPS[sysTab] || []).slice().sort((x, y) => SYSTEM_LABEL(x).localeCompare(SYSTEM_LABEL(y)));
+            const picked = list.filter(x => sel.has(x));
+            return (
+              <div style={{ border: "1px solid rgba(148,163,184,.3)", borderRadius: 14, padding: 14 }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 700, opacity: .7, marginRight: 4 }}>Quick add:</span>
+                  {PRESETS.map(([name, arr]) => {
+                    const on = arr.every(x => sel.has(x));
+                    return <button key={name} type="button" onClick={() => setMany(arr, !on)}
+                      style={{ fontSize: 12, fontWeight: 700, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                        border: "1px solid " + (on ? "#3987e5" : "rgba(148,163,184,.45)"), background: on ? "rgba(57,135,229,.18)" : "transparent", color: on ? "#93c5fd" : "inherit" }}>
+                      {on ? "\u2713 " : "+ "}{name}</button>;
+                  })}
                 </div>
-              );
-            })}
-          </div>
-          </div>
-          ))}
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", borderBottom: "1px solid rgba(148,163,184,.25)", paddingBottom: 8, marginBottom: 12 }}>
+                  {Object.entries(GROUPS).map(([g, arr]) => {
+                    const n = arr.filter(x => sel.has(x)).length, on = g === sysTab;
+                    return <button key={g} type="button" onClick={() => setSysTab(g)}
+                      style={{ fontSize: 12.5, fontWeight: on ? 800 : 600, padding: "7px 12px", borderRadius: 9, cursor: "pointer", border: 0,
+                        background: on ? "#2563eb" : "rgba(148,163,184,.12)", color: on ? "#fff" : "inherit" }}>
+                      {g.replace(" (HVAC)", "")}{n ? <span style={{ marginLeft: 6, fontSize: 11, padding: "1px 7px", borderRadius: 999, background: on ? "rgba(255,255,255,.25)" : "#2563eb", color: "#fff" }}>{n}</span> : null}
+                    </button>;
+                  })}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, opacity: .75 }}>{sysTab}: {picked.length} of {list.length} selected</span>
+                  <span style={{ display: "flex", gap: 6 }}>
+                    <button type="button" onClick={() => setMany(list, true)} disabled={picked.length === list.length} className="text-[11px] font-semibold px-2 py-0.5 rounded border disabled:opacity-40">Select all</button>
+                    <button type="button" onClick={() => setMany(list, false)} disabled={!picked.length} className="text-[11px] font-semibold px-2 py-0.5 rounded border disabled:opacity-40">Clear</button>
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 6 }}>
+                  {list.map(sy => {
+                    const on = sel.has(sy);
+                    return (
+                      <label key={sy} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 9, cursor: "pointer", fontSize: 13,
+                        border: "1px solid " + (on ? "rgba(57,135,229,.7)" : "rgba(148,163,184,.25)"), background: on ? "rgba(57,135,229,.12)" : "transparent", fontWeight: on ? 700 : 500 }}>
+                        <input type="checkbox" checked={on} onChange={() => toggleSystem(sy)} style={{ accentColor: "#2563eb" }} />
+                        {SYSTEM_LABEL(sy)}
+                      </label>
+                    );
+                  })}
+                </div>
+                {sel.size > 0 && (
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(148,163,184,.2)", fontSize: 12, lineHeight: 1.6 }}>
+                    <b>Selected:</b>{" "}
+                    {Object.entries(GROUPS).map(([g, arr]) => { const n = arr.filter(x => sel.has(x)); return n.length ? <span key={g} style={{ marginRight: 12 }}>{g.replace(" (HVAC)", "")} <b>{n.length}</b></span> : null; })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <div className="flex items-center gap-3 mt-2">
             <button type="button" onClick={() => toggleSystem("other")} aria-pressed={(form.required_systems || []).includes("other")}
               className="text-xs px-2.5 py-1 rounded-full border"
@@ -9739,13 +9774,25 @@ const TENDER_FN_URL = `${SUPABASE_URL}/functions/v1/tender-engine`;
 async function callEdge(url, action, payload) {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) throw new Error("Your session has expired — please sign in again.");
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
-    body: JSON.stringify({ action, ...payload }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || "Request failed");
+  const actLabel = Q_ACT_LABEL[action], actId = actLabel ? qActId() : null;
+  if (actId) qActivity({ phase: "start", id: actId, label: actLabel, expect: action === "generate_design" ? Q_ACT_EXPECT.design : Q_ACT_EXPECT.quick });
+  let res, json;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ action, ...payload }),
+    });
+    json = await res.json().catch(() => ({}));
+  } catch (netErr) {
+    if (actId) qActivity({ phase: "error", id: actId, label: actLabel, message: "The request did not reach the server. Check your connection and try again." });
+    throw netErr;
+  }
+  if (!res.ok) {
+    if (actId) qActivity({ phase: "error", id: actId, label: actLabel, message: json.error || "Request failed" });
+    throw new Error(json.error || "Request failed");
+  }
+  if (actId) qActivity({ phase: "done", id: actId, label: actLabel });
   return json;
 }
 const callProcurement = (action, payload) => callEdge(PROC_FN_URL, action, payload);
@@ -11632,7 +11679,11 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [counts, setCounts] = useState(null);
-  const match = typed.trim() === project.project_name.trim();
+  // 2026-11-01: no typing. The person picks why (a dropdown) and ticks that they understand;
+  // the reason is kept with the support log so we learn why projects are removed.
+  const [reason, setReason] = useState("");
+  const [understood, setUnderstood] = useState(false);
+  const match = !!reason && understood;
 
   useEffect(() => {
     (async () => {
@@ -11700,11 +11751,19 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
           Your AI usage and billing history are kept — those records stay on your account and are simply no
           longer linked to a project.
         </p>
-        <label className="text-xs font-semibold text-slate-600 block mt-4 mb-1">
-          Type the project name to confirm
+        <label className="text-xs font-semibold text-slate-600 block mt-4 mb-1">Why are you deleting it?</label>
+        <select className="w-full border rounded-lg px-3 py-2 text-sm bg-white" value={reason} onChange={e => setReason(e.target.value)}>
+          <option value="">Choose a reason…</option>
+          <option value="test">It was a test project</option>
+          <option value="duplicate">It is a duplicate</option>
+          <option value="lost">The tender was lost or cancelled</option>
+          <option value="finished">The project is finished</option>
+          <option value="other">Other</option>
+        </select>
+        <label className="flex items-start gap-2 mt-3 text-sm text-slate-700 cursor-pointer">
+          <input type="checkbox" className="mt-1" checked={understood} onChange={e => setUnderstood(e.target.checked)} />
+          <span>I understand <b>{project.project_name}</b> and everything listed above will be deleted permanently.</span>
         </label>
-        <input className="w-full border rounded-lg px-3 py-2 text-sm" value={typed}
-          placeholder={project.project_name} onChange={e => setTyped(e.target.value)} />
         {err && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-3">{err}</div>}
         <div className="flex gap-2 mt-5 justify-end">
           <button onClick={onClose} className="text-sm font-semibold border px-4 py-2 rounded-lg hover:bg-slate-50">Cancel</button>
@@ -12011,6 +12070,7 @@ function DrawingsTab({ project }) {
   const measuringRef = useRef({});                          // run id -> drawing name, while its ducts are measured
   const [err, setErr] = useState("");
   const [expandedHistory, setExpandedHistory] = useState(null);
+  const [rowMenu, setRowMenu] = useState(null);      // the drawing whose "More" menu is open
   const [classifyDrawing, setClassifyDrawing] = useState(null);
   const [markupDrawing, setMarkupDrawing] = useState(null);
   const [selectedForCombine, setSelectedForCombine] = useState({});
@@ -12656,13 +12716,13 @@ function DrawingsTab({ project }) {
         </details>
         <div className="mt-3">
           <button onClick={analyzeAllPending} disabled={anyAiCallInFlight} className="text-xs bg-slate-900 text-white px-3 py-2 rounded-lg font-semibold hover:bg-slate-800 disabled:opacity-50">Analyze All Un-analyzed Drawings</button>
-          <span className="text-xs text-slate-400 ml-2">Runs AI analysis on every uploaded drawing that hasn't been analyzed yet, one at a time, so a full drawing set produces one complete project BOQ without clicking "Analyze" on each file individually.</span>
+          <span className="text-xs text-slate-400 ml-2">Reads every drawing not analysed yet, one after another, into one project BOQ.</span>
         </div>
         <div className="mt-2">
           <button onClick={analyzeCombined} disabled={anyAiCallInFlight} className="text-xs bg-white text-slate-900 border border-slate-300 px-3 py-2 rounded-lg font-semibold hover:bg-slate-50 disabled:opacity-50">
             {combining ? "Analyzing combined set…" : `Combine & Analyze Selected (${Object.values(selectedForCombine).filter(Boolean).length})`}
           </button>
-          <span className="text-xs text-slate-400 ml-2">Check 2+ drawings below, then run this to send them to the AI together in ONE call — the AI deduplicates items that appear on more than one of them (e.g. the same camera on both an architectural plan and an ELV layout), instead of counting it twice.</span>
+          <span className="text-xs text-slate-400 ml-2">Tick 2 or more drawings below to read them together: an item shown on several sheets is counted once.</span>
         </div>
       </div>
 
@@ -12720,31 +12780,32 @@ function DrawingsTab({ project }) {
                 {NEEDS_EXPORT_TYPES.includes(d.file_type) && d.analysis_source_path && (
                   <div className="text-[10px] text-blue-700 bg-blue-50 inline-block px-2 py-0.5 rounded-full mt-1">AI analysis via attached export</div>
                 )}
-                {runs[d.id] && (
-                  <button onClick={()=>setExpandedHistory(expandedHistory===d.id?null:d.id)} className="text-xs text-blue-600 hover:underline mt-1">
-                    {runs[d.id].length} analysis run(s) · latest: {runs[d.id][0].status} (rev {runs[d.id][0].revision_number}) · {expandedHistory===d.id ? "hide history" : "show revision history"}
-                  </button>
-                )}
                 </div>
               </div>
-              <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
-                <button onClick={()=>previewDrawing(d.storage_path)} className="text-xs text-slate-600 border px-3 py-2 rounded-lg hover:bg-slate-50">Preview</button>
-                <button onClick={()=>deleteDrawing(d)} className="text-xs text-rose-600 border border-rose-200 px-3 py-2 rounded-lg hover:bg-rose-50">Delete</button>
-                {/* 2026-10-27: report a wrong or failed result on this sheet,
-                    with the latest run attached so pages can be returned. */}
-                <button onClick={() => {
-                    const r0 = runs[d.id] && runs[d.id][0];
-                    supportOpen({
-                      kind: "issue", page: "drawings", projectId: project.id,
-                      drawingId: d.id, drawingName: d.file_name,
-                      runId: r0 ? r0.id : null, runRev: r0 ? r0.revision_number : null, runStatus: r0 ? r0.status : null,
-                      errorText: r0 && r0.status === "failed" ? r0.error_message : null,
-                      category: r0 && r0.status === "failed" ? "analysis" : "",
-                      refundAsk: !!(r0 && r0.status === "completed"),
-                    });
-                  }}
-                  title="Something wrong with this sheet's result? Tell us and ask for the pages back."
-                  className="text-xs text-amber-700 border border-amber-200 px-3 py-2 rounded-lg hover:bg-amber-50">Report</button>
+              {/* 2026-11-01: one row = file | status | actions, the same on every drawing.
+                  The status says in words where this sheet is; one main button does the
+                  next step; everything else sits in "More". */}
+              {(() => {
+                const r0 = runs[d.id] && runs[d.id][0];
+                const sm = (r0 && r0.summary) || {};
+                const busy = analyzing[d.id] || tiling[d.id] || (r0 && r0.status === "processing");
+                const [txt, col, bg] = busy ? [tiling[d.id] || (sm.measuring ? "Measuring…" : "Analysing…"), "#3b82f6", "rgba(59,130,246,.16)"]
+                  : !r0 ? ["Not analysed yet", "#94a3b8", "rgba(148,163,184,.16)"]
+                  : r0.status === "failed" ? ["Failed: see details", "#f43f5e", "rgba(244,63,94,.16)"]
+                  : r0.status === "completed" ? [`Done · ${Number(sm.item_count ?? 0)} BOQ lines`, "#10b981", "rgba(16,185,129,.16)"]
+                  : [r0.status, "#94a3b8", "rgba(148,163,184,.16)"];
+                return (
+                  <div style={{ minWidth: 190, display: "grid", gap: 4, justifyItems: "start" }}>
+                    <span className={busy ? "animate-pulse" : ""} style={{ fontSize: 12, fontWeight: 700, color: col, background: bg, border: "1px solid " + col, padding: "4px 10px", borderRadius: 999 }}>{txt}</span>
+                    {runs[d.id] && (
+                      <button onClick={()=>setExpandedHistory(expandedHistory===d.id?null:d.id)} className="text-[11px] text-blue-600 hover:underline">
+                        Revision {runs[d.id][0].revision_number} · {expandedHistory===d.id ? "hide history" : `history (${runs[d.id].length})`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+              <div className="flex items-center gap-2" style={{ flexWrap: "wrap", justifyContent: "flex-end", position: "relative" }}>
                 {runs[d.id] && (
                   <button onClick={()=>{ setMarkupDucts(false); setMarkupDrawing(d); }} className="text-xs text-blue-700 bg-blue-50 px-3 py-2 rounded-lg font-semibold">View Markup</button>
                 )}
@@ -12766,21 +12827,15 @@ function DrawingsTab({ project }) {
                 })()}
                 {canAnalyze(d) ? (
                   <>
-                    {d.file_type === "pdf" && (
-                      <button onClick={()=>setClassifyDrawing(d)} className="text-xs text-violet-700 border border-violet-300 bg-violet-50 px-3 py-2 rounded-lg font-semibold hover:bg-violet-100">
-                        Classify & Select Pages
-                      </button>
-                    )}
                     <button onClick={()=>analyzeAuto(d)} disabled={anyAiCallInFlight || !!tiling[d.id]}
                       title={anyAiCallInFlight && !analyzing[d.id] && !tiling[d.id]
                         ? "Another AI analysis is already running -- please wait for it to finish first"
                         : "Quantora measures the sheet and reads it at whatever resolution its symbols need."}
-                      className={`bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50 ${!runs[d.id] && !tiling[d.id] && !analyzing[d.id] ? "ring-2 ring-offset-2 ring-blue-500 animate-pulse" : ""}`}>
+                      className={`text-white text-xs font-bold px-4 py-2 rounded-lg disabled:opacity-50 ${!runs[d.id] && !tiling[d.id] && !analyzing[d.id] ? "ring-2 ring-offset-2 ring-blue-500" : ""}`}
+                      style={{ background: runs[d.id] ? "#334155" : "#2563eb" }}>
                       {tiling[d.id] || (analyzing[d.id] ? "Analyzing with AI…" : (runs[d.id] ? "Re-analyze" : "Analyze with AI"))}
                     </button>
-                    {!runs[d.id] && !tiling[d.id] && !analyzing[d.id] && (
-                      <span className="text-[11px] text-blue-700 font-semibold">← Next step: get this drawing's BOQ</span>
-                    )}
+
                   </>
                 ) : d.discipline === "specification" ? <span className="text-xs text-slate-400">Reference document</span> : NEEDS_EXPORT_TYPES.includes(d.file_type) ? (
                   <label className="text-xs text-amber-700 border border-amber-200 bg-amber-50 px-3 py-2 rounded-lg font-semibold cursor-pointer">
@@ -12789,6 +12844,30 @@ function DrawingsTab({ project }) {
                       onChange={e=>{ if (e.target.files[0]) attachExport(d.id, e.target.files[0]); e.target.value=""; }} />
                   </label>
                 ) : <span className="text-xs text-slate-400">CAD parsing not yet wired</span>}
+                <button onClick={() => setRowMenu(rowMenu === d.id ? null : d.id)}
+                  className="text-xs text-slate-700 border px-3 py-2 rounded-lg hover:bg-slate-50 font-semibold">More ▾</button>
+                {rowMenu === d.id && (
+                  <>
+                    <div onClick={() => setRowMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 30 }} />
+                    <div className="qrow-menu" style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 31, minWidth: 220, padding: 6,
+                      borderRadius: 12, border: "1px solid rgba(148,163,184,.35)", background: "var(--q-surface, #0f1a3a)", boxShadow: "0 18px 40px rgba(0,0,0,.45)", display: "grid" }}>
+                      {[["Preview the drawing", () => previewDrawing(d.storage_path)],
+                        ...(d.file_type === "pdf" && canAnalyze(d) ? [["Choose pages to read", () => setClassifyDrawing(d)]] : []),
+                        ["Report a problem with this sheet", () => {
+                          const r0 = runs[d.id] && runs[d.id][0];
+                          supportOpen({ kind: "issue", page: "drawings", projectId: project.id, drawingId: d.id, drawingName: d.file_name,
+                            runId: r0 ? r0.id : null, runRev: r0 ? r0.revision_number : null, runStatus: r0 ? r0.status : null,
+                            errorText: r0 && r0.status === "failed" ? r0.error_message : null,
+                            category: r0 && r0.status === "failed" ? "analysis" : "", refundAsk: !!(r0 && r0.status === "completed") });
+                        }],
+                        ["Delete drawing", () => deleteDrawing(d), true]].map(([label, fn, danger]) => (
+                        <button key={label} onClick={() => { setRowMenu(null); fn(); }}
+                          style={{ textAlign: "left", padding: "9px 12px", borderRadius: 8, fontSize: 13, fontWeight: 600, background: "transparent", border: 0, cursor: "pointer",
+                            color: danger ? "#f43f5e" : "inherit", borderTop: danger ? "1px solid rgba(148,163,184,.2)" : 0, marginTop: danger ? 4 : 0 }}>{label}</button>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
             {expandedHistory === d.id && runs[d.id] && (
@@ -25212,6 +25291,318 @@ function BoqAccuracyBar({ project, itemCount }) {
 // A single line, three words, and a cross. Modelled on the prompt Claude itself
 // uses, for the same reason: the cheapest possible question gets answered, and
 // a long one gets closed.
+// ---------------------------------------------------------------------------
+// Live activity (2026-11-01). Users could not tell what was happening after
+// they pressed Analyze / Generate: nothing showed that work had started, how
+// far it was, or that it had failed. Now every long process shows up at once
+// in a panel at the bottom of the screen (started -> running -> done), a
+// finished run pops a short green note, and a failure pops a glowing red card
+// that stays until it is read. Two sources feed it:
+//   - events from callEngine / callEdge the moment a request is sent or fails
+//     (instant, even before the server has created a run), and
+//   - polling of the user's own analysis_runs and draftsman_jobs (the truth,
+//     survives a page refresh and covers work started on another tab).
+// ---------------------------------------------------------------------------
+const Q_ACT_LABEL = {
+  analyze_drawing: "Take-off", analyze_drawing_tiled: "Take-off", analyze_drawings_combined: "Combined take-off",
+  classify_pages: "Reading drawing pages", design_system: "System design", rework: "Re-analysis",
+  price_boq: "BOQ pricing", generate_design: "Design drawings", analyze_document: "Tender document analysis",
+  draft_clarifications: "Tender clarifications", executive_summary: "Tender summary",
+};
+// Typical durations (seconds) used only for the progress bar, from real runs.
+const Q_ACT_EXPECT = { takeoff: 120, tiled: 200, combined: 240, classify: 60, design: 90, rework: 120, draftsman: 420, quick: 45 };
+// The Draftsman worker reports these stages as it goes (worker.py progress / run.py STAGE lines).
+const Q_DJ_STEPS = [["queued", "Queue", "Waiting for a free drafting engine"], ["reading", "Read", "Reading the plans…"],
+  ["designing", "Design", "Designing the systems…"], ["drawing", "Draw", "Drawing the sheets…"],
+  ["checking", "Check", "Checking against the codes…"], ["3d", "3D", "Building the 3D model…"], ["saving", "Save", "Saving the drawings…"]];
+function qActivity(detail) { try { window.dispatchEvent(new CustomEvent("q-activity", { detail })); } catch (_) {} }
+function qActId() { return "loc_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function qActSeen(key, set) {
+  try {
+    const s = JSON.parse(sessionStorage.getItem("q_act_seen") || "[]");
+    if (set) { s.push(key); sessionStorage.setItem("q_act_seen", JSON.stringify(s.slice(-200))); return true; }
+    return s.includes(key);
+  } catch (_) { return false; }
+}
+function qMmSs(sec) { sec = Math.max(0, Math.round(sec)); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`; }
+
+function ActivityCenter({ onOpenProject }) {
+  const [local, setLocal] = useState({});          // id -> item, from the events (instant)
+  const [server, setServer] = useState([]);        // items from the database
+  const [open, setOpen] = useState(false);
+  const [toasts, setToasts] = useState([]);        // finished ones: short green notes
+  const [errors, setErrors] = useState([]);        // failed ones: glowing cards, until dismissed
+  const [now, setNow] = useState(Date.now());
+  const mounted = useRef(Date.now());
+  const userRef = useRef(null);
+  const known = useRef({});                        // server key -> last status, to notice changes
+
+  const pushToast = (t) => {
+    setToasts(ts => [...ts.filter(x => x.key !== t.key), t].slice(-3));
+    setTimeout(() => setToasts(ts => ts.filter(x => x.key !== t.key)), 9000);
+  };
+  const pushError = (e) => { if (qActSeen("err:" + e.key)) return; setErrors(es => [...es.filter(x => x.key !== e.key), e].slice(-3)); };
+  const dismissError = (key) => { qActSeen("err:" + key, true); setErrors(es => es.filter(x => x.key !== key)); };
+
+  // Instant events from the request helpers.
+  useEffect(() => {
+    const on = (ev) => {
+      const d = ev.detail || {};
+      if (d.phase === "start") {
+        setLocal(l => ({ ...l, [d.id]: { key: d.id, label: d.label, sub: d.sub || "", status: "Starting…", state: "active", started: Date.now(), expect: d.expect || Q_ACT_EXPECT.quick } }));
+        setOpen(true);
+      } else if (d.phase === "accepted") {
+        // the server took it: polling shows the real run from here, so drop the placeholder once it appears
+        setLocal(l => l[d.id] ? { ...l, [d.id]: { ...l[d.id], status: "Running on the server…", runId: d.runId || null } } : l);
+        if (!d.runId) setTimeout(() => setLocal(l => { const n = { ...l }; delete n[d.id]; return n; }), 1500);
+        poll();
+      } else if (d.phase === "done") {
+        setLocal(l => { const n = { ...l }; delete n[d.id]; return n; });
+        if (d.label) pushToast({ key: d.id, title: `${d.label} finished`, sub: d.sub || "" });
+      } else if (d.phase === "error") {
+        setLocal(l => { const n = { ...l }; delete n[d.id]; return n; });
+        pushError({ key: d.id, title: `${d.label || "Request"} could not start`, message: d.message || "Something went wrong." });
+      } else if (d.phase === "refresh") {
+        setOpen(true); poll();
+      }
+    };
+    window.addEventListener("q-activity", on);
+    return () => window.removeEventListener("q-activity", on);
+  }, []);
+
+  async function poll() {
+    try {
+      if (!userRef.current) {
+        const { data: { session } } = await sb.auth.getSession();
+        userRef.current = session?.user?.id || null;
+      }
+      const uid = userRef.current;
+      if (!uid) return;
+      const since = new Date(Date.now() - 6 * 3600e3).toISOString();
+      const [ar, dj] = await Promise.all([
+        sb.from("analysis_runs").select("id,status,run_kind,created_at,completed_at,error_message,summary,project_id,projects(project_name),drawings(file_name)")
+          .eq("triggered_by", uid).gte("created_at", since).order("created_at", { ascending: false }).limit(25),
+        sb.from("draftsman_jobs").select("id,status,ifc_name,systems,summary,created_at,started_at,finished_at,error,project_id,projects(project_name)")
+          .eq("created_by", uid).gte("created_at", since).order("created_at", { ascending: false }).limit(15),
+      ]);
+      const items = [];
+      for (const r of ar.data || []) {
+        // design_ifc runs belong to a Draftsman job, which has its own row below
+        if (r.status === "superseded" || r.run_kind === "design_ifc") continue;
+        const kind = r.run_kind === "tiled" ? "tiled" : r.run_kind === "design_drawing" ? "design" : "takeoff";
+        const isDesign = kind === "design";
+        const st = r.status === "completed" ? "done" : r.status === "failed" ? "failed" : "active";
+        items.push({ key: "ar:" + r.id, src: "run", id: r.id, label: isDesign ? "System design" : "Take-off", projectId: r.project_id,
+          sub: [r.projects?.project_name, r.drawings?.file_name].filter(Boolean).join(" · "),
+          state: st, status: st === "active" ? (r.status === "pending" ? "Queued" : "Reading the drawing and counting…") : st === "done" ? `${Number(r.summary?.item_count ?? 0)} BOQ lines` : "Failed",
+          started: Date.parse(r.created_at), ended: r.completed_at ? Date.parse(r.completed_at) : null,
+          expect: Q_ACT_EXPECT[kind], error: r.error_message, count: Number(r.summary?.item_count ?? 0),
+          steps: ["Sent", r.summary?.measuring ? "Measuring the lines" : "Reading and counting", "BOQ ready"],
+          step: st === "done" ? 3 : r.status === "pending" ? 1 : 1 });
+      }
+      const queued = (dj.data || []).filter(j => j.status === "queued");
+      let pos = {};
+      if (queued.length) {
+        try {
+          const { data } = await sb.rpc("draftsman_queue_positions", { p_ids: queued.map(j => j.id) });
+          for (const x of data || []) pos[x.job_id] = x.position;
+        } catch (_) { /* optional: shown when the database function exists */ }
+      }
+      for (const j of dj.data || []) {
+        if (j.status === "cancelled") continue;
+        const st = j.status === "done" ? "done" : j.status === "failed" ? "failed" : "active";
+        const p = pos[j.id];
+        items.push({ key: "dj:" + j.id, src: "draftsman", id: j.id, label: "Draftsman drawings", projectId: j.project_id,
+          sub: [j.projects?.project_name, (j.systems || []).slice(0, 4).join(", ").toUpperCase()].filter(Boolean).join(" · "),
+          state: st, status: st === "active" ? (j.status === "queued" ? (p ? `Waiting for a free drafting engine — ${p === 1 ? "next in line" : `position ${p}`}` : "Waiting for a free drafting engine") : "Designing and drawing the sheets…") : st === "done" ? "Drawings ready" : "Failed",
+          started: Date.parse(j.started_at || j.created_at), ended: j.finished_at ? Date.parse(j.finished_at) : null,
+          expect: Q_ACT_EXPECT.draftsman, queued: j.status === "queued", error: j.error,
+          steps: Q_DJ_STEPS.map(x => x[1]),
+          step: st === "done" ? Q_DJ_STEPS.length : j.status === "queued" ? 0 : Math.max(1, Q_DJ_STEPS.findIndex(x => x[0] === (j.summary && j.summary.stage)) ) });
+        if (st === "active" && j.status === "running") {
+          const lab = (Q_DJ_STEPS.find(x => x[0] === (j.summary && j.summary.stage)) || [])[2];
+          if (lab) items[items.length - 1].status = lab;
+        }
+      }
+      // Notice what changed since the last look. Things that finished before this page opened
+      // are history, not news: no pop-up for those.
+      for (const it of items) {
+        const prev = known.current[it.key];
+        known.current[it.key] = it.state;
+        if (it.state === "active" && prev === undefined) setOpen(true);   // a job started (here or on another tab): show it
+        const fresh = prev === "active" || (prev === undefined && (it.ended || 0) > mounted.current);
+        if (it.state === "done" && fresh && !qActSeen("ok:" + it.key)) {
+          qActSeen("ok:" + it.key, true);
+          pushToast({ key: it.key, title: `${it.label} finished`, sub: [it.status, it.sub].filter(Boolean).join(" · "), item: it });
+        }
+        if (it.state === "failed" && fresh) {
+          pushError({ key: it.key, title: `${it.label} failed`, message: it.error || "The run stopped without a message.", item: it });
+        }
+      }
+      setServer(items);
+      // a placeholder whose run is now visible from the server is no longer needed
+      // and a placeholder the server never turned into a visible run (a quick action) is cleared after a while
+      setLocal(l => { const n = { ...l }; for (const k of Object.keys(n)) {
+        if ((n[k].runId && items.some(i => i.id === n[k].runId)) || Date.now() - n[k].started > Math.max(180, 3 * (n[k].expect || 60)) * 1000) delete n[k];
+      } return n; });
+    } catch (_) { /* never let the status panel break the page */ }
+  }
+
+  // Poll fast while something is running, slowly otherwise; slower again in a hidden tab.
+  const anyActive = Object.keys(local).length > 0 || server.some(i => i.state === "active");
+  useEffect(() => {
+    let alive = true, t;
+    const loop = async () => {
+      if (!alive) return;
+      await poll();
+      const hidden = typeof document !== "undefined" && document.hidden;
+      t = setTimeout(loop, anyActive ? (hidden ? 15000 : 4000) : (hidden ? 90000 : 30000));
+    };
+    loop();
+    return () => { alive = false; clearTimeout(t); };
+  }, [anyActive]);
+  useEffect(() => { if (!anyActive) return; const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, [anyActive]);
+
+  const active = [...Object.values(local), ...server.filter(i => i.state === "active")];
+  const recent = server.filter(i => i.state !== "active" && i.ended && Date.now() - i.ended < 30 * 60e3).slice(0, 5);
+
+  const openProject = async (projectId, tab) => {
+    if (!projectId || !onOpenProject) return;
+    try { const { data } = await sb.from("projects").select("*").eq("id", projectId).maybeSingle(); if (data) { onOpenProject(data, tab); setOpen(false); } } catch (_) {}
+  };
+
+  const Row = ({ it }) => {
+    const el = ((it.ended || now) - (it.started || now)) / 1000;
+    const pct = it.state === "active" ? (it.queued ? 4 : Math.min(94, Math.max(6, (el / (it.expect || 60)) * 100))) : 100;
+    const col = it.state === "failed" ? "#f43f5e" : it.state === "done" ? "#10b981" : "#3b82f6";
+    return (
+      <div style={{ minWidth: 0, padding: "10px 12px", borderRadius: 12, background: "rgba(255,255,255,.04)", border: "1px solid rgba(148,163,184,.18)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className={it.state === "active" ? "qact-spin" : ""} style={{ flexShrink: 0, width: 18, height: 18, borderRadius: 999,
+            border: `2.5px solid ${col}`, borderTopColor: it.state === "active" ? "transparent" : col, display: "grid", placeItems: "center", fontSize: 11, color: col, fontWeight: 800 }}>
+            {it.state === "done" ? "✓" : it.state === "failed" ? "!" : ""}</span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <b style={{ fontSize: 13 }}>{it.label}</b>
+              <span style={{ fontSize: 11.5, opacity: .7, fontVariantNumeric: "tabular-nums" }}>{it.state === "active" && !it.queued ? qMmSs(el) : ""}</span>
+            </div>
+            {it.sub && <div style={{ fontSize: 11.5, opacity: .65, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.sub}</div>}
+            <div style={{ fontSize: 12, marginTop: 2, color: it.state === "failed" ? "#fda4af" : it.state === "done" ? "#6ee7b7" : "#bfdbfe" }}>{it.status}</div>
+          </div>
+        </div>
+        {it.steps && it.state !== "failed" && (
+          <div style={{ display: "flex", gap: 4, marginTop: 10 }}>
+            {it.steps.map((name, i) => {
+              const done = i < it.step, cur = i === it.step && it.state === "active";
+              return (
+                <div key={name} style={{ flex: 1, minWidth: 0 }}>
+                  <div className={cur ? "qact-bar" : ""} style={{ height: 4, borderRadius: 4, background: done ? "#10b981" : cur ? "#3b82f6" : "rgba(148,163,184,.25)" }} />
+                  <div style={{ fontSize: 10, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                    color: done ? "#6ee7b7" : cur ? "#bfdbfe" : "#64748b", fontWeight: cur ? 800 : 600 }}>{done ? "✓ " : ""}{name}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {!it.steps && <div style={{ height: 4, borderRadius: 4, background: "rgba(148,163,184,.18)", marginTop: 8, overflow: "hidden" }}>
+          <div className={it.state === "active" ? "qact-bar" : ""} style={{ height: "100%", width: pct + "%", background: col, borderRadius: 4, transition: "width 1s linear" }} />
+        </div>}
+        {it.state === "done" && it.src === "run" && it.projectId && (
+          <button onClick={() => openProject(it.projectId, "boq")} style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: "#93c5fd", background: "none", border: 0, cursor: "pointer", padding: 0 }}>Open Take-off &amp; BOQ →</button>)}
+      </div>
+    );
+  };
+
+  const show = active.length > 0 || recent.length > 0;
+  return (
+    <>
+      <style>{`
+        @keyframes qactSpin{to{transform:rotate(360deg)}}
+        .qact-spin{animation:qactSpin 1s linear infinite}
+        @keyframes qactBar{0%{opacity:.75}50%{opacity:1}100%{opacity:.75}}
+        .qact-bar{animation:qactBar 1.4s ease-in-out infinite}
+        @keyframes qactGlow{0%,100%{box-shadow:0 0 0 1px rgba(244,63,94,.65),0 0 18px 2px rgba(244,63,94,.35),0 18px 40px rgba(0,0,0,.45)}
+          50%{box-shadow:0 0 0 2px rgba(244,63,94,.95),0 0 34px 8px rgba(244,63,94,.55),0 18px 40px rgba(0,0,0,.45)}}
+        .qact-err{animation:qactGlow 1.6s ease-in-out infinite}
+        @keyframes qactPill{0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.55),0 8px 24px rgba(0,0,0,.35)}60%{box-shadow:0 0 0 9px rgba(59,130,246,0),0 8px 24px rgba(0,0,0,.35)}}
+        .qact-pill-on{animation:qactPill 2s ease-out infinite}
+        @keyframes qactIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+        .qact-in{animation:qactIn .25s ease-out}
+      `}</style>
+
+      {/* the running panel: bottom centre, between Help (left) and Estima (right) */}
+      {show && (
+        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 18, zIndex: 60, width: "min(440px, calc(100vw - 32px))", color: "#e2e8f0" }}>
+          {open && (
+            <div className="qact-in" style={{ marginBottom: 8, padding: 12, borderRadius: 16, background: "rgba(10,18,44,.97)", border: "1px solid rgba(96,165,250,.35)",
+              boxShadow: "0 24px 60px rgba(0,0,0,.5)", maxHeight: "55vh", overflowY: "auto", display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <b style={{ fontSize: 14 }}>Activity</b>
+                <button onClick={() => setOpen(false)} style={{ background: "none", border: 0, color: "#94a3b8", cursor: "pointer", fontSize: 12 }}>Hide</button>
+              </div>
+              {active.map(it => <Row key={it.key} it={it} />)}
+              {recent.length > 0 && <div style={{ fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase", opacity: .55, marginTop: 4 }}>Recently finished</div>}
+              {recent.map(it => <Row key={it.key} it={it} />)}
+              <div style={{ fontSize: 11, opacity: .55 }}>You can leave this page: the work carries on and shows here when it is done.</div>
+            </div>
+          )}
+          <button onClick={() => setOpen(o => !o)} className={active.length ? "qact-pill-on" : ""}
+            style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 auto", padding: "9px 16px", borderRadius: 999, border: "1px solid rgba(96,165,250,.5)",
+              background: active.length ? "linear-gradient(90deg,#1d4ed8,#2563eb)" : "rgba(15,23,42,.92)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+            {active.length ? <span className="qact-spin" style={{ width: 14, height: 14, borderRadius: 999, border: "2px solid #fff", borderTopColor: "transparent" }} /> : <span>✓</span>}
+            {active.length ? `${active.length} task${active.length > 1 ? "s" : ""} running` : "All tasks finished"}
+            <span style={{ opacity: .75, fontWeight: 600 }}>{open ? "▾" : "▴"}</span>
+          </button>
+        </div>
+      )}
+
+      {/* finished: short green notes, top right */}
+      <div style={{ position: "fixed", top: 78, right: 18, zIndex: 70, display: "grid", gap: 8, width: "min(360px, calc(100vw - 32px))" }}>
+        {toasts.map(t => (
+          <div key={t.key} className="qact-in" style={{ padding: "12px 14px", borderRadius: 14, background: "rgba(6,40,30,.97)", border: "1px solid rgba(16,185,129,.6)",
+            color: "#d1fae5", boxShadow: "0 16px 36px rgba(0,0,0,.4)" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <span style={{ width: 22, height: 22, borderRadius: 999, background: "#10b981", color: "#04120c", display: "grid", placeItems: "center", fontWeight: 900, flexShrink: 0 }}>✓</span>
+              <div style={{ minWidth: 0 }}><b style={{ fontSize: 13.5 }}>{t.title}</b>
+                {t.sub && <div style={{ fontSize: 12, opacity: .85 }}>{t.sub}</div>}
+                {t.item && t.item.src === "run" && t.item.projectId && (
+                  <button onClick={() => openProject(t.item.projectId, "boq")} style={{ marginTop: 6, fontSize: 12, fontWeight: 700, color: "#6ee7b7", background: "none", border: 0, padding: 0, cursor: "pointer" }}>Open Take-off &amp; BOQ →</button>)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* failed: a glowing red card that stays until it is read */}
+      {errors.length > 0 && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "grid", placeItems: "center", background: "rgba(2,6,23,.45)", padding: 16 }}>
+          <div style={{ display: "grid", gap: 12, width: "min(460px, 100%)" }}>
+            {errors.map(e => (
+              <div key={e.key} className="qact-err qact-in" style={{ padding: 18, borderRadius: 18, background: "rgba(40,8,18,.98)", border: "1px solid #f43f5e", color: "#ffe4e6" }}>
+                <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                  <span style={{ width: 30, height: 30, borderRadius: 999, background: "#f43f5e", color: "#fff", display: "grid", placeItems: "center", fontWeight: 900, fontSize: 17, flexShrink: 0 }}>!</span>
+                  <div style={{ minWidth: 0 }}>
+                    <b style={{ fontSize: 16 }}>{e.title}</b>
+                    {e.item?.sub && <div style={{ fontSize: 12.5, opacity: .8, marginTop: 2 }}>{e.item.sub}</div>}
+                    <div style={{ fontSize: 13.5, marginTop: 8, lineHeight: 1.45, wordBreak: "break-word" }}>{String(e.message).slice(0, 400)}</div>
+                    <div style={{ fontSize: 12, opacity: .7, marginTop: 8 }}>You can try again, or press Report this and we will look into it.</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+                  <button onClick={() => { supportOpen({ kind: "issue", category: "analysis", projectId: e.item?.projectId, errorText: e.message }); dismissError(e.key); }}
+                    style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid #fda4af", background: "transparent", color: "#ffe4e6", fontWeight: 700, cursor: "pointer" }}>Report this</button>
+                  <button onClick={() => dismissError(e.key)}
+                    style={{ padding: "8px 16px", borderRadius: 10, border: 0, background: "#f43f5e", color: "#fff", fontWeight: 800, cursor: "pointer" }}>OK</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function PulseBar() {
   const KEY = "q_pulse_at";
   const NUDGE_KEY = "q_feedback_asked_at";
@@ -32533,7 +32924,7 @@ function DraftsmanIfcPackage({ project }) {
         project_id: project.id, ifc_path: first, ifc_name: firstName, systems, options,
         ...(region ? { region } : {}),
       });
-      if (error) throw error;
+      if (error) throw error; qActivity({ phase: "refresh" });   // the activity panel shows the queued job at once
       setFiles([]); setPlanInfo({});
       await load();
     } catch (e) {
@@ -32579,7 +32970,7 @@ function DraftsmanIfcPackage({ project }) {
         project_id: project.id, ifc_path: j.ifc_path, ifc_name: j.ifc_name, systems: d ? [d.system] : j.systems, options,
         ...(j.region ? { region: j.region } : {}),
       });
-      if (error) throw error;
+      if (error) throw error; qActivity({ phase: "refresh" });   // the activity panel shows the queued job at once
       setRework(null); setRwText(""); setRwFiles([]);
       await load();
     } catch (e) {
@@ -32600,7 +32991,7 @@ function DraftsmanIfcPackage({ project }) {
         project_id: project.id, ifc_path: pj.ifc_path, ifc_name: pj.ifc_name, systems: pj.systems, options,
         ...(pj.region ? { region: pj.region } : {}),
       });
-      if (error) throw error;
+      if (error) throw error; qActivity({ phase: "refresh" });   // the activity panel shows the queued job at once
       await load();
     } catch (e) { setErr(e.message || String(e)); } finally { setBusy(false); }
   };
@@ -32826,7 +33217,7 @@ function DraftsmanIfcPackage({ project }) {
         project_id: project.id, ifc_path: latestPkg.ifc_path, ifc_name: latestPkg.ifc_name, systems: addSel,
         options: { ...base, add_to: latestPkg.id }, ...(latestPkg.region ? { region: latestPkg.region } : {}),
       });
-      if (error) throw error;
+      if (error) throw error; qActivity({ phase: "refresh" });   // the activity panel shows the queued job at once
       setAddOpen(false); setAddSel([]);
       await load();
     } catch (e) { setErr(e.message || String(e)); } finally { setBusy(false); }
@@ -34274,6 +34665,7 @@ function App() {
           boxShadow: "0 6px 18px rgba(37,99,235,0.35)",
         }}>Help</button>
       <EstimaDock currentProject={view.name === "project" ? view.project : null} />
+      <ActivityCenter onOpenProject={(p, tab) => setView({ name: "project", project: p, tab })} />
       <PulseBar />
       <SupportModal open={!!supportCtx} initial={supportCtx} onClose={()=>setSupportCtx(null)} />
       {/* the location question comes first; the rating waits behind it */}
