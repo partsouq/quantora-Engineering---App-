@@ -3200,13 +3200,16 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
 
-      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes, tagged_devices: rawDevices, schedule_images: rawSchedImgs, batch_revision, page_label } = body as {
+      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes, tagged_devices: rawDevices, schedule_images: rawSchedImgs, batch_revision, page_label, page_floor } = body as {
         drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any; measured_routes?: any; tagged_devices?: any; schedule_images?: any;
-        batch_revision?: number; page_label?: string;
+        batch_revision?: number; page_label?: string; page_floor?: string;
         confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean;
       };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
       if (dErr || !drawing) throw new Error("Drawing not found.");
+      // One file can hold several floors (2026-11-01): the sheet check before the run says which
+      // floor each sheet is, and this sheet's rows are filed under it (not saved on the drawing).
+      if (typeof page_floor === "string" && page_floor.trim()) drawing.floor_label = page_floor.trim().slice(0, 60);
       // Civil sheets are measured from the whole sheet: a tile cuts dimension
       // strings and room outlines in half. The app sends them to analyze_drawing.
       if (isCivilDrawing(drawing)) {
