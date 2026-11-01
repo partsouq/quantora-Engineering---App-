@@ -3286,6 +3286,15 @@ Deno.serve(async (req: Request) => {
       // sheets read together, not only the last one. Accepted only for the drawing's newest revision.
       const joinBatch = Number.isInteger(batch_revision) && batch_revision! > 0 && batch_revision === topRevision;
       const nextRevision = joinBatch ? topRevision : topRevision + 1;
+      // A sheet sent again (the tab closed while it was on its way, then "Send the rest"): hand back
+      // the run that already has it, so no sheet is ever counted twice in one BOQ.
+      if (joinBatch) {
+        const { data: same } = await admin.from("analysis_runs").select("id, revision_number, status")
+          .eq("drawing_id", drawing_id).eq("revision_number", topRevision)
+          .eq("change_reason", `Sheet ${Math.max(1, Number(page_number) || 1)} of the same set`)
+          .in("status", ["processing", "completed"]).limit(1).maybeSingle();
+        if (same) return jsonResponse({ run_id: same.id, revision_number: same.revision_number, background: true, status: same.status, reused_existing_run: true, pages_processed: 0 });
+      }
 
       const { data: run, error: runErr } = await admin.from("analysis_runs").insert({
         project_id: project.id, drawing_id, revision_number: nextRevision, status: "processing", triggered_by: userId,

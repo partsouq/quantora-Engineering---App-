@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.7"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.8"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4218,6 +4218,31 @@ async function qSheetFacts(pdf, drawingId) {
       read: sug.pages.includes(n), skippedWhy: sug.skipped.includes(n) ? "Master plan: shows the same devices as its part plans" : "" });
   }
   return sheets;
+}
+
+// Sheets of a set not sent yet (2026-11-01): kept in this browser so a closed tab or a
+// sleeping laptop can pick up where it stopped, into the same BOQ. Per-viewer convenience only;
+// the server still checks every sheet.
+const Q_SET_KEY = (id) => "q_set_pending_" + id;
+function qSetPendingGet(id) {
+  try {
+    const v = JSON.parse(localStorage.getItem(Q_SET_KEY(id)) || "null");
+    if (!v || !Array.isArray(v.pending) || !v.pending.length || Date.now() - (v.at || 0) > 3 * 86400000) return null;
+    return v;
+  } catch (_) { return null; }
+}
+function qSetPendingPut(id, v) {
+  try { if (v && v.pending && v.pending.length) localStorage.setItem(Q_SET_KEY(id), JSON.stringify({ ...v, at: Date.now() })); else localStorage.removeItem(Q_SET_KEY(id)); } catch (_) {}
+  try { window.dispatchEvent(new CustomEvent("q-set-pending")); } catch (_) {}
+}
+// "Leave anyway?" while sheets are still being prepared in this tab.
+let qSendingSets = 0;
+function qSendingGuard(on) {
+  qSendingSets = Math.max(0, qSendingSets + (on ? 1 : -1));
+  if (!window.__qLeaveGuard) {
+    window.__qLeaveGuard = (e) => { if (qSendingSets > 0) { e.preventDefault(); e.returnValue = "Sheets are still being sent. Leave anyway?"; return e.returnValue; } };
+    window.addEventListener("beforeunload", window.__qLeaveGuard);
+  }
 }
 
 function SheetCheckModal({ state, onClose }) {
@@ -12504,8 +12529,10 @@ function DrawingsTab({ project }) {
   const [tiling, setTiling] = useState({});
   const [sheetCheck, setSheetCheck] = useState(null);   // the "choose the sheets" panel, open while it waits for the user
   const askSheets = (st) => new Promise(resolve => setSheetCheck({ ...st, resolve }));
+  const [, setPendTick] = useState(0);   // a set that stopped part-way shows "Send the rest"
+  useEffect(() => { const on = () => setPendTick(t => t + 1); window.addEventListener("q-set-pending", on); return () => window.removeEventListener("q-set-pending", on); }, []);
 
-  async function analyzeAuto(d) {
+  async function analyzeAuto(d, resume) {
     setErr("");
     const isPdf = d.file_type === "pdf" || d.analysis_source_type === "pdf";
 
@@ -12549,21 +12576,24 @@ function DrawingsTab({ project }) {
 
     // Defined here so both the planned high-resolution path below and the
     // truncation fallback just above can run exactly the same take-off.
-    async function runTiled(pages) {
+    async function runTiled(pages, startRev) {
       let totalItems = 0;
       let totalBlankSkipped = 0;
       let blankPages = 0, scannedPages = 0;
-      let batchRev = null;     // every sheet after the first joins the first sheet's revision: one BOQ for the set
+      let batchRev = startRev || null;     // every sheet after the first joins the first sheet's revision: one BOQ for the set
       const sentRuns = [];     // sheets of a set handed to the server, read there side by side
+      const isSet = pages.length > 1 || !!startRev;
+      let pendingLeft = pages.slice();
+      if (isSet) { qSendingGuard(true); if (!startRev) qSetPendingPut(d.id, null); }
       try {
         // Sequential, not parallel: ai-engine's findInFlightRun would hand back
         // the first run rather than starting a second for the same drawing.
         for (let i = 0; i < pages.length; i++) {
           const pageNumber = pages[i];
-          const label = pages.length > 1 ? ` (sheet ${i + 1} of ${pages.length}${pageFloors && pageFloors[pageNumber] ? " · " + pageFloors[pageNumber] : ""})` : "";
+          const label = isSet ? ` (sheet ${i + 1} of ${pages.length}${pageFloors && pageFloors[pageNumber] ? " · " + pageFloors[pageNumber] : ""})` : "";
           // Same standard for every sheet: blank pages skipped, scans cleaned up first.
           const kind = (await inspectPdfPage(await pdf.getPage(pageNumber))).kind;
-          if (kind === "empty") { blankPages++; continue; }
+          if (kind === "empty") { blankPages++; pendingLeft = pendingLeft.filter(n => n !== pageNumber); continue; }
           const { tiles, grid, blankSkipped, plannedTiles } = await renderAndUploadTiles(
             pdf, pageNumber, project.id, d.id,
             (p) => setTiling(t => ({
@@ -12596,7 +12626,7 @@ function DrawingsTab({ project }) {
           if (measuredRoutes.length) console.log(`Sheet ${pageNumber}: measured`, measuredRoutes);
           setTiling(t => ({ ...t, [d.id]: `Reading the sheet's schedules${label}…` }));
           const scheduleImages = await renderScheduleCrops(pdf, pageNumber, project.id, d.id, refZones);
-          setTiling(t => ({ ...t, [d.id]: pages.length > 1 ? `Sending to the server${label}… keep this tab open until every sheet is sent` : `Reading ${tiles.length} tiles with AI${label}…` }));
+          setTiling(t => ({ ...t, [d.id]: isSet ? `Sending to the server${label}… keep this tab open until every sheet is sent` : `Reading ${tiles.length} tiles with AI${label}…` }));
           // The high-resolution path had no confirmation loop at all: a
           // cost-protection gate came back as a flat error and the sheet was
           // abandoned. It now offers the same choice the single-sheet path
@@ -12623,7 +12653,13 @@ function DrawingsTab({ project }) {
           if (!batchRev && started && started.revision_number) batchRev = started.revision_number;
           // A set: the server reads each sheet as soon as it is sent, beside the others, while this
           // tab prepares the next one. Once every sheet is sent the tab can be closed.
-          if (pages.length > 1) { sentRuns.push(started.run_id); continue; }
+          if (isSet) {
+            sentRuns.push(started.run_id);
+            pendingLeft = pendingLeft.filter(n => n !== pageNumber);
+            qSetPendingPut(d.id, { rev: batchRev, pending: pendingLeft, floors: pageFloors, labels: pageLabels, total: (resume && resume.total) || pages.length });
+            if (!pendingLeft.length) qSendingGuard(false);
+            continue;
+          }
           const summary = await pollAnalysisRun(started.run_id);
           totalItems += summary.item_count || 0;
         }
@@ -12660,10 +12696,20 @@ function DrawingsTab({ project }) {
         ) + (scannedPages ? `\n\n${scannedPages} scanned sheet${scannedPages === 1 ? " was" : "s were"} cleaned up first (white background, dark lines) so they read like a CAD print. A CAD PDF export still gives the most exact count.` : "")
           + (blankPages ? `\n\n${blankPages} blank page${blankPages === 1 ? " was" : "s were"} skipped.` : "");
       } catch (ex) {
-        setErr(ex.message);
+        setErr(isSet && pendingLeft.length && pendingLeft.length < pages.length
+          ? `${ex.message}\n\n${pendingLeft.length} sheet${pendingLeft.length === 1 ? " was" : "s were"} not sent. Use "Send the rest" on the drawing to finish the set.` : ex.message);
       } finally {
+        if (isSet && pendingLeft.length) qSendingGuard(false);
+        if (isSet && pendingLeft.length === pages.length && !startRev) qSetPendingPut(d.id, null);   // nothing sent: nothing to resume
         setTiling(t => ({ ...t, [d.id]: null }));
       }
+    }
+
+    // Picking up a set that stopped part-way: the sheets not sent yet, into the same BOQ.
+    if (resume && resume.pending && resume.pending.length) {
+      pageLabels = resume.labels || {}; pageFloors = resume.floors || {};
+      await runTiled(resume.pending, resume.rev);
+      return;
     }
 
     // A scanned sheet is never read whole: it is cleaned up and read at high
@@ -13050,6 +13096,24 @@ function DrawingsTab({ project }) {
                 )}
               </div>
             </div>
+            {(() => {
+              const pend = !tiling[d.id] && qSetPendingGet(d.id);
+              const top = runs[d.id] && runs[d.id][0];
+              if (!pend || (top && top.revision_number !== pend.rev)) return null;
+              return (
+                <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.55)",
+                  display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13 }}>
+                  <span style={{ flex: 1, minWidth: 220 }}>
+                    <b>{pend.pending.length} of {pend.total || pend.pending.length} sheets were not sent</b> — the page was closed before they were sent.
+                    The sheets already sent are in the BOQ; send the rest to complete it.
+                  </span>
+                  <button type="button" onClick={() => analyzeAuto(d, pend)} disabled={anyAiCallInFlight}
+                    style={{ padding: "7px 14px", borderRadius: 10, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>Send the rest</button>
+                  <button type="button" onClick={() => qSetPendingPut(d.id, null)}
+                    style={{ padding: "7px 10px", borderRadius: 10, border: "1px solid rgba(148,163,184,.45)", background: "transparent", color: "inherit", fontWeight: 600, cursor: "pointer" }}>Dismiss</button>
+                </div>
+              );
+            })()}
             {expandedHistory === d.id && runs[d.id] && (
               <div className="mt-3 bg-slate-50 rounded-lg overflow-x-auto">
                 <table className="w-full text-xs">
@@ -19646,6 +19710,8 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
   const n = pages.length;
   let total = 0, read = 0, tilesUsed = 0, batchRev = null;
   const sent = [];
+  if (n > 1) qSendingGuard(true);
+  try {
   for (let i = 0; i < n; i++) {
     const pn = pages[i];
     const pg = await pdf.getPage(pn);
@@ -19678,6 +19744,7 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
     const summary = await pollAnalysisRun(started.run_id);
     total += summary.item_count || 0;
   }
+  } finally { if (n > 1) qSendingGuard(false); }
   if (sent.length) {
     say(`All ${sent.length} sheets sent. The server is reading them now — you can close this tab; the BOQ is ready in a few minutes.`);
     const sums = await Promise.all(sent.map(id => pollAnalysisRun(id).catch(e => ({ item_count: 0, failed: e }))));
