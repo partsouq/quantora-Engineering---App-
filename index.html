@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.4"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4146,7 +4146,37 @@ const WHOLE_SHEET_RASTER_PX = 1568;
 const MIN_READABLE_PX_PER_MM = 4;
 // How many sheets one click may tile. A 20-page package at ~7 calls a page is
 // not something anyone should set off by accident.
-const MAX_AUTO_TILED_PAGES = 5;
+const MAX_AUTO_TILED_PAGES = 12;   // 2026-11-01: was 5; a 3-floor ELV set is 9 sheets (master + 2 part plans per floor)
+
+// Which sheets of a multi-page drawing set to read (2026-11-01). A set often carries, per floor,
+// a MASTER (key) plan and PART plans that show the same devices again at a larger scale: reading
+// both counts every device twice, and the master plan's symbols are too small to read anyway. So
+// when part plans exist, master / key / overall plans are left out by default. Labels come from
+// the page classification when it has run, else from the sheet's own text (free, in the browser).
+async function suggestPlanPages(pdf, drawingId) {
+  const total = pdf.numPages || 1;
+  const labels = {};
+  try {
+    const { data } = await sb.from("drawing_pages").select("page_number,page_label").eq("drawing_id", drawingId);
+    for (const r of data || []) if (r.page_label) labels[r.page_number] = String(r.page_label);
+  } catch (_) {}
+  for (let i = 1; i <= total && i <= 40; i++) {
+    if (labels[i]) continue;
+    try {
+      const tc = await (await pdf.getPage(i)).getTextContent();
+      const t = tc.items.map(x => x.str).join(" ").toUpperCase();
+      // a part plan usually carries a small "KEY PLAN" inset too, so KEY PLAN alone never marks a master
+      labels[i] = /\b(PART|ENLARGED)\s+PLAN\b/.test(t) ? "PART PLAN" : /\b(MASTER|OVERALL)\s+PLAN\b/.test(t) ? "MASTER PLAN" : "";
+    } catch (_) { labels[i] = ""; }
+  }
+  const isMaster = (l) => /\b(MASTER|OVERALL)\s+PLAN\b/i.test(l || "") && !/\b(PART|ENLARGED)\s+PLAN\b/i.test(l || "");
+  const isPart = (l) => /\b(PART|ENLARGED)\s+PLAN\b/i.test(l || "");
+  const all = Array.from({ length: total }, (_, k) => k + 1);
+  const hasParts = all.some(n => isPart(labels[n]));
+  const skipped = hasParts ? all.filter(n => isMaster(labels[n])) : [];
+  const pages = all.filter(n => !skipped.includes(n)).slice(0, MAX_AUTO_TILED_PAGES);
+  return { pages, skipped, labels };
+}
 
 // Everything needed to decide how to read a page, and to explain the decision.
 function assessPageForAnalysis(viewportAtScale1) {
@@ -12359,6 +12389,7 @@ function DrawingsTab({ project }) {
     }
 
     let pdf, assessment, sheetKind = "vector";
+    let pageLabels = {};       // sheet labels (master / part plan …), sent with each sheet for its notes
     try {
       setTiling(t => ({ ...t, [d.id]: "Checking drawing…" }));
       pdf = await openStoredPdf(d.analysis_source_path || d.storage_path);
@@ -12385,6 +12416,7 @@ function DrawingsTab({ project }) {
       let totalItems = 0;
       let totalBlankSkipped = 0;
       let blankPages = 0, scannedPages = 0;
+      let batchRev = null;     // every sheet after the first joins the first sheet's revision: one BOQ for the set
       try {
         // Sequential, not parallel: ai-engine's findInFlightRun would hand back
         // the first run rather than starting a second for the same drawing.
@@ -12437,6 +12469,7 @@ function DrawingsTab({ project }) {
             try {
               started = await callEngine("analyze_drawing_tiled", {
                 project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: refZones, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages, ...tileConfirms,
+                ...(batchRev ? { batch_revision: batchRev } : {}), ...(pageLabels && pageLabels[pageNumber] ? { page_label: pageLabels[pageNumber] } : {}),
               });
               break;
             } catch (ex) {
@@ -12448,6 +12481,7 @@ function DrawingsTab({ project }) {
               throw ex;
             }
           }
+          if (!batchRev && started && started.revision_number) batchRev = started.revision_number;
           const summary = await pollAnalysisRun(started.run_id);
           totalItems += summary.item_count || 0;
         }
@@ -12516,12 +12550,16 @@ function DrawingsTab({ project }) {
     const totalPages = pdf.numPages || 1;
     let pages = [1];
     if (totalPages > 1) {
-      const suggested = Math.min(totalPages, MAX_AUTO_TILED_PAGES);
+      setTiling(t => ({ ...t, [d.id]: "Looking at the sheets in this file…" }));
+      const sug = await suggestPlanPages(pdf, d.id);
+      pageLabels = sug.labels;
       const answer = window.prompt(
-        `This file has ${totalPages} pages, and each ${sheetKind === "scan" ? "scanned" : "large"} ${assessment.sheetName} sheet has to be read at high resolution.\n\n` +
-        `Which pages should be read? Enter numbers or a range, e.g. "1-3" or "2,5".\n` +
-        `Up to ${MAX_AUTO_TILED_PAGES} pages per run.`,
-        totalPages === 1 ? "1" : `1-${suggested}`
+        `This file has ${totalPages} sheets. All of them are read in one go, into one BOQ.\n\n` +
+        (sug.skipped.length
+          ? `Sheets ${sug.skipped.join(", ")} are master / key plans that repeat the part plans, so they are left out to avoid counting devices twice.\n\n`
+          : "") +
+        `Sheets to read (change the list if needed, e.g. "2,3,5-9"). Up to ${MAX_AUTO_TILED_PAGES} per run:`,
+        sug.pages.join(",")
       );
       if (answer === null) { setTiling(t => ({ ...t, [d.id]: null })); return; }
       pages = parsePageList(answer, totalPages);
