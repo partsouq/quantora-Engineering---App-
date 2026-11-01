@@ -38,7 +38,9 @@ begin
   perform net.http_post(
     url := 'https://mcwcvyuvlkmqsivnzvjy.supabase.co/functions/v1/push-notify',
     body := jsonb_build_object('action', 'send', 'title', p_title, 'body', left(coalesce(p_body, ''), 300), 'tag', p_tag, 'url', '/'),
-    headers := jsonb_build_object('content-type', 'application/json', 'x-push-secret', v_secret),
+    -- the public (anon) key only gets past the gateway; the real check is the internal secret
+    headers := jsonb_build_object('content-type', 'application/json', 'x-push-secret', v_secret,
+      'Authorization', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1jd2N2eXV2bGttcXNpdm56dmp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUxNjQ5OTksImV4cCI6MjEwMDc0MDk5OX0.YhwsYhxZOyNjCKqeycQorP88TDqCSYRsZutwWnvoRY0'),
     timeout_milliseconds := 10000);
 exception when others then
   raise warning 'q_push_send failed: %', sqlerrm;    -- a notification must never block the customer's message
