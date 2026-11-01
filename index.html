@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.19"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-01.20"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -26765,27 +26765,33 @@ function AdminLiveChatWatcher({ onOpen }) {
     check(); const id = setInterval(check, 20000);
     return () => { off(); clearInterval(id); };
   }, []);
-  const needAsk = !hideAsk && (perm === "default" || perm === "denied" || !soundOn || (perm === "granted" && !pushOk && "PushManager" in window));
+  const needAsk = !hideAsk && (perm === "default" || perm === "denied" || (perm === "granted" && !pushOk && "PushManager" in window));
   const goChat = () => { setBanner(null); try { window.dispatchEvent(new CustomEvent("q-open-admin-view", { detail: "livechat" })); } catch (_) {} if (onOpen) onOpen(); };
   return (<>
     {banner && (
-      <div style={{ position: "fixed", top: 76, left: "50%", transform: "translateX(-50%)", zIndex: 9999, display: "flex", alignItems: "center", gap: 12,
-        padding: "10px 14px", borderRadius: 12, background: "#065f46", color: "#ecfdf5", boxShadow: "0 10px 30px rgba(0,0,0,.45)", border: "1px solid #10b981", fontSize: 13.5, maxWidth: "92vw" }}>
-        <span style={{ fontSize: 16 }}>💬</span>
-        <span><b>New live chat message.</b> {banner.text}</span>
-        <button type="button" onClick={goChat} style={{ padding: "6px 12px", borderRadius: 8, border: 0, background: "#10b981", color: "#04261b", fontWeight: 800, cursor: "pointer" }}>Open Live Chat</button>
-        <button type="button" onClick={() => setBanner(null)} aria-label="Dismiss" style={{ background: "transparent", border: 0, color: "#a7f3d0", cursor: "pointer", fontSize: 16 }}>✕</button>
+      <div onClick={() => setBanner(null)} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(2,6,23,.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+        <div onClick={e => e.stopPropagation()} role="alertdialog" aria-label="New live chat message"
+          style={{ width: "min(400px, 100%)", borderRadius: 18, background: "#0b1a2e", border: "1px solid #10b981", boxShadow: "0 24px 60px rgba(0,0,0,.6)", padding: "22px 20px", textAlign: "center", color: "#e2e8f0" }}>
+          <div style={{ fontSize: 34 }}>💬</div>
+          <div style={{ fontSize: 18, fontWeight: 800, marginTop: 6 }}>New live chat message</div>
+          <div style={{ fontSize: 14, opacity: .8, marginTop: 6 }}>{banner.text}</div>
+          <button type="button" onClick={goChat} style={{ marginTop: 16, width: "100%", padding: "12px 14px", borderRadius: 12, border: 0, background: "#10b981", color: "#04261b", fontWeight: 800, fontSize: 15, cursor: "pointer" }}>Open Live Chat</button>
+          <button type="button" onClick={() => setBanner(null)} style={{ marginTop: 8, width: "100%", padding: "10px 14px", borderRadius: 12, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "#cbd5e1", fontWeight: 700, cursor: "pointer" }}>Later</button>
+        </div>
       </div>
     )}
     {needAsk && (
-      <div style={{ position: "fixed", left: 150, bottom: 22, zIndex: 9998, display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 12,
-        background: "#1e293b", color: "#e2e8f0", border: "1px solid #f59e0b", boxShadow: "0 8px 24px rgba(0,0,0,.4)", fontSize: 13 }}>
-        <span>🔔</span>
-        {perm === "denied"
-          ? <span>Chat alerts are blocked in Chrome. Click the 🔒 icon by the address → <b>Notifications → Allow</b>.</span>
-          : <span>Get a pop-up and a sound when a customer writes in Live Chat.</span>}
-        {perm !== "denied" && <button type="button" onClick={enable} style={{ padding: "6px 12px", borderRadius: 8, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, cursor: "pointer" }}>Turn on chat alerts</button>}
-        <button type="button" onClick={() => setHideAsk(true)} aria-label="Hide" style={{ background: "transparent", border: 0, color: "#94a3b8", cursor: "pointer" }}>✕</button>
+      <div style={{ position: "fixed", inset: 0, zIndex: 9998, background: "rgba(2,6,23,.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+        <div role="dialog" aria-label="Turn on chat alerts"
+          style={{ width: "min(400px, 100%)", borderRadius: 18, background: "#0f172a", border: "1px solid #f59e0b", boxShadow: "0 24px 60px rgba(0,0,0,.6)", padding: "22px 20px", textAlign: "center", color: "#e2e8f0" }}>
+          <div style={{ fontSize: 34 }}>🔔</div>
+          <div style={{ fontSize: 18, fontWeight: 800, marginTop: 6 }}>Turn on chat alerts</div>
+          {perm === "denied"
+            ? <div style={{ fontSize: 14, opacity: .85, marginTop: 8 }}>Alerts are blocked on this device. Tap the 🔒 icon by the address, then <b>Notifications → Allow</b>, and reopen Quantora.</div>
+            : <div style={{ fontSize: 14, opacity: .85, marginTop: 8 }}>Get a notification on this device whenever a customer writes in Live Chat — even when Quantora is closed.</div>}
+          {perm !== "denied" && <button type="button" onClick={async (e) => { e.stopPropagation(); await enable(); }} style={{ marginTop: 16, width: "100%", padding: "12px 14px", borderRadius: 12, border: 0, background: "#f59e0b", color: "#1f1300", fontWeight: 800, fontSize: 15, cursor: "pointer" }}>Turn on chat alerts</button>}
+          <button type="button" onClick={() => setHideAsk(true)} style={{ marginTop: 8, width: "100%", padding: "10px 14px", borderRadius: 12, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "#cbd5e1", fontWeight: 700, cursor: "pointer" }}>Not now</button>
+        </div>
       </div>
     )}
   </>);
