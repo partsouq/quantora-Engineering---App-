@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.04"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.05"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -6128,6 +6128,35 @@ function qPlanInfo() {
   return __qPlanP;
 }
 async function qIsWelcomePack() { const p = await qPlanInfo(); return !!(p && p.is_trial); }
+// Welcome Pack locks (2026-11-02): these parts are for paid plans. The user sees a short
+// "Upgrade to use" card in their place -- never an error. Everything else stays open.
+const Q_WELCOME_LOCKED = {
+  tender:        ["Reading tenders with AI", "Quantora reads your tender documents and summarises the scope, risks and RFIs."],
+  specification: ["Checking specifications", "Quantora reads the specification clause by clause."],
+  compliance:    ["Specification compliance", "Quantora checks every requirement in the specification."],
+  comparison:    ["Comparing quotations", "Compare your suppliers side by side on price and items."],
+  qcompliance:   ["Checking quotations", "Quantora checks each supplier quotation against your specification or purchase request and tells you what does not comply, and why."],
+  estimation:    ["Pricing your BOQ", "Put rates and totals on your BOQ and get the tender value."],
+  cost:          ["Cost & Budget", "Track the project cost and budget from your priced BOQ."],
+  products:      ["Product Recommendations", "Brands, models and prices suggested for every BOQ line."],
+  pricing:       ["Pricing your BOQ", "Put rates and totals on your BOQ and get the tender value."],
+  design:        ["System Design without drawings", "Quantora designs a complete system from your requirements, with no drawing needed."],
+};
+function QUpgradeCard({ k }) {
+  const [what, detail] = Q_WELCOME_LOCKED[k] || ["This feature", ""];
+  return (
+    <div style={{ display: "flex", justifyContent: "center", padding: "48px 12px" }}>
+      <div style={{ maxWidth: 460, width: "100%", textAlign: "center", borderRadius: 18, padding: "28px 24px", border: "1px solid rgba(124,58,237,.45)", background: "linear-gradient(180deg, rgba(124,58,237,.10), rgba(37,99,235,.06))" }}>
+        <div style={{ fontSize: 34 }}>🔒</div>
+        <div style={{ fontSize: 19, fontWeight: 800, marginTop: 8 }}>{what} is part of the paid plans</div>
+        <div style={{ fontSize: 14, opacity: .8, marginTop: 8, lineHeight: 1.5 }}>{detail}</div>
+        <button type="button" onClick={() => qOpenBilling(`${what} is part of the paid plans. Choose a plan to unlock it.`)}
+          style={{ marginTop: 18, padding: "12px 22px", borderRadius: 12, border: 0, fontWeight: 800, fontSize: 15, color: "#fff", cursor: "pointer", background: "linear-gradient(90deg,#2563eb,#7c3aed)" }}>Upgrade to use</button>
+        <div style={{ fontSize: 12, opacity: .65, marginTop: 12 }}>On the Welcome Pack you keep unlimited Manual Take-off and the complete Designed BOQ.</div>
+      </div>
+    </div>
+  );
+}
 async function qDownloadAllowed(what) {
   if (!(await qIsWelcomePack())) return true;
   window.dispatchEvent(new CustomEvent("plan-limit-reached", { detail: { message:
@@ -12231,6 +12260,9 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
 
 function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialTab }) {
   const [tab, setTab] = useState(initialTab || "overview");
+  const [welcome, setWelcome] = useState(false);
+  useEffect(() => { let a = true; qIsWelcomePack().then(v => { if (a) setWelcome(!!v); }).catch(() => {}); return () => { a = false; }; }, []);
+  const locked = (k) => (welcome && Q_WELCOME_LOCKED[k] ? <QUpgradeCard k={k} /> : null);
   const [navOpen, setNavOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 2026-08-12: the flat nine-tab bar was replaced with the grouped navigation
@@ -12256,7 +12288,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
       // work, and having it sit between the drawing upload and the take-off
       // made the estimating section read as two jobs at once. It lives in the
       // Draftsman workspace, where the base plan and the specification are.
-      ["boq", "Take-off & BOQ"],
+      ["boq", "AI Take-off & BOQ"],
       ["manual", "Manual Take-off"],
       ["estimation", "Estimation"],
     ]],
@@ -12302,7 +12334,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
                   ? "bg-blue-50 border-blue-600 text-blue-700 font-semibold"
                   : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               }`}
-            >{l}</button>
+            >{l}{welcome && Q_WELCOME_LOCKED[k] ? <span title="Paid plans" style={{ marginLeft: 6, fontSize: 11, opacity: .7 }}>🔒</span> : null}</button>
           ))}
         </div>
       ))}
@@ -12372,7 +12404,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
                 <span className="qws-sep">{group}</span>
                 {items.map(([k, l]) => (
                   <button key={`strip-${k}`} onClick={() => setTab(k)}
-                    className={`qws-chip${tab === k ? " is-on" : ""}`}>{l}</button>
+                    className={`qws-chip${tab === k ? " is-on" : ""}`}>{l}{welcome && Q_WELCOME_LOCKED[k] ? " 🔒" : ""}</button>
                 ))}
               </React.Fragment>
             ))}
@@ -12396,21 +12428,21 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
               <OverviewTab project={project} onViewFloors={() => setTab("boq")} />
             </>
           )}
-          {tab === "tender"        && <TenderIntelligenceTab project={project} />}
+          {tab === "tender" && (locked("tender") || <TenderIntelligenceTab project={project} />)}
           {tab === "vendors"       && <VendorsTab project={project} />}
           {tab === "rfq"           && <RfqPackagesTab project={project} />}
-          {tab === "comparison"    && <ComparisonTab project={project} />}
-          {tab === "qcompliance"   && <QuotationComplianceTab project={project} />}
+          {tab === "comparison" && (locked("comparison") || <ComparisonTab project={project} />)}
+          {tab === "qcompliance" && (locked("qcompliance") || <QuotationComplianceTab project={project} />)}
           {tab === "approvals"     && <ApprovalsTab project={project} onOpenTab={setTab} />}
           {tab === "drawings"      && <DrawingsTab project={project} />}
-          {tab === "design"        && <DesignTab project={project} />}
+          {tab === "design" && (locked("design") || <DesignTab project={project} />)}
           {tab === "boq"           && <BoqTab project={project} onGoToEstimation={() => setTab("estimation")} />}
           {tab === "manual"        && <ManualTakeoffTab project={project} onGoToBoq={() => setTab("boq")} />}
-          {tab === "estimation"    && <EstimationTab project={project} />}
-          {tab === "cost"          && <CostBudgetTab project={project} />}
-          {tab === "specification" && <SpecificationTab project={project} />}
-          {tab === "compliance"    && <ComplianceTab project={project} />}
-          {tab === "products"      && <ProductsTab project={project} />}
+          {tab === "estimation" && (locked("estimation") || <EstimationTab project={project} />)}
+          {tab === "cost" && (locked("cost") || <CostBudgetTab project={project} />)}
+          {tab === "specification" && (locked("specification") || <SpecificationTab project={project} />)}
+          {tab === "compliance" && (locked("compliance") || <ComplianceTab project={project} />)}
+          {tab === "products" && (locked("products") || <ProductsTab project={project} />)}
           {tab === "export"        && <ExportTab project={project} />}
           {tab === "chat"          && <ChatTab project={project} />}
         </main>
@@ -17116,7 +17148,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
   };
   const sendToBoq = async () => {
     if (!designed.length) return;
-    if (!window.confirm("Send these lines to the project's Take-off & BOQ? Lines sent from Manual Take-off before are replaced; AI take-off lines are not touched.")) return;
+    if (!window.confirm("Send these lines to the project's AI Take-off & BOQ page? Lines sent from Manual Take-off before are replaced; AI take-off lines are not touched.")) return;
     setSending("Sending…");
     try {
       const { error: delErr } = await sb.from("boq_items").delete().eq("project_id", project.id).eq("measurement_rule_code", "manual_takeoff");
@@ -17131,7 +17163,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
           review_status: you ? "confirmed" : "pending" });
       }
       for (let i = 0; i < rows.length; i += 200) { const { error } = await sb.from("boq_items").insert(rows.slice(i, i + 200)); if (error) throw error; }
-      setSending(`Sent ${rows.length} lines to Take-off & BOQ.`);
+      setSending(`Sent ${rows.length} lines to AI Take-off & BOQ.`);
       try { qStepDone("manual_takeoff", project.id); } catch (_) {}
     } catch (e) { setSending("Could not send: " + (e.message || String(e))); }
   };
@@ -17202,7 +17234,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
           <button type="button" style={{ ...btn(true), background: "linear-gradient(90deg,#2563eb,#7c3aed)", border: 0, padding: "10px 16px" }} onClick={sendToBoq} disabled={!designed.length || sending === "Sending…"}>Send to project BOQ →</button>
           <button type="button" style={btn(false)} onClick={exportExcel}>Export Excel</button>
           {sending && <span className="text-xs" style={{ opacity: .8 }}>{sending}</span>}
-          {/^Sent /.test(sending) && onGoToBoq && <button type="button" style={btn(false)} onClick={onGoToBoq}>Open Take-off & BOQ (pricing, export) →</button>}
+          {/^Sent /.test(sending) && onGoToBoq && <button type="button" style={btn(false)} onClick={onGoToBoq}>Open AI Take-off & BOQ (pricing, export) →</button>}
         </div>
       </div>
     );
@@ -17410,6 +17442,8 @@ function BoqTab({ project, onGoToEstimation }) {
   // drive boqListType as before; "pricing" swaps the whole page for the market
   // rate view, because it answers a different question and shares no columns.
   const [boqView, setBoqView] = useState("designed");
+  const [welcomeB, setWelcomeB] = useState(false);
+  useEffect(() => { let a = true; qIsWelcomePack().then(v => { if (a) setWelcomeB(!!v); }).catch(() => {}); return () => { a = false; }; }, []);
   // `focusedItemKey` opens the persistent Breakdown/Evidence/Notes drill-down
   // panel below the Simple List table, scoped to one item via its "View"
   // action -- this replaces the former two-panel dashboard's per-bucket
@@ -18192,7 +18226,7 @@ function BoqTab({ project, onGoToEstimation }) {
       </div>
 
       {boqView === "pricing" ? (
-        <PricingBoqPanel project={project} consolidated={consolidatedAll} loading={loading} />
+        welcomeB ? <QUpgradeCard k="pricing" /> : <PricingBoqPanel project={project} consolidated={consolidatedAll} loading={loading} />
       ) : (
       <React.Fragment>
       <BoqAccuracyBar project={project} itemCount={rawItems.length} />
