@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-01.20"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -35685,6 +35685,7 @@ function App() {
   // Step feedback: steps finished in this visit wait here until the user leaves the page.
   const [fbQueue, setFbQueue] = useState([]);
   const [fbOpen, setFbOpen] = useState(null);
+  const [fbTick, setFbTick] = useState(0);     // "open the next rating now" (2026-11-02)
   const [countryGate, setCountryGate] = useState(false);
   const [fbTrial, setFbTrial] = useState(null);       // null = not known yet
 
@@ -35756,7 +35757,9 @@ function App() {
         const { data } = await q;
         if (data && data.length) return;
       } catch (_) {}
-      setFbQueue(qs => qs.some(x => qFbKey(x) === qFbKey(it)) ? qs : qs.concat([it]));
+      // Ask about 5 s after the result appears (2026-11-02): people who finish and close the tab
+      // were never asked when the rating waited for a page change.
+      setTimeout(() => { setFbQueue(qs => qs.some(x => qFbKey(x) === qFbKey(it)) ? qs : qs.concat([it])); setFbTick(n => n + 1); }, 5000);
     };
     window.addEventListener("quantora:step-done", onDone);
     return () => window.removeEventListener("quantora:step-done", onDone);
@@ -35772,6 +35775,49 @@ function App() {
     setFbOpen(fbQueue[0]);
     setFbQueue(qs => qs.slice(1));
   }, [fbViewKey, fbQueue, session, isPlatformAdmin]);
+  // The timed ask: open the next rating unless sheets are still being sent from this tab
+  // (then try again shortly, so the pop-up never blocks an upload in progress).
+  useEffect(() => {
+    if (!fbTick || fbOpen || !fbQueue.length || !session || isPlatformAdmin) return;
+    if (qSendingSets > 0) { const id = setTimeout(() => setFbTick(n => n + 1), 5000); return () => clearTimeout(id); }
+    const id = setTimeout(() => { setFbOpen(cur => cur || fbQueue[0]); setFbQueue(qs => qs.slice(1)); }, 1200);   // a short pause between two questions
+    return () => clearTimeout(id);
+  }, [fbTick, fbOpen, fbQueue.length]);
+  // Catch-up at sign-in (2026-11-02): a finished take-off, design or drawing set that was never
+  // rated (the tab was closed first) is asked about on the next visit -- once per step and project.
+  useEffect(() => {
+    if (!session || isPlatformAdmin) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { data: prof } = await sb.from("profiles").select("company_id").eq("id", session.user.id).maybeSingle();
+        if (!prof || !prof.company_id) return;
+        const { data: projs } = await sb.from("projects").select("id").eq("company_id", prof.company_id);
+        const ids = (projs || []).map(p => p.id); if (!ids.length) return;
+        const since = new Date(Date.now() - 30 * 864e5).toISOString();
+        const { data: runs } = await sb.from("analysis_runs").select("project_id, run_kind, created_at").in("project_id", ids)
+          .eq("status", "completed").gte("created_at", since).order("created_at", { ascending: false }).limit(200);
+        const { data: mine } = await sb.from("platform_feedback").select("step, project_id").eq("user_id", session.user.id);
+        const done = new Set((mine || []).map(r => r.step + ":" + (r.project_id || "-")));
+        const want = [];
+        for (const r of runs || []) {
+          const k = r.run_kind || "";
+          if (k === "quotation_compliance") continue;
+          const step = /^design_(drawing|system)$/.test(k) ? "design" : k === "design_ifc" ? "draftsman" : "takeoff";
+          const it = { step, project_id: r.project_id, page: "catch-up" };
+          const key = step + ":" + r.project_id;
+          if (done.has(key) || want.some(w => w.step + ":" + w.project_id === key)) continue;
+          try { if (localStorage.getItem(qFbKey(it))) continue; } catch (_) {}
+          want.push(it);
+          if (want.length >= 1) break;          // one catch-up question per visit (the newest)
+        }
+        if (!alive || !want.length) return;
+        setFbQueue(qs => qs.concat(want.filter(w => !qs.some(x => qFbKey(x) === qFbKey(w)))));
+        setTimeout(() => setFbTick(n => n + 1), 4000);
+      } catch (e) { console.error("rating catch-up failed (non-fatal):", e); }
+    })();
+    return () => { alive = false; };
+  }, [session && session.user && session.user.id, isPlatformAdmin]);
 
   // Safety net: ensures every signed-in session has a company (and, for a
   // brand-new one, a stamped 2-day trial) even if AuthScreen's own
