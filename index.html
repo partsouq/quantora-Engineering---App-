@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4319,6 +4319,65 @@ async function qPushTest() {
     return await r.json();
   } catch (_) { return null; }
 }
+// ---- Staying up to date without pressing refresh ----
+// Views quietly reload their data every so often and when the user comes back to the tab.
+// Quiet means: no loading spinner, no pop-ups, and never while the user is typing or clicking.
+const qQuiet = { on: false, depth: 0 };
+function qUserIsTyping() {
+  const a = document.activeElement;
+  return !!(a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable));
+}
+let qLastInput = Date.now();
+try { ["pointerdown", "keydown", "wheel", "touchstart"].forEach(ev => window.addEventListener(ev, () => { qLastInput = Date.now(); }, { passive: true, capture: true })); } catch (_) {}
+function qWithTimeout(p, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(Object.assign(new Error("timeout"), { qTimeout: true })), ms);
+    Promise.resolve(p).then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+  });
+}
+function useQAutoRefresh(fn, seconds) {
+  const ref = useRef(fn); ref.current = fn;
+  useEffect(() => {
+    let last = Date.now(), running = false;
+    const run = async (force) => {
+      if (running || document.hidden) return;
+      if (!force && (qUserIsTyping() || Date.now() - qLastInput < 4000)) return;
+      running = true; last = Date.now(); qQuiet.depth++;
+      try { qQuiet.on = true; const p = ref.current(); qQuiet.on = false; await qWithTimeout(Promise.resolve(p), 20000); }
+      catch (_) {} finally { qQuiet.on = false; qQuiet.depth = Math.max(0, qQuiet.depth - 1); running = false; }
+    };
+    const t = setInterval(() => { if (Date.now() - last >= seconds * 1000) run(false); }, 5000);
+    const back = () => { if (!document.hidden && Date.now() - last > 10000) run(true); };
+    document.addEventListener("visibilitychange", back); window.addEventListener("focus", back);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", back); window.removeEventListener("focus", back); };
+  }, [seconds]);
+}
+// The signed-in user without a network round trip (getUser can stall after the laptop sleeps).
+async function qCurrentUser() {
+  try { const { data } = await qWithTimeout(sb.auth.getSession(), 8000); if (data && data.session && data.session.user) return data.session.user; } catch (_) {}
+  const { data: { user } } = await qWithTimeout(sb.auth.getUser(), 15000);
+  return user;
+}
+// A new version is out: switch to it on its own, but only when nobody is in the middle of something
+// (tab in the background, or no clicks or typing for 2 minutes; never during an upload or Manual Take-off).
+const qUpdate = { pending: null, busy: 0 };
+try { window.qUpdate = qUpdate; } catch (_) {}
+(function qWatchVersion() {
+  const check = async () => {
+    try {
+      const r = await fetch(location.pathname + "?v=" + Date.now(), { cache: "no-store" });
+      const m = (await r.text()).match(/QUANTORA_BUILD = "([^"]+)"/);
+      if (m && window.QUANTORA_BUILD && m[1] !== window.QUANTORA_BUILD) qUpdate.pending = m[1];
+    } catch (_) {}
+  };
+  const safe = () => !qUpdate.busy && !qUserIsTyping() && !document.querySelector("[data-q-noreload]") && !document.querySelector('[role="alertdialog"]');
+  const maybe = () => {
+    if (!qUpdate.pending || !safe()) return;
+    if (document.hidden || Date.now() - qLastInput > 120000) location.reload();
+  };
+  setTimeout(check, 30000); setInterval(check, 120000); setInterval(maybe, 10000);
+  document.addEventListener("visibilitychange", maybe);
+})();
 // ---- Pop-ups: every error and notice appears as a centred card, not a line of red text ----
 // qPop({ kind: "error" | "warn" | "info" | "success", title, message, action: { label, onClick } })
 // The same message is never stacked twice, and one closed a moment ago does not jump back.
@@ -4344,6 +4403,7 @@ function qPop(o) {
 function useQErr(init) {
   const [v, setV] = useState(init);
   const set = useCallback((x) => {
+    if (qQuiet.depth > 0) { setV(x); return; }   // a background refresh: no pop-up
     if (typeof x === "function") { setV(prev => { const n = x(prev); const t = qPopText(n); if (t) qPop({ kind: "error", message: t }); return n; }); return; }
     const t = qPopText(x);
     if (t) qPop({ kind: "error", message: t });
@@ -10533,8 +10593,9 @@ function TenderIntelligenceTab({ project }) {
   const [sub, setSub]         = useState("technical");
 
   useEffect(() => { load(); }, [project.id]);
+  useQAutoRefresh(() => load(), 60);   // keeps the page up to date without a reload
   async function load() {
-    setLoading(true); setError(null);
+    if (!qQuiet.on) setLoading(true); setError(null);
     try {
       const t = await ensureTender(project);
       setTender(t);
@@ -12746,6 +12807,7 @@ function DrawingsTab({ project }) {
   }
 
   useEffect(() => { load(); }, [project.id]);
+  useQAutoRefresh(() => load(), 30);   // keeps the page up to date without a reload
   async function load() {
     const { data } = await sb.from("drawings").select("*").eq("project_id", project.id).order("uploaded_at", { ascending: false });
     setDrawings(data || []);
@@ -12859,10 +12921,10 @@ function DrawingsTab({ project }) {
       try { const el = document.getElementById("qup-scope"); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("qup-flash"); setTimeout(() => el.classList.remove("qup-flash"), 4000); } } catch (_) {}
       return;
     }
-    setUploading(true); setErr(""); setStdSummary("");
+    setUploading(true); setErr(""); setStdSummary(""); qUpdate.busy++;
     const stdReports = [];
     try {
-      const { data: { user } } = await sb.auth.getUser();
+      const user = await qCurrentUser();
       for (const { file: original, floorLabel } of pendingFiles) {
         // Mandatory: every drawing is brought to the standard before it is saved.
         const { file, report } = await standardizeDrawingFile(original, setStdStatus);
@@ -12880,20 +12942,29 @@ function DrawingsTab({ project }) {
         // 2026-11-01: sheets in the file, counted now, so the limit is shown before Analyze.
         let sheetCount = null;
         if (fileType === "pdf" && window.pdfjsLib) {
-          try { const doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise; sheetCount = doc.numPages || null; try { doc.destroy(); } catch (_) {} } catch (_) {}
+          try { const doc = await qWithTimeout(window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise, 20000); sheetCount = doc.numPages || null; try { doc.destroy(); } catch (_) {} } catch (_) {}
         }
-        const { error: insErr } = await sb.from("drawings").insert({
+        setStdStatus(`Saving ${file.name}…`);
+        const insP = sb.from("drawings").insert({
           project_id: project.id, file_name: file.name, storage_path: path, file_type: fileType, total_pages_detected: sheetCount,   // page_count is generated from this column
           discipline, floor_label: (floorLabel || "").trim() || null, uploaded_by: user.id, file_hash: fileHash,
           takeoff_systems: scopeSystems, takeoff_custom: scopeCustom, sheet_type: sheetType || null,
         });
+        let insErr = null;
+        try { ({ error: insErr } = await qWithTimeout(insP, 30000)); }
+        catch (te) {
+          // The screen lost track of the answer: look in the database instead of waiting forever.
+          const { data: saved } = await qWithTimeout(sb.from("drawings").select("id").eq("storage_path", path).limit(1), 15000).catch(() => ({ data: null }));
+          if (!saved || !saved.length) throw te;
+        }
         if (insErr) throw insErr;
       }
       setPendingFiles([]);
       if (fileRef.current) fileRef.current.value = "";
       setStdSummary(describeStandardReports(stdReports));
-      await load();
-    } catch (ex) { setErr(qUserError("upload a drawing", ex)); } finally { setUploading(false); setStdStatus(""); }
+      qPop({ kind: "success", title: "Uploaded \u2713", message: pendingFiles.map(x => x.file.name).join(", ") + (pendingFiles.length === 1 ? " is" : " are") + " saved. Next: click \u201cAnalyze with AI\u201d on it to get the take-off and BOQ." });
+      await qWithTimeout(load(), 15000).catch(() => setTimeout(() => load(), 3000));
+    } catch (ex) { setErr(qUserError("upload a drawing", ex)); } finally { setUploading(false); setStdStatus(""); qUpdate.busy = Math.max(0, qUpdate.busy - 1); }
   }
 
   async function deleteDrawing(d) {
@@ -17419,7 +17490,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
   const liveLen = draft.length && mPerUnit ? polyLen(draft.concat(hover ? [hover] : [])) * mPerUnit : null;
   const doneLen = draft.length > 1 && mPerUnit ? polyLen(draft) * mPerUnit : 0;
   return (
-    <div style={full ? { position: "fixed", inset: 0, zIndex: 9500, background: "#0a1226", color: "#e2e8f0", padding: 12, display: "flex", gap: 12, overflow: "hidden" } : { display: "flex", gap: 12, minHeight: 640 }}>
+    <div data-q-noreload="1" style={full ? { position: "fixed", inset: 0, zIndex: 9500, background: "#0a1226", color: "#e2e8f0", padding: 12, display: "flex", gap: 12, overflow: "hidden" } : { display: "flex", gap: 12, minHeight: 640 }}>
       {/* tools */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center", paddingTop: 4 }}>
         {toolBtn("select", "🖐", "Select")}
@@ -17679,8 +17750,9 @@ function BoqTab({ project, onGoToEstimation }) {
   const SIMPLE_BOQ_PAGE_SIZE = 50;
 
   useEffect(() => { load(); }, [project.id]);
+  useQAutoRefresh(() => load(), 45);   // keeps the page up to date without a reload
   async function load() {
-    setLoading(true);
+    if (!qQuiet.on) setLoading(true);
     setError(null);
     try {
       const { data, error: qErr } = await sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id).order("system_category").order("floor_label");
@@ -18784,8 +18856,9 @@ function ProcurementBoqTab({ project }) {
   const [error, setError] = useQErr(null);
 
   useEffect(() => { load(); }, [project.id]);
+  useQAutoRefresh(() => load(), 60);   // keeps the page up to date without a reload
   async function load() {
-    setLoading(true); setError(null);
+    if (!qQuiet.on) setLoading(true); setError(null);
     try {
       const [{ data: items, error: iErr }, { data: dr, error: dErr }, { data: er, error: eErr }] = await Promise.all([
         sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id),
@@ -18889,8 +18962,9 @@ function EngineeringBoqTab({ project }) {
   const [error, setError] = useQErr(null);
 
   useEffect(() => { load(); }, [project.id]);
+  useQAutoRefresh(() => load(), 60);   // keeps the page up to date without a reload
   async function load() {
-    setLoading(true); setError(null);
+    if (!qQuiet.on) setLoading(true); setError(null);
     try {
       const [{ data: items, error: iErr }, { data: dr, error: dErr }] = await Promise.all([
         sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id),
@@ -18985,8 +19059,9 @@ function SpecificationTab({ project }) {
   const [view, setView] = useState("requirement");
 
   useEffect(() => { load(); }, [project.id]);
+  useQAutoRefresh(() => load(), 60);   // keeps the page up to date without a reload
   async function load() {
-    setLoading(true); setError(null);
+    if (!qQuiet.on) setLoading(true); setError(null);
     try {
       const [{ data: items, error: iErr }, { data: dr, error: dErr }, { data: cr, error: cErr }] = await Promise.all([
         sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", project.id),
@@ -21845,6 +21920,7 @@ function QAlertsView() {
     setRows(error ? [] : (data || []));
   };
   useEffect(() => { load(); }, [filter]);
+  useQAutoRefresh(() => load(), 30);   // keeps the page up to date without a reload
   const setStatus = async (a, status) => {
     setBusy(a.id);
     await sb.from("admin_alerts").update({ status, admin_note: note[a.id] ?? a.admin_note ?? null, updated_at: new Date().toISOString() }).eq("id", a.id);
@@ -22263,8 +22339,9 @@ function QSupportView({ companyNameById }) {
   }
 
   useEffect(() => { load(); }, []);
+  useQAutoRefresh(() => load(), 30);   // keeps the page up to date without a reload
   async function load() {
-    setLoading(true); setErr("");
+    if (!qQuiet.on) setLoading(true); setErr("");
     try {
       const { data, error } = await sb.from("support_tickets").select("*")
         .order("created_at", { ascending: false }).limit(500);
@@ -23788,6 +23865,7 @@ function QMyProjectsView({ onOpen }) {
   const [rows, setRows] = useState(null);
   const [error, setError] = useQErr("");
   useEffect(() => { load(); }, []);
+  useQAutoRefresh(() => load(), 60);   // keeps the page up to date without a reload
   async function load() {
     setError("");
     try {
@@ -25528,8 +25606,9 @@ function DrawingsPage({ projects, onOpenProject, markupFirst }) {
   const [marking, setMarking] = useState(null);
 
   useEffect(() => { load(); }, [projects.length]);
+  useQAutoRefresh(() => load(), 30);   // keeps the page up to date without a reload
   async function load() {
-    setLoading(true); setErr(null);
+    if (!qQuiet.on) setLoading(true); setErr(null);
     try {
       const { data, error } = await sb.from("drawings").select("*").order("created_at", { ascending: false });
       if (error) throw error;
@@ -25617,8 +25696,9 @@ function BoqPage({ projects, onOpenProject }) {
   const [err, setErr] = useQErr(null);
 
   useEffect(() => { load(); }, [projects.length]);
+  useQAutoRefresh(() => load(), 45);   // keeps the page up to date without a reload
   async function load() {
-    setLoading(true); setErr(null);
+    if (!qQuiet.on) setLoading(true); setErr(null);
     try {
       const { data, error } = await sb.from("boq_items").select("project_id, system_category, quantity, unit_cost_cents");
       if (error) throw error;
@@ -27972,6 +28052,7 @@ function QuotationComplianceTab({ project }) {
     if (!open && data && data[0] && data[0].status === "completed") setOpen(data[0].id);
   }
   useEffect(() => { load(); }, [project.id]);
+  useQAutoRefresh(() => load(), 30);   // keeps the page up to date without a reload
   const addQuotes = (files) => { const list = Array.from(files || []); setQuotes(q => [...q, ...list.map(f => ({ file: f, vendor: f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").slice(0, 40) }))].slice(0, 5)); };
   async function run() {
     setErr("");
@@ -29170,6 +29251,7 @@ function SalesPage({ onNavigate }) {
     } catch (e) { setErr(e.message); setBids([]); }
   }
   useEffect(() => { load(); }, []);
+  useQAutoRefresh(() => load(), 60);   // keeps the page up to date without a reload
 
   const nameOf = id => {
     const p = people.find(x => x.id === id);
@@ -29907,6 +29989,7 @@ function OperationsPage({ onNavigate }) {
     } catch (e) { setErr(e.message); setProjects([]); }
   }
   useEffect(() => { load(); }, []);
+  useQAutoRefresh(() => load(), 60);   // keeps the page up to date without a reload
 
   const stats = useMemo(() => {
     const p = (projects || []).filter(x => x.status !== "archived");
@@ -30160,6 +30243,7 @@ function RevenuePage({ onNavigate }) {
     } catch (e) { setErr(e.message); setProjects([]); }
   }
   useEffect(() => { load(); }, []);
+  useQAutoRefresh(() => load(), 60);   // keeps the page up to date without a reload
 
   const sum = (arr, f) => arr.reduce((a, x) => a + (Number(f(x)) || 0), 0);
 
@@ -32506,6 +32590,7 @@ function DraftsmanDashboard({ initialProjects, onNewJob, onOpenStudio, onEditBri
     } catch (e) { setErr(e.message || String(e)); } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+  useQAutoRefresh(() => load(), 30);   // keeps the page up to date without a reload
   useEffect(() => {
     if (!jobs.some(j => j.status === "queued" || j.status === "running")) return;
     const t = setTimeout(load, 10000);
@@ -32851,10 +32936,10 @@ function DraftsmanUpload({ project, kind, onUploaded }) {
 
   async function send() {
     if (!files.length) { setErr("Choose a file first."); return; }
-    setBusy(true); setErr(""); setDone("");
+    setBusy(true); setErr(""); setDone(""); qUpdate.busy++;
     const stdReports = [];
     try {
-      const { data: { user } } = await sb.auth.getUser();
+      const user = await qCurrentUser();
       for (let file of files) {
         if (!isSpec) {                                    // drawings: brought to standard first
           const std = await standardizeDrawingFile(file, setDone);
@@ -32876,9 +32961,9 @@ function DraftsmanUpload({ project, kind, onUploaded }) {
       setDone(`${files.length} file${files.length === 1 ? "" : "s"} uploaded.` + (stdReports.some(Boolean) ? " " + describeStandardReports(stdReports) + "." : ""));
       setFiles([]);
       if (ref.current) ref.current.value = "";
-      if (onUploaded) await onUploaded();
+      if (onUploaded) await qWithTimeout(onUploaded(), 15000).catch(() => {});
       setTimeout(() => setDone(""), 9000);
-    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+    } catch (e) { setErr(e.message); } finally { setBusy(false); qUpdate.busy = Math.max(0, qUpdate.busy - 1); }
   }
 
   return (
@@ -36506,8 +36591,9 @@ function QFeedbackView({ companyNameById }) {
   const [step, setStep] = useState("all");
   const [stars, setStars] = useState("all");
   useEffect(() => { load(); }, []);
+  useQAutoRefresh(() => load(), 60);   // keeps the page up to date without a reload
   async function load() {
-    setLoading(true); setErr("");
+    if (!qQuiet.on) setLoading(true); setErr("");
     try {
       const { data, error } = await sb.from("platform_feedback").select("*").order("created_at", { ascending: false }).limit(2000);
       if (error) throw error;
