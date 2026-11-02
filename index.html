@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.13"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -16985,39 +16985,114 @@ function PricingBoqPanel({ project, consolidated, loading }) {
 // ---------------------------------------------------------------------------
 const MT_PT_M = 0.0254 / 72;                 // one PDF point in metres at 1:1
 const MT_COLORS = ["#2563eb", "#0d9488", "#7c3aed", "#f59e0b", "#ec4899", "#ef4444", "#16a34a", "#0891b2", "#a16207", "#475569"];
-const MT_LIBRARY = [
-  // [group, name, tag, kind, unit, system_category, rule]
-  ["CCTV", "Dome camera, 4 MP", "D", "count", "No", "cctv", "camera"],
-  ["CCTV", "Bullet camera, 4 MP", "B", "count", "No", "cctv", "camera_out"],
-  ["CCTV", "PTZ camera", "P", "count", "No", "cctv", "camera_out"],
-  ["CCTV", "Fisheye camera, 12 MP", "F", "count", "No", "cctv", "camera"],
-  ["Fire alarm", "Smoke detector, addressable", "S", "count", "No", "fire_alarm", "fa_detector"],
-  ["Fire alarm", "Heat detector, addressable", "H", "count", "No", "fire_alarm", "fa_detector"],
-  ["Fire alarm", "Manual call point", "M", "count", "No", "fire_alarm", "fa_mcp"],
-  ["Fire alarm", "Sounder / strobe", "A", "count", "No", "fire_alarm", "fa_sounder"],
-  ["Data", "Data outlet (single)", "DO", "count", "No", "structured_cabling", "data_outlet"],
-  ["Data", "WiFi access point", "W", "count", "No", "wifi", "wifi_ap"],
-  ["Access control", "Access-controlled door", "AC", "count", "No", "access_control", "acs_door"],
-  ["Public address", "Ceiling speaker", "SP", "count", "No", "public_address", "pa_speaker"],
-  ["Electrical", "Light fitting", "L", "count", "No", "lighting", "light"],
-  ["Electrical", "13 A socket outlet", "SO", "count", "No", "power_distribution", "socket"],
-  ["Electrical", "Isolator / power point", "I", "count", "No", "power_distribution", "isolator"],
-  ["Containment", "Cable tray 150×50", "CT", "length", "m", "containment", "tray"],
-  ["Containment", "Cable trunking 100×100", "TR", "length", "m", "containment", "tray"],
-  ["Containment", "Conduit 25 mm", "CD", "length", "m", "containment", "conduit"],
-];
-const MT_SYSTEMS = [
-  ["cctv", "CCTV"], ["fire_alarm", "Fire alarm"], ["structured_cabling", "Data / structured cabling"], ["wifi", "WiFi"],
-  ["access_control", "Access control"], ["public_address", "Public address"], ["lighting", "Lighting"],
-  ["power_distribution", "Small power"], ["containment", "Containment"], ["other", "Other"],
-];
 const mtId = () => Math.random().toString(36).slice(2, 10);
-const mtSysLabel = (k) => (MT_SYSTEMS.find(s => s[0] === k) || [k, k])[1];
 const mtRound = (v, unit) => unit === "m" ? Math.round(v * 10) / 10 : Math.round(v);
+
+// Every system offered on the New Project form, in the same groups, so Manual Take-off speaks the same language.
+const MT_SYS_GROUPS = [
+  ...Object.entries(SYSTEM_GROUPS).filter(([g]) => g !== "Other"),
+  ...Object.entries(PROJECT_CIVIL_GROUPS),
+  ["Other", ["other"]],
+];
+const MT_SYSTEMS = MT_SYS_GROUPS.flatMap(([, list]) => list.map(k => [k, SYSTEM_LABEL(k)]));
+// A system the user typed is kept as "other:<name>"; it goes to the project BOQ under Other.
+const mtSysLabel = (k) => String(k || "").startsWith("other:") ? String(k).slice(6) : SYSTEM_LABEL(k || "other");
+const mtSysCategory = (k) => String(k || "").startsWith("other:") ? "other" : (k || "other");
+
+// Equipment per system: [name, tag, kind (c = count, l = length in m), design rule].
+// Items with a rule also get the engineered lines in the Designed BOQ.
+const MT_ITEMS = {
+  cctv: [["Dome camera, 4 MP", "D", "c", "camera"], ["Bullet camera, 4 MP", "B", "c", "camera_out"], ["Turret camera, 4 MP", "T", "c", "camera"], ["PTZ camera", "P", "c", "camera_out"], ["Fisheye camera, 12 MP", "F", "c", "camera"], ["Camera pole", "CP", "c"], ["Monitor / video wall screen", "MON", "c"]],
+  access_control: [["Access-controlled door", "AC", "c", "acs_door"], ["Card reader (extra)", "CR", "c"], ["Biometric reader", "BIO", "c"], ["Turnstile", "TS", "c"], ["Exit button (extra)", "EX", "c"], ["Electromagnetic lock (extra)", "ML", "c"]],
+  structured_cabling: [["Data outlet, single", "DO", "c", "data_outlet"], ["Data outlet, double", "DD", "c", "data_outlet2"], ["Floor box with data", "FB", "c", "data_outlet2"], ["Consolidation point", "CPT", "c"], ["Rack / cabinet", "RK", "c"]],
+  wifi: [["WiFi access point, indoor", "W", "c", "wifi_ap"], ["WiFi access point, outdoor", "WO", "c", "wifi_ap"]],
+  intercom: [["Door entry panel", "IP", "c", "ic_point"], ["Indoor monitor / handset", "IM", "c", "ic_point"], ["Lift intercom", "LI", "c", "ic_point"], ["Guard / master station", "GS", "c", "ic_point"]],
+  iptv: [["TV outlet", "TV", "c", "tv_point"], ["Set-top box", "STB", "c"], ["Satellite dish", "SAT", "c"]],
+  public_address: [["Ceiling speaker", "SP", "c", "pa_speaker"], ["Wall speaker", "WS", "c", "pa_speaker"], ["Horn speaker", "HS", "c", "pa_speaker"], ["Volume control", "VC", "c"], ["Paging microphone", "MIC", "c"]],
+  audio_visual: [["Display screen", "DS", "c", "av_point"], ["Projector", "PJ", "c", "av_point"], ["Projection screen", "PS", "c"], ["AV ceiling speaker", "AVS", "c"], ["Video conference camera", "VCC", "c", "av_point"], ["AV floor box", "AFB", "c", "av_point"]],
+  parking_management: [["Parking bay sensor", "PSN", "c"], ["Parking guidance display", "PGD", "c"], ["Ticket dispenser", "TD", "c"], ["Pay station", "PAY", "c"]],
+  gate_barrier: [["Boom barrier", "BB", "c"], ["Sliding gate motor", "SG", "c"], ["Road blocker", "RB", "c"], ["Automatic bollard", "BL", "c"], ["Vehicle loop detector", "LD", "c"]],
+  anpr: [["ANPR camera", "AN", "c", "camera_out"], ["ANPR controller", "ANC", "c"]],
+  bms: [["DDC controller", "DDC", "c"], ["Temperature sensor", "TS", "c"], ["Humidity sensor", "HUM", "c"], ["CO₂ sensor", "CO2", "c"], ["Energy meter", "EM", "c"], ["BMS cable run", "BC", "l"]],
+  grms: [["Room control unit", "RCU", "c"], ["DND / doorbell panel", "DND", "c"], ["Key-card switch", "KCS", "c"], ["Room thermostat", "RT", "c"]],
+  pabx: [["Telephone outlet", "TO", "c", "data_outlet"], ["IP phone", "IPP", "c"], ["PABX system", "PBX", "c"]],
+  security_room: [["Video wall", "VW", "c"], ["Operator workstation", "OW", "c"], ["Control console desk", "CD", "c"]],
+  nurse_call: [["Patient call point", "PC", "c", "nc_point"], ["Bathroom pull cord", "PUL", "c", "nc_point"], ["Corridor dome light", "CL", "c"], ["Duty / nurse station", "DUS", "c"]],
+  lighting: [["Light fitting", "L", "c", "light"], ["Downlight", "DL", "c", "light"], ["Linear LED fitting", "LN", "c", "light"], ["Outdoor light", "OL", "c", "light"], ["Emergency light", "EL", "c", "light_em"], ["Exit sign", "ES", "c", "light_em"], ["Light switch", "SW", "c"], ["Occupancy sensor", "OS", "c"]],
+  power_distribution: [["Socket outlet, single", "SO", "c", "socket"], ["Socket outlet, twin", "SO2", "c", "socket"], ["Isolator / power point", "I", "c", "isolator"], ["Cooker / heavy-duty point", "HP", "c", "isolator"], ["Floor box with power", "FBP", "c", "socket"]],
+  db_panels: [["Distribution board", "DB", "c"], ["Main distribution board", "MDB", "c"], ["Sub-main distribution board", "SMB", "c"]],
+  cable_sizing: [["Power cable run", "PCR", "l"], ["Sub-main cable run", "SMC", "l"]],
+  containment: [["Cable tray 150×50", "CT", "l", "tray"], ["Cable tray 300×50", "CT3", "l", "tray"], ["Cable ladder", "LAD", "l", "tray"], ["Cable trunking 100×100", "TR", "l", "tray"], ["Conduit 20 mm", "C20", "l", "conduit"], ["Conduit 25 mm", "CD", "l", "conduit"]],
+  earthing: [["Earth pit", "EP", "c"], ["Main earth bar", "EB", "c"], ["Earth conductor run", "EC", "l"]],
+  lightning_protection: [["Air terminal", "AT", "c"], ["Down conductor", "DC", "l"], ["Test clamp", "TC", "c"], ["Lightning earth pit", "LEP", "c"]],
+  ups: [["UPS unit", "UPS", "c"], ["Battery cabinet", "BAT", "c"]],
+  generator: [["Generator", "GEN", "c"], ["Automatic transfer switch", "ATS", "c"], ["Fuel tank", "FT", "c"]],
+  transformer: [["Transformer", "TX", "c"], ["Ring main unit", "RMU", "c"]],
+  lv_panel: [["LV panel", "LVP", "c"], ["Capacitor bank", "CAP", "c"]],
+  bus_duct: [["Bus duct run", "BD", "l"], ["Tap-off box", "TOB", "c"]],
+  solar_pv: [["PV module", "PV", "c"], ["Inverter", "INV", "c"], ["DC cable run", "DCC", "l"]],
+  hvac: [["Split AC indoor unit", "AC", "c", "split_unit"], ["Condensing unit", "CU", "c"], ["VRF indoor unit", "VRF", "c", "split_unit"], ["Refrigerant pipe run", "RP", "l", "refrig_pipe"]],
+  fcu: [["Fan coil unit, ducted", "FCU", "c", "fcu_unit"], ["Fan coil unit, cassette", "FCC", "c", "fcu_unit"], ["Room thermostat (extra)", "TH", "c"]],
+  ahu: [["Air handling unit", "AHU", "c", "ahu_unit"], ["Fresh air unit", "FAU", "c", "ahu_unit"]],
+  chillers: [["Chiller", "CH", "c"], ["Chilled water pump", "CHP", "c"], ["Chilled water pipe", "CHW", "l", "hyd_pipe"]],
+  ducting: [["Supply air diffuser", "SD", "c", "hvac_terminal"], ["Linear slot diffuser", "LSD", "c", "hvac_terminal"], ["Return air grille", "RG", "c", "hvac_terminal"], ["Exhaust grille", "EG", "c", "hvac_terminal"], ["Supply air duct", "DU", "l", "duct"], ["Return air duct", "RD", "l", "duct"], ["Fire damper", "FD", "c"], ["Volume control damper (extra)", "VCD", "c"]],
+  ventilation: [["Exhaust fan", "EF", "c"], ["Fresh air fan", "FAF", "c"], ["Toilet extract grille", "TEG", "c", "hvac_terminal"], ["Jet fan", "JF", "c"], ["Ventilation duct", "VD", "l", "duct"]],
+  smoke_management: [["Smoke extract fan", "SEF", "c"], ["Smoke damper", "SMD", "c"], ["Duct smoke detector", "DSD", "c"], ["Smoke extract duct", "SED", "l", "duct"]],
+  water_supply: [["Cold water pipe", "CW", "l", "water_pipe"], ["Hot water pipe", "HW", "l", "water_pipe"], ["Isolation valve", "IV", "c"], ["Water meter", "WM", "c"], ["Water tank", "WT", "c"]],
+  drainage: [["Soil pipe", "SOP", "l", "drain_pipe"], ["Waste pipe", "WP", "l", "drain_pipe"], ["Rainwater pipe", "RWP", "l", "drain_pipe"], ["Floor drain", "FDR", "c"], ["Rainwater outlet", "RWO", "c"], ["Clean-out", "CO", "c"], ["Manhole", "MH", "c"]],
+  pumps: [["Booster pump set", "BPS", "c"], ["Transfer pump", "TP", "c"], ["Sump pump", "SUM", "c"]],
+  fixtures: [["WC", "WC", "c", "sanitary"], ["Wash basin", "WB", "c", "sanitary"], ["Sink", "SK", "c", "sanitary"], ["Urinal", "UR", "c", "sanitary"], ["Shower", "SH", "c", "sanitary"], ["Bidet spray / shattaf", "BS", "c", "sanitary"]],
+  hot_water: [["Water heater", "WH", "c"], ["Solar water heater", "SWH", "c"], ["Hot water circulation pump", "HCP", "c"]],
+  fire_alarm: [["Smoke detector, addressable", "S", "c", "fa_detector"], ["Heat detector, addressable", "H", "c", "fa_detector"], ["Multi-sensor detector", "MS", "c", "fa_detector"], ["Beam detector", "BMD", "c", "fa_detector"], ["Manual call point", "M", "c", "fa_mcp"], ["Sounder / strobe", "A", "c", "fa_sounder"], ["Interface / monitor module", "IFM", "c", "fa_module"], ["Fire alarm panel", "FAP", "c"]],
+  fire_fighting: [["Fire hose reel", "HR", "c", "hose_reel"], ["Landing valve", "LDV", "c", "hose_reel"], ["Fire extinguisher", "FE", "c", "extinguisher"], ["Fire hydrant", "HYD", "c"], ["Fire fighting pipe", "FP", "l", "fire_pipe"], ["Fire blanket", "FBL", "c"]],
+  sprinkler: [["Sprinkler head, pendant", "SPK", "c", "sprinkler_head"], ["Sprinkler head, sidewall", "SSW", "c", "sprinkler_head"], ["Sprinkler head, upright", "SUP", "c", "sprinkler_head"], ["Sprinkler pipe", "SPP", "l", "fire_pipe"], ["Zone control valve (extra)", "ZCV", "c"]],
+  fire_pump: [["Fire pump set (duty + standby)", "FPS", "c"], ["Jockey pump", "JP", "c"]],
+  gas_suppression: [["Gas cylinder", "GC", "c"], ["Discharge nozzle", "NOZ", "c"], ["Abort switch", "ABS", "c"], ["Manual release switch", "RLS", "c"]],
+  partitions: [["Partition wall (length)", "PW", "l"]],
+  masonry: [["Block wall (length)", "BW", "l"]],
+  skirting: [["Skirting", "SKR", "l"]],
+  doors: [["Single door", "DR1", "c"], ["Double door", "DR2", "c"], ["Fire-rated door", "FRD", "c"], ["Door ironmongery set", "IRM", "c"]],
+  windows: [["Window", "WIN", "c"], ["Louvre", "LOU", "c"]],
+  joinery: [["Wardrobe", "WRB", "c"], ["Vanity counter", "VAN", "l"], ["Kitchen cabinet run", "KCB", "l"]],
+  metalwork: [["Handrail", "HRL", "l"], ["Balustrade", "BAL", "l"]],
+  glazing: [["Glass partition (length)", "GLP", "l"], ["Shopfront (length)", "SHF", "l"]],
+  cladding: [["Cladding run (length)", "CLD", "l"]],
+  mouldings_trims: [["Cornice", "COR", "l"]],
+  roofing: [["Roof drain", "RDR", "c"], ["Parapet coping", "CPG", "l"]],
+  stairs_ramps: [["Stair nosing", "NOS", "l"], ["Ramp handrail", "RHR", "l"]],
+  ceiling_finishes: [["Ceiling access panel", "CAP", "c"], ["Bulkhead (length)", "BLK", "l"]],
+  floor_finishes: [["Threshold strip", "THS", "l"]],
+  waterproofing: [["Waterproofing upstand (length)", "WPU", "l"]],
+  earthworks: [["Trench excavation (length)", "TRN", "l"]],
+  piling: [["Pile", "PIL", "c"]],
+  concrete: [["Column", "COL", "c"], ["Beam (length)", "BM", "l"]],
+  structural_steel: [["Steel column", "SC", "c"], ["Steel beam (length)", "SB", "l"]],
+  site_works: [["Tree removal", "TRE", "c"], ["Site hoarding / fence", "FEN", "l"]],
+  external_works: [["Kerb", "KRB", "l"], ["Drainage channel", "DCH", "l"], ["Light pole", "LP", "c"], ["Road marking", "RM", "l"]],
+  pools_water_features: [["Pool light", "PLL", "c"], ["Pool pipework", "PPL", "l"]],
+};
+// Kept for anything that still looks items up by the old flat list.
+const MT_LIBRARY = Object.entries(MT_ITEMS).flatMap(([sys, list]) => list.map(([n, t, k, r]) => [SYSTEM_LABEL(sys), n, t, k === "l" ? "length" : "count", k === "l" ? "m" : "No", sys, r || null]));
+
+// Design basis by the project's country. Each engineered line says which code it follows.
+// These are planning allowances; the specification and the authority always win.
+function mtCountryRules(country) {
+  const c = String(country || "").toLowerCase();
+  const gccBS = { socket: "13 A switched socket outlet (BS 1363)", lightCable: "Cable 3C × 1.5 mm² LSZH (lighting)", powerCable: "Cable 3C × 2.5 mm² LSZH (power)", isoCable: "Cable 3C × 4 mm² LSZH (power points)", rcbo: "RCBO 20 A, 30 mA (socket circuits)", mcb: "MCB 10 A, 1-pole (lighting circuits)", dataStd: "ISO/IEC 11801", hanger: 3.7, sprStd: "NFPA 13", ductSup: 2.5, cctvDays: 30 };
+  if (/emirates|\buae\b|dubai|abu dhabi|sharjah/.test(c)) return { ...gccBS, key: "uae", name: "UAE", fire: "UAE Fire & Life Safety Code", elec: "DEWA / ADDC regulations (BS 7671 practice)", cctvDays: 31, cctvBasis: "SIRA requires recordings kept for at least 31 days", faCable: "Fire-resistant cable 2C × 1.5 mm² (enhanced, UAE Fire & Life Safety Code)", sprStd: "NFPA 13, per UAE Fire & Life Safety Code" };
+  if (/saudi|\bksa\b|riyadh|jeddah/.test(c)) return { ...gccBS, key: "ksa", name: "Saudi Arabia", fire: "SBC 801 (NFPA 72 based)", elec: "SBC 401", socket: "13 A socket outlet (SASO, BS 1363 type)", faCable: "Fire-resistant fire alarm cable 2C × 1.5 mm² (SBC 801)", sprStd: "NFPA 13, per SBC 801" };
+  if (/qatar|doha/.test(c)) return { ...gccBS, key: "qa", name: "Qatar", fire: "QCDD (Qatar Civil Defence)", elec: "KAHRAMAA regulations (BS 7671 practice)", faCable: "Fire-resistant cable 2C × 1.5 mm² (enhanced, BS 5839-1 / QCDD)" };
+  if (/oman|muscat|kuwait|bahrain|manama/.test(c)) return { ...gccBS, key: "gcc", name: country, fire: "Civil Defence requirements (BS 5839-1 / NFPA 72)", elec: "Local utility regulations (BS 7671 practice)", faCable: "Fire-resistant cable 2C × 1.5 mm² (BS 5839-1)" };
+  if (/india|bharat/.test(c)) return { ...gccBS, key: "in", name: "India", fire: "NBC 2016 Part 4 / IS 2189", elec: "IS 732 / CEA regulations", socket: "6/16 A socket outlet (IS 1293)", lightCable: "FRLS cable 2 × 1.5 mm² + E (lighting)", powerCable: "FRLS cable 2 × 2.5 mm² + E (power)", isoCable: "FRLS cable 2 × 4 mm² + E (power points)", rcbo: "RCBO / MCB 16 A, 30 mA (socket circuits)", faCable: "FRLS fire-survival cable 2C × 1.5 mm² (IS 2189)", sprStd: "IS 15105 / NBC 2016" };
+  if (/united kingdom|\buk\b|england|scotland|wales|britain/.test(c)) return { ...gccBS, key: "uk", name: "United Kingdom", fire: "BS 5839-1", elec: "BS 7671", dataStd: "BS EN 50173", faCable: "Enhanced fire-resistant cable 2C × 1.5 mm² (BS 5839-1, BS EN 50200)", sprStd: "BS EN 12845", hanger: 4.0 };
+  if (/united states|\busa\b|\bus\b|america/.test(c)) return { ...gccBS, key: "us", name: "USA", fire: "NFPA 72", elec: "NEC (NFPA 70)", dataStd: "TIA-568", socket: "20 A duplex receptacle (NEMA 5-20R)", lightCable: "THHN 12 AWG in conduit (lighting)", powerCable: "THHN 12 AWG in conduit (power)", isoCable: "THHN 10 AWG in conduit (power points)", rcbo: "20 A breaker, GFCI where required (receptacle circuits)", mcb: "20 A breaker (lighting circuits)", faCable: "FPLR fire alarm cable 2C 16 AWG (NFPA 70 Art. 760)", ductSup: 3.0 };
+  return { ...gccBS, key: "intl", name: country || "International", fire: "BS 5839-1 / NFPA 72 practice", elec: "IEC 60364 practice", faCable: "Fire-resistant cable 2C × 1.5 mm² (BS 5839-1 / IEC 60331)" };
+}
 
 // The designed BOQ: the user's lines plus engineered lines, every quantity per floor.
 // Returns [{ key, system, name, unit, source: "you"|"eng", why, byFloor: {floorId: qty}, central }]
-function mtDesign(doc) {
+function mtDesign(doc, project) {
+  const R = mtCountryRules(project && project.country);
   const floors = doc.floors || [];
   const lines = [];
   const add = (system, name, unit, source, why, byFloor) => {
@@ -17035,79 +17110,98 @@ function mtDesign(doc) {
   const perRule = (rule) => { const o = {}; for (const it of doc.items || []) if (it.rule === rule || (Array.isArray(rule) && rule.includes(it.rule))) for (const f of Object.keys(qty[it.id] || {})) o[f] = (o[f] || 0) + qty[it.id][f]; return o; };
   const map = (o, fn) => { const r = {}; for (const f of Object.keys(o)) r[f] = fn(o[f], f); return r; };
   const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+  const plus = (...os) => { const r = {}; for (const o of os) for (const f of Object.keys(o)) r[f] = (r[f] || 0) + o[f]; return r; };
+  const firstFloor = (o) => floors.find(fl => o[fl.id]) ? floors.find(fl => o[fl.id]).id : Object.keys(o)[0];
   // 1. what the user marked
   for (const it of doc.items || []) add(it.system || "other", it.name, it.unit, "you", it.kind === "length" ? "Measured on the drawing at the sheet scale" : "Counted on the drawing", qty[it.id] || {});
   // 2. CCTV
-  const camIn = perRule("camera"), camOut = perRule("camera_out"), cams = {};
-  for (const o of [camIn, camOut]) for (const f of Object.keys(o)) cams[f] = (cams[f] || 0) + o[f];
+  const camIn = perRule("camera"), camOut = perRule("camera_out"), cams = plus(camIn, camOut);
   if (sum(cams)) {
-    add("cctv", "NVR 32-channel with 4 × 8 TB surveillance HDD (RAID 5)", "No", "eng", "One NVR per 32 cameras on the floor; sized for 30 days at 4 MP", map(cams, c => Math.ceil(c / 32)));
+    add("cctv", `NVR 32-channel, ${R.cctvDays}-day recording (RAID 5 surveillance HDD)`, "No", "eng", `One NVR per 32 cameras on the floor; storage sized for ${R.cctvDays} days at 4 MP` + (R.cctvBasis ? ` (${R.cctvBasis})` : " (confirm the retention period with the local authority)"), map(cams, c => Math.ceil(c / 32)));
     add("cctv", "PoE+ switch 24-port managed, 4 × SFP uplink", "No", "eng", "Cameras + 20% spare ports, 24 ports per switch", map(cams, c => Math.ceil(c * 1.2 / 24)));
-    add("cctv", "Cat6 U/UTP LSZH cable", "m", "eng", "45 m average drop per camera + 10% (adjust if your routes are longer)", map(cams, c => c * 45 * 1.1));
+    add("cctv", "Cat6 U/UTP LSZH cable", "m", "eng", `45 m average drop per camera + 10%, max 90 m link (${R.dataStd})`, map(cams, c => c * 45 * 1.1));
     add("cctv", "Cat6 patch cord 1 m + RJ45 connectors (per camera)", "Set", "eng", "One set per camera", cams);
     add("cctv", "Camera junction box / back box", "No", "eng", "One per indoor camera", camIn);
-    add("cctv", "Wall / pole mounting bracket, outdoor", "No", "eng", "One per bullet / PTZ camera", camOut);
+    add("cctv", "Wall / pole mounting bracket, outdoor", "No", "eng", "One per bullet / PTZ / ANPR camera", camOut);
     add("cctv", "VMS licence per camera", "No", "eng", "One per camera", cams);
   }
   // 3. Fire alarm
-  const det = perRule("fa_detector"), mcp = perRule("fa_mcp"), snd = perRule("fa_sounder");
-  const faDev = {}; for (const o of [det, mcp, snd]) for (const f of Object.keys(o)) faDev[f] = (faDev[f] || 0) + o[f];
+  const det = perRule("fa_detector"), mcp = perRule("fa_mcp"), snd = perRule("fa_sounder"), mod = perRule("fa_module");
+  const faDev = plus(det, mcp, snd, mod);
   if (sum(faDev)) {
     const total = sum(faDev), loops = Math.max(1, Math.ceil(total * 1.25 / 125));
-    const first = floors[0] ? floors[0].id : Object.keys(faDev)[0];
-    add("fire_alarm", `Addressable fire alarm control panel, ${loops}-loop`, "No", "eng", `${total} devices in the building + 25% growth, 125 devices per loop (one panel, shown on ${floors[0] ? floors[0].name : "the first floor"})`, { [first]: 1 });
+    const first = firstFloor(faDev);
+    add("fire_alarm", `Addressable fire alarm control panel, ${loops}-loop`, "No", "eng", `${total} devices in the building + 25% growth, 125 devices per loop (one panel, shown on ${(floors.find(f => f.id === first) || {}).name || "the first floor"}); ${R.fire}`, { [first]: 1 });
     add("fire_alarm", "Detector base", "No", "eng", "One per detector", det);
-    add("fire_alarm", "Loop isolator module", "No", "eng", "One per 20 loop devices", map(faDev, d => Math.ceil(d / 20)));
-    add("fire_alarm", "Fire-rated cable 2C × 1.5 mm² (loop)", "m", "eng", "12 m per device + 10%", map(faDev, d => d * 12 * 1.1));
-    if (!sum(mcp) && sum(det)) add("fire_alarm", "Manual call point (allowance — confirm on layout)", "No", "eng", "None marked; 1 per 12 detectors as an allowance for UAE Civil Defence travel distance", map(det, d => Math.ceil(d / 12)));
-    if (!sum(snd) && sum(det)) add("fire_alarm", "Sounder / strobe (allowance — confirm on layout)", "No", "eng", "None marked; 1 per 8 detectors as an allowance", map(det, d => Math.ceil(d / 8)));
+    add("fire_alarm", "Loop isolator module", "No", "eng", `One per 20 loop devices (${R.fire})`, map(faDev, d => Math.ceil(d / 20)));
+    add("fire_alarm", R.faCable, "m", "eng", `12 m per device + 10% (${R.fire})`, map(faDev, d => d * 12 * 1.1));
+    if (!sum(mcp) && sum(det)) add("fire_alarm", "Manual call point (allowance, confirm on layout)", "No", "eng", `None marked; 1 per 12 detectors as an allowance for exit / travel-distance rules (${R.fire})`, map(det, d => Math.ceil(d / 12)));
+    if (!sum(snd) && sum(det)) add("fire_alarm", "Sounder / strobe (allowance, confirm on layout)", "No", "eng", `None marked; 1 per 8 detectors as an allowance for audibility (${R.fire})`, map(det, d => Math.ceil(d / 8)));
   }
-  // 4. Data / WiFi / access / PA
-  const dout = perRule("data_outlet"), ap = perRule("wifi_ap");
-  const ports = {}; for (const o of [dout, ap]) for (const f of Object.keys(o)) ports[f] = (ports[f] || 0) + o[f];
+  // 4. Data / WiFi / telephone
+  const d1 = perRule("data_outlet"), d2 = perRule("data_outlet2"), ap = perRule("wifi_ap");
+  const ports = plus(d1, map(d2, n => n * 2), ap);
   if (sum(ports)) {
-    add("structured_cabling", "Cat6 U/UTP LSZH cable", "m", "eng", "45 m average per outlet / access point + 10%", map(ports, p => p * 45 * 1.1));
-    add("structured_cabling", "Cat6 faceplate with keystone jack", "No", "eng", "One per data outlet", dout);
-    add("structured_cabling", "Cat6 patch panel 24-port", "No", "eng", "Outlets + APs + 20% spare, 24 ports per panel", map(ports, p => Math.ceil(p * 1.2 / 24)));
+    add("structured_cabling", "Cat6 U/UTP LSZH cable", "m", "eng", `45 m average per port + 10%, max 90 m permanent link (${R.dataStd})`, map(ports, p => p * 45 * 1.1));
+    add("structured_cabling", "Cat6 keystone jack", "No", "eng", "One per data port", plus(d1, map(d2, n => n * 2)));
+    add("structured_cabling", "Faceplate (single / double)", "No", "eng", "One per outlet", plus(d1, d2));
+    add("structured_cabling", "Cat6 patch panel 24-port", "No", "eng", "Ports + 20% spare, 24 ports per panel", map(ports, p => Math.ceil(p * 1.2 / 24)));
     add("structured_cabling", "Cat6 patch cord (rack + user end)", "No", "eng", "Two per port", map(ports, p => p * 2));
     add("structured_cabling", "Floor rack 42U with PDU and cable managers", "No", "eng", "One per floor with outlets", map(ports, () => 1));
   }
   if (sum(ap)) add("wifi", "Ceiling mounting bracket for access point", "No", "eng", "One per access point", ap);
+  // 5. Access control, intercom, IPTV, AV, nurse call
   const doors = perRule("acs_door");
   if (sum(doors)) {
     add("access_control", "Card reader", "No", "eng", "One per door (entry side)", doors);
     add("access_control", "Request-to-exit button", "No", "eng", "One per door", doors);
     add("access_control", "Electromagnetic lock 600 lb with bracket", "No", "eng", "One per door", doors);
     add("access_control", "Door contact", "No", "eng", "One per door", doors);
-    add("access_control", "Emergency break-glass unit", "No", "eng", "One per door (fire release)", doors);
+    add("access_control", "Emergency break-glass unit", "No", "eng", `One per door, released by the fire alarm (${R.fire})`, doors);
     add("access_control", "Two-door access controller", "No", "eng", "One per two doors", map(doors, d => Math.ceil(d / 2)));
     add("access_control", "Multicore cable 6C × 0.22 mm²", "m", "eng", "30 m per door + 10%", map(doors, d => d * 30 * 1.1));
   }
+  const icp = perRule("ic_point");
+  if (sum(icp)) add("intercom", "Cat6 cable (IP intercom)", "m", "eng", `40 m per intercom point + 10% (${R.dataStd})`, map(icp, n => n * 40 * 1.1));
+  const tvp = perRule("tv_point");
+  if (sum(tvp)) {
+    add("iptv", "Coaxial / Cat6 cable to TV point", "m", "eng", "35 m per TV point + 10%", map(tvp, n => n * 35 * 1.1));
+    add("iptv", "TV outlet back box and faceplate", "No", "eng", "One per TV point", tvp);
+  }
+  const avp = perRule("av_point");
+  if (sum(avp)) add("audio_visual", "HDMI-over-IP / Cat6 cable to AV point", "m", "eng", "30 m per AV point + 10%", map(avp, n => n * 30 * 1.1));
+  const ncp = perRule("nc_point");
+  if (sum(ncp)) {
+    add("nurse_call", "Nurse call cable", "m", "eng", "25 m per call point + 10%", map(ncp, n => n * 25 * 1.1));
+    add("nurse_call", "Reset / presence button", "No", "eng", "One per room, taken as one per two call points", map(ncp, n => Math.ceil(n / 2)));
+  }
+  // 6. Public address
   const spk = perRule("pa_speaker");
   if (sum(spk)) {
-    add("public_address", "PA cable 2C × 1.5 mm² fire-rated", "m", "eng", "10 m per speaker + 10%", map(spk, s => s * 10 * 1.1));
+    add("public_address", "PA cable 2C × 1.5 mm² fire-resistant", "m", "eng", `10 m per speaker + 10% (voice alarm cabling, ${R.fire})`, map(spk, s => s * 10 * 1.1));
     add("public_address", "PA amplifier zone (120 W)", "No", "eng", "6 W per speaker + 20% headroom, 120 W per zone", map(spk, s => Math.ceil(s * 6 * 1.2 / 120)));
   }
-  // 5. Electrical
-  const lights = perRule("light"), sockets = perRule("socket"), iso = perRule("isolator");
+  // 7. Electrical
+  const lights = plus(perRule("light"), perRule("light_em")), sockets = perRule("socket"), iso = perRule("isolator");
   const lc = map(lights, n => Math.ceil(n / 10)), sc = map(sockets, n => Math.ceil(n / 8)), ic = iso;
   if (sum(lights)) {
-    add("lighting", "Cable 3C × 1.5 mm² LSZH (lighting)", "m", "eng", "8 m per fitting + 10%", map(lights, n => n * 8 * 1.1));
-    add("lighting", "Light switch (1–3 gang)", "No", "eng", "One per 6 fittings", map(lights, n => Math.ceil(n / 6)));
-    add("lighting", "MCB 10 A, 1-pole (lighting circuits)", "No", "eng", "10 fittings per circuit", lc);
+    add("lighting", R.lightCable, "m", "eng", `8 m per fitting + 10% (${R.elec})`, map(lights, n => n * 8 * 1.1));
+    add("lighting", "Light switch (1–3 gang)", "No", "eng", "One per 6 fittings", map(perRule("light"), n => Math.ceil(n / 6)));
+    add("lighting", R.mcb, "No", "eng", `10 fittings per circuit (${R.elec})`, lc);
   }
+  if (sum(perRule("light_em"))) add("lighting", "Emergency lighting test / monitoring point", "No", "eng", "One per emergency fitting or exit sign", perRule("light_em"));
   if (sum(sockets)) {
-    add("power_distribution", "Cable 3C × 2.5 mm² LSZH (power)", "m", "eng", "10 m per socket + 10%", map(sockets, n => n * 10 * 1.1));
-    add("power_distribution", "Metal back box", "No", "eng", "One per socket", sockets);
-    add("power_distribution", "RCBO 20 A, 30 mA (socket circuits)", "No", "eng", "8 sockets per ring / radial circuit", sc);
+    add("power_distribution", R.powerCable, "m", "eng", `10 m per socket + 10% (${R.elec})`, map(sockets, n => n * 10 * 1.1));
+    add("power_distribution", "Metal back box", "No", "eng", `One per socket outlet; outlet type ${R.socket}`, sockets);
+    add("power_distribution", R.rcbo, "No", "eng", `8 sockets per circuit (${R.elec})`, sc);
   }
-  if (sum(iso)) add("power_distribution", "Cable 3C × 4 mm² LSZH (power points)", "m", "eng", "15 m per isolator + 10%", map(iso, n => n * 15 * 1.1));
-  const circuits = {}; for (const o of [lc, sc, ic]) for (const f of Object.keys(o)) circuits[f] = (circuits[f] || 0) + o[f];
+  if (sum(iso)) add("power_distribution", R.isoCable, "m", "eng", `15 m per isolator + 10% (${R.elec})`, map(iso, n => n * 15 * 1.1));
+  const circuits = plus(lc, sc, ic);
   if (sum(circuits)) {
-    add("db_panels", "Distribution board, TPN (ways = circuits + 25% spare)", "No", "eng", "One DB per floor", map(circuits, () => 1));
+    add("db_panels", "Distribution board (ways = circuits + 25% spare)", "No", "eng", `One DB per floor (${R.elec})`, map(circuits, () => 1));
     add("db_panels", "DB outgoing ways required", "No", "eng", "Circuits on the floor + 25% spare", map(circuits, c => Math.ceil(c * 1.25)));
   }
-  // 6. Containment
+  // 8. Containment
   const tray = perRule("tray"), cond = perRule("conduit");
   if (sum(tray)) {
     add("containment", "Tray / trunking bends, tees and couplers", "No", "eng", "One fitting per 10 m of route", map(tray, l => Math.ceil(l / 10)));
@@ -17119,6 +17213,60 @@ function mtDesign(doc) {
     add("containment", "Conduit saddles / spacer bar", "No", "eng", "One per metre", map(cond, l => Math.ceil(l)));
     add("containment", "Wastage allowance on conduit", "m", "eng", "5% of the measured length", map(cond, l => l * 0.05));
   }
+  // 9. HVAC
+  const term = perRule("hvac_terminal"), fcu = perRule("fcu_unit"), split = perRule("split_unit"), ahu = perRule("ahu_unit"), duct = perRule("duct"), rp = perRule("refrig_pipe"), hyd = perRule("hyd_pipe");
+  if (sum(term)) {
+    add("ducting", "Flexible duct connection (1.5 m per terminal)", "m", "eng", "1.5 m insulated flexible duct per diffuser / grille", map(term, n => n * 1.5));
+    add("ducting", "Plenum box for diffuser / grille", "No", "eng", "One per diffuser / grille", term);
+    add("ducting", "Volume control damper", "No", "eng", "One per diffuser / grille for balancing", term);
+  }
+  if (sum(duct)) {
+    add("ducting", "Duct supports (rods, angle, anchors)", "Set", "eng", `One support every ${R.ductSup} m of duct`, map(duct, l => Math.ceil(l / R.ductSup)));
+    add("ducting", "Duct fittings (bends, tees, transitions)", "No", "eng", "One fitting per 6 m of duct", map(duct, l => Math.ceil(l / 6)));
+    add("ducting", "Duct sealant and jointing", "Set", "eng", "One set per 10 m of duct", map(duct, l => Math.ceil(l / 10)));
+  }
+  const units = plus(fcu, split);
+  if (sum(units)) {
+    add("fcu", "Room thermostat / controller", "No", "eng", "One per indoor unit", units);
+    add("fcu", "Condensate drain pipe (uPVC 32 mm)", "m", "eng", "8 m per indoor unit to the nearest drain", map(units, n => n * 8));
+    add("fcu", "Anti-vibration hanger set", "Set", "eng", "One set per indoor unit", units);
+  }
+  if (sum(fcu)) add("fcu", "Valve set (2-way control + isolation + strainer)", "Set", "eng", "One per fan coil unit", fcu);
+  if (sum(ahu)) add("ahu", "Flexible connector + isolation valve set", "Set", "eng", "One per air handling / fresh air unit", ahu);
+  if (sum(rp)) add("hvac", "Refrigerant pipe insulation and supports", "m", "eng", "Same length as the refrigerant pipe run", rp);
+  if (sum(hyd)) {
+    add("chillers", "Pipe insulation (chilled water)", "m", "eng", "Same length as the chilled water pipe", hyd);
+    add("chillers", "Pipe supports", "Set", "eng", "One support every 3 m", map(hyd, l => Math.ceil(l / 3)));
+  }
+  // 10. Plumbing
+  const san = perRule("sanitary"), wp = perRule("water_pipe"), dp = perRule("drain_pipe");
+  if (sum(san)) {
+    add("fixtures", "Angle valve + flexible connector", "Set", "eng", "Two per fixture (hot and cold)", map(san, n => n * 2));
+    add("fixtures", "Trap / waste connector", "No", "eng", "One per fixture", san);
+  }
+  if (sum(wp)) {
+    add("water_supply", "Pipe fittings (elbows, tees, couplers)", "No", "eng", "One fitting per 3 m of pipe", map(wp, l => Math.ceil(l / 3)));
+    add("water_supply", "Pipe clips / supports", "No", "eng", "One support every 1.5 m", map(wp, l => Math.ceil(l / 1.5)));
+  }
+  if (sum(dp)) {
+    add("drainage", "Drainage fittings (bends, junctions)", "No", "eng", "One fitting per 4 m of pipe", map(dp, l => Math.ceil(l / 4)));
+    add("drainage", "Pipe brackets", "No", "eng", "One bracket every 1.2 m", map(dp, l => Math.ceil(l / 1.2)));
+    add("drainage", "Clean-out / access point", "No", "eng", "One per 15 m of drain run", map(dp, l => Math.ceil(l / 15)));
+  }
+  // 11. Fire fighting
+  const heads = perRule("sprinkler_head"), fpipe = perRule("fire_pipe"), hr = perRule("hose_reel"), ext = perRule("extinguisher");
+  if (sum(heads)) {
+    add("sprinkler", "Sprinkler drop / flexible hose", "No", "eng", `One per sprinkler head (${R.sprStd})`, heads);
+    add("sprinkler", "Escutcheon plate", "No", "eng", "One per sprinkler head", heads);
+    add("sprinkler", "Floor control valve assembly (valve, flow + tamper switch, test & drain)", "Set", "eng", `One per floor with sprinklers (${R.sprStd})`, map(heads, () => 1));
+    add("sprinkler", "Spare sprinkler heads + cabinet", "No", "eng", `Spares kept on site (${R.sprStd}), taken as 2% of heads (min 6)`, (() => { const t = sum(heads), f = firstFloor(heads); return { [f]: Math.max(6, Math.ceil(t * 0.02)) }; })());
+  }
+  if (sum(fpipe)) {
+    add("fire_fighting", "Fire pipe hangers / supports", "No", "eng", `One hanger every ${R.hanger} m (${R.sprStd})`, map(fpipe, l => Math.ceil(l / R.hanger)));
+    add("fire_fighting", "Fire pipe fittings (grooved / threaded)", "No", "eng", "One fitting per 4 m of pipe", map(fpipe, l => Math.ceil(l / 4)));
+  }
+  if (sum(hr)) add("fire_fighting", "Isolating valve for hose reel / landing valve", "No", "eng", `One per hose reel / landing valve (${R.fire})`, hr);
+  if (sum(ext)) add("fire_fighting", "Extinguisher signage and bracket", "Set", "eng", `One per extinguisher (${R.fire})`, ext);
   return lines;
 }
 
@@ -17141,7 +17289,11 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
   const [err, setErr] = useQErr("");
   const [scaleM, setScaleM] = useState("");
   const [ratio, setRatio] = useState("");
+  const projSys = (project.required_systems || []).filter(k => MT_SYSTEMS.some(x => x[0] === k));
+  const [libSys, setLibSys] = useState(() => projSys.find(k => MT_ITEMS[k]) || "cctv");
   const [newItem, setNewItem] = useState({ name: "", tag: "", kind: "count", unit: "No", system: "cctv", color: MT_COLORS[0] });
+  const [newSysName, setNewSysName] = useState("");
+  const rules = mtCountryRules(project.country);
   const [showNew, setShowNew] = useState(false);
   const [view, setView] = useState("draw");       // draw | boq
   const [boqType, setBoqType] = useState("designed");
@@ -17354,7 +17506,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
     for (const m of doc.marks) { const f = sf[m.sheetId]; const v = m.type === "length" ? (m.len || 0) : 1; ((t[m.itemId] ||= {})[f] = (t[m.itemId][f] || 0) + v); }
     return t;
   }, [doc]);
-  const designed = useMemo(() => doc ? mtDesign(doc) : [], [doc]);
+  const designed = useMemo(() => doc ? mtDesign(doc, project) : [], [doc, project.country]);
 
   const addFloor = () => {
     const name = (window.prompt("Floor name (e.g. First floor, Roof, Basement 1)") || "").trim(); if (!name) return;
@@ -17367,7 +17519,8 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
     setSheetId(id);
   };
   const createItem = (lib) => {
-    const src = lib ? { name: lib[1], tag: lib[2], kind: lib[3], unit: lib[4], system: lib[5], rule: lib[6] } : { ...newItem, rule: null };
+    if (!lib && newItem.system === "__new" && !newSysName.trim()) { setErr("Type the name of the new system, or pick one from the list."); return; }
+    const src = lib ? lib : { ...newItem, system: newItem.system === "__new" ? "other:" + newSysName.trim().slice(0, 60) : newItem.system, rule: null };
     if (!src.name.trim() || !src.tag.trim()) { setErr("Give the item a name and a short tag (e.g. D)."); return; }
     const used = new Set(doc.items.map(i => i.color));
     const color = lib ? (MT_COLORS.find(c => !used.has(c)) || MT_COLORS[doc.items.length % MT_COLORS.length]) : newItem.color;
@@ -17404,7 +17557,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
       const rows = [];
       for (const l of designed) for (const f of Object.keys(l.byFloor)) {
         const you = l.source === "you";
-        rows.push({ project_id: project.id, system_category: l.system, floor_label: floorName(f), description: l.name, quantity: l.byFloor[f], unit: l.unit,
+        rows.push({ project_id: project.id, system_category: mtSysCategory(l.system), floor_label: floorName(f), description: String(l.system).startsWith("other:") ? `${mtSysLabel(l.system)}: ${l.name}` : l.name, quantity: l.byFloor[f], unit: l.unit,
           length_value: l.unit === "m" ? l.byFloor[f] : null, source: you ? "manual" : "engineering_rule",
           optimization_status: you ? "drawing_requirement" : "engineered", quantity_source_type: you ? (l.unit === "m" ? "calculated_quantity" : "physical_count") : "calculated_quantity",
           quantity_basis_notes: (you ? "Manual take-off — " : "Designed by Quantora — ") + l.why, measurement_rule_code: "manual_takeoff",
@@ -17447,6 +17600,9 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
             {floors.map(f => <option key={f.id} value={f.id}>Only {f.name}</option>)}
           </select>
         </div>
+        {boqType === "designed" && <div className="text-xs" style={{ padding: "7px 10px", borderRadius: 9, background: "rgba(16,185,129,.10)", border: "1px solid rgba(16,185,129,.35)" }}>
+          <b>Design basis: {rules.name}</b> · Fire: {rules.fire} · Electrical: {rules.elec} · Data: {rules.dataStd} · CCTV recording: {rules.cctvDays} days{rules.cctvBasis ? ` (${rules.cctvBasis})` : ""}. Set by the project's country; check against your specification.
+        </div>}
         <div className="text-xs" style={{ opacity: .75 }}>Marked by you: {designed.filter(l => l.source === "you").length} lines · Engineered by Quantora: {designed.filter(l => l.source === "eng").length} lines. Engineered lines use fixed design rules (no AI, no pages used) — each says why it was added. Check them against your specification.</div>
         {!rows.length ? <div className="text-sm" style={{ opacity: .7 }}>Nothing marked yet. Go back to the drawing and mark some items.</div> : (
           <div style={{ overflowX: "auto", border: "1px solid rgba(148,163,184,.25)", borderRadius: 12 }}>
@@ -17637,27 +17793,44 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
         </div>
         <div style={{ border: "1px dashed rgba(148,163,184,.45)", borderRadius: 12, padding: 10 }}>
           <div className="flex items-center gap-2"><b style={{ fontSize: 12.5 }}>＋ Add item</b><div style={{ flex: 1 }} />
-            <button type="button" style={{ ...btn(showNew), padding: "4px 9px", fontSize: 11.5 }} onClick={() => setShowNew(v => !v)}>{showNew ? "Library" : "Custom item"}</button></div>
+            <button type="button" style={{ ...btn(showNew), padding: "4px 9px", fontSize: 11.5 }} onClick={() => { setNewItem(n => ({ ...n, system: libSys })); setShowNew(v => !v); }}>{showNew ? "Back to the list" : "Type my own"}</button></div>
           {!showNew ? (
-            <select value="" onChange={e => { const lib = MT_LIBRARY[Number(e.target.value)]; if (lib) createItem(lib); }} className="border rounded-lg px-2 py-1" style={{ width: "100%", marginTop: 8, fontSize: 12.5 }}>
-              <option value="">Pick from the library…</option>
-              {Array.from(new Set(MT_LIBRARY.map(l => l[0]))).map(g => (
-                <optgroup key={g} label={g}>{MT_LIBRARY.map((l, i) => l[0] === g ? <option key={i} value={i}>{l[2]} · {l[1]}</option> : null)}</optgroup>
-              ))}
-            </select>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+              <label className="text-[11px]" style={{ opacity: .7 }}>1. System</label>
+              <select value={libSys} onChange={e => setLibSys(e.target.value)} className="border rounded-lg px-2 py-1" style={{ width: "100%", fontSize: 12.5 }}>
+                {projSys.length > 0 && <optgroup label="This project's systems">{projSys.map(k => <option key={"p" + k} value={k}>{SYSTEM_LABEL(k)}</option>)}</optgroup>}
+                {MT_SYS_GROUPS.map(([g, list]) => <optgroup key={g} label={g}>{list.map(k => <option key={k} value={k}>{SYSTEM_LABEL(k)}</option>)}</optgroup>)}
+              </select>
+              <label className="text-[11px]" style={{ opacity: .7 }}>2. Equipment</label>
+              <select value="" onChange={e => {
+                const v = e.target.value; if (!v) return;
+                if (v === "__own") { setNewItem(n => ({ ...n, system: libSys })); setShowNew(true); return; }
+                const it = (MT_ITEMS[libSys] || [])[Number(v)]; if (!it) return;
+                createItem({ name: it[0], tag: it[1], kind: it[2] === "l" ? "length" : "count", unit: it[2] === "l" ? "m" : "No", system: libSys, rule: it[3] || null });
+              }} className="border rounded-lg px-2 py-1" style={{ width: "100%", fontSize: 12.5 }}>
+                <option value="">{(MT_ITEMS[libSys] || []).length ? `Pick ${SYSTEM_LABEL(libSys)} equipment…` : "No ready items for this system"}</option>
+                {(MT_ITEMS[libSys] || []).map((it, i) => <option key={i} value={i}>{it[1]} · {it[0]}{it[2] === "l" ? " (m)" : ""}</option>)}
+                <option value="__own">＋ Not in the list? Type my own item…</option>
+              </select>
+            </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+              <select value={newItem.system} onChange={e => setNewItem({ ...newItem, system: e.target.value })} className="border rounded-lg px-2 py-1" style={{ width: "100%", fontSize: 12.5 }}>
+                {projSys.length > 0 && <optgroup label="This project's systems">{projSys.map(k => <option key={"p" + k} value={k}>{SYSTEM_LABEL(k)}</option>)}</optgroup>}
+                {MT_SYS_GROUPS.map(([g, list]) => <optgroup key={g} label={g}>{list.map(k => <option key={k} value={k}>{SYSTEM_LABEL(k)}</option>)}</optgroup>)}
+                <option value="__new">＋ Type a new system…</option>
+              </select>
+              {newItem.system === "__new" && <input value={newSysName} onChange={e => setNewSysName(e.target.value)} placeholder="System name, e.g. Kitchen equipment" className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }} />}
               <div style={{ display: "flex", gap: 6 }}>
-                <input value={newItem.name} onChange={e => setNewItem({ ...newItem, name: e.target.value })} placeholder="Name, e.g. Fisheye camera 12 MP" className="border rounded-lg px-2 py-1" style={{ flex: 1, fontSize: 12.5 }} />
+                <input value={newItem.name} onChange={e => setNewItem({ ...newItem, name: e.target.value })} placeholder="Item name, e.g. Fisheye camera 12 MP" className="border rounded-lg px-2 py-1" style={{ flex: 1, fontSize: 12.5 }} />
                 <input value={newItem.tag} onChange={e => setNewItem({ ...newItem, tag: e.target.value })} placeholder="Tag" className="border rounded-lg px-2 py-1" style={{ width: 56, fontSize: 12.5 }} />
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                <select value={newItem.kind} onChange={e => setNewItem({ ...newItem, kind: e.target.value, unit: e.target.value === "length" ? "m" : "No" })} className="border rounded-lg px-2 py-1" style={{ fontSize: 12 }}><option value="count">Count</option><option value="length">Length (m)</option></select>
-                <select value={newItem.system} onChange={e => setNewItem({ ...newItem, system: e.target.value })} className="border rounded-lg px-2 py-1" style={{ fontSize: 12 }}>{MT_SYSTEMS.map(s => <option key={s[0]} value={s[0]}>{s[1]}</option>)}</select>
+                <select value={newItem.kind} onChange={e => setNewItem({ ...newItem, kind: e.target.value, unit: e.target.value === "length" ? "m" : "No" })} className="border rounded-lg px-2 py-1" style={{ fontSize: 12 }}><option value="count">Count (No)</option><option value="length">Length (m)</option></select>
               </div>
               <div style={{ display: "flex", gap: 5 }}>{MT_COLORS.map(c => <button key={c} type="button" onClick={() => setNewItem({ ...newItem, color: c })} style={{ width: 20, height: 20, borderRadius: "50%", background: c, border: newItem.color === c ? "2px solid #fff" : "2px solid transparent", boxShadow: newItem.color === c ? "0 0 0 2px " + c : "none", cursor: "pointer" }} />)}</div>
               <button type="button" style={btn(true)} onClick={() => createItem(null)}>Add item</button>
-              <div className="text-[11px]" style={{ opacity: .6 }}>Custom items appear in the BOQ as marked. Library items also get the engineered lines.</div>
+              <div className="text-[11px]" style={{ opacity: .6 }}>Your own items go into the BOQ exactly as marked. Items from the list also get the engineered lines.</div>
             </div>
           )}
         </div>
