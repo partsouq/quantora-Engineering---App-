@@ -4302,6 +4302,10 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
       const ownPath = (p: any) => typeof p === "string" && p.startsWith(`${project.id}/compliance/`) && !p.includes("..");
       if (!base || !ownPath(base.path)) return jsonResponse({ error: mode === "pr" ? "Upload the purchase request first." : "Upload the specification first." }, 400);
       if (!quotes.length || !quotes.every((q) => ownPath(q.path))) return jsonResponse({ error: "Upload at least one quotation." }, 400);
+      // Welcome Pack / Free (2026-11-02): checking quotations is part of the paid plans.
+      if (!isAdminOverride && (plan?.is_trial || (company?.plan ?? "free") === "free")) {
+        return jsonResponse({ error: "Checking quotations is part of the paid plans. Choose a plan to unlock it.", code: "plan-limit-reached" }, 403);
+      }
       const gate = await checkConcurrencyGate(admin, companyId);
       if (!gate.ok) return jsonResponse({ error: gate.error }, 429);
 
@@ -4439,6 +4443,10 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
     // Saying so in the UI is part of the feature, not a disclaimer bolted on.
     // -----------------------------------------------------------------
     if (action === "price_boq") {
+      // Welcome Pack / Free (2026-11-02): pricing the BOQ is part of the paid plans.
+      if (!isAdminOverride && (plan?.is_trial || (company?.plan ?? "free") === "free")) {
+        return jsonResponse({ error: "Pricing your BOQ is part of the paid plans. Choose a plan to unlock it.", code: "plan-limit-reached" }, 403);
+      }
       // NO plan-quota check here, deliberately. Market lookups are a separate
       // paid product: the customer buys searches, and those searches are the
       // only thing that funds this action. Charging it against the plan's AI
