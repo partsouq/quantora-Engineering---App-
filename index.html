@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.18"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.19"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -17345,6 +17345,31 @@ function mtDesign(doc, project) {
   return lines;
 }
 
+// Manual Take-off file cache (2026-11-02): a drawing file is downloaded once per visit and reused
+// for counting its sheets, opening any of its pages and the markup PDF. Signed links are reused
+// too, so the browser can serve images and files from its own cache.
+const MT_URLS = new Map();
+async function mtSignedUrl(path) {
+  const c = MT_URLS.get(path); if (c && Date.now() - c.at < 45 * 60e3) return c.url;
+  const { data, error } = await sb.storage.from("drawings").createSignedUrl(path, 3600);
+  if (error) throw error;
+  MT_URLS.set(path, { url: data.signedUrl, at: Date.now() }); return data.signedUrl;
+}
+const MT_PDFS = new Map();
+function mtPdf(path) {
+  if (MT_PDFS.has(path)) { const pr = MT_PDFS.get(path); MT_PDFS.delete(path); MT_PDFS.set(path, pr); return pr; }
+  if (!window.pdfjsLib) return Promise.reject(new Error("The PDF viewer is still loading — try again in a moment."));
+  const pr = (async () => {
+    const url = await mtSignedUrl(path);
+    // Ask for the parts of the file that are needed first; falls back to the whole file.
+    return window.pdfjsLib.getDocument({ url, disableAutoFetch: true, rangeChunkSize: 524288 }).promise;
+  })();
+  pr.catch(() => { if (MT_PDFS.get(path) === pr) MT_PDFS.delete(path); });
+  MT_PDFS.set(path, pr);
+  while (MT_PDFS.size > 8) { const k = MT_PDFS.keys().next().value; const old = MT_PDFS.get(k); MT_PDFS.delete(k); old.then(d => d.destroy()).catch(() => {}); }
+  return pr;
+}
+
 // Download the marked-up drawings (2026-11-02): one PDF page per marked sheet, the drawing with
 // every mark drawn on it, plus a key of the items and the totals on that sheet. For reference only.
 async function mtExportMarkup(doc, project, onlySheetIds) {
@@ -17356,18 +17381,16 @@ async function mtExportMarkup(doc, project, onlySheetIds) {
   if (!sheets.length) throw new Error("Mark a drawing first, then download it.");
   let pdf = null;
   for (const sh of sheets) {
-    const { data: sg, error } = await sb.storage.from("drawings").createSignedUrl(sh.storagePath, 600);
-    if (error) throw error;
+    const sgUrl = await mtSignedUrl(sh.storagePath);
     let w, h, draw;
     if (/\.pdf$/i.test(sh.storagePath)) {
-      const buf = await (await fetch(sg.signedUrl)).arrayBuffer();
-      const pd = await window.pdfjsLib.getDocument({ data: buf }).promise;
+      const pd = await mtPdf(sh.storagePath);
       const pg = await pd.getPage(Math.min(sh.page || 1, pd.numPages));
       const vp1 = pg.getViewport({ scale: 1 }); w = vp1.width; h = vp1.height;
       draw = async (ctx, k) => { await pg.render({ canvasContext: ctx, viewport: pg.getViewport({ scale: k }) }).promise; };
     } else {
       const img = new Image(); img.crossOrigin = "anonymous";
-      await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("Could not open " + (sh.fileName || "the image") + ".")); img.src = sg.signedUrl; });
+      await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("Could not open " + (sh.fileName || "the image") + ".")); img.src = sgUrl; });
       w = img.naturalWidth; h = img.naturalHeight;
       draw = async (ctx, k) => { ctx.drawImage(img, 0, 0, w * k, h * k); };
     }
@@ -17499,6 +17522,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
   const [sending, setSending] = useState("");
   useEffect(() => { if (!flash) return; const id = setTimeout(() => setFlash(null), 1600); return () => clearTimeout(id); }, [flash]);
   const canvasRef = useRef(null), svgRef = useRef(null), wrapRef = useRef(null), saveTimer = useRef(null), loaded = useRef(false);
+  const fitZ = useRef(null);
 
   // load the saved take-off and the project's drawings
   useEffect(() => {
@@ -17549,19 +17573,16 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
     (async () => {
       setLoadingSheet(true); setErr("");
       try {
-        const { data: sg, error } = await sb.storage.from("drawings").createSignedUrl(sheet.storagePath, 3600);
-        if (error) throw error;
         if (/\.pdf$/i.test(sheet.storagePath)) {
-          if (!window.pdfjsLib) throw new Error("The PDF viewer is still loading — try again in a moment.");
-          const buf = await (await fetch(sg.signedUrl)).arrayBuffer();
-          const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+          const pdf = await mtPdf(sheet.storagePath);
           const pg = await pdf.getPage(Math.min(sheet.page || 1, pdf.numPages));
           const vp1 = pg.getViewport({ scale: 1 });
           if (alive) setPage({ w: vp1.width, h: vp1.height, pdfPage: pg, isPdf: true, pages: pdf.numPages });
         } else {
           const img = new Image(); img.crossOrigin = "anonymous";
-          await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("Could not open the image.")); img.src = sg.signedUrl; });
-          if (alive) setPage({ w: img.naturalWidth, h: img.naturalHeight, img: sg.signedUrl, isPdf: false });
+          const url = await mtSignedUrl(sheet.storagePath);
+          await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("Could not open the image.")); img.src = url; });
+          if (alive) setPage({ w: img.naturalWidth, h: img.naturalHeight, img: img.src, isPdf: false });
         }
       } catch (e) { if (alive) setErr(e.message || String(e)); }
       if (alive) setLoadingSheet(false);
@@ -17573,19 +17594,22 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
   useEffect(() => {
     if (!page || !wrapRef.current) return;
     const w = wrapRef.current.clientWidth - 24;
-    setZoom(Math.max(0.08, Math.min(4, w / page.w)));   // opens filling the width; wheel / ＋ to go closer
+    const z = Math.max(0.08, Math.min(4, w / page.w));
+    fitZ.current = z; setZoom(z);   // opens filling the width; wheel / ＋ to go closer
   }, [page]);
 
   // draw the PDF at the current zoom: the old picture is stretched at once (smooth wheel zoom),
   // then a sharp one is drawn off-screen and swapped in. Canvas size is capped for the browser.
   useEffect(() => {
     if (!page || !page.isPdf || !canvasRef.current) return;
+    // A new sheet is drawn once, at its fit-to-width size (not first at the old zoom).
+    if (fitZ.current != null) { if (Math.abs(fitZ.current - zoom) > 1e-9) return; fitZ.current = null; }
     const c = canvasRef.current;
     c.style.width = (page.w * zoom) + "px"; c.style.height = (page.h * zoom) + "px";
     let task, alive = true;
     const t = setTimeout(() => {
       const dpr = window.devicePixelRatio || 1;
-      const scale = Math.min(zoom * dpr, 12000 / Math.max(page.w, page.h));
+      const scale = Math.min(zoom * dpr, 8000 / Math.max(page.w, page.h));   // big enough to read, small enough to draw fast
       const vp = page.pdfPage.getViewport({ scale });
       const off = document.createElement("canvas"); off.width = Math.round(vp.width); off.height = Math.round(vp.height);
       task = page.pdfPage.render({ canvasContext: off.getContext("2d"), viewport: vp });
@@ -17719,12 +17743,8 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
   const fileSheetCount = async (dr) => {
     const known = Number(dr.page_count || dr.total_pages_detected || 0);
     if (!/\.pdf$/i.test(dr.storage_path || dr.file_name || "")) return 1;
-    try {
-      if (!window.pdfjsLib) return known || 1;
-      const { data: sg } = await sb.storage.from("drawings").createSignedUrl(dr.storage_path, 600);
-      const pdf = await window.pdfjsLib.getDocument({ data: await (await fetch(sg.signedUrl)).arrayBuffer() }).promise;
-      return pdf.numPages || known || 1;
-    } catch (_) { return known || 1; }
+    try { const pdf = await mtPdf(dr.storage_path); return pdf.numPages || known || 1; }   // also gets the file ready to open
+    catch (_) { return known || 1; }
   };
   const [attaching, setAttaching] = useState(false);
   const addSheet = async (drawingId, pg) => {
