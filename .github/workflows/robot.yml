@@ -1,7 +1,8 @@
 name: Test robot
 
 # Uses the live website like a customer every 30 minutes (and after every release).
-# Every 2 hours, and after a release, it also generates the AI BOQ.
+# No AI BOQ generation (it costs AI credit); real users' BOQ errors are caught by the error watch.
+# A manual run can include the AI BOQ step (Run workflow -> tick "Include the AI BOQ step").
 # Results go to the database; a failure raises an alert on the admin's phone.
 on:
   schedule:
@@ -14,7 +15,7 @@ on:
       full:
         description: "Include the AI BOQ step"
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: test-robot
@@ -52,11 +53,8 @@ jobs:
           ROBOT_SHOTS: ${{ github.workspace }}/robot-shots
         run: |
           if [ -z "$ROBOT_EMAIL" ] || [ -z "$ROBOT_PASSWORD" ]; then echo "Robot account not set up yet (secrets ROBOT_EMAIL / ROBOT_PASSWORD). Skipping."; exit 0; fi
-          H=$(date -u +%H); M=$(date -u +%M)
           FULL=0
-          if [ "${{ github.event_name }}" = "push" ]; then FULL=1; fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.full }}" = "true" ]; then FULL=1; fi
-          if [ "${{ github.event_name }}" = "schedule" ] && [ $((10#$H % 2)) -eq 0 ] && [ $((10#$M)) -lt 30 ]; then FULL=1; fi
           echo "Full run (with AI BOQ): $FULL"
           ROBOT_FULL=$FULL node robot.js
 
