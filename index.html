@@ -4328,7 +4328,8 @@ function qUserIsTyping() {
   return !!(a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable));
 }
 let qLastInput = Date.now();
-try { ["pointerdown", "keydown", "wheel", "touchstart"].forEach(ev => window.addEventListener(ev, () => { qLastInput = Date.now(); }, { passive: true, capture: true })); } catch (_) {}
+// Any sign of a person: clicks, typing, scrolling, and also just moving the mouse over a drawing.
+try { ["pointerdown", "pointermove", "keydown", "wheel", "scroll", "touchstart", "touchmove"].forEach(ev => window.addEventListener(ev, () => { qLastInput = Date.now(); }, { passive: true, capture: true })); } catch (_) {}
 function qWithTimeout(p, ms) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(Object.assign(new Error("timeout"), { qTimeout: true })), ms);
@@ -4359,7 +4360,8 @@ async function qCurrentUser() {
   return user;
 }
 // A new version is out: switch to it on its own, but only when nobody is in the middle of something
-// (tab in the background, or no clicks or typing for 2 minutes; never during an upload or Manual Take-off).
+// Only when the tab is in the background, or nobody has clicked, typed, scrolled or even moved the mouse
+// for 10 minutes. Never during an upload, while typing, with a pop-up open, in Manual Take-off or the drawing viewer.
 const qUpdate = { pending: null, busy: 0 };
 try { window.qUpdate = qUpdate; } catch (_) {}
 (function qWatchVersion() {
@@ -4373,7 +4375,7 @@ try { window.qUpdate = qUpdate; } catch (_) {}
   const safe = () => !qUpdate.busy && !qUserIsTyping() && !document.querySelector("[data-q-noreload]") && !document.querySelector('[role="alertdialog"]');
   const maybe = () => {
     if (!qUpdate.pending || !safe()) return;
-    if (document.hidden || Date.now() - qLastInput > 120000) location.reload();
+    if (document.hidden || Date.now() - qLastInput > 600000) location.reload();
   };
   setTimeout(check, 30000); setInterval(check, 120000); setInterval(maybe, 10000);
   document.addEventListener("visibilitychange", maybe);
@@ -14966,7 +14968,7 @@ function MarkupViewerModal({ drawing, onClose, focusDucts }) {
   const hasCadInstances = located.some(i => Array.isArray(i.coordinates?.instances) && i.coordinates.instances.length > 0);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div data-q-noreload="1" className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div ref={panelRef} className="bg-white rounded-xl w-full max-h-[90vh] overflow-y-auto p-6"
         style={{ maxWidth: "96vw" }}>
         <div className="flex items-center justify-between mb-4">
