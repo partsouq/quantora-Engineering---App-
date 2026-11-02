@@ -17,7 +17,7 @@
 //   Events: all subscription.*, payment.* and refund.* events
 // ===========================================================================
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { applySubscription, dodo, loadKeys, recordPayment, verifyWebhook } from "./dodo.ts";
+import { applySubscription, creditMtPack, dodo, loadKeys, recordPayment, verifyWebhook } from "./dodo.ts";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   { auth: { persistSession: false } });
@@ -59,6 +59,7 @@ Deno.serve(async (req) => {
       const sub = subId ? await dodo(keys, `/subscriptions/${subId}`).catch(() => null) : null;
       if (type === "payment.succeeded" && sub) console.log(`dodo-webhook ${type}: ${await applySubscription(admin, sub)}`);
       if (["payment.succeeded", "payment.failed"].includes(type)) console.log(`dodo-webhook ${type}: ${await recordPayment(admin, pay, sub ?? undefined)}`);
+      if (type === "payment.succeeded" && pay?.metadata?.kind === "mt_pack") console.log(`dodo-webhook ${type}: ${await creditMtPack(admin, pay)}`);
     } else if (type === "refund.succeeded" && event?.data?.payment_id) {
       const pay = await dodo(keys, `/payments/${event.data.payment_id}`).catch(() => null);
       if (pay) {

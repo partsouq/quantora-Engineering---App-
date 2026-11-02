@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.13"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.14"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -6495,6 +6495,17 @@ async function callPay(action, payload) {
   return json;
 }
 const CARD_OFF_MSG = "Card payment is not switched on for this account yet.";
+// Manual Take-off pack: 30 more marked drawings for $10 (one-time, valid 30 days).
+async function qBuyMtPack() {
+  try {
+    const cfg = await callPay("config", {}).catch(() => null);
+    if (!cfg || !cfg.enabled) throw new Error(CARD_OFF_MSG);
+    const back = `${location.origin}${location.pathname}?mt_pack=done`;
+    const start = await callPay("buy_mt_pack", { return_url: back });
+    if (!start.checkout_url) throw new Error("The payment page could not be opened. Please try again.");
+    location.assign(start.checkout_url);
+  } catch (e) { qPop({ kind: "error", title: "Could not open the payment page", message: (e && e.message) || "Please try again." }); }
+}
 // Starts a subscription and sends the customer to Dodo's checkout page.
 // Resolves true only when an existing subscription was switched in place;
 // otherwise the page leaves for Dodo and comes back with ?checkout=done.
@@ -17294,6 +17305,31 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
   const [newItem, setNewItem] = useState({ name: "", tag: "", kind: "count", unit: "No", system: "cctv", color: MT_COLORS[0] });
   const [newSysName, setNewSysName] = useState("");
   const rules = mtCountryRules(project.country);
+  // Monthly drawing allowance (Free 10, Individual 50, Professional 200, Team unlimited, + $10 packs of 30).
+  const [mtQuota, setMtQuota] = useState(null);
+  const okSheets = useRef(new Set());
+  useEffect(() => {
+    const load = () => sb.rpc("q_mt_quota").then(({ data, error }) => { if (!error && data) setMtQuota(data); }).catch(() => {});
+    load(); window.addEventListener("mt-quota-changed", load);
+    return () => window.removeEventListener("mt-quota-changed", load);
+  }, []);
+  const mtLimitPop = (q) => qPop({ kind: "warn", title: "This month's Manual Take-off drawings are used",
+    message: `You have marked ${q && q.used != null ? q.used : "all"} of ${q && q.allowance != null ? q.allowance : 10} drawings this month. Get 30 more drawings for $10 (valid 30 days), or upgrade your plan: Individual 50, Professional 200, Team unlimited.`,
+    action: { label: "Get 30 more · $10", onClick: qBuyMtPack } });
+  // A sheet counts once a month, the first time it gets a mark. Sheets already marked before stay free to edit.
+  // If the check itself is unavailable, marking is never blocked.
+  const sheetAllowed = async (sid) => {
+    if (okSheets.current.has(sid) || (doc && doc.marks.some(m => m.sheetId === sid))) { okSheets.current.add(sid); return true; }
+    if (mtQuota && mtQuota.unlimited) { okSheets.current.add(sid); }
+    try {
+      const { data, error } = await sb.rpc("q_mt_use_sheet", { p_project: project.id, p_sheet: sid });
+      if (error || !data) return true;
+      setMtQuota(data);
+      if (data.ok) { okSheets.current.add(sid); return true; }
+      if (data.reason === "limit") { mtLimitPop(data); return false; }
+      return true;
+    } catch (_) { return true; }
+  };
   const [showNew, setShowNew] = useState(false);
   const [view, setView] = useState("draw");       // draw | boq
   const [boqType, setBoqType] = useState("designed");
@@ -17456,10 +17492,13 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
     if (tool === "count") {
       if (!item) { setErr("Create or pick an item on the right first."); return; }
       if (item.kind !== "count") { setErr(`"${item.name}" is measured by length — pick the Length tool, or a counted item.`); return; }
-      const n = nextNumber(item.id, floorId);
-      update(d => { d.marks.push({ id: mtId(), sheetId: sheet.id, itemId: item.id, type: "count", x: p[0], y: p[1], n }); return d; });
-      setFlash({ x: p[0], y: p[1], text: `+1 → ${item.tag}${n}`, color: item.color, at: Date.now() });
-      setErr("");
+      const add = () => {
+        const n = nextNumber(item.id, floorId);
+        update(d => { d.marks.push({ id: mtId(), sheetId: sheet.id, itemId: item.id, type: "count", x: p[0], y: p[1], n }); return d; });
+        setFlash({ x: p[0], y: p[1], text: `+1 → ${item.tag}${n}`, color: item.color, at: Date.now() });
+        setErr("");
+      };
+      if (okSheets.current.has(sheet.id)) add(); else sheetAllowed(sheet.id).then(ok => { if (ok) add(); });
     } else if (tool === "length" || tool === "scale") {
       if (tool === "length" && (!item || item.kind !== "length")) { setErr("Pick a length item (cable tray, conduit …) on the right first."); return; }
       if (tool === "scale" && draft.length >= 2) setDraft([p]); else setDraft(d => d.concat([p]));
@@ -17471,8 +17510,9 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
     const pts = draft.filter((p, i) => i === 0 || Math.hypot(p[0] - draft[i - 1][0], p[1] - draft[i - 1][1]) > 0.5);
     if (tool !== "length" || pts.length < 2 || !item) { setDraft([]); return; }
     const units = polyLen(pts);
-    update(d => { d.marks.push({ id: mtId(), sheetId: sheet.id, itemId: item.id, type: "length", pts, len: mPerUnit ? units * mPerUnit : null }); return d; });
+    const sid = sheet.id, itId = item.id, len = mPerUnit ? units * mPerUnit : null;
     setDraft([]);
+    sheetAllowed(sid).then(ok => { if (ok) update(d => { d.marks.push({ id: mtId(), sheetId: sid, itemId: itId, type: "length", pts, len }); return d; }); });
   };
   const applyScale = (mPU, how) => {
     update(d => {
@@ -17774,7 +17814,17 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
       <div style={{ width: 330, flex: "none", display: "flex", flexDirection: "column", gap: 8 }}>
         <div><b style={{ fontSize: 15 }}>Item list</b><div className="text-xs" style={{ opacity: .7, marginTop: 2 }}>Create your items, pick one, then click the drawing. Every click gets the next number.</div></div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 380, overflow: "auto" }}>
-          {!doc.items.length && <div className="text-xs" style={{ opacity: .7, padding: "8px 2px" }}>No items yet — add one from the library below.</div>}
+          {mtQuota && (
+            <div className="text-xs" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "7px 10px", borderRadius: 10,
+              border: "1px solid " + (!mtQuota.unlimited && mtQuota.used >= mtQuota.allowance ? "rgba(245,158,11,.6)" : "rgba(148,163,184,.3)"),
+              background: !mtQuota.unlimited && mtQuota.used >= mtQuota.allowance ? "rgba(245,158,11,.10)" : "transparent" }}>
+              {mtQuota.unlimited
+                ? <span><b>Unlimited</b> Manual Take-off drawings on your plan</span>
+                : <span><b>{mtQuota.used} of {mtQuota.allowance}</b> drawings used this month{mtQuota.packs ? ` (incl. ${mtQuota.packs} from packs)` : ""}</span>}
+              {!mtQuota.unlimited && <button type="button" onClick={qBuyMtPack} style={{ ...btn(false), padding: "3px 9px", fontSize: 11.5 }}>+30 drawings · $10</button>}
+            </div>
+          )}
+          {!doc.items.length && <div className="text-xs" style={{ opacity: .7, padding: "8px 2px" }}>No items yet — add one from the list below.</div>}
           {doc.items.map(it => {
             const t = totals[it.id] || {}, tot = Object.values(t).reduce((a, b) => a + b, 0);
             return (
@@ -17838,7 +17888,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
         <button type="button" onClick={() => { setView("boq"); setBoqType("designed"); }} disabled={!doc.marks.length}
           style={{ padding: "13px", borderRadius: 12, border: 0, fontWeight: 800, fontSize: 14.5, color: "#fff", cursor: doc.marks.length ? "pointer" : "not-allowed", opacity: doc.marks.length ? 1 : .5, background: "linear-gradient(90deg,#2563eb,#7c3aed)" }}>Design BOQ for these systems →</button>
         <button type="button" onClick={() => { setView("boq"); setBoqType("takeoff"); }} disabled={!doc.marks.length} style={{ ...btn(false), padding: 10 }}>View Take-off BOQ</button>
-        <div className="text-[11px]" style={{ opacity: .6, textAlign: "center" }}>Manual marking is free — no pages are used. Totals are kept floor by floor.</div>
+        <div className="text-[11px]" style={{ opacity: .6, textAlign: "center" }}>Manual Take-off uses no AI pages. A drawing counts once a month, when you first mark it. Totals are kept floor by floor.</div>
       </div>
     </div>
   );
@@ -37184,6 +37234,37 @@ function App() {
       window.history.replaceState({}, "", window.location.pathname + (rest ? `?${rest}` : ""));
     }
   }, []);
+
+  // Back from buying a Manual Take-off pack (?mt_pack=done&payment_id=…&status=…).
+  useEffect(() => {
+    if (!session) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("mt_pack") !== "done") return;
+    const payId = params.get("payment_id") || "";
+    const status = (params.get("status") || "").toLowerCase();
+    ["mt_pack", "payment_id", "status", "email", "subscription_id"].forEach(k => params.delete(k));
+    const rest = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (rest ? `?${rest}` : ""));
+    if (status && !["succeeded", "processing", "pending", "active"].includes(status)) {
+      qPop({ kind: "warn", title: "Payment not completed", message: "The Manual Take-off pack was not bought. You have not been charged. You can try again from Manual Take-off." });
+      return;
+    }
+    let tries = 0;
+    const tick = async () => {
+      tries++;
+      try {
+        const r = payId ? await callPay("confirm_mt_pack", { payment_id: payId }) : null;
+        if (r && r.ok) {
+          qPop({ kind: "success", title: "30 drawings added \u2713", message: "Your Manual Take-off pack is active for 30 days. Thank you!" });
+          window.dispatchEvent(new CustomEvent("mt-quota-changed"));
+          return;
+        }
+      } catch (e) { /* try again */ }
+      if (tries < 8) setTimeout(tick, 3000);
+      else qPop({ kind: "info", title: "Payment received", message: "Your pack is being confirmed and will appear in Manual Take-off in a minute." });
+    };
+    setTimeout(tick, 800);
+  }, [session]);
 
   // Back from Dodo's checkout page (?checkout=done, plus Dodo's own
   // subscription_id / status). Shows the payment pop-up: "confirming" while the

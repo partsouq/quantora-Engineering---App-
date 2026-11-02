@@ -177,6 +177,7 @@ export async function recordPayment(admin: any, pay: any, sub?: any, refundedMin
       description = `${plan?.name ?? ref} plan, monthly`;
     } else if (kind === "storage") description = `Storage +${ref} GB, monthly`;
   }
+  if (!item && pay.metadata?.kind === "mt_pack") { item = `mt_pack:${pay.metadata?.drawings ?? 30}`; description = `Manual Take-off pack: ${pay.metadata?.drawings ?? 30} drawings`; }
   const companyId = await companyOf(admin, { metadata: pay.metadata?.company_id ? pay.metadata : sub?.metadata, customer: pay.customer });
   const period = (pay.service_periods ?? [])[0] ?? null;
   const { data: old } = await admin.from("billing_payments").select("refunded_minor, description, item").eq("payment_id", pay.payment_id).maybeSingle();
@@ -197,4 +198,20 @@ export async function recordPayment(admin: any, pay: any, sub?: any, refundedMin
   const { error } = await admin.from("billing_payments").upsert(row, { onConflict: "payment_id" });
   if (error) throw error;
   return `payment ${pay.payment_id} ${status} ${total / 100} ${row.currency}`;
+}
+
+/** A paid Manual Take-off pack (one-time payment, metadata.kind = "mt_pack") becomes drawing credits for 30 days. Idempotent. */
+export async function creditMtPack(admin: any, pay: any): Promise<string> {
+  if (!pay?.payment_id || pay?.metadata?.kind !== "mt_pack") return "not a Manual Take-off pack";
+  if (String(pay.status ?? "succeeded") !== "succeeded") return `pack payment ${pay.payment_id} is ${pay.status}`;
+  const companyId = String(pay.metadata?.company_id ?? "");
+  if (!companyId) return "pack payment without company";
+  const drawings = Math.max(1, Number(pay.metadata?.drawings ?? 30) || 30);
+  const { error } = await admin.from("mt_packs").upsert({
+    payment_id: pay.payment_id, company_id: companyId, drawings,
+    purchased_at: pay.created_at ?? new Date().toISOString(),
+    expires_at: new Date(Date.parse(pay.created_at ?? new Date().toISOString()) + 30 * 86400e3).toISOString(),
+  }, { onConflict: "payment_id", ignoreDuplicates: true });
+  if (error) throw error;
+  return `pack ${pay.payment_id}: +${drawings} drawings for company ${companyId}`;
 }
