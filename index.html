@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.02"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -16739,6 +16739,30 @@ function PricingBoqPanel({ project, consolidated, loading }) {
 // ---------------------------------------------------------------------------
 // BOQ Review tab
 // ---------------------------------------------------------------------------
+// Reaching the bottom of the BOQ asks for the take-off rating (2026-11-02): the person has just
+// read the whole result, which is the best moment. Asked once per project (the rating system skips
+// anything already rated), and only when the BOQ has lines.
+function QBoqEndRating({ projectId, hasRows }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!hasRows || !projectId || !ref.current || !("IntersectionObserver" in window)) return;
+    let fired = false, scrolled = false, seen = false;
+    // only after the person has actually scrolled through the BOQ, not when the page first draws
+    const ask = () => {
+      if (fired || !scrolled || !seen) return;
+      fired = true; io.disconnect(); window.removeEventListener("scroll", onScroll, true);
+      try { window.dispatchEvent(new CustomEvent("quantora:step-done", { detail: { step: "takeoff", project_id: projectId, delayMs: 1200 } })); } catch (_) {}
+    };
+    const onScroll = () => { scrolled = true; ask(); };
+    window.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    const io = new IntersectionObserver((ents) => {
+      seen = ents.some(e => e.isIntersecting); ask();
+    }, { threshold: 0.1 });
+    io.observe(ref.current);
+    return () => { io.disconnect(); window.removeEventListener("scroll", onScroll, true); };
+  }, [projectId, hasRows]);
+  return <div ref={ref} aria-hidden="true" style={{ height: 1 }} />;
+}
 function BoqTab({ project, onGoToEstimation }) {
   const [rawItems, setRawItems] = useState([]);
   const [drawingRows, setDrawingRows] = useState([]);
@@ -17872,6 +17896,7 @@ function BoqTab({ project, onGoToEstimation }) {
       )}
       </React.Fragment>
       )}
+      <QBoqEndRating projectId={project && project.id} hasRows={rawItems.length > 0} />
     </div>
   );
 }
@@ -35759,7 +35784,8 @@ function App() {
       } catch (_) {}
       // Ask about 5 s after the result appears (2026-11-02): people who finish and close the tab
       // were never asked when the rating waited for a page change.
-      setTimeout(() => { setFbQueue(qs => qs.some(x => qFbKey(x) === qFbKey(it)) ? qs : qs.concat([it])); setFbTick(n => n + 1); }, 5000);
+      const wait = Number(it.delayMs) > 0 ? Number(it.delayMs) : 5000;
+      setTimeout(() => { setFbQueue(qs => qs.some(x => qFbKey(x) === qFbKey(it)) ? qs : qs.concat([it])); setFbTick(n => n + 1); }, wait);
     };
     window.addEventListener("quantora:step-done", onDone);
     return () => window.removeEventListener("quantora:step-done", onDone);
