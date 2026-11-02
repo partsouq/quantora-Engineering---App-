@@ -1,0 +1,70 @@
+name: Test robot
+
+# Uses the live website like a customer every 30 minutes (and after every release).
+# Every 2 hours, and after a release, it also generates the AI BOQ.
+# Results go to the database; a failure raises an alert on the admin's phone.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  push:
+    branches: [main]
+    paths: [index.html]
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Include the AI BOQ step"
+        type: boolean
+        default: true
+
+concurrency:
+  group: test-robot
+  cancel-in-progress: false
+
+jobs:
+  robot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests/robot
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install browser
+        working-directory: tests/robot
+        run: |
+          npm install --no-audit --no-fund playwright@1.48.2
+          npx playwright install --with-deps chromium
+
+      - name: Wait for the release to go live
+        if: github.event_name == 'push'
+        run: sleep 150
+
+      - name: Run the robot
+        working-directory: tests/robot
+        env:
+          ROBOT_EMAIL: ${{ secrets.ROBOT_EMAIL }}
+          ROBOT_PASSWORD: ${{ secrets.ROBOT_PASSWORD }}
+          ROBOT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ROBOT_SHOTS: ${{ github.workspace }}/robot-shots
+        run: |
+          if [ -z "$ROBOT_EMAIL" ] || [ -z "$ROBOT_PASSWORD" ]; then echo "Robot account not set up yet (secrets ROBOT_EMAIL / ROBOT_PASSWORD). Skipping."; exit 0; fi
+          H=$(date -u +%H); M=$(date -u +%M)
+          FULL=0
+          if [ "${{ github.event_name }}" = "push" ]; then FULL=1; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.full }}" = "true" ]; then FULL=1; fi
+          if [ "${{ github.event_name }}" = "schedule" ] && [ $((10#$H % 2)) -eq 0 ] && [ $((10#$M)) -lt 30 ]; then FULL=1; fi
+          echo "Full run (with AI BOQ): $FULL"
+          ROBOT_FULL=$FULL node robot.js
+
+      - name: Keep screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-screenshots
+          path: robot-shots
+          retention-days: 3
+          if-no-files-found: ignore
