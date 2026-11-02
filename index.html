@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.02"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.03"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -20882,6 +20882,94 @@ function QMeasurementRules() {
 
 // Platform alerts (2026-10-30): platform bugs the run-doctor agent found, for platform admins only.
 // Users never see these; they get a plain "we're looking into it" message instead (user_messages).
+// Hourly Reports (2026-11-02): the ops-report agent's hourly summary. Alerts are NOT here -- they
+// arrive instantly as their own notification and live under Platform Alerts.
+function QHourlyReportsView() {
+  const [rows, setRows] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [open, setOpen] = useState(null);
+  const load = async () => {
+    const { data, error } = await sb.from("admin_reports").select("*").order("period_end", { ascending: false }).limit(72);
+    setRows(error ? [] : (data || []));
+    if (error) setMsg(/admin_reports/.test(error.message || "") ? "The reports table is not set up yet." : error.message);
+  };
+  useEffect(() => { load(); const id = setInterval(load, 5 * 60 * 1000); return () => clearInterval(id); }, []);
+  const runNow = async () => {
+    setMsg("Building a report for the last 60 minutes…");
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/ops-report`, { method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "hourly" }) });
+      const j = await r.json();
+      setMsg(r.ok ? "Report ready." : (j.error || "Report failed."));
+      load();
+    } catch (e) { setMsg(String(e.message || e)); }
+  };
+  const t = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const d = (iso) => new Date(iso).toLocaleDateString([], { day: "2-digit", month: "short" });
+  const Stat = ({ label, value, warn }) => (
+    <div className="border rounded-lg px-3 py-2" style={{ minWidth: 112, background: warn ? "#fff7ed" : "#fff", borderColor: warn ? "#fdba74" : undefined }}>
+      <div className="text-[10.5px] uppercase tracking-wide text-slate-500 font-semibold">{label}</div>
+      <div className="text-lg font-extrabold" style={{ color: warn ? "#c2410c" : "#0f172a" }}>{value}</div>
+    </div>
+  );
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-[11.5px] text-slate-500">One report every hour, on the hour, also sent to your devices as "Hourly report". Errors are not mixed in here: they come instantly as their own "Alert" notification and are listed under Platform Alerts.</div>
+        <div style={{ flex: 1 }} />
+        <span className="text-xs text-slate-500">{msg}</span>
+        <button onClick={runNow} className="text-xs font-semibold px-3 py-1.5 rounded-lg border">Run report now</button>
+      </div>
+      {rows === null ? <div className="text-sm text-slate-500">Loading…</div> : rows.length === 0 ? (
+        <div className="bg-white border rounded-xl p-6 text-sm text-slate-500">No reports yet. The first one arrives at the top of the next hour.</div>
+      ) : rows.map((r, i) => {
+        const x = r.data || {}, u = x.users || {}, ru = x.runs || {}, dr = x.drawings || {}, c = x.chats || {}, rt = x.ratings || {};
+        const health = x.health || [], down = health.filter(h => !h.up);
+        const quiet = !(u.signups || u.logins || ru.completed || ru.failed || dr.done || dr.failed || c.new_chats || c.customer_messages || rt.count || x.payments);
+        const expanded = open === r.id || (open === null && i === 0);
+        return (
+          <div key={r.id} className="bg-white border rounded-xl p-4 space-y-3">
+            <button type="button" onClick={() => setOpen(expanded ? "" : r.id)} className="w-full flex flex-wrap items-center gap-2 text-left">
+              <b className="text-sm">📊 {d(r.period_start)} · {t(r.period_start)}–{t(r.period_end)}</b>
+              {r.manual && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full border">Run by hand</span>}
+              {quiet && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: "#f1f5f9", color: "#475569" }}>Quiet hour</span>}
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={down.length ? { background: "#fee2e2", color: "#991b1b" } : { background: "#dcfce7", color: "#166534" }}>
+                Engines {health.length - down.length}/{health.length}{down.length ? " ❌" : " ✅"}</span>
+              {(r.alerts_count || 0) > 0 && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: "#fef3c7", color: "#92400e" }}>{r.alerts_count} alert(s) — see Platform Alerts</span>}
+              <div style={{ flex: 1 }} />
+              <span className="text-xs text-slate-400">{expanded ? "Hide" : "Show"}</span>
+            </button>
+            {expanded && (<>
+              <div className="flex flex-wrap gap-2">
+                <Stat label="New users" value={u.signups || 0} />
+                <Stat label="Signed in" value={u.logins || 0} />
+                <Stat label="Take-offs done" value={ru.completed || 0} />
+                <Stat label="Take-offs failed" value={ru.failed || 0} warn={(ru.failed || 0) > 0} />
+                <Stat label="Empty results" value={ru.empty || 0} warn={(ru.empty || 0) > 0} />
+                <Stat label="Pages used" value={x.pages || 0} />
+                <Stat label="Drawings done" value={dr.done || 0} />
+                <Stat label="Drawings failed" value={dr.failed || 0} warn={(dr.failed || 0) > 0} />
+                <Stat label="New chats" value={c.new_chats || 0} />
+                <Stat label="Chats waiting" value={c.waiting || 0} warn={(c.waiting || 0) > 0} />
+                <Stat label="Ratings" value={rt.count ? `${rt.count} · ${rt.avg}★` : 0} />
+                <Stat label="Payments" value={x.payments || 0} />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {health.map(h => (
+                  <span key={h.fn} className="text-[11px] px-2 py-0.5 rounded-full border" style={h.up ? {} : { background: "#fee2e2", color: "#991b1b", borderColor: "#fca5a5" }}>
+                    {h.up ? "✓" : "✕"} {h.fn}{h.up ? "" : ` (${h.status || "no answer"})`}</span>
+                ))}
+              </div>
+            </>)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function QAlertsView() {
   const [rows, setRows] = useState(null);
   const [filter, setFilter] = useState("open");
@@ -21060,6 +21148,7 @@ const QADMIN_NAV = [
   { group: "Platform", key: "livechat", label: "Live Chat", sub: "Talk to customers in real time — replies appear as Quantora Team" },
   { group: "Platform", key: "support", label: "Support & Feedback", sub: "What customers report, and what they want next" },
   { group: "Platform", key: "ratings", label: "User Ratings", sub: "1-5 star ratings after each step, per customer" },
+  { group: "Platform", key: "hourly", label: "Hourly Reports", sub: "What happened on the platform each hour. Errors are under Platform Alerts, never mixed in here." },
   { group: "Platform", key: "alerts", label: "Platform Alerts", sub: "Platform bugs the run-doctor agent found. Users never see these." },
   { group: "Platform", key: "health", label: "System Health", sub: "Live status of core platform services" },
   { group: "Platform", key: "reports", label: "Reports & Exports", sub: "Detailed downloadable Excel reports" },
@@ -21958,6 +22047,9 @@ function AdminPortal({ onBack }) {
             )}
             {activeView === "health" && (
               <QHealthView systemStatus={systemStatus} />
+            )}
+            {activeView === "hourly" && (
+              <QHourlyReportsView />
             )}
             {activeView === "alerts" && (
               <QAlertsView />
