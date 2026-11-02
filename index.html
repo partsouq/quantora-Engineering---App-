@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.03"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.04"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -12257,6 +12257,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
       // made the estimating section read as two jobs at once. It lives in the
       // Draftsman workspace, where the base plan and the specification are.
       ["boq", "Take-off & BOQ"],
+      ["manual", "Manual Take-off"],
       ["estimation", "Estimation"],
     ]],
     ["Procurement", [
@@ -12404,6 +12405,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
           {tab === "drawings"      && <DrawingsTab project={project} />}
           {tab === "design"        && <DesignTab project={project} />}
           {tab === "boq"           && <BoqTab project={project} onGoToEstimation={() => setTab("estimation")} />}
+          {tab === "manual"        && <ManualTakeoffTab project={project} onGoToBoq={() => setTab("boq")} />}
           {tab === "estimation"    && <EstimationTab project={project} />}
           {tab === "cost"          && <CostBudgetTab project={project} />}
           {tab === "specification" && <SpecificationTab project={project} />}
@@ -16739,6 +16741,632 @@ function PricingBoqPanel({ project, consolidated, loading }) {
 // ---------------------------------------------------------------------------
 // BOQ Review tab
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Manual Take-off (2026-11-02, Phase 1). The user marks the drawing themselves:
+// make an item list (Dome camera "D", Bullet camera "B", Cable tray ...), pick an
+// item, click the drawing -- every click places the next number (D1, D2 ...).
+// Lengths are measured along clicked routes at the sheet's scale. Floors keep the
+// marks apart, so the BOQ is floor by floor. "Design BOQ" adds what the systems
+// need (NVR, switches, cable, FACP, circuits, DBs, supports ...) from fixed rules --
+// no AI, no pages used. "Send to project BOQ" writes the lines into boq_items
+// (source manual / engineering_rule) so Take-off & BOQ, Pricing and Export work.
+// Marks are kept in the project's storage folder: <project>/manual-takeoff/takeoff.json
+// ---------------------------------------------------------------------------
+const MT_PT_M = 0.0254 / 72;                 // one PDF point in metres at 1:1
+const MT_COLORS = ["#2563eb", "#0d9488", "#7c3aed", "#f59e0b", "#ec4899", "#ef4444", "#16a34a", "#0891b2", "#a16207", "#475569"];
+const MT_LIBRARY = [
+  // [group, name, tag, kind, unit, system_category, rule]
+  ["CCTV", "Dome camera, 4 MP", "D", "count", "No", "cctv", "camera"],
+  ["CCTV", "Bullet camera, 4 MP", "B", "count", "No", "cctv", "camera_out"],
+  ["CCTV", "PTZ camera", "P", "count", "No", "cctv", "camera_out"],
+  ["CCTV", "Fisheye camera, 12 MP", "F", "count", "No", "cctv", "camera"],
+  ["Fire alarm", "Smoke detector, addressable", "S", "count", "No", "fire_alarm", "fa_detector"],
+  ["Fire alarm", "Heat detector, addressable", "H", "count", "No", "fire_alarm", "fa_detector"],
+  ["Fire alarm", "Manual call point", "M", "count", "No", "fire_alarm", "fa_mcp"],
+  ["Fire alarm", "Sounder / strobe", "A", "count", "No", "fire_alarm", "fa_sounder"],
+  ["Data", "Data outlet (single)", "DO", "count", "No", "structured_cabling", "data_outlet"],
+  ["Data", "WiFi access point", "W", "count", "No", "wifi", "wifi_ap"],
+  ["Access control", "Access-controlled door", "AC", "count", "No", "access_control", "acs_door"],
+  ["Public address", "Ceiling speaker", "SP", "count", "No", "public_address", "pa_speaker"],
+  ["Electrical", "Light fitting", "L", "count", "No", "lighting", "light"],
+  ["Electrical", "13 A socket outlet", "SO", "count", "No", "power_distribution", "socket"],
+  ["Electrical", "Isolator / power point", "I", "count", "No", "power_distribution", "isolator"],
+  ["Containment", "Cable tray 150×50", "CT", "length", "m", "containment", "tray"],
+  ["Containment", "Cable trunking 100×100", "TR", "length", "m", "containment", "tray"],
+  ["Containment", "Conduit 25 mm", "CD", "length", "m", "containment", "conduit"],
+];
+const MT_SYSTEMS = [
+  ["cctv", "CCTV"], ["fire_alarm", "Fire alarm"], ["structured_cabling", "Data / structured cabling"], ["wifi", "WiFi"],
+  ["access_control", "Access control"], ["public_address", "Public address"], ["lighting", "Lighting"],
+  ["power_distribution", "Small power"], ["containment", "Containment"], ["other", "Other"],
+];
+const mtId = () => Math.random().toString(36).slice(2, 10);
+const mtSysLabel = (k) => (MT_SYSTEMS.find(s => s[0] === k) || [k, k])[1];
+const mtRound = (v, unit) => unit === "m" ? Math.round(v * 10) / 10 : Math.round(v);
+
+// The designed BOQ: the user's lines plus engineered lines, every quantity per floor.
+// Returns [{ key, system, name, unit, source: "you"|"eng", why, byFloor: {floorId: qty}, central }]
+function mtDesign(doc) {
+  const floors = doc.floors || [];
+  const lines = [];
+  const add = (system, name, unit, source, why, byFloor) => {
+    const clean = {}; let any = false;
+    for (const f of Object.keys(byFloor)) { const v = mtRound(byFloor[f] || 0, unit); if (v > 0) { clean[f] = v; any = true; } }
+    if (any) lines.push({ key: system + "|" + name, system, name, unit, source, why, byFloor: clean });
+  };
+  const sheetFloor = {}; (doc.sheets || []).forEach(s => { sheetFloor[s.id] = s.floorId; });
+  const qty = {};   // itemId -> floorId -> qty
+  for (const m of doc.marks || []) {
+    const f = sheetFloor[m.sheetId]; if (!f) continue;
+    const v = m.type === "length" ? (m.len || 0) : 1;
+    ((qty[m.itemId] ||= {})[f] = (qty[m.itemId][f] || 0) + v);
+  }
+  const perRule = (rule) => { const o = {}; for (const it of doc.items || []) if (it.rule === rule || (Array.isArray(rule) && rule.includes(it.rule))) for (const f of Object.keys(qty[it.id] || {})) o[f] = (o[f] || 0) + qty[it.id][f]; return o; };
+  const map = (o, fn) => { const r = {}; for (const f of Object.keys(o)) r[f] = fn(o[f], f); return r; };
+  const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+  // 1. what the user marked
+  for (const it of doc.items || []) add(it.system || "other", it.name, it.unit, "you", it.kind === "length" ? "Measured on the drawing at the sheet scale" : "Counted on the drawing", qty[it.id] || {});
+  // 2. CCTV
+  const camIn = perRule("camera"), camOut = perRule("camera_out"), cams = {};
+  for (const o of [camIn, camOut]) for (const f of Object.keys(o)) cams[f] = (cams[f] || 0) + o[f];
+  if (sum(cams)) {
+    add("cctv", "NVR 32-channel with 4 × 8 TB surveillance HDD (RAID 5)", "No", "eng", "One NVR per 32 cameras on the floor; sized for 30 days at 4 MP", map(cams, c => Math.ceil(c / 32)));
+    add("cctv", "PoE+ switch 24-port managed, 4 × SFP uplink", "No", "eng", "Cameras + 20% spare ports, 24 ports per switch", map(cams, c => Math.ceil(c * 1.2 / 24)));
+    add("cctv", "Cat6 U/UTP LSZH cable", "m", "eng", "45 m average drop per camera + 10% (adjust if your routes are longer)", map(cams, c => c * 45 * 1.1));
+    add("cctv", "Cat6 patch cord 1 m + RJ45 connectors (per camera)", "Set", "eng", "One set per camera", cams);
+    add("cctv", "Camera junction box / back box", "No", "eng", "One per indoor camera", camIn);
+    add("cctv", "Wall / pole mounting bracket, outdoor", "No", "eng", "One per bullet / PTZ camera", camOut);
+    add("cctv", "VMS licence per camera", "No", "eng", "One per camera", cams);
+  }
+  // 3. Fire alarm
+  const det = perRule("fa_detector"), mcp = perRule("fa_mcp"), snd = perRule("fa_sounder");
+  const faDev = {}; for (const o of [det, mcp, snd]) for (const f of Object.keys(o)) faDev[f] = (faDev[f] || 0) + o[f];
+  if (sum(faDev)) {
+    const total = sum(faDev), loops = Math.max(1, Math.ceil(total * 1.25 / 125));
+    const first = floors[0] ? floors[0].id : Object.keys(faDev)[0];
+    add("fire_alarm", `Addressable fire alarm control panel, ${loops}-loop`, "No", "eng", `${total} devices in the building + 25% growth, 125 devices per loop (one panel, shown on ${floors[0] ? floors[0].name : "the first floor"})`, { [first]: 1 });
+    add("fire_alarm", "Detector base", "No", "eng", "One per detector", det);
+    add("fire_alarm", "Loop isolator module", "No", "eng", "One per 20 loop devices", map(faDev, d => Math.ceil(d / 20)));
+    add("fire_alarm", "Fire-rated cable 2C × 1.5 mm² (loop)", "m", "eng", "12 m per device + 10%", map(faDev, d => d * 12 * 1.1));
+    if (!sum(mcp) && sum(det)) add("fire_alarm", "Manual call point (allowance — confirm on layout)", "No", "eng", "None marked; 1 per 12 detectors as an allowance for UAE Civil Defence travel distance", map(det, d => Math.ceil(d / 12)));
+    if (!sum(snd) && sum(det)) add("fire_alarm", "Sounder / strobe (allowance — confirm on layout)", "No", "eng", "None marked; 1 per 8 detectors as an allowance", map(det, d => Math.ceil(d / 8)));
+  }
+  // 4. Data / WiFi / access / PA
+  const dout = perRule("data_outlet"), ap = perRule("wifi_ap");
+  const ports = {}; for (const o of [dout, ap]) for (const f of Object.keys(o)) ports[f] = (ports[f] || 0) + o[f];
+  if (sum(ports)) {
+    add("structured_cabling", "Cat6 U/UTP LSZH cable", "m", "eng", "45 m average per outlet / access point + 10%", map(ports, p => p * 45 * 1.1));
+    add("structured_cabling", "Cat6 faceplate with keystone jack", "No", "eng", "One per data outlet", dout);
+    add("structured_cabling", "Cat6 patch panel 24-port", "No", "eng", "Outlets + APs + 20% spare, 24 ports per panel", map(ports, p => Math.ceil(p * 1.2 / 24)));
+    add("structured_cabling", "Cat6 patch cord (rack + user end)", "No", "eng", "Two per port", map(ports, p => p * 2));
+    add("structured_cabling", "Floor rack 42U with PDU and cable managers", "No", "eng", "One per floor with outlets", map(ports, () => 1));
+  }
+  if (sum(ap)) add("wifi", "Ceiling mounting bracket for access point", "No", "eng", "One per access point", ap);
+  const doors = perRule("acs_door");
+  if (sum(doors)) {
+    add("access_control", "Card reader", "No", "eng", "One per door (entry side)", doors);
+    add("access_control", "Request-to-exit button", "No", "eng", "One per door", doors);
+    add("access_control", "Electromagnetic lock 600 lb with bracket", "No", "eng", "One per door", doors);
+    add("access_control", "Door contact", "No", "eng", "One per door", doors);
+    add("access_control", "Emergency break-glass unit", "No", "eng", "One per door (fire release)", doors);
+    add("access_control", "Two-door access controller", "No", "eng", "One per two doors", map(doors, d => Math.ceil(d / 2)));
+    add("access_control", "Multicore cable 6C × 0.22 mm²", "m", "eng", "30 m per door + 10%", map(doors, d => d * 30 * 1.1));
+  }
+  const spk = perRule("pa_speaker");
+  if (sum(spk)) {
+    add("public_address", "PA cable 2C × 1.5 mm² fire-rated", "m", "eng", "10 m per speaker + 10%", map(spk, s => s * 10 * 1.1));
+    add("public_address", "PA amplifier zone (120 W)", "No", "eng", "6 W per speaker + 20% headroom, 120 W per zone", map(spk, s => Math.ceil(s * 6 * 1.2 / 120)));
+  }
+  // 5. Electrical
+  const lights = perRule("light"), sockets = perRule("socket"), iso = perRule("isolator");
+  const lc = map(lights, n => Math.ceil(n / 10)), sc = map(sockets, n => Math.ceil(n / 8)), ic = iso;
+  if (sum(lights)) {
+    add("lighting", "Cable 3C × 1.5 mm² LSZH (lighting)", "m", "eng", "8 m per fitting + 10%", map(lights, n => n * 8 * 1.1));
+    add("lighting", "Light switch (1–3 gang)", "No", "eng", "One per 6 fittings", map(lights, n => Math.ceil(n / 6)));
+    add("lighting", "MCB 10 A, 1-pole (lighting circuits)", "No", "eng", "10 fittings per circuit", lc);
+  }
+  if (sum(sockets)) {
+    add("power_distribution", "Cable 3C × 2.5 mm² LSZH (power)", "m", "eng", "10 m per socket + 10%", map(sockets, n => n * 10 * 1.1));
+    add("power_distribution", "Metal back box", "No", "eng", "One per socket", sockets);
+    add("power_distribution", "RCBO 20 A, 30 mA (socket circuits)", "No", "eng", "8 sockets per ring / radial circuit", sc);
+  }
+  if (sum(iso)) add("power_distribution", "Cable 3C × 4 mm² LSZH (power points)", "m", "eng", "15 m per isolator + 10%", map(iso, n => n * 15 * 1.1));
+  const circuits = {}; for (const o of [lc, sc, ic]) for (const f of Object.keys(o)) circuits[f] = (circuits[f] || 0) + o[f];
+  if (sum(circuits)) {
+    add("db_panels", "Distribution board, TPN (ways = circuits + 25% spare)", "No", "eng", "One DB per floor", map(circuits, () => 1));
+    add("db_panels", "DB outgoing ways required", "No", "eng", "Circuits on the floor + 25% spare", map(circuits, c => Math.ceil(c * 1.25)));
+  }
+  // 6. Containment
+  const tray = perRule("tray"), cond = perRule("conduit");
+  if (sum(tray)) {
+    add("containment", "Tray / trunking bends, tees and couplers", "No", "eng", "One fitting per 10 m of route", map(tray, l => Math.ceil(l / 10)));
+    add("containment", "Tray supports (drop rods, channel, anchors)", "Set", "eng", "One support every 1.5 m", map(tray, l => Math.ceil(l / 1.5)));
+    add("containment", "Wastage allowance on tray / trunking", "m", "eng", "5% of the measured length", map(tray, l => l * 0.05));
+  }
+  if (sum(cond)) {
+    add("containment", "Conduit couplers and bends", "No", "eng", "One per 3 m of conduit", map(cond, l => Math.ceil(l / 3)));
+    add("containment", "Conduit saddles / spacer bar", "No", "eng", "One per metre", map(cond, l => Math.ceil(l)));
+    add("containment", "Wastage allowance on conduit", "m", "eng", "5% of the measured length", map(cond, l => l * 0.05));
+  }
+  return lines;
+}
+
+function ManualTakeoffTab({ project, onGoToBoq }) {
+  const path = `${project.id}/manual-takeoff/takeoff.json`;
+  const [doc, setDoc] = useState(null);            // { floors, sheets, items, marks }
+  const [drawings, setDrawings] = useState([]);
+  const [floorId, setFloorId] = useState(null);
+  const [sheetId, setSheetId] = useState(null);
+  const [itemId, setItemId] = useState(null);
+  const [tool, setTool] = useState("count");       // select | count | length | scale
+  const [zoom, setZoom] = useState(1);
+  const [page, setPage] = useState(null);          // { w, h, url (image) | canvas }
+  const [loadingSheet, setLoadingSheet] = useState(false);
+  const [draft, setDraft] = useState([]);          // length in progress / scale points
+  const [hover, setHover] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [flash, setFlash] = useState(null);
+  const [saveState, setSaveState] = useState("");
+  const [err, setErr] = useState("");
+  const [scaleM, setScaleM] = useState("");
+  const [ratio, setRatio] = useState("");
+  const [newItem, setNewItem] = useState({ name: "", tag: "", kind: "count", unit: "No", system: "cctv", color: MT_COLORS[0] });
+  const [showNew, setShowNew] = useState(false);
+  const [view, setView] = useState("draw");       // draw | boq
+  const [boqType, setBoqType] = useState("designed");
+  const [boqMode, setBoqMode] = useState("floors");
+  const [sending, setSending] = useState("");
+  useEffect(() => { if (!flash) return; const id = setTimeout(() => setFlash(null), 1600); return () => clearTimeout(id); }, [flash]);
+  const canvasRef = useRef(null), svgRef = useRef(null), wrapRef = useRef(null), saveTimer = useRef(null), loaded = useRef(false);
+
+  // load the saved take-off and the project's drawings
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data: dr } = await sb.from("drawings").select("id, file_name, storage_path, file_type, page_count, total_pages_detected, floor_label").eq("project_id", project.id).order("uploaded_at", { ascending: false });
+      if (alive) setDrawings((dr || []).filter(d => /\.(pdf|png|jpe?g|webp)$/i.test(d.file_name || d.storage_path || "")));
+      let d = null;
+      try {
+        const { data: blob } = await sb.storage.from("drawings").download(path);
+        if (blob) d = JSON.parse(await blob.text());
+      } catch (_) {}
+      if (!d || !Array.isArray(d.floors)) d = { version: 1, floors: [{ id: mtId(), name: "Ground floor" }], sheets: [], items: [], marks: [] };
+      if (!alive) return;
+      loaded.current = true;
+      setDoc(d); setFloorId(d.floors[0] && d.floors[0].id);
+      const s0 = d.sheets.find(s => s.floorId === (d.floors[0] && d.floors[0].id)); setSheetId(s0 ? s0.id : null);
+      setItemId(d.items[0] ? d.items[0].id : null);
+    })();
+    return () => { alive = false; };
+  }, [project.id]);
+
+  // autosave 1.5 s after a change
+  const update = (fn) => setDoc(d => { const n = fn(JSON.parse(JSON.stringify(d))); return n; });
+  useEffect(() => {
+    if (!doc || !loaded.current) return;
+    clearTimeout(saveTimer.current); setSaveState("Saving…");
+    saveTimer.current = setTimeout(async () => {
+      const body = new Blob([JSON.stringify(doc)], { type: "application/json" });
+      let { error } = await sb.storage.from("drawings").upload(path, body, { upsert: true, contentType: "application/json" });
+      if (error) { await sb.storage.from("drawings").remove([path]).catch(() => {}); ({ error } = await sb.storage.from("drawings").upload(path, body, { contentType: "application/json" })); }
+      setSaveState(error ? "Not saved — " + (error.message || "storage error") : "Saved");
+    }, 1500);
+    return () => clearTimeout(saveTimer.current);
+  }, [doc]);
+
+  const floors = doc ? doc.floors : [];
+  const sheet = doc && doc.sheets.find(s => s.id === sheetId);
+  const floorSheets = doc ? doc.sheets.filter(s => s.floorId === floorId) : [];
+  const item = doc && doc.items.find(i => i.id === itemId);
+
+  // render the sheet (PDF page or image)
+  useEffect(() => {
+    let alive = true;
+    setPage(null); setDraft([]); setSelected(null);
+    if (!sheet) return;
+    (async () => {
+      setLoadingSheet(true); setErr("");
+      try {
+        const { data: sg, error } = await sb.storage.from("drawings").createSignedUrl(sheet.storagePath, 3600);
+        if (error) throw error;
+        if (/\.pdf$/i.test(sheet.storagePath)) {
+          if (!window.pdfjsLib) throw new Error("The PDF viewer is still loading — try again in a moment.");
+          const buf = await (await fetch(sg.signedUrl)).arrayBuffer();
+          const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+          const pg = await pdf.getPage(Math.min(sheet.page || 1, pdf.numPages));
+          const vp1 = pg.getViewport({ scale: 1 });
+          if (alive) setPage({ w: vp1.width, h: vp1.height, pdfPage: pg, isPdf: true, pages: pdf.numPages });
+        } else {
+          const img = new Image(); img.crossOrigin = "anonymous";
+          await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("Could not open the image.")); img.src = sg.signedUrl; });
+          if (alive) setPage({ w: img.naturalWidth, h: img.naturalHeight, img: sg.signedUrl, isPdf: false });
+        }
+      } catch (e) { if (alive) setErr(e.message || String(e)); }
+      if (alive) setLoadingSheet(false);
+    })();
+    return () => { alive = false; };
+  }, [sheet && sheet.id, sheet && sheet.page]);
+
+  // fit to width when a sheet opens
+  useEffect(() => {
+    if (!page || !wrapRef.current) return;
+    const w = wrapRef.current.clientWidth - 24;
+    setZoom(Math.max(0.2, Math.min(4, w / page.w)));
+  }, [page]);
+
+  // draw the PDF at the current zoom
+  useEffect(() => {
+    if (!page || !page.isPdf || !canvasRef.current) return;
+    let task;
+    const dpr = window.devicePixelRatio || 1;
+    const vp = page.pdfPage.getViewport({ scale: zoom * dpr });
+    const c = canvasRef.current; c.width = vp.width; c.height = vp.height;
+    c.style.width = (page.w * zoom) + "px"; c.style.height = (page.h * zoom) + "px";
+    task = page.pdfPage.render({ canvasContext: c.getContext("2d"), viewport: vp });
+    task.promise.catch(() => {});   // a newer zoom cancels the older render
+    return () => { try { task && task.cancel(); } catch (_) {} };
+  }, [page, zoom]);
+
+  const toPt = (e) => {
+    const r = svgRef.current.getBoundingClientRect();
+    return [(e.clientX - r.left) / zoom, (e.clientY - r.top) / zoom];
+  };
+  const mPerUnit = sheet && sheet.scale ? sheet.scale.mPerUnit : null;
+  const polyLen = (pts) => { let d = 0; for (let i = 1; i < pts.length; i++) d += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return d; };
+
+  const nextNumber = (itId, fId) => {
+    const sheetIds = new Set(doc.sheets.filter(s => s.floorId === fId).map(s => s.id));
+    return 1 + doc.marks.filter(m => m.itemId === itId && sheetIds.has(m.sheetId) && m.type === "count").reduce((a, m) => Math.max(a, m.n || 0), 0);
+  };
+
+  const onClick = (e) => {
+    if (!page || !sheet) return;
+    const p = toPt(e);
+    if (tool === "count") {
+      if (!item) { setErr("Create or pick an item on the right first."); return; }
+      if (item.kind !== "count") { setErr(`"${item.name}" is measured by length — pick the Length tool, or a counted item.`); return; }
+      const n = nextNumber(item.id, floorId);
+      update(d => { d.marks.push({ id: mtId(), sheetId: sheet.id, itemId: item.id, type: "count", x: p[0], y: p[1], n }); return d; });
+      setFlash({ x: p[0], y: p[1], text: `+1 → ${item.tag}${n}`, color: item.color, at: Date.now() });
+      setErr("");
+    } else if (tool === "length" || tool === "scale") {
+      if (tool === "length" && (!item || item.kind !== "length")) { setErr("Pick a length item (cable tray, conduit …) on the right first."); return; }
+      if (tool === "scale" && draft.length >= 2) setDraft([p]); else setDraft(d => d.concat([p]));
+    } else if (tool === "select") {
+      setSelected(null);
+    }
+  };
+  const finishLength = () => {
+    if (tool !== "length" || draft.length < 2 || !item) { setDraft([]); return; }
+    const units = polyLen(draft);
+    update(d => { d.marks.push({ id: mtId(), sheetId: sheet.id, itemId: item.id, type: "length", pts: draft, len: mPerUnit ? units * mPerUnit : null }); return d; });
+    setDraft([]);
+  };
+  const applyScale = (mPU, how) => {
+    update(d => {
+      const s = d.sheets.find(x => x.id === sheet.id); s.scale = { mPerUnit: mPU, how };
+      for (const m of d.marks) if (m.sheetId === s.id && m.type === "length") m.len = polyLen(m.pts) * mPU;   // re-measure with the new scale
+      return d;
+    });
+    setDraft([]); setScaleM(""); setTool(item && item.kind === "length" ? "length" : "count");
+  };
+  const undo = () => {
+    if (draft.length) { setDraft(d => d.slice(0, -1)); return; }
+    update(d => { for (let i = d.marks.length - 1; i >= 0; i--) if (d.marks[i].sheetId === sheet.id) { d.marks.splice(i, 1); break; } return d; });
+  };
+  const removeMark = (id) => { update(d => { d.marks = d.marks.filter(m => m.id !== id); return d; }); setSelected(null); };
+
+  useEffect(() => {
+    const h = (e) => {
+      if (/input|textarea|select/i.test((e.target && e.target.tagName) || "")) return;
+      if (e.key === "Enter") finishLength();
+      else if (e.key === "Escape") { setDraft([]); setSelected(null); }
+      else if ((e.key === "Delete" || e.key === "Backspace") && selected) removeMark(selected);
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
+    };
+    window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
+  });
+
+  // totals: item -> floor -> qty
+  const totals = useMemo(() => {
+    const t = {}; if (!doc) return t;
+    const sf = {}; doc.sheets.forEach(s => { sf[s.id] = s.floorId; });
+    for (const m of doc.marks) { const f = sf[m.sheetId]; const v = m.type === "length" ? (m.len || 0) : 1; ((t[m.itemId] ||= {})[f] = (t[m.itemId][f] || 0) + v); }
+    return t;
+  }, [doc]);
+  const designed = useMemo(() => doc ? mtDesign(doc) : [], [doc]);
+
+  const addFloor = () => {
+    const name = (window.prompt("Floor name (e.g. First floor, Roof, Basement 1)") || "").trim(); if (!name) return;
+    const id = mtId(); update(d => { d.floors.push({ id, name }); return d; }); setFloorId(id); setSheetId(null);
+  };
+  const addSheet = (drawingId, pg) => {
+    const dr = drawings.find(x => x.id === drawingId); if (!dr) return;
+    const id = mtId();
+    update(d => { d.sheets.push({ id, floorId, drawingId: dr.id, storagePath: dr.storage_path, fileName: dr.file_name, page: pg || 1, scale: null }); return d; });
+    setSheetId(id);
+  };
+  const createItem = (lib) => {
+    const src = lib ? { name: lib[1], tag: lib[2], kind: lib[3], unit: lib[4], system: lib[5], rule: lib[6] } : { ...newItem, rule: null };
+    if (!src.name.trim() || !src.tag.trim()) { setErr("Give the item a name and a short tag (e.g. D)."); return; }
+    const used = new Set(doc.items.map(i => i.color));
+    const color = lib ? (MT_COLORS.find(c => !used.has(c)) || MT_COLORS[doc.items.length % MT_COLORS.length]) : newItem.color;
+    const id = mtId();
+    update(d => { d.items.push({ id, name: src.name.trim(), tag: src.tag.trim().toUpperCase().slice(0, 3), kind: src.kind, unit: src.kind === "length" ? "m" : (src.unit || "No"), system: src.system, color, rule: src.rule }); return d; });
+    setItemId(id); setTool(src.kind === "length" ? "length" : "count"); setShowNew(false); setErr("");
+    setNewItem(n => ({ ...n, name: "", tag: "" }));
+  };
+  const removeItem = (id) => {
+    const n = doc.marks.filter(m => m.itemId === id).length;
+    if (n && !window.confirm(`Delete this item and its ${n} mark(s)?`)) return;
+    update(d => { d.items = d.items.filter(i => i.id !== id); d.marks = d.marks.filter(m => m.itemId !== id); return d; });
+    if (itemId === id) setItemId(null);
+  };
+
+  const floorName = (f) => (floors.find(x => x.id === f) || {}).name || "—";
+  const exportExcel = () => {
+    if (!window.XLSX) { setErr("Excel export is still loading."); return; }
+    const rows = (boqType === "designed" ? designed : designed.filter(l => l.source === "you"));
+    const head = ["System", "Item", "Unit", "Source", ...floors.map(f => f.name), "Total", "Why"];
+    const data = [head, ...rows.map(l => [mtSysLabel(l.system), l.name, l.unit, l.source === "you" ? "Marked by you" : "Engineered by Quantora",
+      ...floors.map(f => l.byFloor[f.id] || ""), mtRound(Object.values(l.byFloor).reduce((a, b) => a + b, 0), l.unit), l.why])];
+    const ws = window.XLSX.utils.aoa_to_sheet(data); ws["!cols"] = head.map((h, i) => ({ wch: i === 1 ? 46 : i === head.length - 1 ? 60 : 14 }));
+    const wb = window.XLSX.utils.book_new(); window.XLSX.utils.book_append_sheet(wb, ws, boqType === "designed" ? "Designed BOQ" : "Take-off BOQ");
+    window.XLSX.writeFile(wb, `${(project.project_name || "Project").replace(/[^A-Za-z0-9_-]+/g, "_")}_Manual_Takeoff_${boqType === "designed" ? "Designed" : "Takeoff"}_BOQ.xlsx`);
+  };
+  const sendToBoq = async () => {
+    if (!designed.length) return;
+    if (!window.confirm("Send these lines to the project's Take-off & BOQ? Lines sent from Manual Take-off before are replaced; AI take-off lines are not touched.")) return;
+    setSending("Sending…");
+    try {
+      const { error: delErr } = await sb.from("boq_items").delete().eq("project_id", project.id).eq("measurement_rule_code", "manual_takeoff");
+      if (delErr) throw delErr;
+      const rows = [];
+      for (const l of designed) for (const f of Object.keys(l.byFloor)) {
+        const you = l.source === "you";
+        rows.push({ project_id: project.id, system_category: l.system, floor_label: floorName(f), description: l.name, quantity: l.byFloor[f], unit: l.unit,
+          length_value: l.unit === "m" ? l.byFloor[f] : null, source: you ? "manual" : "engineering_rule",
+          optimization_status: you ? "drawing_requirement" : "engineered", quantity_source_type: you ? (l.unit === "m" ? "calculated_quantity" : "physical_count") : "calculated_quantity",
+          quantity_basis_notes: (you ? "Manual take-off — " : "Designed by Quantora — ") + l.why, measurement_rule_code: "manual_takeoff",
+          review_status: you ? "confirmed" : "pending" });
+      }
+      for (let i = 0; i < rows.length; i += 200) { const { error } = await sb.from("boq_items").insert(rows.slice(i, i + 200)); if (error) throw error; }
+      setSending(`Sent ${rows.length} lines to Take-off & BOQ.`);
+      try { qStepDone("manual_takeoff", project.id); } catch (_) {}
+    } catch (e) { setSending("Could not send: " + (e.message || String(e))); }
+  };
+
+  if (!doc) return <div className="text-sm text-slate-500 p-4">Loading Manual Take-off…</div>;
+
+  const S = (px) => px / zoom;   // keep marks the same size on screen at any zoom
+  const sheetMarks = sheet ? doc.marks.filter(m => m.sheetId === sheet.id) : [];
+  const itemById = {}; doc.items.forEach(i => { itemById[i.id] = i; });
+  const btn = (on) => ({ padding: "7px 12px", borderRadius: 9, fontSize: 12.5, fontWeight: 700, border: "1px solid " + (on ? "#3b82f6" : "rgba(148,163,184,.35)"), background: on ? "#1d4ed8" : "transparent", color: on ? "#fff" : "inherit", cursor: "pointer" });
+  const toolBtn = (k, icon, label) => (
+    <button key={k} type="button" onClick={() => { setTool(k); setDraft([]); setErr(""); }} title={label}
+      style={{ width: 58, padding: "8px 0 6px", borderRadius: 12, border: "1px solid " + (tool === k ? "#3b82f6" : "transparent"), background: tool === k ? "#1d4ed8" : "transparent", color: tool === k ? "#fff" : "inherit", cursor: "pointer", fontSize: 10.5 }}>
+      <div style={{ fontSize: 18 }}>{icon}</div>{label}</button>
+  );
+  const fmtQ = (v, unit) => unit === "m" ? (Math.round(v * 10) / 10).toLocaleString() : Math.round(v).toLocaleString();
+
+  // ---------------- BOQ view ----------------
+  if (view === "boq") {
+    const rows = boqType === "designed" ? designed : designed.filter(l => l.source === "you");
+    const bySys = {}; rows.forEach(l => { (bySys[l.system] ||= []).push(l); });
+    const fl = boqMode === "floors" ? floors : boqMode === "building" ? [] : floors.filter(f => f.id === boqMode);
+    return (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" style={btn(false)} onClick={() => setView("draw")}>← Back to drawing</button>
+          <b style={{ fontSize: 17, marginLeft: 6 }}>{boqType === "designed" ? "Designed BOQ — complete solution" : "Take-off BOQ — your marks only"}</b>
+          <div style={{ flex: 1 }} />
+          <button type="button" style={btn(boqType === "takeoff")} onClick={() => setBoqType("takeoff")}>Take-off BOQ</button>
+          <button type="button" style={btn(boqType === "designed")} onClick={() => setBoqType("designed")}>Designed BOQ</button>
+          <select value={boqMode} onChange={e => setBoqMode(e.target.value)} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
+            <option value="floors">Floor by floor</option><option value="building">Whole building</option>
+            {floors.map(f => <option key={f.id} value={f.id}>Only {f.name}</option>)}
+          </select>
+        </div>
+        <div className="text-xs" style={{ opacity: .75 }}>Marked by you: {designed.filter(l => l.source === "you").length} lines · Engineered by Quantora: {designed.filter(l => l.source === "eng").length} lines. Engineered lines use fixed design rules (no AI, no pages used) — each says why it was added. Check them against your specification.</div>
+        {!rows.length ? <div className="text-sm" style={{ opacity: .7 }}>Nothing marked yet. Go back to the drawing and mark some items.</div> : (
+          <div style={{ overflowX: "auto", border: "1px solid rgba(148,163,184,.25)", borderRadius: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead><tr style={{ fontSize: 11, textAlign: "left", opacity: .7 }}>
+                <th style={{ padding: "9px 10px" }}>Item</th><th style={{ padding: "9px 10px" }}>Source</th>
+                {fl.map(f => <th key={f.id} style={{ padding: "9px 10px", textAlign: "right" }}>{f.name}</th>)}
+                <th style={{ padding: "9px 10px", textAlign: "right" }}>Total</th><th style={{ padding: "9px 10px" }}>Unit</th><th style={{ padding: "9px 10px" }}>Why</th>
+              </tr></thead>
+              <tbody>{Object.keys(bySys).map(sys => (
+                <React.Fragment key={sys}>
+                  <tr><td colSpan={fl.length + 5} style={{ padding: "8px 10px", fontWeight: 800, background: "rgba(37,99,235,.10)" }}>{mtSysLabel(sys)}</td></tr>
+                  {bySys[sys].map(l => {
+                    const tot = fl.length && boqMode !== "floors" ? fl.reduce((a, f) => a + (l.byFloor[f.id] || 0), 0) : Object.values(l.byFloor).reduce((a, b) => a + b, 0);
+                    if (boqMode !== "floors" && boqMode !== "building" && !tot) return null;
+                    return (
+                      <tr key={l.key} style={{ borderTop: "1px solid rgba(148,163,184,.15)", background: l.source === "eng" ? "rgba(124,58,237,.06)" : undefined }}>
+                        <td style={{ padding: "8px 10px", fontWeight: 600 }}>{l.name}</td>
+                        <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 11, fontWeight: 800, padding: "3px 8px", borderRadius: 999, whiteSpace: "nowrap", background: l.source === "you" ? "rgba(37,99,235,.18)" : "rgba(124,58,237,.2)", color: l.source === "you" ? "#60a5fa" : "#a78bfa" }}>{l.source === "you" ? "Marked by you" : "Engineered by Quantora"}</span></td>
+                        {fl.map(f => <td key={f.id} style={{ padding: "8px 10px", textAlign: "right" }}>{l.byFloor[f.id] ? fmtQ(l.byFloor[f.id], l.unit) : <span style={{ opacity: .35 }}>–</span>}</td>)}
+                        <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 800 }}>{fmtQ(tot, l.unit)}</td>
+                        <td style={{ padding: "8px 10px" }}>{l.unit}</td>
+                        <td style={{ padding: "8px 10px", fontSize: 12, opacity: .75 }}>{l.why}</td>
+                      </tr>
+                    );
+                  })}
+                </React.Fragment>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" style={{ ...btn(true), background: "linear-gradient(90deg,#2563eb,#7c3aed)", border: 0, padding: "10px 16px" }} onClick={sendToBoq} disabled={!designed.length || sending === "Sending…"}>Send to project BOQ →</button>
+          <button type="button" style={btn(false)} onClick={exportExcel}>Export Excel</button>
+          {sending && <span className="text-xs" style={{ opacity: .8 }}>{sending}</span>}
+          {/^Sent /.test(sending) && onGoToBoq && <button type="button" style={btn(false)} onClick={onGoToBoq}>Open Take-off & BOQ (pricing, export) →</button>}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------- drawing view ----------------
+  return (
+    <div style={{ display: "flex", gap: 12, minHeight: 640 }}>
+      {/* tools */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center", paddingTop: 4 }}>
+        {toolBtn("select", "🖐", "Select")}
+        {toolBtn("count", "●", "Count")}
+        {toolBtn("length", "〰", "Length")}
+        {toolBtn("scale", "📏", "Scale")}
+        <button type="button" onClick={undo} title="Undo (Ctrl+Z)" style={{ width: 58, padding: "8px 0 6px", borderRadius: 12, border: "1px solid transparent", background: "transparent", color: "inherit", cursor: "pointer", fontSize: 10.5 }}><div style={{ fontSize: 18 }}>↶</div>Undo</button>
+      </div>
+
+      {/* sheet */}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div className="flex flex-wrap items-center gap-2">
+          {floors.map(f => <button key={f.id} type="button" style={btn(f.id === floorId)} onClick={() => { setFloorId(f.id); const s = doc.sheets.find(x => x.floorId === f.id); setSheetId(s ? s.id : null); }}>{f.name}</button>)}
+          <button type="button" style={{ ...btn(false), color: "#60a5fa" }} onClick={addFloor}>＋ Floor</button>
+          <div style={{ flex: 1 }} />
+          {floorSheets.length > 1 && <select value={sheetId || ""} onChange={e => setSheetId(e.target.value)} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>{floorSheets.map(s => <option key={s.id} value={s.id}>{s.fileName}{s.page > 1 ? ` · p${s.page}` : ""}</option>)}</select>}
+          <select value="" onChange={e => { if (e.target.value) addSheet(e.target.value, 1); }} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
+            <option value="">{floorSheets.length ? "＋ Add another sheet to this floor" : "Choose the drawing for this floor"}</option>
+            {drawings.map(d => <option key={d.id} value={d.id}>{d.file_name}</option>)}
+          </select>
+          {sheet && page && page.isPdf && page.pages > 1 && (
+            <select value={sheet.page || 1} onChange={e => update(d => { d.sheets.find(x => x.id === sheet.id).page = Number(e.target.value); return d; })} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
+              {Array.from({ length: page.pages }, (_, i) => <option key={i} value={i + 1}>Page {i + 1}</option>)}
+            </select>
+          )}
+          {sheet && <span style={{ fontSize: 12, padding: "6px 10px", borderRadius: 9, border: "1px solid " + (mPerUnit ? "#10b981" : "#f59e0b"), color: mPerUnit ? "#34d399" : "#fbbf24" }}>{mPerUnit ? `Scale ✓ ${sheet.scale.how}` : "Scale not set — lengths need it"}</span>}
+          <span className="text-xs" style={{ opacity: .7 }}>{saveState}</span>
+        </div>
+
+        {tool === "scale" && sheet && (
+          <div className="flex flex-wrap items-center gap-2 text-xs" style={{ padding: "8px 10px", borderRadius: 10, background: "rgba(245,158,11,.1)", border: "1px solid rgba(245,158,11,.4)" }}>
+            {page && page.isPdf && <>
+              <span>Drawing scale 1 :</span><input value={ratio} onChange={e => setRatio(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="100" style={{ width: 70 }} className="border rounded-lg px-2 py-1" />
+              <button type="button" style={btn(false)} onClick={() => { const n = Number(ratio); if (n > 0) applyScale(MT_PT_M * n, `1:${n}`); }}>Apply</button>
+              <span style={{ opacity: .6 }}>(the sheet must be printed at its true paper size) · or</span>
+            </>}
+            <span>click two points of a known dimension{draft.length ? ` (${draft.length}/2)` : ""}, then the real length:</span>
+            <input value={scaleM} onChange={e => setScaleM(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="metres" style={{ width: 80 }} className="border rounded-lg px-2 py-1" />
+            <button type="button" style={btn(false)} disabled={draft.length < 2 || !(Number(scaleM) > 0)} onClick={() => applyScale(Number(scaleM) / polyLen(draft.slice(0, 2)), `calibrated (${scaleM} m)`)}>Set scale</button>
+          </div>
+        )}
+        {err && <div className="text-xs" style={{ color: "#f87171" }}>{err}</div>}
+
+        <div ref={wrapRef} style={{ position: "relative", flex: 1, minHeight: 560, maxHeight: "72vh", overflow: "auto", background: "#fff", borderRadius: 12, border: "1px solid rgba(148,163,184,.3)" }}>
+          {!sheet ? (
+            <div style={{ padding: 40, color: "#475569", textAlign: "center" }}>
+              <div style={{ fontSize: 34 }}>📐</div>
+              <div style={{ fontWeight: 800, fontSize: 16, marginTop: 6 }}>Choose the drawing for {floorName(floorId)}</div>
+              <div style={{ fontSize: 13, marginTop: 6 }}>Use the box above. Drawings come from <b>Drawings & Upload</b> — PDF or image.</div>
+              {!drawings.length && <div style={{ fontSize: 13, marginTop: 10, color: "#b45309" }}>No drawings in this project yet. Upload one under Drawings & Upload first.</div>}
+            </div>
+          ) : loadingSheet || !page ? <div style={{ padding: 40, color: "#475569" }}>Opening the drawing…</div> : (
+            <div style={{ position: "relative", width: page.w * zoom, height: page.h * zoom, margin: 12, cursor: tool === "select" ? "default" : "crosshair" }}>
+              {page.isPdf ? <canvas ref={canvasRef} style={{ position: "absolute", left: 0, top: 0 }} /> : <img src={page.img} alt="" style={{ position: "absolute", left: 0, top: 0, width: page.w * zoom, height: page.h * zoom }} />}
+              <svg ref={svgRef} viewBox={`0 0 ${page.w} ${page.h}`} style={{ position: "absolute", left: 0, top: 0, width: page.w * zoom, height: page.h * zoom }}
+                onClick={onClick} onDoubleClick={(e) => { e.preventDefault(); finishLength(); }} onMouseMove={e => setHover(toPt(e))} onMouseLeave={() => setHover(null)}>
+                {sheetMarks.filter(m => m.type === "length").map(m => { const it = itemById[m.itemId] || { color: "#64748b" }; const mid = m.pts[Math.floor(m.pts.length / 2)];
+                  return (<g key={m.id} onClick={(e) => { if (tool === "select") { e.stopPropagation(); setSelected(m.id); } }}>
+                    <polyline points={m.pts.map(p => p.join(",")).join(" ")} fill="none" stroke={it.color} strokeWidth={S(selected === m.id ? 6 : 4)} strokeLinejoin="round" strokeLinecap="round" opacity=".85" />
+                    <g transform={`translate(${mid[0]},${mid[1] - S(14)})`}><rect x={S(-38)} y={S(-9)} width={S(76)} height={S(18)} rx={S(5)} fill={it.color} /><text y={S(4)} fontSize={S(10.5)} fontWeight="800" fill="#fff" textAnchor="middle">{it.tag} {m.len != null ? `${(Math.round(m.len * 10) / 10)} m` : "set scale"}</text></g>
+                  </g>); })}
+                {sheetMarks.filter(m => m.type === "count").map(m => { const it = itemById[m.itemId] || { color: "#64748b", tag: "?" };
+                  return (<g key={m.id} transform={`translate(${m.x},${m.y})`} onClick={(e) => { if (tool === "select") { e.stopPropagation(); setSelected(m.id); } }} style={{ cursor: tool === "select" ? "pointer" : undefined }}>
+                    <rect x={S(-15)} y={S(-9)} width={S(30)} height={S(18)} rx={S(it.kind === "count" && /cam/i.test(it.rule || "") ? 9 : 4)} fill={it.color} stroke={selected === m.id ? "#facc15" : "#fff"} strokeWidth={S(selected === m.id ? 3 : 1.5)} />
+                    <text y={S(4)} fontSize={S(10)} fontWeight="800" fill="#fff" textAnchor="middle">{it.tag}{m.n}</text>
+                  </g>); })}
+                {draft.length > 0 && (<>
+                  <polyline points={draft.concat(hover ? [hover] : []).map(p => p.join(",")).join(" ")} fill="none" stroke={tool === "scale" ? "#f59e0b" : (item ? item.color : "#64748b")} strokeWidth={S(3)} strokeDasharray={`${S(6)} ${S(4)}`} />
+                  {draft.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={S(4)} fill="#fff" stroke="#0f172a" strokeWidth={S(1.5)} />)}
+                  {tool === "length" && hover && <text x={hover[0] + S(10)} y={hover[1] - S(10)} fontSize={S(12)} fontWeight="800" fill="#0f172a">{mPerUnit ? `${(Math.round(polyLen(draft.concat([hover])) * mPerUnit * 10) / 10)} m — double-click or Enter to finish` : "set the scale first"}</text>}
+                </>)}
+                {flash && Date.now() - flash.at < 1600 && <text key={flash.at} x={flash.x + S(18)} y={flash.y - S(12)} fontSize={S(12)} fontWeight="800" fill={flash.color}>{flash.text}</text>}
+              </svg>
+            </div>
+          )}
+          {sheet && page && (
+            <div style={{ position: "sticky", left: 12, bottom: 12, display: "flex", gap: 6, padding: "0 12px 12px", pointerEvents: "none" }}>
+              <span style={{ pointerEvents: "auto", background: "rgba(15,23,42,.9)", color: "#e2e8f0", borderRadius: 9, padding: "6px 10px", fontSize: 12 }}>
+                {tool === "count" ? (item ? <>Counting <b style={{ color: item.color }}>{item.name}</b> — each click adds the next number</> : "Pick an item on the right") :
+                 tool === "length" ? "Click along the route · double-click or Enter to finish · Esc to cancel" :
+                 tool === "scale" ? "Set the scale above" : "Click a mark to select it · Delete removes it"}</span>
+              <div style={{ flex: 1 }} />
+              {[["−", () => setZoom(z => Math.max(0.2, z / 1.25))], [Math.round(zoom * 100) + "%", null], ["+", () => setZoom(z => Math.min(6, z * 1.25))], ["Fit", () => { if (wrapRef.current && page) setZoom(Math.max(0.2, (wrapRef.current.clientWidth - 24) / page.w)); }]].map(([l, fn], i) => (
+                <button key={i} type="button" onClick={fn || undefined} style={{ pointerEvents: "auto", background: "rgba(15,23,42,.9)", color: "#fff", border: 0, borderRadius: 8, padding: "5px 10px", fontSize: 12, cursor: fn ? "pointer" : "default" }}>{l}</button>
+              ))}
+            </div>
+          )}
+        </div>
+        {selected && (() => { const m = doc.marks.find(x => x.id === selected); if (!m) return null; return (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span>Selected: <b>{(itemById[m.itemId] || {}).tag}{m.n || ""}</b></span>
+            <span>Change to</span>
+            <select value={m.itemId} onChange={e => { const to = e.target.value; update(d => { const mm = d.marks.find(x => x.id === selected); mm.itemId = to; if (mm.type === "count") { const sheetIds = new Set(d.sheets.filter(s => s.floorId === floorId).map(s => s.id)); mm.n = 1 + d.marks.filter(x => x.itemId === to && x.id !== mm.id && sheetIds.has(x.sheetId) && x.type === "count").reduce((a, x) => Math.max(a, x.n || 0), 0); } return d; }); }} className="border rounded-lg px-2 py-1">
+              {doc.items.filter(i => i.kind === m.type || (m.type === "count" && i.kind === "count")).map(i => <option key={i.id} value={i.id}>{i.tag} · {i.name}</option>)}
+            </select>
+            <button type="button" style={{ ...btn(false), color: "#f87171" }} onClick={() => removeMark(selected)}>Delete mark</button>
+          </div>); })()}
+      </div>
+
+      {/* item list */}
+      <div style={{ width: 330, flex: "none", display: "flex", flexDirection: "column", gap: 8 }}>
+        <div><b style={{ fontSize: 15 }}>Item list</b><div className="text-xs" style={{ opacity: .7, marginTop: 2 }}>Create your items, pick one, then click the drawing. Every click gets the next number.</div></div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 380, overflow: "auto" }}>
+          {!doc.items.length && <div className="text-xs" style={{ opacity: .7, padding: "8px 2px" }}>No items yet — add one from the library below.</div>}
+          {doc.items.map(it => {
+            const t = totals[it.id] || {}, tot = Object.values(t).reduce((a, b) => a + b, 0);
+            return (
+              <div key={it.id} onClick={() => { setItemId(it.id); setTool(it.kind === "length" ? "length" : "count"); setDraft([]); }}
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 11, cursor: "pointer", border: "1px solid " + (it.id === itemId ? "#3b82f6" : "rgba(148,163,184,.25)"), boxShadow: it.id === itemId ? "0 0 0 1px #3b82f6 inset" : "none" }}>
+                <span style={{ minWidth: 30, height: 20, borderRadius: it.kind === "length" ? 3 : 10, background: it.color, color: "#fff", fontSize: 10.5, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>{it.tag}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name}</div>
+                  <div style={{ fontSize: 11, opacity: .65 }}>{floors.filter(f => t[f.id]).map(f => `${f.name.replace(/ floor$/i, "")} ${fmtQ(t[f.id], it.unit)}`).join(" · ") || (it.kind === "length" ? "Length" : "Count") + " · " + mtSysLabel(it.system)}</div>
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>{fmtQ(tot, it.unit)}<span style={{ fontSize: 11, opacity: .6, marginLeft: 3 }}>{it.unit}</span></div>
+                <button type="button" onClick={(e) => { e.stopPropagation(); removeItem(it.id); }} title="Delete item" style={{ background: "transparent", border: 0, color: "#94a3b8", cursor: "pointer" }}>✕</button>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ border: "1px dashed rgba(148,163,184,.45)", borderRadius: 12, padding: 10 }}>
+          <div className="flex items-center gap-2"><b style={{ fontSize: 12.5 }}>＋ Add item</b><div style={{ flex: 1 }} />
+            <button type="button" style={{ ...btn(showNew), padding: "4px 9px", fontSize: 11.5 }} onClick={() => setShowNew(v => !v)}>{showNew ? "Library" : "Custom item"}</button></div>
+          {!showNew ? (
+            <select value="" onChange={e => { const lib = MT_LIBRARY[Number(e.target.value)]; if (lib) createItem(lib); }} className="border rounded-lg px-2 py-1" style={{ width: "100%", marginTop: 8, fontSize: 12.5 }}>
+              <option value="">Pick from the library…</option>
+              {Array.from(new Set(MT_LIBRARY.map(l => l[0]))).map(g => (
+                <optgroup key={g} label={g}>{MT_LIBRARY.map((l, i) => l[0] === g ? <option key={i} value={i}>{l[2]} · {l[1]}</option> : null)}</optgroup>
+              ))}
+            </select>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input value={newItem.name} onChange={e => setNewItem({ ...newItem, name: e.target.value })} placeholder="Name, e.g. Fisheye camera 12 MP" className="border rounded-lg px-2 py-1" style={{ flex: 1, fontSize: 12.5 }} />
+                <input value={newItem.tag} onChange={e => setNewItem({ ...newItem, tag: e.target.value })} placeholder="Tag" className="border rounded-lg px-2 py-1" style={{ width: 56, fontSize: 12.5 }} />
+              </div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                <select value={newItem.kind} onChange={e => setNewItem({ ...newItem, kind: e.target.value, unit: e.target.value === "length" ? "m" : "No" })} className="border rounded-lg px-2 py-1" style={{ fontSize: 12 }}><option value="count">Count</option><option value="length">Length (m)</option></select>
+                <select value={newItem.system} onChange={e => setNewItem({ ...newItem, system: e.target.value })} className="border rounded-lg px-2 py-1" style={{ fontSize: 12 }}>{MT_SYSTEMS.map(s => <option key={s[0]} value={s[0]}>{s[1]}</option>)}</select>
+              </div>
+              <div style={{ display: "flex", gap: 5 }}>{MT_COLORS.map(c => <button key={c} type="button" onClick={() => setNewItem({ ...newItem, color: c })} style={{ width: 20, height: 20, borderRadius: "50%", background: c, border: newItem.color === c ? "2px solid #fff" : "2px solid transparent", boxShadow: newItem.color === c ? "0 0 0 2px " + c : "none", cursor: "pointer" }} />)}</div>
+              <button type="button" style={btn(true)} onClick={() => createItem(null)}>Add item</button>
+              <div className="text-[11px]" style={{ opacity: .6 }}>Custom items appear in the BOQ as marked. Library items also get the engineered lines.</div>
+            </div>
+          )}
+        </div>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={() => { setView("boq"); setBoqType("designed"); }} disabled={!doc.marks.length}
+          style={{ padding: "13px", borderRadius: 12, border: 0, fontWeight: 800, fontSize: 14.5, color: "#fff", cursor: doc.marks.length ? "pointer" : "not-allowed", opacity: doc.marks.length ? 1 : .5, background: "linear-gradient(90deg,#2563eb,#7c3aed)" }}>Design BOQ for these systems →</button>
+        <button type="button" onClick={() => { setView("boq"); setBoqType("takeoff"); }} disabled={!doc.marks.length} style={{ ...btn(false), padding: 10 }}>View Take-off BOQ</button>
+        <div className="text-[11px]" style={{ opacity: .6, textAlign: "center" }}>Manual marking is free — no pages are used. Totals are kept floor by floor.</div>
+      </div>
+    </div>
+  );
+}
+
 // Reaching the bottom of the BOQ asks for the take-off rating (2026-11-02): the person has just
 // read the whole result, which is the best moment. Asked once per project (the rating system skips
 // anything already rated), and only when the BOQ has lines.
@@ -35548,6 +36176,7 @@ function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) 
 // ---------------------------------------------------------------------------
 const FEEDBACK_STEPS = {
   takeoff: "AI take-off & BOQ",
+  manual_takeoff: "Manual take-off",
   rework: "BOQ rework",
   design: "System design",
   draftsman: "Shop drawings (draftsman)",
