@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.16"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.17"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -17344,6 +17344,91 @@ function mtDesign(doc, project) {
   return lines;
 }
 
+// Download the marked-up drawings (2026-11-02): one PDF page per marked sheet, the drawing with
+// every mark drawn on it, plus a key of the items and the totals on that sheet. For reference only.
+async function mtExportMarkup(doc, project, onlySheetIds) {
+  if (!window.jspdf) throw new Error("The PDF tool is still loading. Try again in a moment.");
+  const { jsPDF } = window.jspdf;
+  const itemById = {}; doc.items.forEach(i => { itemById[i.id] = i; });
+  const floorName = {}; doc.floors.forEach(f => { floorName[f.id] = f.name; });
+  const sheets = doc.sheets.filter(sh => doc.marks.some(m => m.sheetId === sh.id) && (!onlySheetIds || onlySheetIds.includes(sh.id)));
+  if (!sheets.length) throw new Error("Mark a drawing first, then download it.");
+  let pdf = null;
+  for (const sh of sheets) {
+    const { data: sg, error } = await sb.storage.from("drawings").createSignedUrl(sh.storagePath, 600);
+    if (error) throw error;
+    let w, h, draw;
+    if (/\.pdf$/i.test(sh.storagePath)) {
+      const buf = await (await fetch(sg.signedUrl)).arrayBuffer();
+      const pd = await window.pdfjsLib.getDocument({ data: buf }).promise;
+      const pg = await pd.getPage(Math.min(sh.page || 1, pd.numPages));
+      const vp1 = pg.getViewport({ scale: 1 }); w = vp1.width; h = vp1.height;
+      draw = async (ctx, k) => { await pg.render({ canvasContext: ctx, viewport: pg.getViewport({ scale: k }) }).promise; };
+    } else {
+      const img = new Image(); img.crossOrigin = "anonymous";
+      await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("Could not open " + (sh.fileName || "the image") + ".")); img.src = sg.signedUrl; });
+      w = img.naturalWidth; h = img.naturalHeight;
+      draw = async (ctx, k) => { ctx.drawImage(img, 0, 0, w * k, h * k); };
+    }
+    const k = Math.min(4, 3200 / Math.max(w, h));
+    const cv = document.createElement("canvas"); cv.width = Math.round(w * k); cv.height = Math.round(h * k);
+    const ctx = cv.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
+    await draw(ctx, k);
+    const u = Math.max(w, h) / 1300 * k;      // mark size: like the screen at "fit width"
+    const marks = doc.marks.filter(m => m.sheetId === sh.id);
+    ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const rr = (x, y, ww, hh, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + ww, y, x + ww, y + hh, r); ctx.arcTo(x + ww, y + hh, x, y + hh, r); ctx.arcTo(x, y + hh, x, y, r); ctx.arcTo(x, y, x + ww, y, r); ctx.closePath(); };
+    for (const m of marks.filter(m => m.type === "length")) {
+      const it = itemById[m.itemId] || { color: "#64748b", tag: "?" };
+      ctx.globalAlpha = .85; ctx.strokeStyle = it.color; ctx.lineWidth = 4 * u; ctx.beginPath();
+      m.pts.forEach(([x, y], i) => (i ? ctx.lineTo(x * k, y * k) : ctx.moveTo(x * k, y * k))); ctx.stroke(); ctx.globalAlpha = 1;
+      const mid = m.pts[Math.floor(m.pts.length / 2)], label = `${it.tag} ${m.len != null ? (Math.round(m.len * 10) / 10) + " m" : ""}`.trim();
+      ctx.font = `800 ${10.5 * u}px Inter, Arial, sans-serif`; const tw = Math.max(40 * u, ctx.measureText(label).width + 12 * u);
+      ctx.fillStyle = it.color; rr(mid[0] * k - tw / 2, mid[1] * k - 23 * u, tw, 18 * u, 5 * u); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.fillText(label, mid[0] * k, mid[1] * k - 14 * u);
+    }
+    for (const m of marks.filter(m => m.type === "count")) {
+      const it = itemById[m.itemId] || { color: "#64748b", tag: "?" }; const label = `${it.tag}${m.n || ""}`;
+      ctx.font = `800 ${10 * u}px Inter, Arial, sans-serif`; const tw = Math.max(30 * u, ctx.measureText(label).width + 10 * u);
+      ctx.fillStyle = it.color; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5 * u; rr(m.x * k - tw / 2, m.y * k - 9 * u, tw, 18 * u, 4 * u); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "#fff"; ctx.fillText(label, m.x * k, m.y * k + .5 * u);
+    }
+    // page: drawing on the left, key on the right (A3 landscape)
+    if (!pdf) pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a3" }); else pdf.addPage("a3", "landscape");
+    const PW = 420, PH = 297, M = 10, KEY = 92;
+    const aw = PW - 2 * M - KEY - 6, ah = PH - 2 * M - 14, sc = Math.min(aw / cv.width, ah / cv.height);
+    const iw = cv.width * sc, ih = cv.height * sc;
+    pdf.setFillColor(11, 20, 48); pdf.rect(0, 0, PW, 14, "F");
+    pdf.setTextColor(255, 255, 255); pdf.setFontSize(12); pdf.setFont("helvetica", "bold");
+    pdf.text(`${project.project_name || "Project"} · Manual Take-off markup`, M, 9);
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(9);
+    pdf.text(`${floorName[sh.floorId] || ""} · ${sh.fileName || ""}${sh.page > 1 ? " · page " + sh.page : ""}`, PW - M, 9, { align: "right" });
+    pdf.addImage(cv.toDataURL("image/jpeg", .9), "JPEG", M, 14 + M / 2 + (ah - ih) / 2, iw, ih);
+    const kx = PW - M - KEY; let ky = 24;
+    pdf.setDrawColor(203, 213, 225); pdf.roundedRect(kx, 19, KEY, PH - 19 - M, 2, 2, "S");
+    pdf.setTextColor(15, 23, 42); pdf.setFont("helvetica", "bold"); pdf.setFontSize(10.5); pdf.text("Key", kx + 4, ky + 2); ky += 8;
+    pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text("Item", kx + 13, ky); pdf.text("On this sheet", kx + KEY - 4, ky, { align: "right" }); ky += 5;
+    const used = doc.items.filter(it => marks.some(m => m.itemId === it.id));
+    for (const it of used) {
+      if (ky > PH - M - 22) break;
+      const ms = marks.filter(m => m.itemId === it.id);
+      const val = it.kind === "length" ? `${(Math.round(ms.reduce((a, m) => a + (m.len || 0), 0) * 10) / 10)} m` : `${ms.length} No`;
+      const hex = (it.color || "#64748b").replace("#", ""); pdf.setFillColor(parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16));
+      pdf.roundedRect(kx + 4, ky - 3.2, 7.5, 4.6, 1, 1, "F"); pdf.setTextColor(255, 255, 255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(6.5); pdf.text(String(it.tag || "").slice(0, 4), kx + 7.75, ky - .2, { align: "center" });
+      pdf.setTextColor(15, 23, 42); pdf.setFont("helvetica", "normal"); pdf.setFontSize(8);
+      const nm = pdf.splitTextToSize(it.name || "", KEY - 40); pdf.text(nm, kx + 13, ky);
+      pdf.setFont("helvetica", "bold"); pdf.text(val, kx + KEY - 4, ky, { align: "right" });
+      ky += Math.max(6.5, nm.length * 3.6 + 2.5);
+    }
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(7); pdf.setTextColor(100, 116, 139);
+    pdf.text(pdf.splitTextToSize(`Scale: ${sh.scale && sh.scale.how ? sh.scale.how : "not set"}. Marked by the user in Quantora Manual Take-off, for reference. Check quantities against the issued drawings.`, KEY - 8), kx + 4, PH - M - 12);
+    pdf.text("quantoraengineering.com", kx + 4, PH - M - 3);
+  }
+  const safe = String(project.project_name || "project").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") || "project";
+  pdf.save(`${safe}-markup${onlySheetIds && sheets.length === 1 ? "-" + String(sheets[0].fileName || "sheet").replace(/\.[^.]+$/, "").replace(/[^\w\-]+/g, "") : ""}.pdf`);
+  return sheets.length;
+}
+
 function ManualTakeoffTab({ project, onGoToBoq }) {
   const path = `${project.id}/manual-takeoff/takeoff.json`;
   const [doc, setDoc] = useState(null);            // { floors, sheets, items, marks }
@@ -17398,6 +17483,13 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
       if (data.reason === "limit") { mtLimitPop(data); return false; }
       return true;
     } catch (_) { return true; }
+  };
+  const [mkBusy, setMkBusy] = useState(false);
+  const downloadMarkup = async (only) => {
+    if (mkBusy) return; setMkBusy(true);
+    try { const n = await mtExportMarkup(doc, project, only); qPop({ kind: "success", title: "Markup downloaded ✓", message: `${n} marked drawing${n === 1 ? "" : "s"} saved as a PDF, with a key of every item.` }); }
+    catch (e) { qPop({ kind: "warn", title: "Could not make the PDF", message: e.message || String(e) }); }
+    setMkBusy(false);
   };
   const [showNew, setShowNew] = useState(false);
   const [view, setView] = useState("draw");       // draw | boq
@@ -17746,6 +17838,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" style={{ ...btn(true), background: "linear-gradient(90deg,#2563eb,#7c3aed)", border: 0, padding: "10px 16px" }} onClick={sendToBoq} disabled={!designed.length || sending === "Sending…"}>Send to project BOQ →</button>
           <button type="button" style={btn(false)} onClick={exportExcel}>Export Excel</button>
+          <button type="button" style={btn(false)} onClick={() => downloadMarkup(null)} disabled={mkBusy}>{mkBusy ? "Making the PDF…" : "⬇ Marked-up drawings (PDF)"}</button>
           {sending && <span className="text-xs" style={{ opacity: .8 }}>{sending}</span>}
           {/^Sent /.test(sending) && onGoToBoq && <button type="button" style={btn(false)} onClick={onGoToBoq}>Open AI Take-off & BOQ (pricing, export) →</button>}
         </div>
@@ -17958,6 +18051,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
         <button type="button" onClick={() => { setView("boq"); setBoqType("designed"); }} disabled={!doc.marks.length}
           style={{ padding: "13px", borderRadius: 12, border: 0, fontWeight: 800, fontSize: 14.5, color: "#fff", cursor: doc.marks.length ? "pointer" : "not-allowed", opacity: doc.marks.length ? 1 : .5, background: "linear-gradient(90deg,#2563eb,#7c3aed)" }}>Design BOQ for these systems →</button>
         <button type="button" onClick={() => { setView("boq"); setBoqType("takeoff"); }} disabled={!doc.marks.length} style={{ ...btn(false), padding: 10 }}>View Take-off BOQ</button>
+        <button type="button" onClick={() => downloadMarkup(null)} disabled={!doc.marks.length || mkBusy} style={{ ...btn(false), padding: 10, opacity: doc.marks.length ? 1 : .5 }}>{mkBusy ? "Making the PDF…" : "⬇ Download marked-up drawings (PDF)"}</button>
         <div className="text-[11px]" style={{ opacity: .6, textAlign: "center" }}>Manual Take-off uses no AI pages. A drawing counts once a month, when you first mark it. Totals are kept floor by floor.</div>
       </div>
     </div>
