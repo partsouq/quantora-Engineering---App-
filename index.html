@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.08"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.09"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -5898,6 +5898,48 @@ async function xlDownloadStyled(sheetDefs, filename, meta) {
   }
 }
 
+// Error watch (2026-11-02): an unexpected failure a user hits is recorded in client_errors.
+// The database turns each new kind of error into an instant admin alert, opens a live chat
+// for the user ("it's on our side, we're fixing it") and tells them when it is fixed.
+// Expected outcomes -- plan limits, "upload the file first", the server being busy -- are not errors.
+const Q_EXPECTED_ERR = /plan-limit|PROJECT_LIMIT_REACHED|part of the paid plans|choose a plan|upgrade|allowance|limit reached|pages? left|running at once|full capacity|first\.|please (choose|select|enter|add|upload)|not signed in|session expired|cancel/i;
+const Q_BENIGN_PAGE_ERR = /ResizeObserver|RenderingCancelled|AbortError|Load failed|NetworkError|Failed to fetch|ChunkLoadError|Script error|Non-Error promise/i;
+const __qErrSeen = {};
+function qErrFingerprint(context, msg) {
+  const norm = String(msg || "").toLowerCase().replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, "#id").replace(/\d+/g, "#").replace(/\s+/g, " ").slice(0, 160);
+  return `${context}|${norm}`;
+}
+function qIsUnexpected(err) {
+  const msg = String((err && (err.message || err.error_description || err.error)) || err || "");
+  if (!msg || (err && err.busy) || (err && err.requiresConfirmation)) return false;
+  return !Q_EXPECTED_ERR.test(msg);
+}
+async function qReportError(context, err, details) {
+  try {
+    const msg = String((err && (err.message || err.error_description || err.error)) || err || "Unknown error").slice(0, 2000);
+    const fingerprint = qErrFingerprint(context, msg);
+    if (__qErrSeen[fingerprint] && Date.now() - __qErrSeen[fingerprint] < 60000) return;   // once a minute per error per tab
+    __qErrSeen[fingerprint] = Date.now();
+    const { data: { session } } = await sb.auth.getSession(); if (!session) return;
+    await sb.from("client_errors").insert({ user_id: session.user.id, context: String(context).slice(0, 120), message: msg, fingerprint,
+      page: (location.hash || location.pathname || "").slice(0, 200), details: details || (err && err.code ? { code: err.code } : null) });
+    // the user's live chat now has a message from the team -- open it shortly
+    setTimeout(() => { try { window.dispatchEvent(new CustomEvent("q-open-live-chat")); } catch (_) {} }, 3000);
+  } catch (_) { /* reporting must never break the page */ }
+}
+// What the user sees for an unexpected failure (and the error is reported). Expected messages pass through.
+function qUserError(context, err) {
+  const raw = String((err && err.message) || err || "Something went wrong.");
+  if (!qIsUnexpected(err)) return raw;
+  qReportError(context, err);
+  return `Something went wrong on our side while trying to ${context}. Our team has been notified and is fixing it — you'll get a message in the chat as soon as it works again.`;
+}
+if (typeof window !== "undefined" && !window.__qErrHook) {
+  window.__qErrHook = true;
+  window.addEventListener("error", (e) => { const m = String((e && (e.message || (e.error && e.error.message))) || ""); if (m && !Q_BENIGN_PAGE_ERR.test(m)) qReportError("use the page", e.error || m, { source: "window.error" }); });
+  window.addEventListener("unhandledrejection", (e) => { const r = e && e.reason; const m = String((r && r.message) || r || ""); if (m && !Q_BENIGN_PAGE_ERR.test(m) && qIsUnexpected(r)) qReportError("use the page", r, { source: "unhandledrejection" }); });
+}
+
 async function callEngine(action, payload) {
   try { clearUsageCache(); } catch (_) {}   // an engine call changes pages used
   // Live activity: the panel shows this the moment it is sent (see ActivityCenter).
@@ -5934,6 +5976,7 @@ async function callEngine(action, payload) {
     }
     const err = new Error(json.error || "AI engine request failed");
     if (busy) err.busy = true;
+    if (res.status >= 500) qReportError(`run ${Q_ACT_LABEL[action] || action}`, err, { status: res.status, action });
     // requires_confirmation (2026-08-10, later still): checkRecentFailureHistory's
     // cost-protection gate on the backend returns this instead of a plain error
     // when a drawing has already timed out repeatedly -- attached onto the thrown
@@ -8908,7 +8951,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
         }
         onCreated(data);
       }
-    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+    } catch (ex) { setErr(qUserError(isEdit ? "save the project" : "create a project", ex)); } finally { setBusy(false); }
   }
 
   return (
@@ -12767,7 +12810,7 @@ function DrawingsTab({ project }) {
       if (fileRef.current) fileRef.current.value = "";
       setStdSummary(describeStandardReports(stdReports));
       await load();
-    } catch (ex) { setErr(ex.message); } finally { setUploading(false); setStdStatus(""); }
+    } catch (ex) { setErr(qUserError("upload a drawing", ex)); } finally { setUploading(false); setStdStatus(""); }
   }
 
   async function deleteDrawing(d) {
@@ -16981,6 +17024,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
       const body = new Blob([JSON.stringify(doc)], { type: "application/json" });
       let { error } = await sb.storage.from("drawings").upload(path, body, { upsert: true, contentType: "application/json" });
       if (error) { await sb.storage.from("drawings").remove([path]).catch(() => {}); ({ error } = await sb.storage.from("drawings").upload(path, body, { contentType: "application/json" })); }
+      if (error) qReportError("save a manual take-off", error);
       setSaveState(error ? "Not saved — " + (error.message || "storage error") : "Saved");
     }, 1500);
     return () => clearTimeout(saveTimer.current);
@@ -17213,7 +17257,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
       for (let i = 0; i < rows.length; i += 200) { const { error } = await sb.from("boq_items").insert(rows.slice(i, i + 200)); if (error) throw error; }
       setSending(`Sent ${rows.length} lines to AI Take-off & BOQ.`);
       try { qStepDone("manual_takeoff", project.id); } catch (_) {}
-    } catch (e) { setSending("Could not send: " + (e.message || String(e))); }
+    } catch (e) { setSending(qUserError("send the manual take-off to the BOQ", e)); }
   };
 
   if (!doc) return <div className="text-sm text-slate-500 p-4">Loading Manual Take-off…</div>;
@@ -21689,6 +21733,7 @@ function QHourlyReportsView() {
                 <Stat label="Chats waiting" value={c.waiting || 0} warn={(c.waiting || 0) > 0} />
                 <Stat label="Ratings" value={rt.count ? `${rt.count} · ${rt.avg}★` : 0} />
                 <Stat label="Payments" value={x.payments || 0} />
+                <Stat label="Errors users hit" value={x.user_errors || 0} warn={(x.user_errors || 0) > 0} />
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {health.map(h => (
@@ -27423,7 +27468,9 @@ function QLiveAttachment({ path }) {
 function QLiveMessages({ ticket, messages, mineIsAdmin }) {
   const endRef = useRef(null);
   const first = ticket ? { id: "__first__", from_admin: false, body: ticket.message || "", created_at: ticket.created_at, attachments: ticket.screenshots || [] } : null;
-  const all = (first && first.body ? [first] : []).concat(messages || []);
+  // a chat the error watch opened for the user: its first line is an internal note -- only the team sees it
+  const autoNote = ticket && /^auto-error:/.test(ticket.page_context || "");
+  const all = (first && first.body && !(autoNote && !mineIsAdmin) ? [first] : []).concat(messages || []);
   useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ block: "end" }); } catch (_) {} }, [all.length]);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -27477,6 +27524,7 @@ function LiveChatWidget({ session, pageName }) {
   const [online, setOnline] = useState(qLivePresence.admins > 0);
   const openRef = useRef(false); openRef.current = open;
   const userId = session && session.user && session.user.id;
+  useEffect(() => { const h = () => { load(); setOpen(true); }; window.addEventListener("q-open-live-chat", h); return () => window.removeEventListener("q-open-live-chat", h); }, [userId]);
   async function load() {
     if (!userId) return;
     try {
