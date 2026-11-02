@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.14"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.18"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -1112,6 +1112,17 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   .qprice-h{font-size:clamp(28px,3.6vw,48px);line-height:1.12;background:linear-gradient(180deg,#fff,#d8ccff);-webkit-background-clip:text;background-clip:text;color:transparent;position:relative;}
   #pricing p.secsub{position:relative;}
   .qprice-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;margin-top:30px;position:relative;}
+  .qmt-pill{display:inline-flex;align-items:center;gap:6px;margin:2px 0 4px;padding:3px 10px;border-radius:999px;background:rgba(16,185,129,.12);border:1px solid rgba(52,211,153,.35);color:#6ee7b7;font-weight:700;font-size:12px;line-height:1.5}
+  .qmt-strip{position:relative;margin-top:22px;display:grid;grid-template-columns:auto 1fr auto;gap:28px;align-items:center;padding:22px 26px;border-radius:18px;
+    background:linear-gradient(120deg,rgba(16,185,129,.16),rgba(59,130,246,.10) 55%,rgba(124,58,237,.14));border:1px solid rgba(52,211,153,.40);box-shadow:0 18px 50px rgba(16,185,129,.10)}
+  .qmt-strip .qmt-new{display:inline-block;padding:3px 10px;border-radius:999px;background:linear-gradient(90deg,#f59e0b,#f97316);color:#1a0f00;font-weight:800;font-size:11px;letter-spacing:1.4px}
+  .qmt-strip .qmt-name{margin-top:8px;font-weight:800;font-size:19px;color:#fff}
+  .qmt-strip .qmt-price{margin-top:2px}.qmt-strip .qmt-price b{font-size:34px;font-weight:800;color:#fff}.qmt-strip .qmt-price span{font-size:13px;color:var(--text-dim,#9aa3ba)}
+  .qmt-strip .qmt-copy{font-size:14px;color:#cbd5f5;line-height:1.55}.qmt-strip .qmt-copy b{color:#fff}
+  .qmt-strip .qmt-feats{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:10px;font-size:13px;color:#d1fae5}
+  .qmt-strip .qmt-feats span{display:inline-flex;align-items:center;gap:6px}.qmt-strip .qmt-feats i{font-style:normal;width:17px;height:17px;border-radius:50%;background:#10b981;color:#04120c;font-weight:900;font-size:10px;display:grid;place-items:center}
+  .qmt-strip .qmt-foot{margin-top:8px;font-size:12px;color:var(--text-dim,#9aa3ba)}
+  @media (max-width:900px){.qmt-strip{grid-template-columns:1fr;gap:14px}}
   @media (max-width:1100px){.qprice-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
   @media (max-width:600px){.qprice-grid{grid-template-columns:1fr;}}
   .panel.qplan{padding:24px;display:flex;flex-direction:column;border-radius:14px;position:relative;background:linear-gradient(180deg,rgba(124,58,237,0.10),rgba(20,10,48,0.55));border:1px solid rgba(167,139,250,0.22);}
@@ -1520,6 +1531,31 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
           <div class="sec-item"><svg class="icon" width="15" height="15" viewBox="0 0 24 24" style="color:var(--text-dim);"><path d="M7 18a4 4 0 01-1-7.9A5 5 0 0115 7a4.5 4.5 0 011 8.9"/><path d="M12 12v7M9 15l3-3 3 3"/></svg> Daily Backup</div>
         </div>
       </div>
+    </div>
+  </div>
+</section>
+
+<section id="manual-takeoff">
+  <div class="wrap m3d-wrap works-wrap">
+    <div class="works-stage">
+      <div class="works-frame">
+        <video id="qmt-vid" muted loop playsinline controls preload="none" poster="manualtakeoffposter.jpg" style="display:block;width:100%;height:auto;" aria-label="Manual Take-off on a sample tower: marking the CCTV drawing, the ELV Designed BOQ, marking the HVAC drawing and the HVAC Designed BOQ">
+          <source src="manualtakeoff.mp4" type="video/mp4"/>
+        </video>
+      </div>
+      <p class="works-cap">Sample Tower &middot; recorded on the live platform: mark the CCTV drawing, ELV Designed BOQ, mark the HVAC drawing, HVAC Designed BOQ &middot; 50 s &middot; no sound</p>
+    </div>
+    <div class="m3d-copy">
+    <div class="kicker">&#9733; New launch</div>
+    <h2 class="sectitle">Manual Take-off: Estimation Has Never Been This Easy</h2>
+    <p class="secsub">You mark the drawing. Quantora designs the complete BOQ for every system, to the rules of your project&rsquo;s country.</p>
+    <ul class="m3d-list">
+      <li><b>Count and measure</b> &mdash; devices, cable, tray and duct runs, at the drawing scale</li>
+      <li><b>Every system</b> &mdash; ELV, HVAC, plumbing, fire, electrical and civil, or type your own item</li>
+      <li><b>Designed BOQ</b> &mdash; NVRs, switches, fittings, supports and cabling engineered for you, each line says why</li>
+      <li><b>10 drawings free every month</b> &mdash; need more? 30 drawings for $10</li>
+    </ul>
+    <div class="hero-ctas"><a class="btn btn-lg btn-grad" href="?auth=signup">Try Manual Take-off Free &rarr;</a></div>
     </div>
   </div>
 </section>
@@ -2033,6 +2069,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
         <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$24</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span><div class="qx-local" data-usd="24"></div></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div><b style="color:#fff;">10 draftsman drawing pages/month</b></div>
+          <div><span class="qmt-pill">&#10003; Manual Take-off · 50 / mo</span></div>
           <div>30 AI-processed pages/month</div>
           <div>5 projects &middot; 1 user</div>
           <div>200 AI chat messages &middot; 10 reworks per project</div>
@@ -2046,6 +2083,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
         <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$99</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span><div class="qx-local" data-usd="99"></div></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div><b style="color:#fff;">40 draftsman drawing pages/month</b></div>
+          <div><span class="qmt-pill">&#10003; Manual Take-off · 200 / mo</span></div>
           <div>150 AI-processed pages/month</div>
           <div>25 projects &middot; 5 users</div>
           <div>1,000 AI chat messages &middot; 20 reworks per project</div>
@@ -2058,6 +2096,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
         <div style="margin:10px 0;"><span style="font-size:32px;font-weight:800;color:#fff;">$249</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span><div class="qx-local" data-usd="249"></div></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div><b style="color:#fff;">100 draftsman drawing pages/month</b></div>
+          <div><span class="qmt-pill">&#10003; Manual Take-off · Unlimited</span></div>
           <div>400 AI-processed pages/month</div>
           <div>100 projects &middot; 15 users</div>
           <div>2,500 AI chat messages &middot; 30 reworks per project</div>
@@ -2070,12 +2109,22 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
         <div style="margin:10px 0;"><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">From </span><span style="font-size:32px;font-weight:800;color:#fff;">$5,000</span><span style="font-size:13px;color:var(--text-dim,#9aa3ba);">/mo</span><div class="qx-local" data-usd="5000"></div></div>
         <div style="font-size:13px;color:var(--text-dim,#9aa3ba);line-height:1.9;flex:1;">
           <div><b style="color:#fff;">500 draftsman drawing pages/month</b></div>
+          <div><span class="qmt-pill">&#10003; Manual Take-off · Unlimited</span></div>
           <div>10,000 AI-processed pages/month</div>
           <div>1,000 projects &middot; 250 users</div>
           <div>Custom limits, onboarding and support</div>
         </div>
         <a class="btn btn-outline-lg" href="#demo" style="margin-top:16px;text-align:center;">Talk to us</a>
       </div>
+    </div>
+    <div class="qmt-strip">
+      <div><span class="qmt-new">NEW</span><div class="qmt-name">Take-off plan</div><div class="qmt-price"><b>$12</b><span>/mo</span><div class="qx-local" data-usd="12"></div></div></div>
+      <div>
+        <div class="qmt-copy"><b>Only need Manual Take-off?</b> You mark the drawing, Quantora designs the complete BOQ for every system.</div>
+        <div class="qmt-feats"><span><i>&#10003;</i>150 drawings / month</span><span><i>&#10003;</i>Designed BOQ</span><span><i>&#10003;</i>Excel &amp; PDF export</span><span><i>&#10003;</i>No project or user limits</span><span><i>&#10003;</i>Download marked-up drawings</span></div>
+        <div class="qmt-foot">Every account gets 10 drawings free each month. Each sheet of an uploaded file counts as one drawing. Need more? 30 drawings for $10.</div>
+      </div>
+      <a class="btn btn-grad" href="?auth=signup" style="white-space:nowrap;">Start with Take-off &rarr;</a>
     </div>
     <p class="secsub qx-local-note" style="margin-top:14px;font-size:12px;display:none;"></p>
     <p class="secsub" style="margin-top:18px;font-size:12px;">Start with a free welcome pack: 2 AI-processed drawing pages, 1 draftsman page, 2 documents and 10 AI chat messages &mdash; no credit card required. See every result on screen; downloads come with a paid plan. Your work is kept for 7 days; choose a plan to keep it.</p>
@@ -6338,7 +6387,7 @@ function QUpgradeCard({ k }) {
         <div style={{ fontSize: 14, opacity: .8, marginTop: 8, lineHeight: 1.5 }}>{detail}</div>
         <button type="button" onClick={() => qOpenBilling(`${what} is part of the paid plans. Choose a plan to unlock it.`)}
           style={{ marginTop: 18, padding: "12px 22px", borderRadius: 12, border: 0, fontWeight: 800, fontSize: 15, color: "#fff", cursor: "pointer", background: "linear-gradient(90deg,#2563eb,#7c3aed)" }}>Upgrade to use</button>
-        <div style={{ fontSize: 12, opacity: .65, marginTop: 12 }}>On the Welcome Pack you keep unlimited Manual Take-off and the complete Designed BOQ.</div>
+        <div style={{ fontSize: 12, opacity: .65, marginTop: 12 }}>On the Welcome Pack you keep 10 Manual Take-off drawings every month and the complete Designed BOQ.</div>
       </div>
     </div>
   );
@@ -7753,6 +7802,17 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                       : plan.price_usd == null ? (plan.id === "enterprise" ? "From $5,000" : "Custom") : plan.price_usd === "0" || Number(plan.price_usd) === 0 ? "$0" : `$${plan.price_usd}`}
                     {plan.price_usd != null && Number(plan.price_usd) > 0 && <span className="text-xs font-normal text-slate-400">/mo</span>}
                   </div>
+                  {plan.id === "takeoff" ? (
+                  <div className="text-xs text-slate-500 mt-2 space-y-1 flex-1">
+                    <div className="font-semibold" style={{ color: "#059669" }}>{plan.mt_drawings_month} Manual Take-off drawings/month</div>
+                    <div>Designed BOQ for every system</div>
+                    <div>Excel &amp; PDF export</div>
+                    <div>No project or user limits · download marked-up drawings</div>
+                    <div>Each sheet of an uploaded file counts as one drawing</div>
+                    <div>Need more? 30 drawings for $10</div>
+                    <div className="text-slate-400">No AI take-off on this plan. Upgrade any time.</div>
+                  </div>
+                  ) : (
                   <div className="text-xs text-slate-500 mt-2 space-y-1 flex-1">
                     {/* Every limit column is NOT NULL at the database level, so there is
                         no "unlimited" case left to fall back to. A missing number here
@@ -7760,6 +7820,9 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                         way to show that rather than inventing a reassuring word. */}
                     {plan.max_draftsman_pages != null && plan.max_draftsman_pages > 0 && (
                       <div className="font-semibold text-slate-700">{plan.max_draftsman_pages} draftsman drawing pages{plan.is_trial ? " (once)" : "/month"}</div>
+                    )}
+                    {plan.id !== "trial" && (
+                      <div className="font-semibold" style={{ color: "#059669" }}>{plan.mt_drawings_month == null ? "Unlimited Manual Take-off" : `${plan.mt_drawings_month} Manual Take-off drawings/month`}</div>
                     )}
                     <div>{fmtLimit(plan.max_drawing_pages)} AI-processed drawing pages{plan.is_trial ? " (once)" : "/month"}</div>
                     <div>{fmtLimit(plan.max_projects)} projects &middot; {fmtLimit(plan.max_users)} user{plan.max_users === 1 ? "" : "s"}</div>
@@ -7781,6 +7844,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                       : <div className="text-slate-400">No pay-as-you-go on this plan.</div>}
                     {plan.is_trial && <div>{(plan.trial_duration_days ?? 2) > 3650 ? "One-time free welcome pack. Your projects and files are kept for 7 days \u2014 choose a plan within 7 days to keep them." : `${plan.trial_duration_days ?? 2}-day trial window`}</div>}
                   </div>
+                  )}
                   {isCurrent ? (
                     <div className="mt-4 text-center text-xs font-semibold text-slate-500 bg-slate-100 rounded-lg py-2">Current plan</div>
                   ) : promoActive() ? (
@@ -17281,6 +17345,91 @@ function mtDesign(doc, project) {
   return lines;
 }
 
+// Download the marked-up drawings (2026-11-02): one PDF page per marked sheet, the drawing with
+// every mark drawn on it, plus a key of the items and the totals on that sheet. For reference only.
+async function mtExportMarkup(doc, project, onlySheetIds) {
+  if (!window.jspdf) throw new Error("The PDF tool is still loading. Try again in a moment.");
+  const { jsPDF } = window.jspdf;
+  const itemById = {}; doc.items.forEach(i => { itemById[i.id] = i; });
+  const floorName = {}; doc.floors.forEach(f => { floorName[f.id] = f.name; });
+  const sheets = doc.sheets.filter(sh => doc.marks.some(m => m.sheetId === sh.id) && (!onlySheetIds || onlySheetIds.includes(sh.id)));
+  if (!sheets.length) throw new Error("Mark a drawing first, then download it.");
+  let pdf = null;
+  for (const sh of sheets) {
+    const { data: sg, error } = await sb.storage.from("drawings").createSignedUrl(sh.storagePath, 600);
+    if (error) throw error;
+    let w, h, draw;
+    if (/\.pdf$/i.test(sh.storagePath)) {
+      const buf = await (await fetch(sg.signedUrl)).arrayBuffer();
+      const pd = await window.pdfjsLib.getDocument({ data: buf }).promise;
+      const pg = await pd.getPage(Math.min(sh.page || 1, pd.numPages));
+      const vp1 = pg.getViewport({ scale: 1 }); w = vp1.width; h = vp1.height;
+      draw = async (ctx, k) => { await pg.render({ canvasContext: ctx, viewport: pg.getViewport({ scale: k }) }).promise; };
+    } else {
+      const img = new Image(); img.crossOrigin = "anonymous";
+      await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("Could not open " + (sh.fileName || "the image") + ".")); img.src = sg.signedUrl; });
+      w = img.naturalWidth; h = img.naturalHeight;
+      draw = async (ctx, k) => { ctx.drawImage(img, 0, 0, w * k, h * k); };
+    }
+    const k = Math.min(4, 3200 / Math.max(w, h));
+    const cv = document.createElement("canvas"); cv.width = Math.round(w * k); cv.height = Math.round(h * k);
+    const ctx = cv.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
+    await draw(ctx, k);
+    const u = Math.max(w, h) / 1300 * k;      // mark size: like the screen at "fit width"
+    const marks = doc.marks.filter(m => m.sheetId === sh.id);
+    ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const rr = (x, y, ww, hh, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + ww, y, x + ww, y + hh, r); ctx.arcTo(x + ww, y + hh, x, y + hh, r); ctx.arcTo(x, y + hh, x, y, r); ctx.arcTo(x, y, x + ww, y, r); ctx.closePath(); };
+    for (const m of marks.filter(m => m.type === "length")) {
+      const it = itemById[m.itemId] || { color: "#64748b", tag: "?" };
+      ctx.globalAlpha = .85; ctx.strokeStyle = it.color; ctx.lineWidth = 4 * u; ctx.beginPath();
+      m.pts.forEach(([x, y], i) => (i ? ctx.lineTo(x * k, y * k) : ctx.moveTo(x * k, y * k))); ctx.stroke(); ctx.globalAlpha = 1;
+      const mid = m.pts[Math.floor(m.pts.length / 2)], label = `${it.tag} ${m.len != null ? (Math.round(m.len * 10) / 10) + " m" : ""}`.trim();
+      ctx.font = `800 ${10.5 * u}px Inter, Arial, sans-serif`; const tw = Math.max(40 * u, ctx.measureText(label).width + 12 * u);
+      ctx.fillStyle = it.color; rr(mid[0] * k - tw / 2, mid[1] * k - 23 * u, tw, 18 * u, 5 * u); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.fillText(label, mid[0] * k, mid[1] * k - 14 * u);
+    }
+    for (const m of marks.filter(m => m.type === "count")) {
+      const it = itemById[m.itemId] || { color: "#64748b", tag: "?" }; const label = `${it.tag}${m.n || ""}`;
+      ctx.font = `800 ${10 * u}px Inter, Arial, sans-serif`; const tw = Math.max(30 * u, ctx.measureText(label).width + 10 * u);
+      ctx.fillStyle = it.color; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5 * u; rr(m.x * k - tw / 2, m.y * k - 9 * u, tw, 18 * u, 4 * u); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "#fff"; ctx.fillText(label, m.x * k, m.y * k + .5 * u);
+    }
+    // page: drawing on the left, key on the right (A3 landscape)
+    if (!pdf) pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a3" }); else pdf.addPage("a3", "landscape");
+    const PW = 420, PH = 297, M = 10, KEY = 92;
+    const aw = PW - 2 * M - KEY - 6, ah = PH - 2 * M - 14, sc = Math.min(aw / cv.width, ah / cv.height);
+    const iw = cv.width * sc, ih = cv.height * sc;
+    pdf.setFillColor(11, 20, 48); pdf.rect(0, 0, PW, 14, "F");
+    pdf.setTextColor(255, 255, 255); pdf.setFontSize(12); pdf.setFont("helvetica", "bold");
+    pdf.text(`${project.project_name || "Project"} · Manual Take-off markup`, M, 9);
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(9);
+    pdf.text(`${floorName[sh.floorId] || ""} · ${sh.fileName || ""}${sh.page > 1 ? " · page " + sh.page : ""}`, PW - M, 9, { align: "right" });
+    pdf.addImage(cv.toDataURL("image/jpeg", .9), "JPEG", M, 14 + M / 2 + (ah - ih) / 2, iw, ih);
+    const kx = PW - M - KEY; let ky = 24;
+    pdf.setDrawColor(203, 213, 225); pdf.roundedRect(kx, 19, KEY, PH - 19 - M, 2, 2, "S");
+    pdf.setTextColor(15, 23, 42); pdf.setFont("helvetica", "bold"); pdf.setFontSize(10.5); pdf.text("Key", kx + 4, ky + 2); ky += 8;
+    pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text("Item", kx + 13, ky); pdf.text("On this sheet", kx + KEY - 4, ky, { align: "right" }); ky += 5;
+    const used = doc.items.filter(it => marks.some(m => m.itemId === it.id));
+    for (const it of used) {
+      if (ky > PH - M - 22) break;
+      const ms = marks.filter(m => m.itemId === it.id);
+      const val = it.kind === "length" ? `${(Math.round(ms.reduce((a, m) => a + (m.len || 0), 0) * 10) / 10)} m` : `${ms.length} No`;
+      const hex = (it.color || "#64748b").replace("#", ""); pdf.setFillColor(parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16));
+      pdf.roundedRect(kx + 4, ky - 3.2, 7.5, 4.6, 1, 1, "F"); pdf.setTextColor(255, 255, 255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(6.5); pdf.text(String(it.tag || "").slice(0, 4), kx + 7.75, ky - .2, { align: "center" });
+      pdf.setTextColor(15, 23, 42); pdf.setFont("helvetica", "normal"); pdf.setFontSize(8);
+      const nm = pdf.splitTextToSize(it.name || "", KEY - 40); pdf.text(nm, kx + 13, ky);
+      pdf.setFont("helvetica", "bold"); pdf.text(val, kx + KEY - 4, ky, { align: "right" });
+      ky += Math.max(6.5, nm.length * 3.6 + 2.5);
+    }
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(7); pdf.setTextColor(100, 116, 139);
+    pdf.text(pdf.splitTextToSize(`Scale: ${sh.scale && sh.scale.how ? sh.scale.how : "not set"}. Marked by the user in Quantora Manual Take-off, for reference. Check quantities against the issued drawings.`, KEY - 8), kx + 4, PH - M - 12);
+    pdf.text("quantoraengineering.com", kx + 4, PH - M - 3);
+  }
+  const safe = String(project.project_name || "project").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") || "project";
+  pdf.save(`${safe}-markup${onlySheetIds && sheets.length === 1 ? "-" + String(sheets[0].fileName || "sheet").replace(/\.[^.]+$/, "").replace(/[^\w\-]+/g, "") : ""}.pdf`);
+  return sheets.length;
+}
+
 function ManualTakeoffTab({ project, onGoToBoq }) {
   const path = `${project.id}/manual-takeoff/takeoff.json`;
   const [doc, setDoc] = useState(null);            // { floors, sheets, items, marks }
@@ -17314,21 +17463,34 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
     return () => window.removeEventListener("mt-quota-changed", load);
   }, []);
   const mtLimitPop = (q) => qPop({ kind: "warn", title: "This month's Manual Take-off drawings are used",
-    message: `You have marked ${q && q.used != null ? q.used : "all"} of ${q && q.allowance != null ? q.allowance : 10} drawings this month. Get 30 more drawings for $10 (valid 30 days), or upgrade your plan: Individual 50, Professional 200, Team unlimited.`,
+    message: `You have used ${q && q.used != null ? q.used : "all"} of ${q && q.allowance != null ? q.allowance : 10} drawings this month. Get 30 more drawings for $10 (valid 30 days), or upgrade your plan: Individual 50, Professional 200, Team unlimited.`,
     action: { label: "Get 30 more · $10", onClick: qBuyMtPack } });
   // A sheet counts once a month, the first time it gets a mark. Sheets already marked before stay free to edit.
   // If the check itself is unavailable, marking is never blocked.
-  const sheetAllowed = async (sid) => {
-    if (okSheets.current.has(sid) || (doc && doc.marks.some(m => m.sheetId === sid))) { okSheets.current.add(sid); return true; }
-    if (mtQuota && mtQuota.unlimited) { okSheets.current.add(sid); }
+  // A drawing = one page of one uploaded file (a 20-page PDF is 20 drawings). It is
+  // counted once a month on the server, the first time it gets a mark; deleting the
+  // file or the sheet afterwards never gives the drawing back.
+  const sheetKey = (sid, pg) => { const s = doc && doc.sheets.find(x => x.id === sid); return s ? `${s.drawingId}:p${pg || s.page || 1}` : sid; };
+  const sheetAllowed = async (sid, pg) => {
+    const key = sheetKey(sid, pg);
+    if (okSheets.current.has(key)) return true;
+    // Sheets marked before pricing started stay free to edit (not when switching page).
+    if (!pg && doc && doc.marks.some(m => m.sheetId === sid)) { okSheets.current.add(key); return true; }
     try {
-      const { data, error } = await sb.rpc("q_mt_use_sheet", { p_project: project.id, p_sheet: sid });
+      const { data, error } = await sb.rpc("q_mt_use_sheet", { p_project: project.id, p_sheet: key });
       if (error || !data) return true;
       setMtQuota(data);
-      if (data.ok) { okSheets.current.add(sid); return true; }
+      if (data.ok) { okSheets.current.add(key); return true; }
       if (data.reason === "limit") { mtLimitPop(data); return false; }
       return true;
     } catch (_) { return true; }
+  };
+  const [mkBusy, setMkBusy] = useState(false);
+  const downloadMarkup = async (only) => {
+    if (mkBusy) return; setMkBusy(true);
+    try { const n = await mtExportMarkup(doc, project, only); qPop({ kind: "success", title: "Markup downloaded ✓", message: `${n} marked drawing${n === 1 ? "" : "s"} saved as a PDF, with a key of every item.` }); }
+    catch (e) { qPop({ kind: "warn", title: "Could not make the PDF", message: e.message || String(e) }); }
+    setMkBusy(false);
   };
   const [showNew, setShowNew] = useState(false);
   const [view, setView] = useState("draw");       // draw | boq
@@ -17498,7 +17660,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
         setFlash({ x: p[0], y: p[1], text: `+1 → ${item.tag}${n}`, color: item.color, at: Date.now() });
         setErr("");
       };
-      if (okSheets.current.has(sheet.id)) add(); else sheetAllowed(sheet.id).then(ok => { if (ok) add(); });
+      sheetAllowed(sheet.id).then(ok => { if (ok) add(); });
     } else if (tool === "length" || tool === "scale") {
       if (tool === "length" && (!item || item.kind !== "length")) { setErr("Pick a length item (cable tray, conduit …) on the right first."); return; }
       if (tool === "scale" && draft.length >= 2) setDraft([p]); else setDraft(d => d.concat([p]));
@@ -17552,8 +17714,38 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
     const name = (window.prompt("Floor name (e.g. First floor, Roof, Basement 1)") || "").trim(); if (!name) return;
     const id = mtId(); update(d => { d.floors.push({ id, name }); return d; }); setFloorId(id); setSheetId(null);
   };
-  const addSheet = (drawingId, pg) => {
-    const dr = drawings.find(x => x.id === drawingId); if (!dr) return;
+  // Attaching a file counts every sheet in it as one drawing each, at once. If the month's
+  // drawings are not enough for the whole file, nothing is attached and the user can buy more.
+  const fileSheetCount = async (dr) => {
+    const known = Number(dr.page_count || dr.total_pages_detected || 0);
+    if (!/\.pdf$/i.test(dr.storage_path || dr.file_name || "")) return 1;
+    try {
+      if (!window.pdfjsLib) return known || 1;
+      const { data: sg } = await sb.storage.from("drawings").createSignedUrl(dr.storage_path, 600);
+      const pdf = await window.pdfjsLib.getDocument({ data: await (await fetch(sg.signedUrl)).arrayBuffer() }).promise;
+      return pdf.numPages || known || 1;
+    } catch (_) { return known || 1; }
+  };
+  const [attaching, setAttaching] = useState(false);
+  const addSheet = async (drawingId, pg) => {
+    const dr = drawings.find(x => x.id === drawingId); if (!dr || attaching) return;
+    setAttaching(true);
+    try {
+      const n = await fileSheetCount(dr);
+      const keys = Array.from({ length: n }, (_, i) => `${dr.id}:p${i + 1}`);
+      const { data, error } = await sb.rpc("q_mt_use_sheets", { p_project: project.id, p_keys: keys });
+      if (!error && data) {
+        setMtQuota(data);
+        if (data.reason === "limit") {
+          const left = Math.max(0, (data.allowance || 0) - (data.used || 0));
+          qPop({ kind: "warn", title: "Not enough drawings left this month",
+            message: `${dr.file_name || "This file"} has ${n} sheet${n === 1 ? "" : "s"}${data.needed != null && data.needed !== n ? ` (${data.needed} not counted yet)` : ""}. Each sheet counts as one drawing, and you have ${left} left this month. Get 30 more drawings for $10 (valid 30 days), or upgrade your plan.`,
+            action: { label: "Get 30 more · $10", onClick: qBuyMtPack } });
+          return;
+        }
+        if (data.ok) keys.forEach(k => okSheets.current.add(k));
+      }
+    } finally { setAttaching(false); }
     const id = mtId();
     update(d => { d.sheets.push({ id, floorId, drawingId: dr.id, storagePath: dr.storage_path, fileName: dr.file_name, page: pg || 1, scale: null }); return d; });
     setSheetId(id);
@@ -17677,6 +17869,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" style={{ ...btn(true), background: "linear-gradient(90deg,#2563eb,#7c3aed)", border: 0, padding: "10px 16px" }} onClick={sendToBoq} disabled={!designed.length || sending === "Sending…"}>Send to project BOQ →</button>
           <button type="button" style={btn(false)} onClick={exportExcel}>Export Excel</button>
+          <button type="button" style={btn(false)} onClick={() => downloadMarkup(null)} disabled={mkBusy}>{mkBusy ? "Making the PDF…" : "⬇ Marked-up drawings (PDF)"}</button>
           {sending && <span className="text-xs" style={{ opacity: .8 }}>{sending}</span>}
           {/^Sent /.test(sending) && onGoToBoq && <button type="button" style={btn(false)} onClick={onGoToBoq}>Open AI Take-off & BOQ (pricing, export) →</button>}
         </div>
@@ -17705,12 +17898,13 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
           <button type="button" style={{ ...btn(false), color: "#60a5fa" }} onClick={addFloor}>＋ Floor</button>
           <div style={{ flex: 1 }} />
           {floorSheets.length > 1 && <select value={sheetId || ""} onChange={e => setSheetId(e.target.value)} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>{floorSheets.map(s => <option key={s.id} value={s.id}>{s.fileName}{s.page > 1 ? ` · p${s.page}` : ""}</option>)}</select>}
-          <select value="" onChange={e => { if (e.target.value) addSheet(e.target.value, 1); }} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
-            <option value="">{floorSheets.length ? "＋ Add another sheet to this floor" : "Choose the drawing for this floor"}</option>
+          <select value="" disabled={attaching} onChange={e => { if (e.target.value) addSheet(e.target.value, 1); }} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
+            <option value="">{attaching ? "Checking the sheets in this file…" : floorSheets.length ? "＋ Add another sheet to this floor" : "Choose the drawing for this floor"}</option>
             {drawings.map(d => <option key={d.id} value={d.id}>{d.file_name}</option>)}
           </select>
           {sheet && page && page.isPdf && page.pages > 1 && (
-            <select value={sheet.page || 1} onChange={e => update(d => { d.sheets.find(x => x.id === sheet.id).page = Number(e.target.value); return d; })} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
+            <select value={sheet.page || 1} onChange={e => { const pg = Number(e.target.value); const go = () => update(d => { d.sheets.find(x => x.id === sheet.id).page = pg; return d; });
+              if (!doc.marks.some(m => m.sheetId === sheet.id)) go(); else sheetAllowed(sheet.id, pg).then(ok => { if (ok) go(); }); }} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
               {Array.from({ length: page.pages }, (_, i) => <option key={i} value={i + 1}>Page {i + 1}</option>)}
             </select>
           )}
@@ -17888,7 +18082,8 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
         <button type="button" onClick={() => { setView("boq"); setBoqType("designed"); }} disabled={!doc.marks.length}
           style={{ padding: "13px", borderRadius: 12, border: 0, fontWeight: 800, fontSize: 14.5, color: "#fff", cursor: doc.marks.length ? "pointer" : "not-allowed", opacity: doc.marks.length ? 1 : .5, background: "linear-gradient(90deg,#2563eb,#7c3aed)" }}>Design BOQ for these systems →</button>
         <button type="button" onClick={() => { setView("boq"); setBoqType("takeoff"); }} disabled={!doc.marks.length} style={{ ...btn(false), padding: 10 }}>View Take-off BOQ</button>
-        <div className="text-[11px]" style={{ opacity: .6, textAlign: "center" }}>Manual Take-off uses no AI pages. A drawing counts once a month, when you first mark it. Totals are kept floor by floor.</div>
+        <button type="button" onClick={() => downloadMarkup(null)} disabled={!doc.marks.length || mkBusy} style={{ ...btn(false), padding: 10, opacity: doc.marks.length ? 1 : .5 }}>{mkBusy ? "Making the PDF…" : "⬇ Download marked-up drawings (PDF)"}</button>
+        <div className="text-[11px]" style={{ opacity: .6, textAlign: "center" }}>Manual Take-off uses no AI pages. Each sheet of a file counts as one drawing, once a month, when you add the file. Totals are kept floor by floor.</div>
       </div>
     </div>
   );
