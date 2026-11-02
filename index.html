@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.05"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.06"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -12757,7 +12757,7 @@ function DrawingsTab({ project }) {
           try { const doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise; sheetCount = doc.numPages || null; try { doc.destroy(); } catch (_) {} } catch (_) {}
         }
         const { error: insErr } = await sb.from("drawings").insert({
-          project_id: project.id, file_name: file.name, storage_path: path, file_type: fileType, page_count: sheetCount,
+          project_id: project.id, file_name: file.name, storage_path: path, file_type: fileType, total_pages_detected: sheetCount,   // page_count is generated from this column
           discipline, floor_label: (floorLabel || "").trim() || null, uploaded_by: user.id, file_hash: fileHash,
           takeoff_systems: scopeSystems, takeoff_custom: scopeCustom, sheet_type: sheetType || null,
         });
