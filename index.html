@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.17"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.18"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -2121,7 +2121,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
       <div><span class="qmt-new">NEW</span><div class="qmt-name">Take-off plan</div><div class="qmt-price"><b>$12</b><span>/mo</span><div class="qx-local" data-usd="12"></div></div></div>
       <div>
         <div class="qmt-copy"><b>Only need Manual Take-off?</b> You mark the drawing, Quantora designs the complete BOQ for every system.</div>
-        <div class="qmt-feats"><span><i>&#10003;</i>150 drawings / month</span><span><i>&#10003;</i>Designed BOQ</span><span><i>&#10003;</i>Excel &amp; PDF export</span><span><i>&#10003;</i>No project or user limits</span></div>
+        <div class="qmt-feats"><span><i>&#10003;</i>150 drawings / month</span><span><i>&#10003;</i>Designed BOQ</span><span><i>&#10003;</i>Excel &amp; PDF export</span><span><i>&#10003;</i>No project or user limits</span><span><i>&#10003;</i>Download marked-up drawings</span></div>
         <div class="qmt-foot">Every account gets 10 drawings free each month. Each sheet of an uploaded file counts as one drawing. Need more? 30 drawings for $10.</div>
       </div>
       <a class="btn btn-grad" href="?auth=signup" style="white-space:nowrap;">Start with Take-off &rarr;</a>
@@ -7807,6 +7807,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                     <div className="font-semibold" style={{ color: "#059669" }}>{plan.mt_drawings_month} Manual Take-off drawings/month</div>
                     <div>Designed BOQ for every system</div>
                     <div>Excel &amp; PDF export</div>
+                    <div>No project or user limits · download marked-up drawings</div>
                     <div>Each sheet of an uploaded file counts as one drawing</div>
                     <div>Need more? 30 drawings for $10</div>
                     <div className="text-slate-400">No AI take-off on this plan. Upgrade any time.</div>
@@ -17462,7 +17463,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
     return () => window.removeEventListener("mt-quota-changed", load);
   }, []);
   const mtLimitPop = (q) => qPop({ kind: "warn", title: "This month's Manual Take-off drawings are used",
-    message: `You have marked ${q && q.used != null ? q.used : "all"} of ${q && q.allowance != null ? q.allowance : 10} drawings this month. Get 30 more drawings for $10 (valid 30 days), or upgrade your plan: Individual 50, Professional 200, Team unlimited.`,
+    message: `You have used ${q && q.used != null ? q.used : "all"} of ${q && q.allowance != null ? q.allowance : 10} drawings this month. Get 30 more drawings for $10 (valid 30 days), or upgrade your plan: Individual 50, Professional 200, Team unlimited.`,
     action: { label: "Get 30 more · $10", onClick: qBuyMtPack } });
   // A sheet counts once a month, the first time it gets a mark. Sheets already marked before stay free to edit.
   // If the check itself is unavailable, marking is never blocked.
@@ -17713,8 +17714,38 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
     const name = (window.prompt("Floor name (e.g. First floor, Roof, Basement 1)") || "").trim(); if (!name) return;
     const id = mtId(); update(d => { d.floors.push({ id, name }); return d; }); setFloorId(id); setSheetId(null);
   };
-  const addSheet = (drawingId, pg) => {
-    const dr = drawings.find(x => x.id === drawingId); if (!dr) return;
+  // Attaching a file counts every sheet in it as one drawing each, at once. If the month's
+  // drawings are not enough for the whole file, nothing is attached and the user can buy more.
+  const fileSheetCount = async (dr) => {
+    const known = Number(dr.page_count || dr.total_pages_detected || 0);
+    if (!/\.pdf$/i.test(dr.storage_path || dr.file_name || "")) return 1;
+    try {
+      if (!window.pdfjsLib) return known || 1;
+      const { data: sg } = await sb.storage.from("drawings").createSignedUrl(dr.storage_path, 600);
+      const pdf = await window.pdfjsLib.getDocument({ data: await (await fetch(sg.signedUrl)).arrayBuffer() }).promise;
+      return pdf.numPages || known || 1;
+    } catch (_) { return known || 1; }
+  };
+  const [attaching, setAttaching] = useState(false);
+  const addSheet = async (drawingId, pg) => {
+    const dr = drawings.find(x => x.id === drawingId); if (!dr || attaching) return;
+    setAttaching(true);
+    try {
+      const n = await fileSheetCount(dr);
+      const keys = Array.from({ length: n }, (_, i) => `${dr.id}:p${i + 1}`);
+      const { data, error } = await sb.rpc("q_mt_use_sheets", { p_project: project.id, p_keys: keys });
+      if (!error && data) {
+        setMtQuota(data);
+        if (data.reason === "limit") {
+          const left = Math.max(0, (data.allowance || 0) - (data.used || 0));
+          qPop({ kind: "warn", title: "Not enough drawings left this month",
+            message: `${dr.file_name || "This file"} has ${n} sheet${n === 1 ? "" : "s"}${data.needed != null && data.needed !== n ? ` (${data.needed} not counted yet)` : ""}. Each sheet counts as one drawing, and you have ${left} left this month. Get 30 more drawings for $10 (valid 30 days), or upgrade your plan.`,
+            action: { label: "Get 30 more · $10", onClick: qBuyMtPack } });
+          return;
+        }
+        if (data.ok) keys.forEach(k => okSheets.current.add(k));
+      }
+    } finally { setAttaching(false); }
     const id = mtId();
     update(d => { d.sheets.push({ id, floorId, drawingId: dr.id, storagePath: dr.storage_path, fileName: dr.file_name, page: pg || 1, scale: null }); return d; });
     setSheetId(id);
@@ -17867,8 +17898,8 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
           <button type="button" style={{ ...btn(false), color: "#60a5fa" }} onClick={addFloor}>＋ Floor</button>
           <div style={{ flex: 1 }} />
           {floorSheets.length > 1 && <select value={sheetId || ""} onChange={e => setSheetId(e.target.value)} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>{floorSheets.map(s => <option key={s.id} value={s.id}>{s.fileName}{s.page > 1 ? ` · p${s.page}` : ""}</option>)}</select>}
-          <select value="" onChange={e => { if (e.target.value) addSheet(e.target.value, 1); }} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
-            <option value="">{floorSheets.length ? "＋ Add another sheet to this floor" : "Choose the drawing for this floor"}</option>
+          <select value="" disabled={attaching} onChange={e => { if (e.target.value) addSheet(e.target.value, 1); }} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
+            <option value="">{attaching ? "Checking the sheets in this file…" : floorSheets.length ? "＋ Add another sheet to this floor" : "Choose the drawing for this floor"}</option>
             {drawings.map(d => <option key={d.id} value={d.id}>{d.file_name}</option>)}
           </select>
           {sheet && page && page.isPdf && page.pages > 1 && (
@@ -18052,7 +18083,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
           style={{ padding: "13px", borderRadius: 12, border: 0, fontWeight: 800, fontSize: 14.5, color: "#fff", cursor: doc.marks.length ? "pointer" : "not-allowed", opacity: doc.marks.length ? 1 : .5, background: "linear-gradient(90deg,#2563eb,#7c3aed)" }}>Design BOQ for these systems →</button>
         <button type="button" onClick={() => { setView("boq"); setBoqType("takeoff"); }} disabled={!doc.marks.length} style={{ ...btn(false), padding: 10 }}>View Take-off BOQ</button>
         <button type="button" onClick={() => downloadMarkup(null)} disabled={!doc.marks.length || mkBusy} style={{ ...btn(false), padding: 10, opacity: doc.marks.length ? 1 : .5 }}>{mkBusy ? "Making the PDF…" : "⬇ Download marked-up drawings (PDF)"}</button>
-        <div className="text-[11px]" style={{ opacity: .6, textAlign: "center" }}>Manual Take-off uses no AI pages. A drawing counts once a month, when you first mark it. Totals are kept floor by floor.</div>
+        <div className="text-[11px]" style={{ opacity: .6, textAlign: "center" }}>Manual Take-off uses no AI pages. Each sheet of a file counts as one drawing, once a month, when you add the file. Totals are kept floor by floor.</div>
       </div>
     </div>
   );
