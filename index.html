@@ -6140,6 +6140,7 @@ const Q_WELCOME_LOCKED = {
   cost:          ["Cost & Budget", "Track the project cost and budget from your priced BOQ."],
   products:      ["Product Recommendations", "Brands, models and prices suggested for every BOQ line."],
   pricing:       ["Pricing your BOQ", "Put rates and totals on your BOQ and get the tender value."],
+  design:        ["System Design without drawings", "Quantora designs a complete system from your requirements, with no drawing needed."],
 };
 function QUpgradeCard({ k }) {
   const [what, detail] = Q_WELCOME_LOCKED[k] || ["This feature", ""];
@@ -12434,7 +12435,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
           {tab === "qcompliance" && (locked("qcompliance") || <QuotationComplianceTab project={project} />)}
           {tab === "approvals"     && <ApprovalsTab project={project} onOpenTab={setTab} />}
           {tab === "drawings"      && <DrawingsTab project={project} />}
-          {tab === "design"        && <DesignTab project={project} />}
+          {tab === "design" && (locked("design") || <DesignTab project={project} />)}
           {tab === "boq"           && <BoqTab project={project} onGoToEstimation={() => setTab("estimation")} />}
           {tab === "manual"        && <ManualTakeoffTab project={project} onGoToBoq={() => setTab("boq")} />}
           {tab === "estimation" && (locked("estimation") || <EstimationTab project={project} />)}
