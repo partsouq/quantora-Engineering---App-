@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -21894,6 +21894,7 @@ function QHourlyReportsView() {
                 <Stat label="Ratings" value={rt.count ? `${rt.count} · ${rt.avg}★` : 0} />
                 <Stat label="Payments" value={x.payments || 0} />
                 <Stat label="Errors users hit" value={x.user_errors || 0} warn={(x.user_errors || 0) > 0} />
+                <Stat label="Uploads not saved" value={x.uploads_not_saved || 0} warn={(x.uploads_not_saved || 0) > 0} />
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {health.map(h => (
