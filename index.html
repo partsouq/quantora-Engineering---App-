@@ -12288,7 +12288,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
       // work, and having it sit between the drawing upload and the take-off
       // made the estimating section read as two jobs at once. It lives in the
       // Draftsman workspace, where the base plan and the specification are.
-      ["boq", "Take-off & BOQ"],
+      ["boq", "AI Take-off & BOQ"],
       ["manual", "Manual Take-off"],
       ["estimation", "Estimation"],
     ]],
@@ -17148,7 +17148,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
   };
   const sendToBoq = async () => {
     if (!designed.length) return;
-    if (!window.confirm("Send these lines to the project's Take-off & BOQ? Lines sent from Manual Take-off before are replaced; AI take-off lines are not touched.")) return;
+    if (!window.confirm("Send these lines to the project's AI Take-off & BOQ page? Lines sent from Manual Take-off before are replaced; AI take-off lines are not touched.")) return;
     setSending("Sending…");
     try {
       const { error: delErr } = await sb.from("boq_items").delete().eq("project_id", project.id).eq("measurement_rule_code", "manual_takeoff");
@@ -17163,7 +17163,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
           review_status: you ? "confirmed" : "pending" });
       }
       for (let i = 0; i < rows.length; i += 200) { const { error } = await sb.from("boq_items").insert(rows.slice(i, i + 200)); if (error) throw error; }
-      setSending(`Sent ${rows.length} lines to Take-off & BOQ.`);
+      setSending(`Sent ${rows.length} lines to AI Take-off & BOQ.`);
       try { qStepDone("manual_takeoff", project.id); } catch (_) {}
     } catch (e) { setSending("Could not send: " + (e.message || String(e))); }
   };
@@ -17234,7 +17234,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
           <button type="button" style={{ ...btn(true), background: "linear-gradient(90deg,#2563eb,#7c3aed)", border: 0, padding: "10px 16px" }} onClick={sendToBoq} disabled={!designed.length || sending === "Sending…"}>Send to project BOQ →</button>
           <button type="button" style={btn(false)} onClick={exportExcel}>Export Excel</button>
           {sending && <span className="text-xs" style={{ opacity: .8 }}>{sending}</span>}
-          {/^Sent /.test(sending) && onGoToBoq && <button type="button" style={btn(false)} onClick={onGoToBoq}>Open Take-off & BOQ (pricing, export) →</button>}
+          {/^Sent /.test(sending) && onGoToBoq && <button type="button" style={btn(false)} onClick={onGoToBoq}>Open AI Take-off & BOQ (pricing, export) →</button>}
         </div>
       </div>
     );
