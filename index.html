@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.09"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-02.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -192,6 +192,7 @@ window.__LIBS_READY__ = (async function () {
   .qtr-fade-up { animation: qtrFadeUp .5s ease both; }
   .qtr-floating-demo { position: fixed; right: 20px; bottom: 20px; z-index: 40; box-shadow: 0 12px 30px -8px rgba(15,23,42,0.45); }
   @media (max-width: 640px) { .qtr-floating-demo { right: 12px; bottom: 12px; } }
+.qup-flash{outline:3px solid #f59e0b;outline-offset:6px;border-radius:14px;animation:qupflash 1s ease-in-out 3}@keyframes qupflash{50%{outline-color:transparent}}
 </style>
 <style id="quantora-dark-theme">
 /* Quantora dark theme override (2026-07-30). Applied app-wide, pre- and
@@ -2388,7 +2389,7 @@ function DrawingScopeEditor({ d, project, onSaved, onClose }) {
   const [custom, setCustom] = useState(Array.isArray(d.takeoff_custom) ? d.takeoff_custom : []);
   const [sheetType, setSheetType] = useState(d.sheet_type || "floor_plan");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const setDisc = (v) => { setDiscipline(v); };
   async function save() {
     setBusy(true); setErr("");
@@ -4317,6 +4318,86 @@ async function qPushTest() {
       body: JSON.stringify({ action: "test" }) });
     return await r.json();
   } catch (_) { return null; }
+}
+// ---- Pop-ups: every error and notice appears as a centred card, not a line of red text ----
+// qPop({ kind: "error" | "warn" | "info" | "success", title, message, action: { label, onClick } })
+// The same message is never stacked twice, and one closed a moment ago does not jump back.
+const qPopRecent = {};
+function qPopText(x) {
+  if (x == null || x === false) return "";
+  if (typeof x === "string") return x.trim();
+  if (x && typeof x.message === "string") return x.message.trim();
+  try { return String(x).trim(); } catch (_) { return ""; }
+}
+function qPop(o) {
+  try {
+    const p = typeof o === "string" ? { kind: "info", message: o } : (o || {});
+    const message = qPopText(p.message);
+    if (!message && !p.title) return;
+    const key = (p.kind || "info") + "|" + (p.title || "") + "|" + message;
+    if (qPopRecent[key] && Date.now() - qPopRecent[key] < 60000) return;
+    qPopRecent[key] = Date.now();
+    window.dispatchEvent(new CustomEvent("q-pop", { detail: { ...p, message, key } }));
+  } catch (_) {}
+}
+// Drop-in for useState used for an error: setting it also pops the message out.
+function useQErr(init) {
+  const [v, setV] = useState(init);
+  const set = useCallback((x) => {
+    if (typeof x === "function") { setV(prev => { const n = x(prev); const t = qPopText(n); if (t) qPop({ kind: "error", message: t }); return n; }); return; }
+    const t = qPopText(x);
+    if (t) qPop({ kind: "error", message: t });
+    setV(x);
+  }, []);
+  return [v, set];
+}
+// alert() would freeze the page with a grey browser box; show our pop-up instead.
+try { window.alert = (m) => qPop({ kind: "info", message: qPopText(m) }); } catch (_) {}
+
+function QPopHost() {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    const on = (ev) => {
+      const d = ev.detail || {};
+      setItems(list => list.some(x => x.key === d.key) ? list : [...list, { ...d, id: Date.now() + Math.random() }].slice(-4));
+      if (d.kind === "success") setTimeout(() => setItems(list => list.filter(x => x.key !== d.key)), 8000);
+    };
+    window.addEventListener("q-pop", on);
+    return () => window.removeEventListener("q-pop", on);
+  }, []);
+  useEffect(() => {
+    if (!items.length) return;
+    const k = (e) => { if (e.key === "Escape" || e.key === "Enter") close(items[0].key); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [items]);
+  function close(key) { qPopRecent[key] = Date.now(); setItems(list => list.filter(x => x.key !== key)); }
+  if (!items.length) return null;
+  const top = items[0];
+  const look = {
+    error:   { icon: "!", bg: "#e11d48", title: "Something needs your attention" },
+    warn:    { icon: "!", bg: "#f59e0b", title: "Please check" },
+    info:    { icon: "i", bg: "#2563eb", title: "Notice" },
+    success: { icon: "✓", bg: "#10b981", title: "Done" },
+  }[top.kind] || { icon: "i", bg: "#2563eb", title: "Notice" };
+  return (
+    <div onClick={() => close(top.key)} style={{ position: "fixed", inset: 0, zIndex: 2147483000, display: "grid", placeItems: "center", padding: 16, background: "rgba(2,6,23,.55)" }}>
+      <div role="alertdialog" aria-live="assertive" onClick={e => e.stopPropagation()} className="qact-in"
+        style={{ width: "min(460px, 100%)", background: "#fff", color: "#0f172a", borderRadius: 18, padding: "22px 22px 18px",
+          boxShadow: "0 30px 80px rgba(0,0,0,.45)", borderTop: "6px solid " + look.bg, textAlign: "center" }}>
+        <div style={{ width: 46, height: 46, margin: "0 auto 10px", borderRadius: 999, background: look.bg, color: "#fff", display: "grid", placeItems: "center", fontWeight: 900, fontSize: 22 }}>{look.icon}</div>
+        <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 6 }}>{top.title || look.title}</div>
+        {top.message && <div style={{ fontSize: 14, lineHeight: 1.5, color: "#334155", whiteSpace: "pre-line", wordBreak: "break-word", maxHeight: "50vh", overflowY: "auto" }}>{top.message}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 16, flexWrap: "wrap" }}>
+          {top.action && <button type="button" onClick={() => { close(top.key); try { top.action.onClick(); } catch (_) {} }}
+            style={{ padding: "9px 18px", borderRadius: 10, border: 0, background: look.bg, color: "#fff", fontWeight: 800, cursor: "pointer" }}>{top.action.label}</button>}
+          <button type="button" autoFocus onClick={() => close(top.key)}
+            style={{ padding: "9px 22px", borderRadius: 10, border: top.action ? "1px solid #cbd5e1" : 0, background: top.action ? "#fff" : look.bg, color: top.action ? "#0f172a" : "#fff", fontWeight: 800, cursor: "pointer" }}>OK</button>
+        </div>
+        {items.length > 1 && <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 10 }}>{items.length - 1} more after this</div>}
+      </div>
+    </div>
+  );
 }
 function qNotifyAsk() {
   try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {}); } catch (_) {}
@@ -6984,7 +7065,7 @@ function LandingPage({ onGetStarted }) {
 function SetNewPasswordScreen({ onDone }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
 
@@ -7068,7 +7149,7 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
   // It decides which authority rules and which price list apply to them.
   const [country, setCountry] = useState("");
   const [countryList, setCountryList] = useState([]);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   // Set when signup is one click from sending an email. Shows the address back
@@ -7442,7 +7523,7 @@ function QAskMore({ reason }) {
   const [what, setWhat] = useState("A few more drawing pages");
   const [msg, setMsg] = useState("");
   const [state, setState] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   async function send() {
     setState("sending"); setErr("");
     try { await callWelcomeGuard("request_more", { what, message: [msg, reason ? `(Limit shown: ${reason})` : ""].filter(Boolean).join(" ") }); setState("sent"); }
@@ -7475,7 +7556,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
   const [loading, setLoading] = useState(true);
   const [busyPlanId, setBusyPlanId] = useState(null);
   const [portalBusy, setPortalBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   // Wallet top-ups (2026-08-12). The pricing page promises pay-as-you-go
   // credit for usage beyond a plan's monthly pages, so the purchase path has
   // to exist. Packs come from the credit_packs table rather than a hardcoded
@@ -7834,7 +7915,7 @@ function TeamSummary({ onOpen }) {
 
 function TeamPanel() {
   const [data, setData] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState("");
   const [editing, setEditing] = useState(null);      // member id
@@ -8188,10 +8269,10 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
   // Null until it has been worked out, so it is never shown as a false zero.
   const [pipeline, setPipeline] = useState(null);
   const [usage, setUsage] = useState(null);
-  const [usageError, setUsageError] = useState(null);
+  const [usageError, setUsageError] = useQErr(null);
   const [trialUsage, setTrialUsage] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(null);
+  const [loadError, setLoadError] = useQErr(null);
 
   useEffect(() => { load(); loadUsage(); loadTrialUsage(); loadPipeline(); }, []);
   async function loadPipeline() {
@@ -8795,7 +8876,7 @@ function NewProjectForm({ onCreated, onCancel, existingProject }) {
   const [currencyTouched, setCurrencyTouched] = useState(!!(existingProject && existingProject.currency));
   const [sysTab, setSysTab] = useState("ELV");            // the discipline open in the systems picker
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   // An existing project may hold a type that predates the list -- including one
   // typed in here earlier -- so the form opens in free-text mode for it rather
   // than silently snapping it back to a residential building.
@@ -11757,7 +11838,7 @@ function ApprovalTypeChip({ type }) {
 
 function ApprovalRequestForm({ project, onDone, onCancel }) {
   const [opt, setOpt] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [busy, setBusy] = useState(false);
   const [type, setType] = useState("");
   const [picked, setPicked] = useState([]);
@@ -11946,7 +12027,7 @@ function ApprovalCard({ a, onChanged, onOpenItem, showProject, startOpen }) {
   const [comment, setComment] = useState("");
   const [item, setItem] = useState("");
   const [busy, setBusy] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [confirmWithdraw, setConfirmWithdraw] = useState(false);
   const st = apStatus(a);
   const chain = a.chain || [];
@@ -12092,7 +12173,7 @@ const AP_FILTERS = [
 
 function ApprovalBoard({ project, projects, onOpenItem, showProject, bare }) {
   const [rows, setRows] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [filter, setFilter] = useState("open");
   const [type, setType] = useState("");
   const [creating, setCreating] = useState(false);
@@ -12201,7 +12282,7 @@ function ApprovalsWaitingCard({ onOpen }) {
 function DeleteProjectModal({ project, onClose, onDeleted }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [counts, setCounts] = useState(null);
   // 2026-11-01: no typing. The person picks why (a dropdown) and ticks that they understand;
   // the reason is kept with the support log so we learn why projects are removed.
@@ -12599,7 +12680,7 @@ function DrawingsTab({ project }) {
   const [runs, setRuns] = useState({});
   const [markupDucts, setMarkupDucts] = useState(false);   // open the markup straight on Duct sizes
   const measuringRef = useRef({});                          // run id -> drawing name, while its ducts are measured
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [expandedHistory, setExpandedHistory] = useState(null);
   const [rowMenu, setRowMenu] = useState(null);      // the drawing whose "More" menu is open
   const [classifyDrawing, setClassifyDrawing] = useState(null);
@@ -12773,7 +12854,9 @@ function DrawingsTab({ project }) {
   async function upload() {
     if (pendingFiles.length === 0) return;
     if (!discipline) {
-      setErr("Choose what these drawings show before uploading. The label is passed to the AI and tells it what to look for on the sheet.");
+      qPop({ kind: "warn", title: "Select the system first",
+        message: "Before uploading, go to step 1 and choose what these drawings show, for example ELV (then tick CCTV), Fire Fighting or Electrical. Then click Upload again." });
+      try { const el = document.getElementById("qup-scope"); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("qup-flash"); setTimeout(() => el.classList.remove("qup-flash"), 4000); } } catch (_) {}
       return;
     }
     setUploading(true); setErr(""); setStdSummary("");
@@ -13244,11 +13327,11 @@ function DrawingsTab({ project }) {
   return (
     <div className="space-y-6">
       <div className="bg-white border rounded-xl p-5 qup">
-        <h3 className="font-semibold mb-3 qup-h">Upload Drawings<span>Pick the discipline, tick the systems, then add your files</span></h3>
+        <h3 className="font-semibold mb-3 qup-h">Upload Drawings<span>Select the system first, tick what is on the sheet, then add your files</span></h3>
         {/* The three steps, in plain words: new users signed up, uploaded (or not) and stopped,
             because the next step was buried in the text below. */}
         <div className="qup-steps" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 14 }}>
-          {[["1", "Pick the discipline", "ELV, Electrical, HVAC, Plumbing, Fire, Civil…"],
+          {[["1", "Select the system", "Required: ELV, Electrical, HVAC, Plumbing, Fire, Civil…"],
             ["2", "Choose your PDF and click Upload", "One floor per sheet works best"],
             ["3", "Click \u201cAnalyze with AI\u201d", "Your take-off and BOQ appear in minutes"]].map(([n, t, d]) => (
             <div key={n} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", borderRadius: 12,
@@ -13269,7 +13352,7 @@ function DrawingsTab({ project }) {
             </button>
           </div>
         )}
-        <div className="mb-3">
+        <div className="mb-3" id="qup-scope">
           <DrawingScopePicker discipline={discipline} setDiscipline={setDiscipline}
             systems={scopeSystems} setSystems={setScopeSystems} custom={scopeCustom} setCustom={setScopeCustom}
             sheetType={sheetType} setSheetType={setSheetType} projectSystems={project.required_systems || []} />
@@ -14222,7 +14305,7 @@ function MarkupViewerModal({ drawing, onClose, focusDucts }) {
   const panelRef = useRef(null);
   const [downloading, setDownloading] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useQErr(null);
   const [activeItem, setActiveItem] = useState(null);
   // Highlighting. A busy A1 with nine systems boxed at once is unreadable, so
   // the two controls a draughtsman actually wants are here: push the sheet back,
@@ -15312,7 +15395,7 @@ function MarkupViewerModal({ drawing, onClose, focusDucts }) {
 // ---------------------------------------------------------------------------
 function ClassifyAndSelectModal({ project, drawing, onClose, onAnalyzed }) {
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useQErr("");
   const [totalPages, setTotalPages] = useState(0);
   const [pages, setPages] = useState([]);
   const [selectedPages, setSelectedPages] = useState({});
@@ -15511,7 +15594,7 @@ function DesignTab({ project }) {
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingBrief, setLoadingBrief] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [result, setResult] = useState(null);
 
   const sys = QBANK[system];
@@ -16011,7 +16094,7 @@ function MepDesignTab({ project, basePlate, spec, onGoToBoq, onUseCloud }) {
   const [openOverrides, setOpenOverrides] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [result, setResult] = useState(null);
   const [offFamilies, setOffFamilies] = useState([]);
 
@@ -16531,7 +16614,7 @@ function PricingBoqPanel({ project, consolidated, loading }) {
   const [prices, setPrices] = useState({});
   const [lastRun, setLastRun] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
+  const [err, setErr] = useQErr(null);
   const [msg, setMsg] = useState(null);
   const [loadingPrices, setLoadingPrices] = useState(true);
   const [query, setQuery] = useState("");
@@ -16982,7 +17065,7 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
   const [selected, setSelected] = useState(null);
   const [flash, setFlash] = useState(null);
   const [saveState, setSaveState] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [scaleM, setScaleM] = useState("");
   const [ratio, setRatio] = useState("");
   const [newItem, setNewItem] = useState({ name: "", tag: "", kind: "count", unit: "No", system: "cctv", color: MT_COLORS[0] });
@@ -17581,7 +17664,7 @@ function BoqTab({ project, onGoToEstimation }) {
   // created client-side in the first place.
   const anyReworkInFlight = Object.values(reworking).some(Boolean);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useQErr(null);
   // Master BOQ Engine supporting data (2026-08-09): AI-proposed cost
   // optimizations, disclosed assumptions, and review-required flags, kept in
   // their own tables (not boq_items) since they aren't always 1:1 with a
@@ -18698,7 +18781,7 @@ function ProcurementBoqTab({ project }) {
   const [drawingRows, setDrawingRows] = useState([]);
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useQErr(null);
 
   useEffect(() => { load(); }, [project.id]);
   async function load() {
@@ -18803,7 +18886,7 @@ function EngineeringBoqTab({ project }) {
   const [rawItems, setRawItems] = useState([]);
   const [drawingRows, setDrawingRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useQErr(null);
 
   useEffect(() => { load(); }, [project.id]);
   async function load() {
@@ -18892,7 +18975,7 @@ function SpecificationTab({ project }) {
   const [drawingRows, setDrawingRows] = useState([]);
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useQErr(null);
   // The specification the customer actually gave us, extracted from their own
   // document by tender-engine. Kept strictly apart from anything the AI wrote.
   const [tender, setTender] = useState(null);
@@ -19261,7 +19344,7 @@ function complianceBadge(r) {
 function ComplianceTab({ project }) {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useQErr(null);
   useEffect(() => { load(); }, [project.id]);
   async function load() {
     setLoading(true);
@@ -19426,7 +19509,7 @@ function parseVendorImport(text) {
 function VendorsTab({ project }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [companyId, setCompanyId] = useState(null);
@@ -19710,7 +19793,7 @@ function ProductsTab({ project }) {
   // The company's own suppliers, matched to each system in this BOQ.
   const [vendorsBySystem, setVendorsBySystem] = useState({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useQErr(null);
   useEffect(() => { load(); }, [project.id]);
   async function load() {
     setLoading(true);
@@ -20894,7 +20977,7 @@ function AdminAssistPanel() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [result, setResult] = useState(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useQErr("");
   const [sheetCheck, setSheetCheck] = useState(null);   // the same "choose the sheets" panel the customer sees
   const askSheets = (st) => new Promise(resolve => setSheetCheck({ ...st, resolve }));
 
@@ -21070,7 +21153,7 @@ function AdminAssistPanel() {
 function ProjectExecutionDashboard({ onBack }) {
   const [data, setData] = useState(null);
   const [trial, setTrial] = useState(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useQErr("");
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("analytics");
 
@@ -21568,7 +21651,7 @@ function QMeasurementRules() {
   const [rules, setRules] = useState([]);
   const [std, setStd] = useState("POMI");
   const [busy, setBusy] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [edit, setEdit] = useState({});
   const load = async () => {
     setErr("");
@@ -22095,7 +22178,7 @@ function qSupportLabel(kind, category) {
 function QSupportView({ companyNameById }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [filter, setFilter] = useState("open");
   const [openId, setOpenId] = useState(null);
   const [shots, setShots] = useState({});
@@ -22531,7 +22614,7 @@ function AdminPortal({ onBack }) {
   }, []);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const [loadError, setLoadError] = useQErr("");
   const [overview, setOverview] = useState(null);
   const [trial, setTrial] = useState(null);
   const [companies, setCompanies] = useState([]);
@@ -23703,7 +23786,7 @@ function QPipelineView({ pipeline }) {
 // ---------------------------------------------------------------------------
 function QMyProjectsView({ onOpen }) {
   const [rows, setRows] = useState(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useQErr("");
   useEffect(() => { load(); }, []);
   async function load() {
     setError("");
@@ -23773,7 +23856,7 @@ function qRzMoney(amount, currency) {
 
 function QPaymentsView() {
   const [data, setData] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [busy, setBusy] = useState(false);
   const [checkedAt, setCheckedAt] = useState(null);
   const [payments, setPayments] = useState([]);
@@ -23996,7 +24079,7 @@ function QDiscountsView() {
 function QProjectsView(props) {
   const [tab, setTab] = useState("takeoff");
   const [data, setData] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [q, setQ] = useState("");
   const [days, setDays] = useState("all");
   const [viewBoq, setViewBoq] = useState(null);     // { id, prefer }
@@ -24111,7 +24194,7 @@ function QProjectsView(props) {
 // A customer's BOQ, read only, for the admin team (2026-11-01). Nothing here can change it.
 function AdminBoqViewer({ projectId, prefer, onClose }) {
   const [data, setData] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [tab, setTab] = useState(prefer || "takeoff");
   const [q, setQ] = useState("");
   useEffect(() => { callAdminAnalytics("project_boq", { project_id: projectId }).then(r => { setData(r); if (!r.takeoff.length && r.draftsman.length) setTab("draftsman"); if (r.takeoff.length && !r.draftsman.length) setTab("takeoff"); }).catch(e => setErr(e.message || "Could not load the BOQ.")); }, [projectId]);
@@ -24391,7 +24474,7 @@ const QWG_OUTCOME = { welcome: ["Welcome Pack", "st-healthy"], welcome_work_emai
 
 function QWelcomeGuardPanel() {
   const [d, setD] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [busy, setBusy] = useState("");
   const load = async () => {
     setErr("");
@@ -24459,7 +24542,7 @@ function QWelcomeGuardPanel() {
 
 function QWelcomeCleanupPanel() {
   const [data, setData] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
   const [orph, setOrph] = useState(null);
@@ -24909,7 +24992,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
   const storage = useStorageUsage();
   const [extra, setExtra] = useState({ drawingRows: [], boqRows: [], runs: [], findings: 0, review: 0 });
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
+  const [err, setErr] = useQErr(null);
   const [q, setQ] = useState("");
 
   useEffect(() => { load(); loadUsage(); loadName(); }, []);
@@ -25255,7 +25338,7 @@ function ProjectChooser({ value, onChange, projects, label = "Project" }) {
 function useProjects() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useQErr(null);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -25286,7 +25369,7 @@ function CompliancePage({ projects, bare }) {
   const [rules, setRules] = useState([]);
   const [system, setSystem] = useState("");
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
+  const [err, setErr] = useQErr(null);
 
   useEffect(() => {
     let alive = true;
@@ -25441,7 +25524,7 @@ function DrawingsPage({ projects, onOpenProject, markupFirst }) {
   const [rows, setRows] = useState([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
+  const [err, setErr] = useQErr(null);
   const [marking, setMarking] = useState(null);
 
   useEffect(() => { load(); }, [projects.length]);
@@ -25531,7 +25614,7 @@ function DrawingsPage({ projects, onOpenProject, markupFirst }) {
 function BoqPage({ projects, onOpenProject }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
+  const [err, setErr] = useQErr(null);
 
   useEffect(() => { load(); }, [projects.length]);
   async function load() {
@@ -25667,7 +25750,7 @@ function TeamPage() {
 
 function BillingPage({ onUpgrade }) {
   const [usage, setUsage] = useState(null);
-  const [err, setErr] = useState(null);
+  const [err, setErr] = useQErr(null);
   useEffect(() => {
     (async () => {
       try { setUsage(await callBilling("usage_summary", {})); }
@@ -25871,7 +25954,7 @@ function PaymentHistoryCard() {
 // next renewal, invoice. "failed" if the card did not go through.
 function PaymentResultModal({ state, onClose, onBilling }) {
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   if (!state) return null;
   const { stage, cfg } = state;
   const pay = cfg?.last_payment || null;
@@ -26566,7 +26649,7 @@ function SupportModal({ open, initial, onClose }) {
   const [projectId, setProjectId] = useState("");
   const [projects, setProjects] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [sent, setSent] = useState(false);
   // A report raised from a drawing or an error carries what it is about, so
   // the customer does not have to describe it and the admin sees the exact run.
@@ -27026,8 +27109,8 @@ function ActivityCenter({ onOpenProject }) {
 
   const pushToast = (t) => {
     qNotify(t.title, t.sub || "Open Quantora to see it.");   // pop-out on the computer when the tab is not in front
-    setToasts(ts => [...ts.filter(x => x.key !== t.key), t].slice(-3));
-    setTimeout(() => setToasts(ts => ts.filter(x => x.key !== t.key)), 9000);
+    qPop({ kind: "success", title: t.title, message: t.sub || "",
+      action: t.item && t.item.src === "run" && t.item.projectId ? { label: "Open AI Take-off & BOQ", onClick: () => openProject(t.item.projectId, "boq") } : null });
   };
   const pushError = (e) => { if (qActSeen("err:" + e.key)) return; qNotify(e.title, e.message || ""); setErrors(es => [...es.filter(x => x.key !== e.key), e].slice(-3)); };
   const dismissError = (key) => { qActSeen("err:" + key, true); setErrors(es => es.filter(x => x.key !== key)); };
@@ -27520,7 +27603,7 @@ function LiveChatWidget({ session, pageName }) {
   const [ticket, setTicket] = useState(null);
   const [msgs, setMsgs] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [online, setOnline] = useState(qLivePresence.admins > 0);
   const openRef = useRef(false); openRef.current = open;
   const userId = session && session.user && session.user.id;
@@ -27703,7 +27786,7 @@ function QLiveChatAdmin({ companyNameById }) {
   const [sel, setSel] = useState(null);
   const [busy, setBusy] = useState(false);
   const [showResolved, setShowResolved] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   async function load() {
     try {
       let q = sb.from("support_tickets").select("*").eq("kind", "help").eq("category", Q_LIVE_CATEGORY).order("created_at", { ascending: false }).limit(100);
@@ -27880,7 +27963,7 @@ function QuotationComplianceTab({ project }) {
   const [base, setBase] = useState(null);
   const [quotes, setQuotes] = useState([]);          // [{ file, vendor }]
   const [busy, setBusy] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [runs, setRuns] = useState([]);
   const [open, setOpen] = useState(null);
   async function load() {
@@ -28021,7 +28104,7 @@ function useSupportThreads(isAdmin, sessionKey) {
 function SupportThreadView({ ticket, messages, isAdmin, onChanged, compact }) {
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -28518,7 +28601,7 @@ function useActivityHeartbeat(session) {
 function AdminMessageModal({ person, company, onClose, onSent }) {
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [done, setDone] = useState(false);
 
   async function send() {
@@ -28601,7 +28684,7 @@ function QCustomerPeople({ company }) {
   const [people, setPeople] = useState([]);
   const [acts, setActs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [openHistory, setOpenHistory] = useState(null);
   const [messaging, setMessaging] = useState(null);
   // Re-derives "online" without another round trip -- the data is already here,
@@ -28833,7 +28916,7 @@ function LocationGate({ isPlatformAdmin, userId, onNeed }) {
   const [city, setCity] = useState("");
   const [otherCity, setOtherCity] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
 
   useEffect(() => {
     if (!userId || isPlatformAdmin) { setNeed(false); return; }
@@ -29055,7 +29138,7 @@ function SalesPage({ onNavigate }) {
   const [bids, setBids] = useState(null);
   const [target, setTarget] = useState(null);
   const [people, setPeople] = useState([]);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [edit, setEdit] = useState(null);      // the bid being edited
   const [busy, setBusy] = useState(false);
   const [targetOpen, setTargetOpen] = useState(false);
@@ -29403,7 +29486,7 @@ function OpsStageTrack({ stage, onPick }) {
 
 function OperationsProject({ project, onBack, onReload }) {
   const [state, setState] = useState({ loading: true });
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [busy, setBusy] = useState(false);
   const [addApp, setAddApp] = useState(null);
   const [addWir, setAddWir] = useState(null);
@@ -29798,7 +29881,7 @@ function OperationsPage({ onNavigate }) {
   const [projects, setProjects] = useState(null);
   const [milestones, setMilestones] = useState([]);
   const [issues, setIssues] = useState([]);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [open, setOpen] = useState(null);     // the project being looked at
   const [edit, setEdit] = useState(null);
   const [issueFor, setIssueFor] = useState(null);
@@ -30052,7 +30135,7 @@ function RevenuePage({ onNavigate }) {
   const [contracts, setContracts] = useState([]);
   const [claims, setClaims] = useState([]);
   const [receipts, setReceipts] = useState([]);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [contractFor, setContractFor] = useState(null);
   const [claimFor, setClaimFor] = useState(null);
   const [form, setForm] = useState({});
@@ -31399,7 +31482,7 @@ function DraftsmanSizeFix({ project, onSaved }) {
     area_unit: project.area_unit || "sqm",
   });
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   async function save(e) {
     e.preventDefault(); e.stopPropagation();
     setErr("");
@@ -31801,7 +31884,7 @@ function DraftsmanBrief({ project: initialProject, onBack, onReady }) {
   const [rooms, setRooms] = useState({});           // key -> { floor: "auto" | "GF" | "L01" | "None" | "One per floor" … }
   const [showAllRooms, setShowAllRooms] = useState(false);
   const [busy, setBusy] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [note, setNote] = useState("");
 
   const floorOpts = useMemo(() => qdFloorOptions(f.floors_above, f.basements, f.has_roof), [f.floors_above, f.basements, f.has_roof]);
@@ -32393,7 +32476,7 @@ function DraftsmanDashboard({ initialProjects, onNewJob, onOpenStudio, onEditBri
   const [jobs, setJobs] = useState([]);
   const [briefs, setBriefs] = useState({});
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [open, setOpen] = useState(null);
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
@@ -32762,7 +32845,7 @@ function DraftsmanUpload({ project, kind, onUploaded }) {
   const [files, setFiles] = useState([]);
   const [discipline, setDiscipline] = useState(isSpec ? "specification" : "architectural");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [done, setDone] = useState("");
   const ref = useRef(null);
 
@@ -32832,7 +32915,7 @@ function DraftsmanUpload({ project, kind, onUploaded }) {
 
 function DraftsmanBasePlan({ project, plate, onPlate, onUseCloud }) {
   const [drawings, setDrawings] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [busy, setBusy] = useState("");
   const [picked, setPicked] = useState(null);
   const [pages, setPages] = useState(1);
@@ -33449,7 +33532,7 @@ function DraftsmanSpec({ project, spec, onSpec }) {
   const [found, setFound] = useState(null);
   const [ticks, setTicks] = useState({});
   const [busy, setBusy] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [note, setNote] = useState("");
 
   const saved = spec || {};
@@ -34821,7 +34904,7 @@ function Draftsman3DViewer({ path, title, sub, onClose }) {
   const host = useRef(null);
   const viewer = useRef(null);
   const [model, setModel] = useState(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [picked, setPicked] = useState(null);
   const [off, setOff] = useState({});
   const [floor, setFloor] = useState("all");
@@ -35012,7 +35095,7 @@ function DraftsmanIfcPackage({ project }) {
   const [tower, setTower] = useState("");
   const [size, setSize] = useState("A0");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [jobs, setJobs] = useState([]);
   const [fams, setFams] = useState({ ELV: true });
   const [model3d, setModel3d] = useState(null);
@@ -36357,7 +36440,7 @@ function StepFeedbackModal({ item, mandatory, onDone }) {
   const [hover, setHover] = useState(0);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   useEffect(() => { setRating(0); setHover(0); setComment(""); setErr(""); }, [item && qFbKey(item)]);
   if (!item) return null;
   const label = FEEDBACK_STEPS[item.step] || item.step;
@@ -36419,7 +36502,7 @@ function QFeedbackView({ companyNameById }) {
   const [rows, setRows] = useState([]);
   const [users, setUsers] = useState({});
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useQErr("");
   const [step, setStep] = useState("all");
   const [stars, setStars] = useState("all");
   useEffect(() => { load(); }, []);
@@ -37084,6 +37167,7 @@ function App() {
 })();
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+try { const popEl = document.createElement("div"); popEl.id = "q-pop-root"; document.body.appendChild(popEl); ReactDOM.createRoot(popEl).render(<QPopHost />); } catch (_) {}
 </script>
 <script>
 (function () {
