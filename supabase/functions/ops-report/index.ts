@@ -83,6 +83,7 @@ async function runReport(manual: boolean) {
     `Ratings: ${rt.count || 0}${rt.count ? ` (avg ${rt.avg})` : ""} · Payments: ${s.payments || 0}`,
     `Engines: ${health.length - down.length}/${health.length} answering${down.length ? " ❌ " + down.map(d => d.fn).join(", ") : " ✅"}`,
     `Errors users hit: ${s.user_errors || 0}${s.user_errors ? ` (${s.user_errors_users} user${s.user_errors_users === 1 ? "" : "s"})` : ""}`,
+    `Drawing uploads not saved: ${s.uploads_not_saved || 0}${s.uploads_not_saved ? " ❌" : ""}`,
     `Alerts this hour: ${s.alerts_new || 0} (open: ${s.alerts_open || 0})`,
   ];
   const period = `${hhmm(from)}–${hhmm(to)}`;
@@ -96,7 +97,7 @@ async function runReport(manual: boolean) {
   const push = await secret("PUSH_INTERNAL_SECRET");
   if (push) {
     const short = [`${u.signups || 0} new users · ${u.logins || 0} signed in`, `${r.completed || 0} take-offs · ${r.failed || 0} failed`,
-      `${c.new_chats || 0} chats · ${c.waiting || 0} waiting`, `${s.user_errors || 0} user errors`, `Engines ${health.length - down.length}/${health.length}` + (down.length ? " ❌" : " ✅")].join(" · ");
+      `${c.new_chats || 0} chats · ${c.waiting || 0} waiting`, `${s.user_errors || 0} user errors`, ...(s.uploads_not_saved ? [`${s.uploads_not_saved} uploads not saved ❌`] : []), `Engines ${health.length - down.length}/${health.length}` + (down.length ? " ❌" : " ✅")].join(" · ");
     await fetch(`${URL_BASE}/functions/v1/push-notify`, { method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${ANON}`, apikey: ANON, "x-push-secret": push },
       body: JSON.stringify({ action: "send", title: `📊 Hourly report · ${period}`, body: short, tag: "q-report", url: "/" }) }).catch(() => {});
