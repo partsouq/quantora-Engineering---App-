@@ -18,7 +18,7 @@
 //   readiness          — platform admins: keys, API check, recent events, paying companies
 // ===========================================================================
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { applySubscription, dodo, loadKeys, recordPayment, type DodoKeys } from "./dodo.ts";
+import { applySubscription, creditMtPack, dodo, loadKeys, recordPayment, type DodoKeys } from "./dodo.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -36,7 +36,7 @@ const NOT_OPEN = "Card payment is not switched on for this account yet.";
 const APP_ORIGINS = ["https://www.quantoraengineering.com", "https://quantoraengineering.com", "http://localhost", "https://partsouq.github.io"];
 
 /** Dodo product id for an item at a price, creating the Dodo product the first time. */
-async function dodoProductFor(keys: DodoKeys, item: string, name: string, description: string, amountUsd: number): Promise<string> {
+async function dodoProductFor(keys: DodoKeys, item: string, name: string, description: string, amountUsd: number, oneTime = false): Promise<string> {
   const amountMinor = Math.round(amountUsd * 100);
   const { data: hit } = await admin.from("dodo_products").select("product_id")
     .eq("item", item).eq("mode", keys.mode).eq("currency", "USD").eq("amount_minor", amountMinor).maybeSingle();
@@ -45,12 +45,14 @@ async function dodoProductFor(keys: DodoKeys, item: string, name: string, descri
     method: "POST",
     body: {
       name, description, tax_category: "saas",
-      price: {
-        type: "recurring_price", currency: "USD", price: amountMinor, discount: 0, purchasing_power_parity: false,
-        payment_frequency_count: 1, payment_frequency_interval: "Month",
-        subscription_period_count: 20, subscription_period_interval: "Year",
-        tax_inclusive: false, trial_period_days: 0,
-      },
+      price: oneTime
+        ? { type: "one_time_price", currency: "USD", price: amountMinor, discount: 0, purchasing_power_parity: false, tax_inclusive: false }
+        : {
+          type: "recurring_price", currency: "USD", price: amountMinor, discount: 0, purchasing_power_parity: false,
+          payment_frequency_count: 1, payment_frequency_interval: "Month",
+          subscription_period_count: 20, subscription_period_interval: "Year",
+          tax_inclusive: false, trial_period_days: 0,
+        },
       metadata: { item },
     },
   });
@@ -145,6 +147,31 @@ Deno.serve(async (req) => {
 
     if (!keys) return json({ error: NOT_OPEN }, 503);
     const customer = { email: user.email ?? "", name: prof.full_name || company?.name || user.email || "Customer" };
+
+    // Manual Take-off: one-time pack of 30 marked drawings for $10, valid 30 days.
+    if (action === "buy_mt_pack") {
+      const productId = await dodoProductFor(keys, "mt_pack:30", "Quantora Manual Take-off pack (30 drawings)",
+        "30 more Manual Take-off drawings, valid for 30 days.", 10, true);
+      const session = await dodo(keys, "/checkouts", {
+        method: "POST",
+        body: {
+          product_cart: [{ product_id: productId, quantity: 1 }],
+          customer, return_url: safeReturn(body.return_url),
+          metadata: { company_id: companyId, kind: "mt_pack", drawings: "30", user_id: user.id },
+        },
+      });
+      return json({ checkout_url: session.checkout_url, session_id: session.session_id });
+    }
+    // Back from checkout: credit the pack straight away (the webhook does the same; both are idempotent).
+    if (action === "confirm_mt_pack") {
+      const payId = String(body.payment_id ?? "");
+      if (!payId) return json({ error: "Missing payment." }, 400);
+      const pay = await dodo(keys, `/payments/${payId}`);
+      if (String(pay?.metadata?.company_id ?? "") !== companyId || pay?.metadata?.kind !== "mt_pack") return json({ error: "That payment is not a Manual Take-off pack for this account." }, 403);
+      const note = await creditMtPack(admin, pay);
+      await recordPayment(admin, pay).catch(() => {});
+      return json({ ok: String(pay.status) === "succeeded", status: pay.status, note });
+    }
 
     if (action === "subscribe_plan") {
       const planId = String(body.plan_id ?? "");
