@@ -216,7 +216,32 @@ async function report(ok, failedStep, message) {
 
     await step("Open Manual Take-off", async () => {
       await page.locator("nav").getByText("Manual Take-off").first().click();
-      await page.getByText(/Choose the drawing for this floor|Pick from the library|Manual Take-off/).first().waitFor({ timeout: 30000 });
+      await page.getByText(/Choose the drawing for this floor/).first().waitFor({ timeout: 30000 });
+    });
+
+    // Manual Take-off end to end (no AI): attach the drawing, mark three cameras, get the Designed BOQ.
+    await step("Manual Take-off: attach the drawing", async () => {
+      const ds = page.locator("select").filter({ has: page.locator("option", { hasText: "Choose the drawing for this floor" }) }).first();
+      const v = await ds.locator("option", { hasText: path.basename(DRAWING) }).first().getAttribute("value", { timeout: 20000 });
+      await ds.selectOption(v);
+      await page.locator('div[style*="crosshair"] svg, div[style*="default"] svg').first().waitFor({ timeout: 60000 });
+      await page.waitForFunction(() => { const c = document.querySelector("canvas"); return c && c.width > 50; }, null, { timeout: 60000 });
+    });
+
+    await step("Manual Take-off: mark and design the BOQ", async () => {
+      const sys = page.locator("select").filter({ has: page.locator("option[value=\"cctv\"]") }).first();
+      await sys.selectOption("cctv"); await page.waitForTimeout(300);
+      const eq = page.locator("select").filter({ has: page.locator('option[value="__own"]') }).first();
+      await eq.selectOption(await eq.locator("option", { hasText: "Dome camera" }).first().getAttribute("value"));
+      await page.waitForTimeout(500);
+      const sheet = page.locator('div[style*="crosshair"] svg').first();
+      for (const [fx, fy] of [[0.3, 0.4], [0.5, 0.5], [0.7, 0.6]]) {
+        const b = await sheet.boundingBox(); await page.mouse.click(b.x + b.width * fx, b.y + b.height * fy); await page.waitForTimeout(400);
+      }
+      await page.getByText(/^D3$/).first().waitFor({ timeout: 15000 });
+      await page.locator("button", { hasText: "Design BOQ for these systems" }).first().click();
+      await page.getByText("Engineered by Quantora").first().waitFor({ timeout: 30000 });
+      if (!(await page.getByText(/NVR/).count())) throw new Error("Designed BOQ has no NVR line for 3 cameras");
     });
   } catch (e) {
     failedStep = e.robotStep || "robot"; failMsg = e.message;
