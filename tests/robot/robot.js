@@ -31,6 +31,12 @@ function log(...a) { console.log(new Date().toISOString().slice(11, 19), ...a); 
 async function shot(name) { try { await page.screenshot({ path: path.join(SHOTS, name + ".png") }); } catch (_) {} }
 
 // An error pop-up while the robot works is a failure of that step.
+// The Activity panel (bottom centre) opens after an AI run and can sit over the drawing: fold it away.
+async function hideActivity() {
+  const hide = page.locator("button", { hasText: /^Hide$/ }).filter({ has: page.locator("xpath=..") });
+  if (await hide.count()) await hide.first().click({ timeout: 3000 }).catch(() => {});
+}
+
 async function closePops() {
   const dlg = page.locator('[role="alertdialog"]');
   for (let i = 0; i < 5 && (await dlg.count()); i++) {
@@ -242,6 +248,7 @@ async function report(ok, failedStep, message) {
       const sheet = page.locator('div[style*="crosshair"] svg').first();
       // Notices from the AI run can arrive late and sit on top of the sheet: clear them, and retry a click that did not count.
       let n = 0;
+      await hideActivity();
       for (const [fx, fy] of [[0.3, 0.4], [0.5, 0.5], [0.7, 0.6]]) {
         for (let tries = 0; tries < 4; tries++) {
           await closePops();
@@ -269,7 +276,7 @@ async function report(ok, failedStep, message) {
 
   // Always clean up: delete this run's test project, and any left over from an earlier run.
   async function deleteProject(name) {
-    await closePops();
+    await closePops(); await hideActivity();
     if (!(await page.getByRole("button", { name: "Delete", exact: true }).count()) || !(await page.getByText(name).count())) {
       await page.goto(BASE, { waitUntil: "domcontentloaded" });
       await page.getByText("Where are you working today").first().waitFor({ timeout: 45000 });

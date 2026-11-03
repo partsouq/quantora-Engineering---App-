@@ -27839,7 +27839,8 @@ function ActivityCenter({ onOpenProject }) {
 
       {/* the running panel: bottom centre, between Help (left) and Estima (right) */}
       {show && (
-        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 18, zIndex: 60, width: "min(440px, calc(100vw - 32px))", color: "#e2e8f0" }}>
+        // zIndex 45: above the page, but under pop-up windows (50+) so it never covers their buttons.
+        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 18, zIndex: 45, width: "min(440px, calc(100vw - 32px))", color: "#e2e8f0" }}>
           {open && (
             <div className="qact-in" style={{ marginBottom: 8, padding: 12, borderRadius: 16, background: "rgba(10,18,44,.97)", border: "1px solid rgba(96,165,250,.35)",
               boxShadow: "0 24px 60px rgba(0,0,0,.5)", maxHeight: "55vh", overflowY: "auto", display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 8 }}>
