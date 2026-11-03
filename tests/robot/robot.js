@@ -202,7 +202,8 @@ async function report(ok, failedStep, message) {
 
     if (process.env.ROBOT_SKIP !== "spec") await step("Upload a specification", async () => {
       await page.locator("nav").getByText("Specification", { exact: true }).first().click();
-      await page.waitForTimeout(2000);
+      await page.getByText("Upload the project specification").first().waitFor({ timeout: 30000 });
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});   // the page finishes loading first
       await page.locator("label", { hasText: "Upload specification" }).first().locator('input[type="file"]').setInputFiles(SPEC);
       await page.getByText(path.basename(SPEC), { exact: true }).first().waitFor({ timeout: 90000 });
     });
