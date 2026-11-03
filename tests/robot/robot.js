@@ -236,8 +236,14 @@ async function report(ok, failedStep, message) {
       await eq.selectOption(await eq.locator("option", { hasText: "Dome camera" }).first().getAttribute("value"));
       await page.waitForTimeout(500);
       const sheet = page.locator('div[style*="crosshair"] svg').first();
+      // Notices from the AI run can arrive late and sit on top of the sheet: clear them, and retry a click that did not count.
+      let n = 0;
       for (const [fx, fy] of [[0.3, 0.4], [0.5, 0.5], [0.7, 0.6]]) {
-        const b = await sheet.boundingBox(); await page.mouse.click(b.x + b.width * fx, b.y + b.height * fy); await page.waitForTimeout(400);
+        for (let tries = 0; tries < 4; tries++) {
+          await closePops();
+          const b = await sheet.boundingBox(); await page.mouse.click(b.x + b.width * fx, b.y + b.height * fy); await page.waitForTimeout(600);
+          if (await page.getByText(new RegExp("^D" + (n + 1) + "$")).count()) { n++; break; }
+        }
       }
       await page.getByText(/^D3$/).first().waitFor({ timeout: 15000 });
       await page.locator("button", { hasText: "Design BOQ for these systems" }).first().click();
@@ -248,26 +254,42 @@ async function report(ok, failedStep, message) {
     failedStep = e.robotStep || "robot"; failMsg = e.message;
   }
 
-  // Always clean up: delete the test project.
-  await step("Delete the test project", async () => {
+  // Always clean up: delete this run's test project, and any left over from an earlier run.
+  async function deleteProject(name) {
     await closePops();
-    if (!(await page.getByRole("button", { name: "Delete", exact: true }).count())) {
+    if (!(await page.getByRole("button", { name: "Delete", exact: true }).count()) || !(await page.getByText(name).count())) {
       await page.goto(BASE, { waitUntil: "domcontentloaded" });
       await page.getByText("Where are you working today").first().waitFor({ timeout: 45000 });
       await page.getByText("Open projects").first().click();
-      const card = page.getByText(PROJECT).first();
+      const card = page.getByText(name).first();
       if (!(await card.count())) { await page.waitForTimeout(3000); }
-      if (!(await card.count())) return;          // nothing was created
+      if (!(await card.count())) return false;          // nothing to delete
       await card.click();
     }
+    await closePops();
     await page.getByRole("button", { name: "Delete", exact: true }).first().click({ timeout: 20000 });
+    await page.waitForTimeout(800);
     const sel = page.locator("select").filter({ has: page.locator("option", { hasText: "Choose a reason" }) }).first();
-    const v = await sel.locator("option").nth(1).getAttribute("value", { timeout: 15000 });
-    await sel.selectOption(v);
+    await sel.selectOption("test");
     const box = page.locator("label", { hasText: "I understand" }).locator('input[type="checkbox"]').first();
     if (!(await box.isChecked())) await box.check();
     await page.getByRole("button", { name: "Delete permanently" }).click({ timeout: 20000 });
-    await page.getByText(PROJECT).first().waitFor({ state: "detached", timeout: 60000 }).catch(() => {});
+    await page.getByRole("button", { name: "Delete permanently" }).waitFor({ state: "detached", timeout: 60000 }).catch(() => {});
+    return true;
+  }
+  await step("Delete the test project", async () => {
+    await deleteProject(PROJECT);
+    // leftovers from a run that stopped half-way
+    for (let i = 0; i < 5; i++) {
+      await page.goto(BASE, { waitUntil: "domcontentloaded" });
+      await page.getByText("Where are you working today").first().waitFor({ timeout: 45000 });
+      await page.getByText("Open projects").first().click(); await page.waitForTimeout(2500);
+      const left = page.getByText(/^ROBOT TEST \d{4}-\d{2}-\d{2}/).first();
+      if (!(await left.count())) break;
+      const name = (await left.innerText()).trim();
+      log("old test project:", name);
+      if (!(await deleteProject(name))) break;
+    }
   }, { optional: true });
 
   const cleanupFailed = steps.some(s => s.step === "Delete the test project" && !s.ok);
