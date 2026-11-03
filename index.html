@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-03.04"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-03.05"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -30779,6 +30779,185 @@ function OpsReport({ D }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// My day (Project Manager) and Material tracker (Operations Manager), 2026-11-03.
+// ---------------------------------------------------------------------------
+function OpsMyDay({ D, onReload }) {
+  const [me, setMe] = useState({ id: null, name: "" });
+  const [form, setForm] = useState(null); const [busy, setBusy] = useState(false);
+  const [reports, setReports] = useState([]);
+  useEffect(() => { (async () => { try { const u = await qCurrentUser(); if (!u) return;
+    const { data: pr } = await sb.from("profiles").select("first_name, full_name").eq("id", u.id).maybeSingle();
+    setMe({ id: u.id, name: (pr && (pr.first_name || (pr.full_name || "").split(" ")[0])) || "" }); } catch (_) {} })(); }, []);
+  const ids = D.projects.map(p => p.id);
+  const loadReports = async () => { try { if (!ids.length) return; const since = new Date(Date.now() - 7 * OPS_DAY).toISOString().slice(0, 10);
+    const { data } = await sb.from("site_reports").select("*").in("project_id", ids).gte("report_date", since).order("report_date", { ascending: false }); setReports(data || []); } catch (_) { setReports([]); } };
+  useEffect(() => { loadReports(); }, [D]);
+  const name = id => (D.projects.find(p => p.id === id) || {}).project_name || "";
+  const today = new Date(); today.setHours(0, 0, 0, 0); const wk = new Date(today.getTime() + 7 * OPS_DAY);
+  const allMs = D.projects.flatMap(p => (D.ms[p.id] || []).map(m => ({ ...m, pn: p.project_name })));
+  const dueWeek = allMs.filter(m => !m.actual_date && m.planned_date && new Date(m.planned_date) <= wk).sort((a, b) => new Date(a.planned_date) - new Date(b.planned_date));
+  const overdue = dueWeek.filter(m => new Date(m.planned_date) < today);
+  const insp = D.projects.flatMap(p => (D.insp[p.id] || []).filter(i => i.status === "raised").map(i => ({ ...i, pn: p.project_name }))).sort((a, b) => new Date(a.raised_at || 0) - new Date(b.raised_at || 0));
+  const myIssues = D.projects.flatMap(p => (D.iss[p.id] || []).filter(i => i.status === "open" && (!i.owner_id || i.owner_id === me.id)).map(i => ({ ...i, pn: p.project_name })));
+  const pay = D.projects.flatMap(p => { const cur = ((D.con[p.id] || [])[0] || {}).currency || projectCurrency(p);
+    return (D.apps[p.id] || []).filter(a => a.status === "submitted" || (a.status === "certified" && !a.paid_at)).map(a => ({ ...a, pn: p.project_name, cur })); });
+  const paySum = pay.reduce((s, a) => s + Number(a.status === "certified" ? a.certified_amount || 0 : a.amount || 0), 0);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const reportedToday = new Set(reports.filter(r => r.report_date === todayStr).map(r => r.project_id));
+  const save = async (e) => {
+    e.preventDefault(); setBusy(true);
+    try {
+      const row = { project_id: form.project_id, report_date: todayStr, manpower: form.manpower === "" ? null : Number(form.manpower),
+        work_done: form.work_done.trim() || null, delays: form.delays.trim() || null, weather: form.weather || null };
+      const { error } = await sb.from("site_reports").insert(row); if (error) throw error;
+      setForm(null); await loadReports(); qPop({ kind: "success", title: "Site report saved ✓", message: `${name(row.project_id)} · today` });
+    } catch (ex) { qPop({ kind: "warn", title: "Could not save the report", message: ex.message || String(ex) }); }
+    setBusy(false);
+  };
+  const Row = ({ tag, tone, title, sub }) => (
+    <div style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: "1px solid var(--q-line,rgba(148,163,184,.18))" }}>
+      {tag != null ? <DivPill tone={tone}>{tag}</DivPill> : <span style={{ width: 10, height: 10, marginTop: 5, borderRadius: 99, flex: "none", background: tone === "bad" ? DIV_BAD : tone === "warn" ? DIV_WARN : DIV_GOOD }} />}
+      <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13 }}>{title}</div><div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>{sub}</div></div>
+    </div>);
+  const dayName = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+  const hr = new Date().getHours();
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <div><div style={{ fontSize: 18, fontWeight: 800 }}>{hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening"}{me.name ? ", " + me.name : ""} · My day</div>
+          <div style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>{dayName} · {D.projects.length} project{D.projects.length === 1 ? "" : "s"}</div></div>
+        <button className="qp-btn pri" onClick={() => setForm({ project_id: (D.projects.find(p => !reportedToday.has(p.id)) || D.projects[0]).id, manpower: "", work_done: "", delays: "", weather: "Clear" })}>＋ Daily site report</button>
+      </div>
+      <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))" }}>
+        <DivStat label="Inspections waiting" value={insp.length} note={insp.length ? `oldest ${opsDays(insp[0].raised_at) ?? 0} days` : "none waiting"} />
+        <DivStat label="Milestones this week" value={dueWeek.length} tone={overdue.length ? DIV_BAD : undefined} note={overdue.length ? `${overdue.length} already late` : "none late"} />
+        <DivStat label="My open issues" value={myIssues.length} tone={myIssues.some(i => opsDays(i.opened_at) > 7) ? DIV_BAD : undefined} note={`${myIssues.filter(i => opsDays(i.opened_at) > 7).length} older than 7 days`} />
+        <DivStat label="Payments to follow up" value={pay.length} note={pay.length ? opsMoney(paySum, pay[0].cur) : "nothing waiting"} />
+        <DivStat label="Site reports today" value={`${reportedToday.size} of ${D.projects.length}`} tone={reportedToday.size < D.projects.length ? DIV_WARN : undefined} note={reportedToday.size < D.projects.length ? "still to write" : "all written"} />
+      </div>
+      <div className="qp-cols" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))" }}>
+        <div className="qp-card"><h4>Due this week</h4>
+          {dueWeek.length === 0 ? <div className="qp-empty">No milestone due in the next 7 days.</div> :
+            dueWeek.slice(0, 8).map(m => { const late = new Date(m.planned_date) < today;
+              return <Row key={m.id} tag={late ? "late" : new Date(m.planned_date).toLocaleDateString("en-GB", { weekday: "short" })} tone={late ? "bad" : "flat"} title={m.name} sub={`${m.pn} · planned ${fmtDay(m.planned_date)}`} />; })}</div>
+        <div className="qp-card"><h4>Inspections waiting</h4>
+          {insp.length === 0 ? <div className="qp-empty">Nothing waiting for the consultant.</div> :
+            insp.slice(0, 8).map(i => <Row key={i.id} tag={`${opsDays(i.raised_at) ?? 0}d`} tone={(opsDays(i.raised_at) ?? 0) > 3 ? "warn" : "flat"} title={`${i.ref ? i.ref + " · " : ""}${i.title || i.kind || "Inspection"}`} sub={`${i.pn}${i.location ? " · " + i.location : ""}`} />)}</div>
+        <div className="qp-card"><h4>My issues and waiting on others</h4>
+          {myIssues.length === 0 && pay.length === 0 ? <div className="qp-empty">Nothing open.</div> : null}
+          {myIssues.slice(0, 5).map(i => <Row key={i.id} tone={i.severity === "critical" || opsDays(i.opened_at) > 7 ? "bad" : "warn"} title={i.title} sub={`${i.pn} · ${opsDays(i.opened_at)} days open${i.owner_id ? "" : " · no owner"}`} />)}
+          {pay.slice(0, 5).map(a => <Row key={a.id} tone={a.status === "certified" && (opsDays(a.certified_at) ?? 0) > 30 ? "bad" : "warn"} title={`${a.ref || "Payment"} · ${a.status === "certified" ? "certified, not paid" : "not certified yet"}`}
+            sub={`${a.pn} · ${opsMoney(a.status === "certified" ? a.certified_amount : a.amount, a.cur)} · ${a.status === "certified" ? opsDays(a.certified_at) : opsDays(a.submitted_at)} days`} />)}</div>
+      </div>
+      <div className="qp-card"><h4>Site diary · last 7 days</h4>
+        {reports.length === 0 ? <div className="qp-empty">No site report yet. Press “Daily site report”: manpower, work done, delays, weather. It takes two minutes and builds the project diary.</div> :
+          <div style={{ overflowX: "auto" }}><table className="qp-table"><thead><tr><th>Date</th><th>Project</th><th style={{ textAlign: "right" }}>Manpower</th><th>Work done</th><th>Delays</th><th>Weather</th></tr></thead>
+            <tbody>{reports.map(r => <tr key={r.id}><td style={{ whiteSpace: "nowrap" }}>{fmtDay(r.report_date)}</td><td style={{ fontWeight: 700 }}>{name(r.project_id)}</td><td style={{ textAlign: "right" }}>{r.manpower ?? "—"}</td>
+              <td style={{ fontSize: 12.5 }}>{r.work_done || "—"}</td><td style={{ fontSize: 12.5, color: r.delays ? "#f59e0b" : undefined }}>{r.delays || "—"}</td><td>{r.weather || ""}</td></tr>)}</tbody></table></div>}</div>
+      {form && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" onClick={() => setForm(null)}>
+          <form className="qp-card" style={{ maxWidth: 520, width: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto" }} onClick={e => e.stopPropagation()} onSubmit={save}>
+            <h4>Daily site report · today</h4>
+            <label style={{ fontSize: 12, fontWeight: 700 }}>Project</label>
+            <select className="w-full border rounded-lg px-3 py-2 text-sm" style={{ margin: "4px 0 10px" }} value={form.project_id} onChange={e => setForm({ ...form, project_id: e.target.value })}>
+              {D.projects.map(p => <option key={p.id} value={p.id}>{p.project_name}{reportedToday.has(p.id) ? " (report written)" : ""}</option>)}</select>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div><label style={{ fontSize: 12, fontWeight: 700 }}>Manpower on site</label>
+                <input type="number" min="0" className="w-full border rounded-lg px-3 py-2 text-sm" style={{ marginTop: 4 }} value={form.manpower} onChange={e => setForm({ ...form, manpower: e.target.value })} placeholder="e.g. 24" /></div>
+              <div><label style={{ fontSize: 12, fontWeight: 700 }}>Weather</label>
+                <select className="w-full border rounded-lg px-3 py-2 text-sm" style={{ marginTop: 4 }} value={form.weather} onChange={e => setForm({ ...form, weather: e.target.value })}>
+                  {["Clear", "Hot", "Windy / dust", "Rain", "Other"].map(w => <option key={w}>{w}</option>)}</select></div>
+            </div>
+            <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginTop: 10 }}>Work done today</label>
+            <textarea rows="3" required className="w-full border rounded-lg px-3 py-2 text-sm" style={{ marginTop: 4 }} value={form.work_done} onChange={e => setForm({ ...form, work_done: e.target.value })} placeholder="e.g. L4 cable pulling 60% · GF CCTV devices fixed" />
+            <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginTop: 10 }}>Delays or problems (optional)</label>
+            <textarea rows="2" className="w-full border rounded-lg px-3 py-2 text-sm" style={{ marginTop: 4 }} value={form.delays} onChange={e => setForm({ ...form, delays: e.target.value })} placeholder="e.g. Waiting for FR cable delivery" />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+              <button type="button" className="qp-btn" onClick={() => setForm(null)}>Cancel</button>
+              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Save report"}</button></div>
+          </form>
+        </div>)}
+    </div>
+  );
+}
+
+function OpsMaterials({ D }) {
+  const [pid, setPid] = useState(D.projects[0] ? D.projects[0].id : "");
+  const [rows, setRows] = useState(null); const [prog, setProg] = useState({}); const [sys, setSys] = useState("all"); const [onlyGaps, setOnlyGaps] = useState(false);
+  const p = D.projects.find(x => x.id === pid);
+  useEffect(() => { if (!p) return; let alive = true; setRows(null);
+    (async () => {
+      try {
+        const [{ data: items }, { data: dr }, { data: mp }] = await Promise.all([
+          sb.from("boq_items").select("*").limit(BOQ_FETCH_LIMIT).eq("project_id", p.id),
+          sb.from("drawings").select("id, file_name, file_hash, uploaded_at").eq("project_id", p.id),
+          sb.from("material_progress").select("*").eq("project_id", p.id)]);
+        const byId = {}; (dr || []).forEach(d => byId[d.id] = d);
+        const { excludeDrawingIds } = detectDuplicateDrawings(dr || []);
+        const latest = withSystemDesign(filterLatestRevisions(items || []).filter(it => !it.drawing_id || !excludeDrawingIds.has(it.drawing_id)), p);
+        const cons = consolidateBoqItems(latest, byId).map(c => ({ ...c, mkey: `${c.systemCategory}|${c.key}`.slice(0, 300) }));
+        const pm = {}; (mp || []).forEach(r => pm[r.item_key] = r);
+        if (alive) { setRows(cons); setProg(pm); }
+      } catch (e) { if (alive) { setRows([]); qPop({ kind: "warn", title: "Could not load the BOQ", message: e.message || String(e) }); } }
+    })(); return () => { alive = false; }; }, [pid]);
+  const save = async (r, field, value) => {
+    const cur = prog[r.mkey] || {};
+    const v = value === "" ? null : Math.max(0, Number(value));
+    if ((cur[field] ?? null) === v) return;
+    const row = { project_id: p.id, item_key: r.mkey, system_category: r.systemCategory, description: r.description, unit: r.unit,
+      ordered: cur.ordered ?? null, delivered: cur.delivered ?? null, installed: cur.installed ?? null, note: cur.note ?? null, [field]: v, updated_at: new Date().toISOString() };
+    setProg(s => ({ ...s, [r.mkey]: row }));
+    const { error } = await sb.from("material_progress").upsert(row, { onConflict: "project_id,item_key" });
+    if (error) qPop({ kind: "warn", title: "Not saved", message: error.message });
+  };
+  if (!p) return <div className="qp-empty">Create a project first.</div>;
+  const systems = rows ? [...new Set(rows.map(r => r.systemCategory))] : [];
+  const val = r => Number(r.totalCostCents || 0);
+  const list = (rows || []).filter(r => sys === "all" || r.systemCategory === sys).filter(r => !onlyGaps || (Number((prog[r.mkey] || {}).ordered || 0) < Number(r.totalQuantity || 0)));
+  const q = r => Number(r.totalQuantity || 0);
+  const pctBy = (field) => { const all = rows || []; const tot = all.reduce((s, r) => s + (val(r) || q(r)), 0); if (!tot) return null;
+    return Math.round(all.reduce((s, r) => s + (val(r) || q(r)) * Math.min(1, q(r) ? Number((prog[r.mkey] || {})[field] || 0) / q(r) : 0), 0) / tot * 100); };
+  const notOrdered = (rows || []).filter(r => q(r) > 0 && Number((prog[r.mkey] || {}).ordered || 0) < q(r)).length;
+  const exportIt = () => opsCsv(`materials-${p.project_name}.csv`, [["System", "Item", "Unit", "BOQ qty", "Ordered", "Delivered", "Installed", "Note"],
+    ...(rows || []).map(r => { const m = prog[r.mkey] || {}; return [SYSTEM_LABEL(r.systemCategory), r.description, r.unit, r.totalQuantity ?? "", m.ordered ?? "", m.delivered ?? "", m.installed ?? "", m.note ?? ""]; })]);
+  const inp = { width: 78, textAlign: "right", padding: "4px 6px", borderRadius: 7, border: "1px solid rgba(148,163,184,.35)", background: "transparent", color: "inherit", fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <select className="border rounded-lg px-3 py-2 text-sm" value={pid} onChange={e => { setPid(e.target.value); setSys("all"); }}>{D.projects.map(x => <option key={x.id} value={x.id}>{x.project_name}</option>)}</select>
+        <span style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>Every BOQ line from order to installed. Built from the project BOQ, so nothing is typed twice. Type a number and it saves.</span>
+        <div style={{ flex: 1 }} /><button className="qp-btn" style={{ fontSize: 11.5 }} onClick={exportIt} disabled={!rows || !rows.length}>Export</button>
+      </div>
+      {rows === null ? <div className="qp-card">Loading the BOQ…</div> : rows.length === 0 ?
+        <DivEmpty title="This project has no BOQ yet" body="Generate the BOQ with AI Take-off, or send lines from Manual Take-off, and every line appears here ready to track." /> : <>
+        <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))" }}>
+          <DivStat label="BOQ lines" value={rows.length} note={`${systems.length} system${systems.length === 1 ? "" : "s"}`} />
+          <DivStat label="Not fully ordered" value={notOrdered} tone={notOrdered ? DIV_BAD : undefined} note="ordered less than the BOQ" />
+          <DivStat label="Delivered" value={pctBy("delivered") == null ? "—" : pctBy("delivered") + "%"} note="of the BOQ" />
+          <DivStat label="Installed" value={pctBy("installed") == null ? "—" : pctBy("installed") + "%"} note={p.percent_complete != null ? `progress recorded ${p.percent_complete}%` : "of the BOQ"} />
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {[["all", "All systems"], ...systems.map(s => [s, SYSTEM_LABEL(s)])].map(([k, l]) => <button key={k} type="button" onClick={() => setSys(k)}
+            style={{ fontSize: 12, fontWeight: 700, padding: "5px 11px", borderRadius: 99, cursor: "pointer", border: "1px solid " + (sys === k ? "transparent" : "rgba(148,163,184,.35)"), background: sys === k ? "#2563eb" : "transparent", color: sys === k ? "#fff" : "inherit" }}>{l}</button>)}
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, marginLeft: 6 }}><input type="checkbox" checked={onlyGaps} onChange={e => setOnlyGaps(e.target.checked)} />Only not fully ordered</label>
+        </div>
+        <div className="qp-card"><div style={{ overflowX: "auto" }}><table className="qp-table">
+          <thead><tr><th>System</th><th>Item</th><th style={{ textAlign: "right" }}>BOQ qty</th><th style={{ textAlign: "right" }}>Ordered</th><th style={{ textAlign: "right" }}>Delivered</th><th style={{ textAlign: "right" }}>Installed</th><th style={{ width: "15%" }}>Installed</th></tr></thead>
+          <tbody>{list.map(r => { const m = prog[r.mkey] || {}; const Q = q(r); const gap = Q > 0 && Number(m.ordered || 0) < Q;
+            const ip = Q ? Math.min(100, Math.round(Number(m.installed || 0) / Q * 100)) : 0;
+            return <tr key={r.mkey}><td><DivPill tone="flat">{SYSTEM_LABEL(r.systemCategory)}</DivPill></td>
+              <td style={{ fontWeight: 600, fontSize: 12.5 }}>{r.description}</td>
+              <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{r.totalQuantity == null ? "TBD" : Number(r.totalQuantity).toLocaleString()} <span style={{ color: "var(--q-text-dimmer,#94a3b8)", fontSize: 11 }}>{r.unit}</span></td>
+              {["ordered", "delivered", "installed"].map(f => <td key={f} style={{ textAlign: "right" }}>
+                <input key={r.mkey + f + (m[f] ?? "")} type="number" min="0" defaultValue={m[f] ?? ""} placeholder="0" onBlur={e => save(r, f, e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={{ ...inp, ...(f === "ordered" && gap ? { borderColor: "#e05252" } : {}) }} /></td>)}
+              <td><DivBullet actual={ip} target={100} colour={gap ? DIV_BAD : DIV_SERIES[2]} /><div style={{ fontSize: 11, marginTop: 2 }}>{ip}%</div></td></tr>; })}</tbody></table></div></div>
+      </>}
+    </div>
+  );
+}
+
 function OpsInsights({ tab, onOpen }) {
   const [D, setD] = useState(null); const [err, setErr] = useQErr("");
   const load = async () => { try { setD(await opsLoadAll()); } catch (e) { setErr(e.message || String(e)); } };
@@ -30789,6 +30968,8 @@ function OpsInsights({ tab, onOpen }) {
   if (!D.projects.length) return <DivEmpty title="No projects yet" body="Create a project and record its programme, payments and issues, and this fills in." />;
   if (tab === "health") return <OpsPortfolio D={D} onOpen={onOpen} />;
   if (tab === "cash") return <OpsCash D={D} />;
+  if (tab === "myday") return <OpsMyDay D={D} onReload={load} />;
+  if (tab === "materials") return <OpsMaterials D={D} />;
   return <OpsReport D={D} />;
 }
 
@@ -30886,7 +31067,7 @@ function OperationsPage({ onNavigate }) {
       <PageHead title="Operations" sub="Delivery stage, progress against programme, and what is blocking site." />
       {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 14px" }}>
-        {[["health", "Portfolio health"], ["cash", "Cash position"], ["report", "Progress report"], ["overview", "Projects & issues"]].map(([k, l]) => (
+        {[["myday", "My day"], ["health", "Portfolio health"], ["cash", "Cash position"], ["materials", "Material tracker"], ["report", "Progress report"], ["overview", "Projects & issues"]].map(([k, l]) => (
           <button key={k} type="button" onClick={() => pickTab(k)}
             style={{ fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer",
               border: "1px solid " + (tab === k ? "transparent" : "rgba(148,163,184,.35)"),
