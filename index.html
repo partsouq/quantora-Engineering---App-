@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-03.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-03.02"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -12481,7 +12481,8 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" onClick={onClose}>
-      <div className="bg-white border rounded-2xl max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
+      {/* Scrolls inside itself: on a laptop screen the full list pushed the Delete button out of reach. */}
+      <div className="bg-white border rounded-2xl max-w-lg w-full p-6" style={{ maxHeight: "calc(100vh - 48px)", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-bold text-rose-600">Delete this project?</h3>
         <p className="text-sm text-slate-600 mt-2 leading-relaxed">
           <b>{project.project_name}</b> and everything filed under it will be removed permanently.

@@ -62,7 +62,10 @@ async function step(name, fn, { optional = false } = {}) {
       const seen = await page.evaluate(() => {
         const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
         const dlg = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],.fixed')].filter(vis).map(e => e.innerText.trim()).filter(Boolean).slice(0, 3);
-        return { url: location.href, dialogs: dlg.map(t => t.replace(/\s+/g, " ").slice(0, 300)), screen: document.body.innerText.replace(/\s+/g, " ").slice(0, 700) };
+        const main = document.querySelector("main") || document.body;
+        const txt = main.innerText.replace(/\s+/g, " "); const il = txt.indexOf("Item list");
+        return { url: location.href, dialogs: dlg.map(t => t.replace(/\s+/g, " ").slice(0, 300)), screen: txt.slice(0, 700),
+          items: il >= 0 ? txt.slice(il, il + 500) : null, marks: document.querySelectorAll("[data-mark]").length, scrollY: Math.round(scrollY), vh: innerHeight };
       });
       log("  SCREEN:", JSON.stringify(seen));
     } catch (_) {}
@@ -181,7 +184,8 @@ async function report(ok, failedStep, message) {
         // a confirm or page-choice window may open: accept it
         for (let i = 0; i < 3; i++) {
           await page.waitForTimeout(2500);
-          const go = page.locator("button", { hasText: /^(Start|Analyze|Analyse|Continue|Run|Confirm)\b/ }).filter({ hasNot: page.locator("[disabled]") });
+          // Only buttons inside an open window: pressing "Analyze with AI" again would start (and pay for) a second run.
+          const go = page.locator('[role="dialog"] button, .fixed button').filter({ hasText: /^(Start|Analyze|Analyse|Continue|Run|Confirm)\b/ }).filter({ hasNot: page.locator("[disabled]") });
           if (await go.count()) { await go.last().click().catch(() => {}); } else break;
         }
         const done = page.getByText(/Done · \d+ BOQ lines/).first();
@@ -241,7 +245,9 @@ async function report(ok, failedStep, message) {
       for (const [fx, fy] of [[0.3, 0.4], [0.5, 0.5], [0.7, 0.6]]) {
         for (let tries = 0; tries < 4; tries++) {
           await closePops();
-          const b = await sheet.boundingBox(); await page.mouse.click(b.x + b.width * fx, b.y + b.height * fy); await page.waitForTimeout(600);
+          const b = await sheet.boundingBox();
+          await sheet.click({ position: { x: b.width * fx, y: b.height * fy }, timeout: 10000 }).catch(e => log("  click:", String(e.message).split("\n")[0]));
+          await page.waitForTimeout(600);
           if (await page.getByText(new RegExp("^D" + (n + 1) + "$")).count()) { n++; break; }
         }
       }
