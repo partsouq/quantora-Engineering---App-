@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-03.05"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-03.06"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29704,6 +29704,273 @@ const DELIVERY_STAGES = [["design","Design"],["procurement","Procurement"],["ins
 const DELIVERY_LABEL = Object.fromEntries(DELIVERY_STAGES);
 
 
+// ---------------------------------------------------------------------------
+// Sales insights (2026-11-03): GM sales dashboard, sales by system, team leaderboard and
+// loss analysis. Built from tenders (value, owner, stage, probability, dates, loss reason,
+// won by), sales targets, the systems on each bid's project, and invoiced payment applications.
+// ---------------------------------------------------------------------------
+const SALES_OPEN = ["identified", "bidding", "submitted", "negotiation"];
+async function salesLoadAll() {
+  const { data: { user } } = await sb.auth.getUser();
+  const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+  const companyId = prof && prof.company_id;
+  const { data: t, error } = await sb.from("tenders")
+    .select("id, tender_name, client_name, bid_value, currency, owner_id, stage, probability, submission_deadline, expected_award, outcome_at, loss_reason, won_by, project_id, created_at, updated_at");
+  if (error) throw error;
+  const bids = t || [];
+  const pids = [...new Set(bids.map(b => b.project_id).filter(Boolean))];
+  const [{ data: pr }, { data: mates }, { data: tg }, { data: apps }] = await Promise.all([
+    pids.length ? sb.from("projects").select("id, project_name, required_systems, currency, country").in("id", pids) : Promise.resolve({ data: [] }),
+    companyId ? sb.from("profiles").select("id, full_name, first_name, last_name").eq("company_id", companyId) : Promise.resolve({ data: [] }),
+    companyId ? sb.from("sales_targets").select("*").eq("company_id", companyId) : Promise.resolve({ data: [] }),
+    sb.from("project_applications").select("project_id, amount, status, submitted_at, created_at"),
+  ]);
+  const proj = {}; (pr || []).forEach(p => proj[p.id] = p);
+  return { bids, proj, people: mates || [], targets: tg || [], apps: apps || [], companyId };
+}
+const salesName = (S, id) => { const p = S.people.find(x => x.id === id); return p ? ((p.full_name || [p.first_name, p.last_name].filter(Boolean).join(" ")).trim() || "Unnamed") : "Unassigned"; };
+const salesCur = (S) => (S.bids.find(b => b.currency) || {}).currency || "AED";
+function salesPeriod(kind) {
+  const n = new Date(); let a, b;
+  if (kind === "week") { const d = (n.getDay() + 6) % 7; a = new Date(n.getFullYear(), n.getMonth(), n.getDate() - d); b = new Date(a.getTime() + 7 * OPS_DAY); }
+  else if (kind === "quarter") { const q = Math.floor(n.getMonth() / 3) * 3; a = new Date(n.getFullYear(), q, 1); b = new Date(n.getFullYear(), q + 3, 1); }
+  else if (kind === "year") { a = new Date(n.getFullYear(), 0, 1); b = new Date(n.getFullYear() + 1, 0, 1); }
+  else { a = new Date(n.getFullYear(), n.getMonth(), 1); b = new Date(n.getFullYear(), n.getMonth() + 1, 1); }
+  return [a, b];
+}
+// Company target for a period: sum of the monthly company targets it covers (a week gets its share of the month).
+function salesTarget(S, a, b, userId) {
+  const rows = S.targets.filter(t => (userId ? t.user_id === userId : !t.user_id));
+  let sum = 0;
+  for (const t of rows) {
+    // "YYYY-MM-DD" read as a local month; a key saved as the last day of the previous month (old UTC bug) counts for the next month.
+    const [yy, mm, dd] = String(t.period_month).slice(0, 10).split("-").map(Number);
+    const m0 = new Date(yy, mm - 1 + (dd >= 28 ? 1 : 0), 1), m1 = new Date(m0.getFullYear(), m0.getMonth() + 1, 1);
+    const overlap = Math.max(0, Math.min(b, m1) - Math.max(a, m0));
+    sum += Number(t.target_value || 0) * overlap / (m1 - m0);
+  }
+  return sum;
+}
+const salesIn = (d, a, b) => d && new Date(d) >= a && new Date(d) < b;
+function salesStats(S, a, b) {
+  const won = S.bids.filter(x => x.stage === "won" && salesIn(x.outcome_at, a, b));
+  const lost = S.bids.filter(x => x.stage === "lost" && salesIn(x.outcome_at, a, b));
+  const open = S.bids.filter(x => SALES_OPEN.includes(x.stage));
+  const v = arr => arr.reduce((s, x) => s + Number(x.bid_value || 0), 0);
+  const closingIn = open.filter(x => x.expected_award && new Date(x.expected_award) < b);
+  const weightedIn = closingIn.reduce((s, x) => s + Number(x.bid_value || 0) * (Number(x.probability || 0) / 100), 0);
+  const invoiced = S.apps.filter(p => p.status !== "draft" && salesIn(p.submitted_at || p.created_at, a, b)).reduce((s, p) => s + Number(p.amount || 0), 0);
+  return { won, lost, open, wonV: v(won), lostV: v(lost), openV: v(open), weightedIn, forecast: v(won) + weightedIn, invoiced,
+           winRate: won.length + lost.length ? Math.round(won.length / (won.length + lost.length) * 100) : null };
+}
+const SALES_KIND = [["week", "This week"], ["month", "This month"], ["quarter", "Quarter"], ["year", "Year"]];
+function SalesChips({ value, onChange, opts }) {
+  return <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{(opts || SALES_KIND).map(([k, l]) => <button key={k} type="button" onClick={() => onChange(k)}
+    style={{ fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 99, cursor: "pointer", border: "1px solid " + (value === k ? "transparent" : "rgba(148,163,184,.35)"), background: value === k ? "#2563eb" : "transparent", color: value === k ? "#fff" : "inherit" }}>{l}</button>)}</div>;
+}
+
+function SalesDashboard({ S }) {
+  const [kind, setKind] = useState("month");
+  const [a, b] = salesPeriod(kind); const cur = salesCur(S);
+  const st = salesStats(S, a, b);
+  const tgt = salesTarget(S, a, b);
+  const [qa, qb] = salesPeriod("quarter"); const qs = salesStats(S, qa, qb); const qt = salesTarget(S, qa, qb);
+  const toGo = Math.max(0, qt - qs.wonV); const coverage = toGo > 0 ? qs.openV / toGo : null;
+  // last 6 months: target vs awarded
+  const months = Array.from({ length: 6 }, (_, i) => { const m0 = new Date(new Date().getFullYear(), new Date().getMonth() - 5 + i, 1), m1 = new Date(m0.getFullYear(), m0.getMonth() + 1, 1);
+    return { label: m0.toLocaleString("en-GB", { month: "short" }), t: salesTarget(S, m0, m1), w: salesStats(S, m0, m1).wonV }; });
+  const max = Math.max(1, ...months.map(m => Math.max(m.t, m.w)));
+  const prevKind = { week: 7, month: 30 }[kind];
+  const top = S.bids.filter(x => SALES_OPEN.includes(x.stage) && (!x.expected_award || new Date(x.expected_award) <= new Date(Date.now() + 30 * OPS_DAY)))
+    .sort((x, y) => Number(y.bid_value || 0) - Number(x.bid_value || 0)).slice(0, 6);
+  const pdf = () => salesSummaryPdf(S, kind);
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <SalesChips value={kind} onChange={setKind} />
+        <button className="qp-btn pri" onClick={pdf}>⬇ Summary PDF</button>
+      </div>
+      <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
+        <DivStat label={`Awarded · ${SALES_KIND.find(k => k[0] === kind)[1].toLowerCase()}`} value={divMoney(st.wonV, cur)}
+          tone={tgt && st.wonV < tgt * 0.6 ? DIV_WARN : undefined} note={tgt ? `${Math.round(st.wonV / tgt * 100)}% of ${divMoney(tgt, cur)} target` : "no target set"} />
+        <DivStat label="Forecast for the period" value={divMoney(st.forecast, cur)} note={tgt ? (st.forecast >= tgt ? "on course for target" : `short ${divMoney(tgt - st.forecast, cur)}`) : "won + weighted bids closing in the period"} tone={tgt && st.forecast < tgt ? DIV_WARN : undefined} />
+        <DivStat label="Won / lost / open" value={`${st.won.length} / ${st.lost.length} / ${st.open.length}`} note={st.winRate == null ? "no closed bids in the period" : `win rate ${st.winRate}%`} />
+        <DivStat label="Pipeline coverage (quarter)" value={coverage == null ? "—" : coverage.toFixed(1) + "×"} tone={coverage != null && coverage < 3 ? DIV_BAD : undefined}
+          note={coverage == null ? (qt ? "quarter target reached" : "set monthly targets to see this") : `${divMoney(qs.openV, cur)} open vs ${divMoney(toGo, cur)} to go`} />
+        <DivStat label="Revenue invoiced" value={divMoney(st.invoiced, cur)} note="payment applications submitted in the period" />
+      </div>
+      <div className="qp-cols" style={{ gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr)" }}>
+        <div className="qp-card"><h4>Awarded vs target · last 6 months</h4>
+          <svg viewBox="0 0 560 200" width="100%" style={{ marginTop: 6 }}>
+            {[0, 1, 2, 3].map(i => <line key={i} x1="20" x2="555" y1={20 + i * 45} y2={20 + i * 45} stroke="rgba(148,163,184,.16)" />)}
+            {months.map((m, i) => { const x = 30 + i * 88, w = 30, h1 = m.t / max * 135, h2 = m.w / max * 135; return <g key={i}>
+              <rect x={x} y={155 - h1} width={w} height={h1} rx="4" fill="rgba(148,163,184,.3)" /><rect x={x + w + 4} y={155 - h2} width={w} height={h2} rx="4" fill="#3b82f6" />
+              <text x={x + w + 2} y="176" fontSize="12" textAnchor="middle" fill="currentColor" opacity=".7">{m.label}</text></g>; })}
+          </svg>
+          <div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "rgba(148,163,184,.4)" }} /> target &nbsp;
+            <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "#3b82f6" }} /> awarded{months.every(m => !m.t) ? " · set a monthly target on Bids & pipeline to see the target bars" : ""}</div></div>
+        <div className="qp-card"><h4>Top deals to watch</h4><p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 8px" }}>Biggest open bids due to close in 30 days.</p>
+          {top.length === 0 ? <div className="qp-empty">No open bid closing in the next 30 days.</div> :
+            <table className="qp-table"><thead><tr><th>Bid</th><th style={{ textAlign: "right" }}>Value</th><th>Chance</th><th>Owner</th></tr></thead><tbody>
+              {top.map(x => { const quiet = opsDays(x.updated_at) > 21; return <tr key={x.id}><td><div style={{ fontWeight: 700 }}>{x.tender_name}</div>
+                <div style={{ fontSize: 11.5, color: quiet ? "#f59e0b" : "var(--q-text-dim,#64748b)" }}>{BID_STAGE_LABEL[x.stage]}{x.expected_award ? " · award " + fmtDay(x.expected_award) : ""}{quiet ? ` · no update for ${opsDays(x.updated_at)} days` : ""}</div></td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{x.bid_value == null ? "—" : divMoney(x.bid_value, x.currency || cur)}</td>
+                <td>{x.probability == null ? "—" : <DivPill tone={x.probability >= 60 ? "good" : x.probability >= 40 ? "warn" : "bad"}>{x.probability}%</DivPill>}</td><td>{salesName(S, x.owner_id)}</td></tr>; })}</tbody></table>}</div>
+      </div>
+    </div>
+  );
+}
+
+function salesSummaryPdf(S, kind) {
+  if (!window.jspdf) { qPop({ kind: "warn", title: "The PDF tool is still loading", message: "Try again in a moment." }); return; }
+  const { jsPDF } = window.jspdf; const doc = new jsPDF({ unit: "mm", format: "a4" }); const M = 14, W = 210;
+  const [a, b] = salesPeriod(kind); const st = salesStats(S, a, b), tgt = salesTarget(S, a, b), cur = salesCur(S);
+  const label = SALES_KIND.find(k => k[0] === kind)[1];
+  doc.setFillColor(11, 20, 48); doc.rect(0, 0, W, 24, "F"); doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(15);
+  doc.text(`Sales summary · ${label}`, M, 11); doc.setFont("helvetica", "normal"); doc.setFontSize(9.5);
+  doc.text(`${a.toLocaleDateString("en-GB")} to ${new Date(b - 1).toLocaleDateString("en-GB")}`, M, 18);
+  doc.autoTable({ startY: 32, margin: { left: M, right: M }, theme: "grid", headStyles: { fillColor: [11, 20, 48] }, styles: { fontSize: 9 },
+    head: [["Awarded", "Target", "Forecast", "Won / lost / open", "Win rate", "Invoiced"]],
+    body: [[divMoney(st.wonV, cur), tgt ? divMoney(tgt, cur) : "not set", divMoney(st.forecast, cur), `${st.won.length} / ${st.lost.length} / ${st.open.length}`, st.winRate == null ? "—" : st.winRate + "%", divMoney(st.invoiced, cur)]] });
+  const tbl = (title, head, body) => { let y = doc.lastAutoTable.finalY + 9; doc.setTextColor(11, 20, 48); doc.setFont("helvetica", "bold"); doc.setFontSize(11.5); doc.text(title, M, y);
+    if (!body.length) { doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(100, 116, 139); doc.text("None.", M, y + 6); doc.lastAutoTable.finalY = y + 6; return; }
+    doc.autoTable({ startY: y + 2, margin: { left: M, right: M }, theme: "grid", headStyles: { fillColor: [11, 20, 48] }, styles: { fontSize: 8.5 }, head: [head], body }); };
+  tbl("Won", ["Bid", "Client", "Value", "Owner", "Date"], st.won.map(x => [x.tender_name, x.client_name || "", divMoney(x.bid_value, x.currency || cur), salesName(S, x.owner_id), fmtDay(x.outcome_at)]));
+  tbl("Lost", ["Bid", "Value", "Reason", "Won by", "Owner"], st.lost.map(x => [x.tender_name, divMoney(x.bid_value, x.currency || cur), LOSS_LABEL[x.loss_reason] || "", x.won_by || "", salesName(S, x.owner_id)]));
+  tbl("Open pipeline (largest 15)", ["Bid", "Stage", "Value", "Chance", "Expected award", "Owner"], st.open.sort((x, y) => Number(y.bid_value || 0) - Number(x.bid_value || 0)).slice(0, 15)
+    .map(x => [x.tender_name, BID_STAGE_LABEL[x.stage], x.bid_value == null ? "" : divMoney(x.bid_value, x.currency || cur), x.probability == null ? "" : x.probability + "%", fmtDay(x.expected_award), salesName(S, x.owner_id)]));
+  doc.save(`sales-summary-${kind}-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+function SalesBySystem({ S }) {
+  const [kind, setKind] = useState("year");
+  const [a, b] = salesPeriod(kind); const cur = salesCur(S);
+  const rows = useMemo(() => {
+    const m = {};
+    for (const x of S.bids) {
+      const p = S.proj[x.project_id]; const sys = (p && p.required_systems && p.required_systems.length) ? p.required_systems : ["__none"];
+      const share = Number(x.bid_value || 0) / sys.length;   // a bid's value is split across its systems
+      for (const s of sys) {
+        const r = (m[s] ||= { s, open: 0, won: 0, lost: 0, nW: 0, nL: 0, nO: 0, reasons: {}, owners: new Set() });
+        if (SALES_OPEN.includes(x.stage)) { r.open += share; r.nO++; }
+        else if (x.stage === "won" && salesIn(x.outcome_at, a, b)) { r.won += share; r.nW++; }
+        else if (x.stage === "lost" && salesIn(x.outcome_at, a, b)) { r.lost += share; r.nL++; if (x.loss_reason) r.reasons[x.loss_reason] = (r.reasons[x.loss_reason] || 0) + 1; }
+        if (x.owner_id) r.owners.add(salesName(S, x.owner_id));
+      }
+    }
+    return Object.values(m).sort((p, q) => (q.open + q.won) - (p.open + p.won));
+  }, [S, kind]);
+  const exportIt = () => opsCsv("sales-by-system.csv", [["System", "Open pipeline", "Won", "Lost", "Win rate %", "Top loss reason", "People"],
+    ...rows.map(r => [r.s === "__none" ? "No systems on project" : SYSTEM_LABEL(r.s), Math.round(r.open), Math.round(r.won), Math.round(r.lost), r.nW + r.nL ? Math.round(r.nW / (r.nW + r.nL) * 100) : "", LOSS_LABEL[Object.entries(r.reasons).sort((p, q) => q[1] - p[1])[0]?.[0]] || "", [...r.owners].join("; ")])]);
+  const weak = rows.filter(r => r.nW + r.nL >= 2).sort((p, q) => p.nW / (p.nW + p.nL) - q.nW / (q.nW + q.nL))[0];
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <SalesChips value={kind} onChange={setKind} opts={SALES_KIND.slice(1)} /><button className="qp-btn" style={{ fontSize: 11.5 }} onClick={exportIt}>Export</button></div>
+      <div className="qp-card">
+        <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginBottom: 8 }}>Systems come from each bid's project. A bid with several systems shares its value between them. Won and lost are for the period; open is everything live.</p>
+        <div style={{ overflowX: "auto" }}><table className="qp-table"><thead><tr><th>System</th><th style={{ textAlign: "right" }}>Open pipeline</th><th style={{ textAlign: "right" }}>Won</th><th style={{ textAlign: "right" }}>Lost</th><th style={{ width: "16%" }}>Win rate</th><th>Top loss reason</th><th>People</th></tr></thead>
+          <tbody>{rows.map(r => { const wr = r.nW + r.nL ? Math.round(r.nW / (r.nW + r.nL) * 100) : null; const top = Object.entries(r.reasons).sort((p, q) => q[1] - p[1])[0];
+            return <tr key={r.s}><td>{r.s === "__none" ? <span style={{ fontSize: 12, color: "#b45309" }}>No systems on the project</span> : <DivPill tone="flat">{SYSTEM_LABEL(r.s)}</DivPill>}</td>
+              <td style={{ textAlign: "right" }}>{divMoney(r.open, cur)} <span style={{ fontSize: 11, color: "var(--q-text-dimmer,#94a3b8)" }}>({r.nO})</span></td>
+              <td style={{ textAlign: "right", color: "#34d399" }}>{divMoney(r.won, cur)}</td><td style={{ textAlign: "right", color: "#f87171" }}>{divMoney(r.lost, cur)}</td>
+              <td>{wr == null ? <span style={{ fontSize: 12, color: "var(--q-text-dimmer,#94a3b8)" }}>no closed bids</span> : <div><DivBullet actual={wr} target={100} colour={wr >= 60 ? DIV_SERIES[2] : wr >= 45 ? DIV_WARN : DIV_BAD} /><div style={{ fontSize: 11, marginTop: 2 }}>{wr}% · {r.nW} of {r.nW + r.nL}</div></div>}</td>
+              <td style={{ fontSize: 12.5 }}>{top ? `${LOSS_LABEL[top[0]] || top[0]} (${top[1]})` : "—"}</td><td style={{ fontSize: 12.5 }}>{[...r.owners].join(", ") || "—"}</td></tr>; })}</tbody></table></div>
+        {weak && <p style={{ fontSize: 12.5, marginTop: 10 }}>Weakest system: <b>{SYSTEM_LABEL(weak.s)}</b> ({Math.round(weak.nW / (weak.nW + weak.nL) * 100)}% win rate){Object.keys(weak.reasons).length ? `, mostly lost on ${(LOSS_LABEL[Object.entries(weak.reasons).sort((p, q) => q[1] - p[1])[0][0]] || "").toLowerCase()}` : ""}.</p>}
+      </div>
+    </div>
+  );
+}
+
+function SalesTeam({ S }) {
+  const [kind, setKind] = useState("month");
+  const [a, b] = salesPeriod(kind); const cur = salesCur(S);
+  const owners = [...new Set(S.bids.map(x => x.owner_id || "__none"))];
+  const rows = owners.map(o => {
+    const mine = S.bids.filter(x => (x.owner_id || "__none") === o);
+    const won = mine.filter(x => x.stage === "won" && salesIn(x.outcome_at, a, b)), lost = mine.filter(x => x.stage === "lost" && salesIn(x.outcome_at, a, b));
+    const allWon = mine.filter(x => x.stage === "won"), allClosed = mine.filter(x => ["won", "lost"].includes(x.stage));
+    const open = mine.filter(x => SALES_OPEN.includes(x.stage));
+    const tgt = o === "__none" ? 0 : salesTarget(S, a, b, o);
+    const wonV = won.reduce((s, x) => s + Number(x.bid_value || 0), 0);
+    return { o, name: o === "__none" ? "Unassigned" : salesName(S, o), tgt, wonV, nWon: won.length, nLost: lost.length,
+      winRate: allClosed.length ? Math.round(allWon.length / allClosed.length * 100) : null,
+      openV: open.reduce((s, x) => s + Number(x.bid_value || 0), 0), nOpen: open.length,
+      avg: allWon.length ? allWon.reduce((s, x) => s + Number(x.bid_value || 0), 0) / allWon.length : null,
+      stuck: open.filter(x => opsDays(x.updated_at) > 21).length };
+  }).sort((p, q) => q.wonV - p.wonV || q.openV - p.openV);
+  // Funnel: of the bids that got at least this far, how many went one step further (from where bids are now).
+  const order = ["identified", "bidding", "submitted", "negotiation", "won"];
+  const reach = st => { const i = order.indexOf(st); return S.bids.filter(x => { if (x.stage === "lost" || x.stage === "no_bid") return false; return order.indexOf(x.stage) >= i; }).length +
+    (i <= 2 ? S.bids.filter(x => x.stage === "lost").length : 0); };
+  const steps = [["identified", "bidding"], ["bidding", "submitted"], ["submitted", "negotiation"], ["negotiation", "won"]].map(([f, t]) => { const n0 = reach(f), n1 = reach(t); return { f, t, pct: n0 ? Math.round(n1 / n0 * 100) : null }; });
+  const stuck = S.bids.filter(x => SALES_OPEN.includes(x.stage) && opsDays(x.updated_at) > 21);
+  return (
+    <div>
+      <div style={{ marginBottom: 12 }}><SalesChips value={kind} onChange={setKind} /></div>
+      <div className="qp-cols" style={{ gridTemplateColumns: "minmax(0,1.7fr) minmax(0,1fr)" }}>
+        <div className="qp-card"><div style={{ overflowX: "auto" }}><table className="qp-table"><thead><tr><th>Salesperson</th><th style={{ textAlign: "right" }}>Target</th><th style={{ textAlign: "right" }}>Won</th><th style={{ width: "16%" }}>Of target</th><th style={{ textAlign: "right" }}>Win rate</th><th style={{ textAlign: "right" }}>Open pipeline</th><th style={{ textAlign: "right" }}>Avg deal</th><th style={{ textAlign: "right" }}>Stuck</th></tr></thead>
+          <tbody>{rows.map(r => { const pc = r.tgt ? Math.round(r.wonV / r.tgt * 100) : null; return <tr key={r.o}><td style={{ fontWeight: 700 }}>{r.name}</td>
+            <td style={{ textAlign: "right" }}>{r.tgt ? divMoney(r.tgt, cur) : <span style={{ fontSize: 12, color: "var(--q-text-dimmer,#94a3b8)" }}>not set</span>}</td>
+            <td style={{ textAlign: "right" }}>{divMoney(r.wonV, cur)} <span style={{ fontSize: 11, color: "var(--q-text-dimmer,#94a3b8)" }}>({r.nWon})</span></td>
+            <td>{pc == null ? null : <div><DivBullet actual={pc} target={100} colour={pc >= 100 ? DIV_SERIES[2] : pc >= 60 ? DIV_WARN : DIV_BAD} /><div style={{ fontSize: 11, marginTop: 2 }}>{pc}%</div></div>}</td>
+            <td style={{ textAlign: "right" }}>{r.winRate == null ? "—" : r.winRate + "%"}</td><td style={{ textAlign: "right" }}>{divMoney(r.openV, cur)} <span style={{ fontSize: 11, color: "var(--q-text-dimmer,#94a3b8)" }}>({r.nOpen})</span></td>
+            <td style={{ textAlign: "right" }}>{r.avg == null ? "—" : divMoney(r.avg, cur)}</td><td style={{ textAlign: "right" }}>{r.stuck ? <DivPill tone="warn">{r.stuck}</DivPill> : "—"}</td></tr>; })}</tbody></table></div>
+          <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 8 }}>Win rate and average deal are over all time; won and target are for the period. Personal targets are set per person; without one the row shows "not set".</p></div>
+        <div className="qp-card"><h4>Stage conversion</h4><p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 8px" }}>Of the bids that reached a stage, how many went on to the next.</p>
+          {steps.map(s => <div key={s.f} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--q-line,rgba(148,163,184,.18))" }}>
+            <span style={{ fontSize: 13 }}><b>{BID_STAGE_LABEL[s.f]}</b> → {BID_STAGE_LABEL[s.t]}</span><b style={{ fontSize: 17 }}>{s.pct == null ? "—" : s.pct + "%"}</b></div>)}
+          {stuck.length > 0 && <div style={{ marginTop: 10, fontSize: 12.5, color: "#f59e0b" }}>⚠ {stuck.length} open bid{stuck.length > 1 ? "s" : ""} with no update for over 21 days: {stuck.slice(0, 4).map(x => x.tender_name).join(", ")}{stuck.length > 4 ? "…" : ""}</div>}</div>
+      </div>
+    </div>
+  );
+}
+
+function SalesLoss({ S }) {
+  const [kind, setKind] = useState("year");
+  const [a, b] = salesPeriod(kind); const cur = salesCur(S);
+  const lost = S.bids.filter(x => x.stage === "lost" && salesIn(x.outcome_at || x.updated_at, a, b));
+  const lostV = lost.reduce((s, x) => s + Number(x.bid_value || 0), 0);
+  const group = (fn) => { const m = {}; for (const x of lost) for (const k of [].concat(fn(x))) { (m[k] ||= { k, n: 0, v: 0 }); m[k].n++; m[k].v += Number(x.bid_value || 0); } return Object.values(m).sort((p, q) => q.n - p.n); };
+  const byReason = group(x => x.loss_reason || "__none"), byComp = group(x => (x.won_by || "").trim() || "__none");
+  const bySys = group(x => { const p = S.proj[x.project_id]; return p && p.required_systems && p.required_systems.length ? p.required_systems : ["__none"]; });
+  const Bars = ({ rows, label, colour }) => { const max = Math.max(1, ...rows.map(r => r.n)); return rows.length === 0 ? <div className="qp-empty">No lost bids in the period.</div> :
+    rows.slice(0, 7).map(r => <div key={r.k} style={{ display: "grid", gridTemplateColumns: "minmax(110px,150px) minmax(0,1fr) 34px", gap: 8, alignItems: "center", padding: "6px 0" }}>
+      <span style={{ fontSize: 12.5, color: r.k === "__none" ? "#b45309" : "var(--q-text-dim,#64748b)" }}>{label(r.k)}</span>
+      <span style={{ height: 12, borderRadius: 6, background: "var(--q-panel-2,rgba(148,163,184,.15))", overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${r.n / max * 100}%`, background: colour }} /></span><b style={{ fontSize: 13 }}>{r.n}</b></div>); };
+  const noComp = byComp.find(r => r.k === "__none");
+  return (
+    <div>
+      <div style={{ marginBottom: 12 }}><SalesChips value={kind} onChange={setKind} opts={SALES_KIND.slice(1)} /></div>
+      <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
+        <DivStat label="Bids lost" value={lost.length} note={divMoney(lostV, cur)} />
+        <DivStat label="Top reason" value={byReason[0] ? (byReason[0].k === "__none" ? "Not recorded" : LOSS_LABEL[byReason[0].k] || byReason[0].k) : "—"} note={byReason[0] ? `${byReason[0].n} bids · ${divMoney(byReason[0].v, cur)}` : ""} />
+        <DivStat label="Most lost to" value={(byComp.find(r => r.k !== "__none") || {}).k || "—"} note={byComp.find(r => r.k !== "__none") ? `${byComp.find(r => r.k !== "__none").n} bids` : "competitors not recorded"} />
+        <DivStat label="System lost most" value={(bySys.find(r => r.k !== "__none") || {}).k ? SYSTEM_LABEL(bySys.find(r => r.k !== "__none").k) : "—"} note={bySys.find(r => r.k !== "__none") ? `${bySys.find(r => r.k !== "__none").n} bids` : ""} />
+      </div>
+      <div className="qp-cols" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))" }}>
+        <div className="qp-card"><h4>By reason</h4><Bars rows={byReason} colour="#e05252" label={k => k === "__none" ? "Not recorded" : LOSS_LABEL[k] || k} /></div>
+        <div className="qp-card"><h4>Lost to</h4><Bars rows={byComp} colour="#7c3aed" label={k => k === "__none" ? "Not recorded" : k} />
+          {noComp && <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 6 }}>{noComp.n} lost bid{noComp.n > 1 ? "s have" : " has"} no competitor recorded. Fill in "Who won it?" when closing a bid as lost.</p>}</div>
+        <div className="qp-card"><h4>By system</h4><Bars rows={bySys} colour="#3b82f6" label={k => k === "__none" ? "No systems on project" : SYSTEM_LABEL(k)} /></div>
+      </div>
+    </div>
+  );
+}
+
+function SalesInsights({ tab }) {
+  const [S, setS] = useState(null); const [err, setErr] = useQErr("");
+  const load = async () => { try { setS(await salesLoadAll()); } catch (e) { setErr(e.message || String(e)); } };
+  useEffect(() => { load(); }, []);
+  useQAutoRefresh(() => load(), 60);
+  if (err) return <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>;
+  if (!S) return <div className="qp-card">Loading…</div>;
+  if (tab === "systems") return <SalesBySystem S={S} />;
+  if (tab === "team") return <SalesTeam S={S} />;
+  if (tab === "loss") return <SalesLoss S={S} />;
+  return <SalesDashboard S={S} />;
+}
+
 function SalesPage({ onNavigate }) {
   const [bids, setBids] = useState(null);
   const [target, setTarget] = useState(null);
@@ -29713,9 +29980,12 @@ function SalesPage({ onNavigate }) {
   const [busy, setBusy] = useState(false);
   const [targetOpen, setTargetOpen] = useState(false);
   const [targetVal, setTargetVal] = useState("");
+  const [tab, setTab] = useState(() => { try { return localStorage.getItem("q_sales_tab") || "dash"; } catch (_) { return "dash"; } });
+  const pickTab = (t) => { setTab(t); try { localStorage.setItem("q_sales_tab", t); } catch (_) {} };
 
   const monthStart = divMonthStart();
-  const monthKey = monthStart.toISOString().slice(0, 10);
+  // Local year-month, not toISOString(): east of UTC (the UAE) that gave the last day of the previous month.
+  const monthKey = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, "0")}-01`;
 
   async function load() {
     setErr("");
@@ -29816,8 +30086,16 @@ function SalesPage({ onNavigate }) {
         right={<button className="qp-btn" onClick={() => setTargetOpen(true)}>Set this month's target</button>} />
 
       {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
+      {bids.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 14px" }}>
+        {[["dash", "Sales dashboard"], ["systems", "By system"], ["team", "Team leaderboard"], ["loss", "Loss analysis"], ["bids", "Bids & pipeline"]].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => pickTab(k)}
+            style={{ fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer",
+              border: "1px solid " + (tab === k ? "transparent" : "rgba(148,163,184,.35)"),
+              background: tab === k ? "linear-gradient(90deg,#2563eb,#7c3aed)" : "transparent", color: tab === k ? "#fff" : "inherit" }}>{l}</button>))}
+      </div>}
+      {tab !== "bids" && bids.length > 0 ? <SalesInsights tab={tab} /> : null}
 
-      {bids.length === 0 ? (
+      {(tab === "bids" || bids.length === 0) && (bids.length === 0 ? (
         <DivEmpty
           title="No bids yet"
           body="This dashboard is built from your tenders. Add a tender on the Tender Intelligence page inside a project, then set its value, owner and stage here — the pipeline, win rate and targets all follow from that."
@@ -29920,7 +30198,7 @@ function SalesPage({ onNavigate }) {
             </div>
           </div>
         </>
-      )}
+      ))}
 
       {edit && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
