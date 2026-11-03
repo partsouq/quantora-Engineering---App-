@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-03.08"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-03.09"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29715,7 +29715,7 @@ async function salesLoadAll() {
   const { data: prof } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
   const companyId = prof && prof.company_id;
   const { data: t, error } = await sb.from("tenders")
-    .select("id, tender_name, client_name, bid_value, currency, owner_id, stage, probability, submission_deadline, expected_award, outcome_at, loss_reason, won_by, project_id, created_at, updated_at");
+    .select("*");   // includes estimator_id once the bid-board SQL has run
   if (error) throw error;
   const bids = t || [];
   const pids = [...new Set(bids.map(b => b.project_id).filter(Boolean))];
@@ -29739,8 +29739,12 @@ function salesPeriod(kind) {
   return [a, b];
 }
 // Company target for a period: sum of the monthly company targets it covers (a week gets its share of the month).
-function salesTarget(S, a, b, userId) {
-  const rows = S.targets.filter(t => (userId ? t.user_id === userId : !t.user_id));
+function salesTarget(S, a, b, userId, kind) {
+  const k = kind || "sales";
+  const seen = new Set();
+  const rows = S.targets.filter(t => (userId ? t.user_id === userId : !t.user_id) && (t.kind || "sales") === k)
+    .sort((x, y) => new Date(y.created_at || 0) - new Date(x.created_at || 0))
+    .filter(t => { const key = String(t.period_month).slice(0, 7); if (seen.has(key)) return false; seen.add(key); return true; });   // the old rule could save a month twice
   let sum = 0;
   for (const t of rows) {
     // "YYYY-MM-DD" read as a local month; a key saved as the last day of the previous month (old UTC bug) counts for the next month.
@@ -29769,11 +29773,13 @@ function SalesChips({ value, onChange, opts }) {
     style={{ fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 99, cursor: "pointer", border: "1px solid " + (value === k ? "transparent" : "rgba(148,163,184,.35)"), background: value === k ? "#2563eb" : "transparent", color: value === k ? "#fff" : "inherit" }}>{l}</button>)}</div>;
 }
 
-function SalesDashboard({ S }) {
+function SalesDashboard({ S, onReload }) {
   const [kind, setKind] = useState("month");
   const [a, b] = salesPeriod(kind); const cur = salesCur(S);
   const st = salesStats(S, a, b);
   const tgt = salesTarget(S, a, b);
+  const rt = salesTarget(S, a, b, null, "revenue");
+  const [targetsOpen, setTargetsOpen] = useState(false);
   const [qa, qb] = salesPeriod("quarter"); const qs = salesStats(S, qa, qb); const qt = salesTarget(S, qa, qb);
   const toGo = Math.max(0, qt - qs.wonV); const coverage = toGo > 0 ? qs.openV / toGo : null;
   // last 6 months: target vs awarded
@@ -29788,8 +29794,9 @@ function SalesDashboard({ S }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
         <SalesChips value={kind} onChange={setKind} />
-        <button className="qp-btn pri" onClick={pdf}>⬇ Summary PDF</button>
+        <div style={{ display: "flex", gap: 8 }}><button className="qp-btn" onClick={() => setTargetsOpen(true)}>Set targets</button><button className="qp-btn pri" onClick={pdf}>⬇ Summary PDF</button></div>
       </div>
+      {targetsOpen && <SalesTargets S={S} onClose={() => setTargetsOpen(false)} onSaved={() => { setTargetsOpen(false); onReload && onReload(); }} />}
       <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
         <DivStat label={`Awarded · ${SALES_KIND.find(k => k[0] === kind)[1].toLowerCase()}`} value={divMoney(st.wonV, cur)}
           tone={tgt && st.wonV < tgt * 0.6 ? DIV_WARN : undefined} note={tgt ? `${Math.round(st.wonV / tgt * 100)}% of ${divMoney(tgt, cur)} target` : "no target set"} />
@@ -29797,7 +29804,8 @@ function SalesDashboard({ S }) {
         <DivStat label="Won / lost / open" value={`${st.won.length} / ${st.lost.length} / ${st.open.length}`} note={st.winRate == null ? "no closed bids in the period" : `win rate ${st.winRate}%`} />
         <DivStat label="Pipeline coverage (quarter)" value={coverage == null ? "—" : coverage.toFixed(1) + "×"} tone={coverage != null && coverage < 3 ? DIV_BAD : undefined}
           note={coverage == null ? (qt ? "quarter target reached" : "set monthly targets to see this") : `${divMoney(qs.openV, cur)} open vs ${divMoney(toGo, cur)} to go`} />
-        <DivStat label="Revenue invoiced" value={divMoney(st.invoiced, cur)} note="payment applications submitted in the period" />
+        <DivStat label="Revenue invoiced" value={divMoney(st.invoiced, cur)} tone={rt && st.invoiced < rt * 0.6 ? DIV_WARN : undefined}
+          note={rt ? `${Math.round(st.invoiced / rt * 100)}% of ${divMoney(rt, cur)} revenue target` : "payment applications submitted in the period"} />
       </div>
       <div className="qp-cols" style={{ gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr)" }}>
         <div className="qp-card"><h4>Awarded vs target · last 6 months</h4>
@@ -29958,6 +29966,115 @@ function SalesLoss({ S }) {
   );
 }
 
+// Bid board (pre-sales), 2026-11-03: every tender in estimation, its estimator, deadline and
+// progress. Progress is worked out from the project itself, so nobody has to tick boxes:
+// drawings uploaded, specification uploaded, BOQ made, BOQ priced, bid submitted.
+const BID_STEPS = [["drawings", "Drawings"], ["spec", "Spec"], ["boq", "BOQ"], ["priced", "Priced"], ["submitted", "Submitted"]];
+function BidBoard({ S, onReload }) {
+  const live = S.bids.filter(x => ["identified", "bidding", "submitted", "negotiation"].includes(x.stage))
+    .sort((a, b) => new Date(a.submission_deadline || "2999-01-01") - new Date(b.submission_deadline || "2999-01-01"));
+  const [prog, setProg] = useState(null);
+  const [est, setEst] = useState({});
+  useEffect(() => { let alive = true; (async () => {
+    const out = {};
+    await Promise.all(live.slice(0, 60).map(async x => {
+      const p = x.project_id; const r = { drawings: false, spec: false, boq: false, priced: false, submitted: ["submitted", "negotiation"].includes(x.stage) };
+      try {
+        const qs = [sb.from("tender_documents").select("id", { count: "exact", head: true }).eq("tender_id", x.id)];
+        if (p) qs.push(sb.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", p),
+          sb.from("boq_items").select("id", { count: "exact", head: true }).eq("project_id", p),
+          sb.from("boq_items").select("id", { count: "exact", head: true }).eq("project_id", p).gt("unit_cost_cents", 0));
+        const res = await Promise.all(qs);
+        r.spec = (res[0].count || 0) > 0;
+        if (p) { r.drawings = (res[1].count || 0) > 0; r.boq = (res[2].count || 0) > 0; r.priced = (res[3].count || 0) > 0; }
+      } catch (_) {}
+      out[x.id] = r;
+    }));
+    if (alive) setProg(out); })(); return () => { alive = false; }; }, [S]);
+  const estOf = x => est[x.id] !== undefined ? est[x.id] : x.estimator_id || null;
+  const setEstimator = async (x, v) => {
+    setEst(s => ({ ...s, [x.id]: v || null }));
+    const { error } = await sb.from("tenders").update({ estimator_id: v || null }).eq("id", x.id);
+    if (error) qPop({ kind: "warn", title: "Not saved", message: error.message });
+  };
+  const days = d => d ? Math.ceil((new Date(d) - Date.now()) / OPS_DAY) : null;
+  const missing = (x, r) => { if (!estOf(x)) return "No estimator assigned"; if (!r) return "";
+    const m = BID_STEPS.find(([k]) => !r[k] && k !== "submitted"); return m ? (m[0] === "boq" ? "BOQ (run AI or Manual Take-off)" : m[0] === "priced" ? "Pricing" : m[1]) : (r.submitted ? "—" : "Ready to submit"); };
+  const cur = salesCur(S);
+  const load = {}; for (const x of live) { const k = estOf(x) || "__none"; (load[k] ||= { k, n: 0, v: 0, soon: 0 }); load[k].n++; load[k].v += Number(x.bid_value || 0); if (days(x.submission_deadline) != null && days(x.submission_deadline) <= 3 && days(x.submission_deadline) >= 0) load[k].soon++; }
+  const loads = Object.values(load).sort((a, b) => b.n - a.n); const maxN = Math.max(1, ...loads.map(l => l.n));
+  const cal = Array.from({ length: 14 }, (_, i) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + i); return d; });
+  const evs = d => S.bids.filter(x => SALES_OPEN.includes(x.stage)).flatMap(x => [[x.submission_deadline, "sub"], [x.clarification_deadline, "clar"]].filter(([dd]) => dd && new Date(dd).toDateString() === d.toDateString()).map(([, k]) => ({ x, k })));
+  const busiest = loads.find(l => l.k !== "__none" && l.soon >= 2);
+  return (
+    <div>
+      <div className="qp-cols" style={{ gridTemplateColumns: "minmax(0,1.8fr) minmax(0,1fr)" }}>
+        <div className="qp-card"><h4>Tenders in estimation</h4>
+          <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 8px" }}>Progress is read from each project: drawings and specification uploaded, BOQ made and priced, bid submitted.</p>
+          {live.length === 0 ? <div className="qp-empty">No open tender.</div> : <div style={{ overflowX: "auto" }}><table className="qp-table">
+            <thead><tr><th>Tender · systems</th><th>Estimator</th><th>Deadline</th><th>Progress</th><th>Missing</th></tr></thead>
+            <tbody>{live.map(x => { const r = prog && prog[x.id]; const dl = days(x.submission_deadline); const p = S.proj[x.project_id];
+              return <tr key={x.id}><td style={{ minWidth: 150 }}><div style={{ fontWeight: 700 }}>{x.tender_name}</div><div style={{ fontSize: 11.5, color: "var(--q-text-dim,#64748b)" }}>{BID_STAGE_LABEL[x.stage]}{x.bid_value ? " · " + divMoney(x.bid_value, x.currency || cur) : ""}</div><div style={{ fontSize: 11.5, color: "#93c5fd", marginTop: 2 }}>{p && p.required_systems && p.required_systems.length ? p.required_systems.slice(0, 4).map(SYSTEM_LABEL).join(", ") + (p.required_systems.length > 4 ? "…" : "") : ""}</div></td>
+                <td><select value={estOf(x) || ""} onChange={e => setEstimator(x, e.target.value)} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5, maxWidth: 130 }}>
+                  <option value="">Not assigned</option>{S.people.map(m => <option key={m.id} value={m.id}>{salesName(S, m.id)}</option>)}</select></td>
+                <td>{dl == null ? <span style={{ fontSize: 12, color: "var(--q-text-dimmer,#94a3b8)" }}>not set</span> : <DivPill tone={dl < 0 ? "bad" : dl <= 3 ? "bad" : dl <= 7 ? "warn" : "good"}>{dl < 0 ? `${-dl}d overdue` : dl === 0 ? "today" : `${dl} day${dl === 1 ? "" : "s"}`}</DivPill>}</td>
+                <td style={{ minWidth: 170 }}>{!r ? <span style={{ fontSize: 12 }}>…</span> : BID_STEPS.map(([k, l]) => <span key={k} title={l} style={{ display: "inline-block", fontSize: 10.5, fontWeight: 800, padding: "2px 7px", borderRadius: 99, marginRight: 3, marginBottom: 3,
+                  background: r[k] ? "rgba(46,158,91,.16)" : "transparent", color: r[k] ? "#34d399" : "var(--q-text-dimmer,#94a3b8)", border: r[k] ? "0" : "1px solid rgba(148,163,184,.35)" }}>{r[k] ? "✓ " : ""}{l}</span>)}</td>
+                <td style={{ fontSize: 12, color: !estOf(x) ? "#f59e0b" : "var(--q-text-dim,#64748b)" }}>{missing(x, r)}</td></tr>; })}</tbody></table></div>}</div>
+        <div className="qp-card"><h4>Team workload</h4><p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 8px" }}>Open tenders per estimator.</p>
+          <table className="qp-table"><thead><tr><th>Estimator</th><th style={{ textAlign: "right" }}>Open</th><th style={{ textAlign: "right" }}>Value</th><th style={{ width: "34%" }}>Load</th></tr></thead>
+            <tbody>{loads.map(l => <tr key={l.k}><td style={{ fontWeight: 700, color: l.k === "__none" ? "#f59e0b" : undefined }}>{l.k === "__none" ? "Not assigned" : salesName(S, l.k)}</td><td style={{ textAlign: "right" }}>{l.n}</td>
+              <td style={{ textAlign: "right" }}>{divMoney(l.v, cur)}</td><td><DivBullet actual={Math.round(l.n / maxN * 100)} target={100} colour={l.n === maxN && maxN > 2 ? DIV_BAD : DIV_SERIES[2]} /></td></tr>)}</tbody></table>
+          {busiest && <p style={{ fontSize: 12.5, marginTop: 10, color: "#f59e0b" }}>{salesName(S, busiest.k)} has {busiest.soon} deadlines in the next 3 days. Consider moving one.</p>}</div>
+      </div>
+      <div className="qp-card"><h4>Deadlines · next 2 weeks</h4>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 6, marginTop: 8 }}>
+          {cal.map(d => <div key={d.toISOString()} style={{ border: "1px solid rgba(148,163,184,.25)", borderRadius: 10, minHeight: 72, padding: 6, fontSize: 11 }}>
+            <div style={{ fontWeight: 700, opacity: .7 }}>{d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}</div>
+            {evs(d).map((e, i) => <div key={i} title={e.x.tender_name} style={{ marginTop: 3, padding: "2px 5px", borderRadius: 6, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              background: e.k === "sub" ? "rgba(224,82,82,.16)" : "rgba(59,130,246,.16)", color: e.k === "sub" ? "#f87171" : "#93c5fd" }}>{e.k === "clar" ? "Clarif.: " : ""}{e.x.tender_name}</div>)}</div>)}</div>
+        <p style={{ fontSize: 11.5, color: "var(--q-text-dim,#64748b)", marginTop: 8 }}>Red: submission deadline · blue: clarification deadline.</p></div>
+    </div>
+  );
+}
+
+// Monthly targets: the company sales and revenue target, and a sales target for each person.
+function SalesTargets({ S, onClose, onSaved }) {
+  const months = Array.from({ length: 4 }, (_, i) => { const d = new Date(new Date().getFullYear(), new Date().getMonth() + i, 1); return [`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`, d.toLocaleString("en-GB", { month: "long", year: "numeric" })]; });
+  const [mk, setMk] = useState(months[0][0]);
+  const find = (uid, kind) => { const r = S.targets.find(t => (t.user_id || null) === uid && (t.kind || "sales") === kind && String(t.period_month).slice(0, 7) === mk.slice(0, 7)); return r ? String(r.target_value) : ""; };
+  const [vals, setVals] = useState({});
+  useEffect(() => { const v = { "co:sales": find(null, "sales"), "co:revenue": find(null, "revenue") }; S.people.forEach(p => { v[p.id] = find(p.id, "sales"); }); setVals(v); }, [mk]);
+  const [busy, setBusy] = useState(false);
+  const save = async (e) => {
+    e.preventDefault(); setBusy(true);
+    try {
+      const rows = [{ user_id: null, kind: "sales", v: vals["co:sales"] }, { user_id: null, kind: "revenue", v: vals["co:revenue"] }, ...S.people.map(p => ({ user_id: p.id, kind: "sales", v: vals[p.id] }))]
+        .filter(r => r.v !== "" && r.v != null).map(r => ({ company_id: S.companyId, user_id: r.user_id, period_month: mk, kind: r.kind, target_value: Number(r.v) || 0, target_count: 0 }));
+      if (rows.length) { const { error } = await sb.from("sales_targets").upsert(rows, { onConflict: "company_id,user_id,period_month,kind" }); if (error) throw error; }
+      onSaved(); qPop({ kind: "success", title: "Targets saved ✓", message: months.find(m => m[0] === mk)[1] });
+    } catch (ex) { qPop({ kind: "warn", title: "Could not save the targets", message: ex.message || String(ex) }); }
+    setBusy(false);
+  };
+  const inp = (k) => <input type="number" min="0" className="w-full border rounded-lg px-3 py-2 text-sm" value={vals[k] ?? ""} onChange={e => setVals({ ...vals, [k]: e.target.value })} placeholder="0" />;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" onClick={onClose}>
+      <form className="qp-card" style={{ maxWidth: 560, width: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto" }} onClick={e => e.stopPropagation()} onSubmit={save}>
+        <h4>Targets</h4>
+        <select className="border rounded-lg px-3 py-2 text-sm" style={{ margin: "8px 0 12px" }} value={mk} onChange={e => setMk(e.target.value)}>{months.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div><label style={{ fontSize: 12, fontWeight: 700 }}>Company sales target ({salesCur(S)})</label>{inp("co:sales")}<div style={{ fontSize: 11, opacity: .6 }}>value to be awarded this month</div></div>
+          <div><label style={{ fontSize: 12, fontWeight: 700 }}>Company revenue target ({salesCur(S)})</label>{inp("co:revenue")}<div style={{ fontSize: 11, opacity: .6 }}>value to be invoiced this month</div></div>
+        </div>
+        {S.people.length > 0 && <><div style={{ fontSize: 12, fontWeight: 800, margin: "14px 0 6px" }}>Sales target per person</div>
+          {S.people.map(p => <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 10, alignItems: "center", padding: "3px 0" }}><span style={{ fontSize: 13 }}>{salesName(S, p.id)}</span>{inp(p.id)}</div>)}</>}
+        <p style={{ fontSize: 11.5, opacity: .65, marginTop: 10 }}>Weekly figures use each month's target shared over its days.</p>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}><button type="button" className="qp-btn" onClick={onClose}>Cancel</button><button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Save targets"}</button></div>
+      </form>
+    </div>
+  );
+}
+
 function SalesInsights({ tab }) {
   const [S, setS] = useState(null); const [err, setErr] = useQErr("");
   const load = async () => { try { setS(await salesLoadAll()); } catch (e) { setErr(e.message || String(e)); } };
@@ -29968,7 +30085,8 @@ function SalesInsights({ tab }) {
   if (tab === "systems") return <SalesBySystem S={S} />;
   if (tab === "team") return <SalesTeam S={S} />;
   if (tab === "loss") return <SalesLoss S={S} />;
-  return <SalesDashboard S={S} />;
+  if (tab === "board") return <BidBoard S={S} onReload={load} />;
+  return <SalesDashboard S={S} onReload={load} />;
 }
 
 function SalesPage({ onNavigate }) {
@@ -30003,7 +30121,7 @@ function SalesPage({ onNavigate }) {
           .select("id, full_name, first_name, last_name").eq("company_id", companyId);
         setPeople(mates || []);
         const { data: tg } = await sb.from("sales_targets")
-          .select("*").eq("company_id", companyId).is("user_id", null).eq("period_month", monthKey).maybeSingle();
+          .select("*").eq("company_id", companyId).is("user_id", null).eq("period_month", monthKey).eq("kind", "sales").order("created_at", { ascending: false }).limit(1).maybeSingle();
         setTarget(tg || null);
         setTargetVal(tg ? String(tg.target_value) : "");
       }
@@ -30067,8 +30185,8 @@ function SalesPage({ onNavigate }) {
       if (!prof || !prof.company_id) throw new Error("No company on your profile yet.");
       const { error } = await sb.from("sales_targets").upsert({
         company_id: prof.company_id, user_id: null, period_month: monthKey,
-        target_value: Number(targetVal) || 0, target_count: 0,
-      }, { onConflict: "company_id,user_id,period_month" });
+        target_value: Number(targetVal) || 0, target_count: 0, kind: "sales",
+      }, { onConflict: "company_id,user_id,period_month,kind" });
       if (error) throw error;
       setTargetOpen(false); await load();
     } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
@@ -30087,7 +30205,7 @@ function SalesPage({ onNavigate }) {
 
       {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
       {bids.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 14px" }}>
-        {[["dash", "Sales dashboard"], ["systems", "By system"], ["team", "Team leaderboard"], ["loss", "Loss analysis"], ["bids", "Bids & pipeline"]].map(([k, l]) => (
+        {[["dash", "Sales dashboard"], ["board", "Bid board"], ["systems", "By system"], ["team", "Team leaderboard"], ["loss", "Loss analysis"], ["bids", "Bids & pipeline"]].map(([k, l]) => (
           <button key={k} type="button" onClick={() => pickTab(k)}
             style={{ fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer",
               border: "1px solid " + (tab === k ? "transparent" : "rgba(148,163,184,.35)"),
