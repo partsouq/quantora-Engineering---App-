@@ -216,7 +216,8 @@ async function report(ok, failedStep, message) {
 
     await step("Open Manual Take-off", async () => {
       await page.locator("nav").getByText("Manual Take-off").first().click();
-      await page.getByText(/Choose the drawing for this floor/).first().waitFor({ timeout: 30000 });
+      // The drawing chooser is a list box; its first option is not "visible" text, so wait for the list itself.
+      await page.locator("select").filter({ has: page.locator("option", { hasText: "Choose the drawing for this floor" }) }).first().waitFor({ timeout: 30000 });
     });
 
     // Manual Take-off end to end (no AI): attach the drawing, mark three cameras, get the Designed BOQ.
