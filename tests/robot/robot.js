@@ -246,7 +246,14 @@ async function report(ok, failedStep, message) {
         for (let tries = 0; tries < 4; tries++) {
           await closePops();
           const b = await sheet.boundingBox();
-          await sheet.click({ position: { x: b.width * fx, y: b.height * fy }, timeout: 10000 }).catch(e => log("  click:", String(e.message).split("\n")[0]));
+          await sheet.click({ position: { x: b.width * fx, y: b.height * fy }, timeout: 10000 }).catch(async e => {
+            const why = String(e.message).split("\n").find(l => /intercepts pointer events/.test(l)) || String(e.message).split("\n")[0];
+            const top = await page.evaluate(([x, y]) => { const el = document.elementFromPoint(x, y); if (!el) return null;
+              const c = el.closest('[role],[class*="fixed"],[id]') || el; return (c.tagName + " " + (c.id || "") + " " + (c.getAttribute("role") || "") + " " + (c.className || "")).slice(0, 160) + " | " + (c.innerText || "").replace(/\s+/g, " ").slice(0, 160); },
+              [b.x + b.width * fx, b.y + b.height * fy]).catch(() => null);
+            log("  click blocked:", why.trim().slice(0, 300), "| on top:", top);
+            throw e;
+          }).catch(() => {});
           await page.waitForTimeout(600);
           if (await page.getByText(new RegExp("^D" + (n + 1) + "$")).count()) { n++; break; }
         }
