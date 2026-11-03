@@ -132,10 +132,21 @@ async function report(ok, failedStep, message) {
     await step("Create a project", async () => {
       await page.getByText("Open projects").first().click();
       await page.getByRole("button", { name: "+ New Project" }).first().click({ timeout: 20000 });
-      const inputs = page.locator('form input[type="text"]');
-      await inputs.nth(0).fill(PROJECT);          // Project name
-      await inputs.nth(2).fill("United Arab Emirates");  // Country
-      await inputs.nth(3).fill("Dubai");          // City
+      const form = page.locator("form").filter({ hasText: "Project Name" }).first();
+      await form.locator("input").first().fill(PROJECT);                 // Project name
+      // Country and city are lists of supported places (typed boxes when the list is not loaded).
+      const ctry = form.locator("select").filter({ has: page.locator("option", { hasText: "Select country" }) }).first();
+      if (await ctry.count()) {
+        const v = await ctry.locator("option", { hasText: /^UAE/ }).first().getAttribute("value");
+        await ctry.selectOption(v);
+        await page.waitForTimeout(300);
+        const city = form.locator("select").filter({ has: page.locator("option", { hasText: "Dubai" }) }).first();
+        if (await city.count()) await city.selectOption({ label: "Dubai" });
+        else { const ci = form.locator('input[placeholder="City name"]'); if (await ci.count()) await ci.fill("Dubai"); }
+      } else {
+        await form.locator('input[placeholder="Country name"]').first().fill("United Arab Emirates").catch(() => {});
+        await form.locator('input[placeholder="City name"]').first().fill("Dubai").catch(() => {});
+      }
       const typeSel = page.locator("form select").filter({ has: page.locator("option", { hasText: "Choose the type of project" }) });
       if (await typeSel.count()) {
         const v = await typeSel.locator("option").nth(1).getAttribute("value");
