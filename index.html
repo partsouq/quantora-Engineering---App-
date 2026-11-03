@@ -11494,8 +11494,9 @@ function ComparisonTab({ project }) {
 
   // Upload a supplier quotation. Goes to the tenders bucket under the tender id,
   // because that is the only place procurement-engine looks.
-  async function uploadQuote(files) {
-    if (!files || !files.length || !pkgId || !tender) return;
+  async function uploadQuote(fileList) {
+    const files = Array.from(fileList || []);   // copied before the input is cleared (see uploadSpec)
+    if (!files.length || !pkgId || !tender) return;
     if (!vendorName.trim()) { setError("Enter the supplier's name first — the comparison is meaningless without knowing whose quote this is."); return; }
     setBusyQ("upload"); setError(null);
     try {
@@ -19536,8 +19537,10 @@ function SpecificationTab({ project }) {
 
   // Same table and bucket as Tender Intelligence, so a document uploaded on
   // either page is visible and readable from both.
-  async function uploadSpec(files) {
-    if (!files || !files.length) return;
+  async function uploadSpec(fileList) {
+    // Copy the files first: the input is cleared straight after this call, which empties a live FileList.
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
     setBusySpec("upload"); setError(null);
     try {
       // A file chosen before the page finished loading used to be ignored without a word.
