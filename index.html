@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-03.02"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-03.03"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -2224,6 +2224,40 @@ const AUTH_RETURN = (function () {
 })();
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Upload retry (2026-11-03): a brief server hiccup at the file storage (HTTP 520/502/503/504, a dropped
+// connection) used to show the user an error at once. Every upload in the app now tries up to 3 times
+// within ~5 s first. If an earlier try did reach storage, the "already exists" answer counts as success.
+// Real problems (too big, not allowed, no internet for long) still show their normal message.
+(function qPatchUploadRetry() {
+  try {
+    const proto = Object.getPrototypeOf(sb.storage.from("drawings"));
+    if (!proto || proto.__qRetry) return;
+    const orig = proto.upload;
+    const transient = (err) => {
+      if (!err) return false;
+      const st = Number(err.status || err.statusCode || (err.originalError && err.originalError.status) || 0);
+      if (st >= 500 && st < 600) return true;
+      return /HTTP 5\d\d|\b52\d\b|50[234]|Failed to fetch|NetworkError|network|timed? ?out|ECONNRESET|socket/i.test(String(err.message || err));
+    };
+    const exists = (err) => err && (Number(err.status || err.statusCode) === 409 || /already exists|Duplicate/i.test(String(err.message || "")));
+    proto.upload = async function (path, body, opts) {
+      let last;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt) await new Promise(r => setTimeout(r, attempt === 1 ? 1500 : 3500));
+        let res;
+        try { res = await orig.call(this, path, body, opts); }
+        catch (e) { res = { data: null, error: e }; }
+        if (!res.error) return res;
+        if (attempt > 0 && exists(res.error)) return { data: { path }, error: null };   // the earlier try got through
+        last = res;
+        if (!transient(res.error)) return res;
+        try { console.warn("upload retry", attempt + 1, path, res.error && res.error.message); } catch (_) {}
+      }
+      return last;
+    };
+    proto.__qRetry = true;
+  } catch (e) { try { console.warn("upload retry not installed", e); } catch (_) {} }
+})();
 const FN_URL = `${SUPABASE_URL}/functions/v1/ai-engine`;
 
 const BUILDING_TYPES = [
