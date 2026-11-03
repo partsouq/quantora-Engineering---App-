@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-03.06"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-03.08"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -93,7 +93,7 @@ window.safeStorageName = function (name) {
   "name": "Quantora Engineering",
   "url": "https://quantoraengineering.com/",
   "logo": "https://quantoraengineering.com/icon512.png",
-  "email": "support@quantoraengineering.com",
+  "email": "info@quantoraengineering.com",
   "description": "AI Construction Intelligence Platform for automated take-off, bill of quantities, specifications and country-specific compliance checking across the Middle East, Asia, the UK, Europe, the Americas, Africa and Australia.",
   "areaServed": ["AE","SA","QA","KW","BH","OM","IN","PK","LK","BD","NP","SG","MY","ID","PH","TH","VN","HK","GB","IE","DE","FR","EU","US","CA","AU","NZ","ZA","EG","JO","TR","AZ","ET","KE","NG"]
 }
@@ -7901,7 +7901,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
                       {busyPlanId === plan.id ? "Opening payment…" : `Subscribe to ${plan.name}`}
                     </button>
                   ) : (
-                    <a href="mailto:support@quantoraengineering.com?subject=Enterprise%20plan%20enquiry" className="mt-4 text-center text-sm font-semibold border rounded-lg py-2 hover:bg-slate-50">Contact sales</a>
+                    <a href="mailto:info@quantoraengineering.com?subject=Enterprise%20plan%20enquiry" className="mt-4 text-center text-sm font-semibold border rounded-lg py-2 hover:bg-slate-50">Contact sales</a>
                   )}
                 </div>
               );
@@ -7944,7 +7944,7 @@ function UpgradePlanModal({ open, onClose, reason, focus }) {
             </div>
             {packs.every(p => !p.available) && (
               <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-3">
-                Credit top-ups aren't switched on yet. Email support@quantoraengineering.com and we'll add credit to your account manually.
+                Credit top-ups aren't switched on yet. Email info@quantoraengineering.com and we'll add credit to your account manually.
               </div>
             )}
           </div>
@@ -26408,7 +26408,7 @@ function qStatementPdf(monthKey, rows, company) {
   doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(18);
   doc.text("Quantora Engineering", 96, 46);
   doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(165, 190, 240);
-  doc.text("www.quantoraengineering.com  ·  support@quantoraengineering.com", 96, 63);
+  doc.text("www.quantoraengineering.com  ·  info@quantoraengineering.com", 96, 63);
   doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(13);
   doc.text("BILLING STATEMENT", W - 40, 46, { align: "right" });
   doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.text(monthName, W - 40, 63, { align: "right" });
@@ -27051,7 +27051,7 @@ function SettingsPage({ email, bare }) {
 // a customer picks the line that matches what they are looking at, and does
 // not have to write a paragraph.
 // ---------------------------------------------------------------------------
-const SUPPORT_EMAIL = "support@quantoraengineering.com";
+const SUPPORT_EMAIL = "info@quantoraengineering.com";
 
 // Business WhatsApp number in full international form, digits only, no "+"
 // and no spaces (e.g. "971501234567"). Deliberately empty: the WhatsApp button
@@ -31865,7 +31865,7 @@ function HelpPage({ onNavigate }) {
       <div className="qp-card">
         <h4>Contact support</h4>
         <p style={{ fontSize: 13, color: "var(--q-text-dim,#64748b)", lineHeight: 1.55 }}>
-          Email <a href="mailto:support@quantoraengineering.com" className="underline font-semibold">support@quantoraengineering.com</a> and
+          Email <a href="mailto:info@quantoraengineering.com" className="underline font-semibold">info@quantoraengineering.com</a> and
           include the project name. If it is about a drawing, say which sheet — it saves a round trip.
           {" "}{SUPPORT_REPLY_PROMISE}
         </p>
