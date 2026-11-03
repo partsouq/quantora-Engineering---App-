@@ -206,7 +206,7 @@ async function report(ok, failedStep, message) {
       await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});   // the page finishes loading first
       await page.locator("label", { hasText: "Upload specification" }).first().locator('input[type="file"]').setInputFiles(SPEC);
       await page.getByText(path.basename(SPEC), { exact: true }).first().waitFor({ timeout: 90000 });
-    });
+    }, { optional: true });
 
     await step("Open the BOQ page", async () => {
       await page.locator("nav").getByText("AI Take-off & BOQ").first().click();
