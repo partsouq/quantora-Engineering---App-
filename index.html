@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-03.09"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-03.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -31004,8 +31004,8 @@ function OpsCash({ D }) {
     const spent = (D.po[p.id] || []).filter(o => o.status !== "cancelled").reduce((s, o) => s + Number(o.amount_cents || 0), 0) / 100;
     const chase = [];
     for (const a of apps) {
-      if (a.status === "certified" && !a.paid_at) chase.push({ d: opsDays(a.certified_at) ?? 0, bad: (opsDays(a.certified_at) ?? 0) > 30, text: `${p.project_name} · ${a.ref || "Application"}`, sub: `${opsMoney(a.certified_amount, cur)} · certified ${opsDays(a.certified_at) ?? "?"} days ago, not paid` });
-      if (a.status === "submitted") chase.push({ d: opsDays(a.submitted_at) ?? 0, bad: false, text: `${p.project_name} · ${a.ref || "Application"}`, sub: `${opsMoney(a.amount, cur)} · submitted ${opsDays(a.submitted_at) ?? "?"} days ago, not certified` });
+      if (a.status === "certified" && !a.paid_at) chase.push({ a, pn: p.project_name, cur, d: opsDays(a.certified_at) ?? 0, bad: (opsDays(a.certified_at) ?? 0) > 30, text: `${p.project_name} · ${a.ref || "Application"}`, sub: `${opsMoney(a.certified_amount, cur)} · certified ${opsDays(a.certified_at) ?? "?"} days ago, not paid` });
+      if (a.status === "submitted") chase.push({ a, pn: p.project_name, cur, d: opsDays(a.submitted_at) ?? 0, bad: false, text: `${p.project_name} · ${a.ref || "Application"}`, sub: `${opsMoney(a.amount, cur)} · submitted ${opsDays(a.submitted_at) ?? "?"} days ago, not certified` });
     }
     return { p, cur, contract: con.contract_value == null ? null : Number(con.contract_value), applied, certified, paid, budget, spent,
              used: budget ? Math.round(spent / budget * 100) : null, pc: p.percent_complete == null ? null : Number(p.percent_complete), chase, n: apps.length };
@@ -31044,9 +31044,10 @@ function OpsCash({ D }) {
           <h4>Chase list</h4><p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 8px" }}>Oldest first.</p>
           {chase.length === 0 ? <div className="qp-empty">Nothing waiting. Submitted and certified applications that are not paid show here.</div> :
             chase.map((c, i) => (
-              <div key={i} style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: i ? "1px solid var(--q-line,rgba(148,163,184,.2))" : 0 }}>
+              <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "9px 0", borderTop: i ? "1px solid var(--q-line,rgba(148,163,184,.2))" : 0 }}>
                 <span style={{ width: 10, height: 10, marginTop: 5, borderRadius: 99, flex: "none", background: c.bad ? DIV_BAD : DIV_WARN }} />
-                <div><div style={{ fontWeight: 700, fontSize: 13 }}>{c.text}</div><div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>{c.sub}</div></div>
+                <div style={{ minWidth: 0, flex: 1 }}><div style={{ fontWeight: 700, fontSize: 13 }}>{c.text}</div><div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>{c.sub}</div></div>
+                <OpsRemind kind="payment" row={c.a} pn={c.pn} cur={c.cur} />
               </div>))}
         </div>
       </div>
@@ -31121,6 +31122,33 @@ async function opsProgressPdf(D, p, ym, inc, companyName) {
     const body = iss.map(i => ["Issue", i.title, i.severity || "", `${opsDays(i.opened_at)} days open`]).concat(ahead.map(x => ["Next month", x.name, "", "planned " + fmt(x.planned_date)]));
     if (body.length) table(["Type", "What", "Severity", "When"], body); else { doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(100, 116, 139); doc.text("No open issues and nothing planned next month.", M, yy + 4); yy += 10; }
   }
+  if (inc.photos) {
+    let rep = []; const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    try { const { data } = await sb.from("site_reports").select("report_date, work_done, photos").eq("project_id", p.id).gte("report_date", ymd(start)).lte("report_date", ymd(end)).order("report_date", { ascending: true }); rep = data || []; } catch (_) {}
+    const list = rep.flatMap(r => (r.photos || []).map(path => ({ path, date: r.report_date, note: r.work_done || "" }))).slice(-12);
+    if (list.length) {
+      try { await opsPhotoUrls(list.map(x => x.path)); } catch (_) {}
+      const imgs = [];
+      for (const it of list) { const u = OPS_PHOTO_URLS[it.path]; if (!u) continue; try { imgs.push({ ...it, img: await opsImgData(u) }); } catch (_) {} }
+      if (imgs.length) {
+        if (yy > 200) { doc.addPage(); yy = 18; }
+        section("7. Site photos"); yy += 3;
+        const gap = 6, cw = (W - 2 * M - gap) / 2, ch = cw * 0.66; let col = 0;
+        for (const it of imgs) {
+          if (col === 0 && yy + ch + 10 > 282) { doc.addPage(); yy = 18; }
+          const x = M + col * (cw + gap);
+          const k = Math.min(cw / it.img.w, ch / it.img.h), iw = it.img.w * k, ih = it.img.h * k;
+          doc.setFillColor(241, 245, 249); doc.rect(x, yy, cw, ch, "F");
+          doc.addImage(it.img.url, "JPEG", x + (cw - iw) / 2, yy + (ch - ih) / 2, iw, ih);
+          doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(11, 20, 48); doc.text(fmt(it.date), x, yy + ch + 4);
+          doc.setFont("helvetica", "normal"); doc.setTextColor(100, 116, 139);
+          const note = doc.splitTextToSize(it.note, cw - 16)[0] || ""; doc.text(note, x + 14, yy + ch + 4);
+          col++; if (col === 2) { col = 0; yy += ch + 9; }
+        }
+        if (col) yy += ch + 9;
+      }
+    }
+  }
   const pages = doc.getNumberOfPages();
   for (let i = 1; i <= pages; i++) { doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(148, 163, 184);
     doc.text(`${p.project_name} · ${monthName} · page ${i} of ${pages}`, M, 290); doc.text("Prepared with Quantora Engineering", W - M, 290, { align: "right" }); }
@@ -31132,10 +31160,10 @@ function OpsReport({ D }) {
   const months = Array.from({ length: 12 }, (_, i) => { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); return [`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, d.toLocaleString("en-GB", { month: "long", year: "numeric" })]; });
   const [pid, setPid] = useState(D.projects[0] ? D.projects[0].id : "");
   const [ym, setYm] = useState(months[0][0]);
-  const [inc, setInc] = useState({ summary: true, curve: true, milestones: true, inspections: true, payments: true, issues: true });
+  const [inc, setInc] = useState({ summary: true, curve: true, milestones: true, inspections: true, payments: true, issues: true, photos: true });
   const [busy, setBusy] = useState(false);
   const p = D.projects.find(x => x.id === pid);
-  const L = [["summary", "Progress summary"], ["curve", "Planned vs actual curve"], ["milestones", "Milestones: planned vs actual"], ["inspections", "Inspections this month"], ["payments", "Payments"], ["issues", "Open issues and look-ahead"]];
+  const L = [["summary", "Progress summary"], ["curve", "Planned vs actual curve"], ["milestones", "Milestones: planned vs actual"], ["inspections", "Inspections this month"], ["payments", "Payments"], ["issues", "Open issues and look-ahead"], ["photos", "Site photos (from daily site reports)"]];
   const has = p ? { ms: (D.ms[p.id] || []).length, apps: (D.apps[p.id] || []).length, insp: (D.insp[p.id] || []).length } : {};
   const go = async () => {
     setBusy(true);
@@ -31176,6 +31204,115 @@ function OpsReport({ D }) {
 }
 
 // ---------------------------------------------------------------------------
+// Site photos and reminders (2026-11-03).
+// Photos: taken with the daily site report, shrunk on the phone (max 1600 px JPEG) and kept in the
+// drawings bucket under <project id>/site/<date>/. They show in the site diary and the progress PDF.
+// Reminders: a polite, ready-written follow-up for a payment or an inspection, sent from the user's own
+// email or WhatsApp (the platform does not send it). The date of the last reminder is kept on the row.
+// ---------------------------------------------------------------------------
+const OPS_PHOTO_MAX = 6;
+const OPS_PHOTO_URLS = {};
+async function opsShrinkPhoto(file, max = 1600) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("Could not read " + (file.name || "the photo"))); i.src = url; });
+    const k = Math.min(1, max / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+    const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error("Could not prepare " + (file.name || "the photo"))), "image/jpeg", 0.82));
+  } finally { URL.revokeObjectURL(url); }
+}
+async function opsPhotoUrls(paths) {
+  const need = (paths || []).filter(x => x && !OPS_PHOTO_URLS[x]);
+  if (need.length) {
+    const { data } = await sb.storage.from("drawings").createSignedUrls(need, 3600);
+    (data || []).forEach(d => { if (d && d.signedUrl && d.path) OPS_PHOTO_URLS[d.path] = d.signedUrl; });
+  }
+  return (paths || []).map(x => OPS_PHOTO_URLS[x] || null);
+}
+// A photo as a JPEG data URL (for the PDF), shrunk to max px on the long side.
+async function opsImgData(url, max = 1100) {
+  const r = await fetch(url); if (!r.ok) throw new Error("photo " + r.status);
+  const bmp = await createImageBitmap(await r.blob());
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  return { url: c.toDataURL("image/jpeg", 0.8), w: c.width, h: c.height };
+}
+function OpsPhotos({ paths }) {
+  const [urls, setUrls] = useState([]); const [big, setBig] = useState(null);
+  const key = (paths || []).join("|");
+  useEffect(() => { let on = true; if (key) opsPhotoUrls(paths).then(u => { if (on) setUrls(u.filter(Boolean)); }).catch(() => {}); return () => { on = false; }; }, [key]);
+  if (!paths || !paths.length) return <span style={{ color: "var(--q-text-dimmer,#94a3b8)" }}>—</span>;
+  return (
+    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", minWidth: 96 }}>
+      {urls.map((u, i) => <img key={i} src={u} alt="Site photo" onClick={() => setBig(u)} style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6, cursor: "zoom-in", border: "1px solid rgba(148,163,184,.3)" }} />)}
+      {big && <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => setBig(null)}>
+        <img src={big} alt="Site photo" style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 8 }} /></div>}
+    </div>);
+}
+
+let OPS_MY_NAME = null;
+async function opsMyName() {
+  if (OPS_MY_NAME != null) return OPS_MY_NAME;
+  try { const u = await qCurrentUser(); const { data: pr } = await sb.from("profiles").select("full_name, first_name, company_id").eq("id", u.id).maybeSingle();
+    let co = ""; if (pr && pr.company_id) { const { data: c } = await sb.from("companies").select("name").eq("id", pr.company_id).maybeSingle(); co = (c && c.name) || ""; }
+    OPS_MY_NAME = [(pr && (pr.full_name || pr.first_name)) || "", co].filter(Boolean).join("\n"); } catch (_) { OPS_MY_NAME = ""; }
+  return OPS_MY_NAME;
+}
+function opsRemindText(kind, r, pn, cur, sign) {
+  const day = d => d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "";
+  const end = `\n\nBest regards,${sign ? "\n" + sign : ""}`;
+  if (kind === "inspection") {
+    const what = [r.ref, r.title || r.kind].filter(Boolean).join(" – ") || "inspection request";
+    return { subject: `Inspection request ${r.ref || ""} · ${pn}`.replace(/\s+·/, " ·"),
+      body: `Dear Sir/Madam,\n\nThis is a kind reminder that our inspection request ${what}${r.location ? " at " + r.location : ""} for ${pn}${r.raised_at ? ", raised on " + day(r.raised_at) + "," : ""} is still waiting for inspection.\n\nPlease let us know a suitable date and time, so the works can continue as planned.` + end };
+  }
+  const ref = r.ref || "payment application";
+  if (r.status === "certified") {
+    return { subject: `Payment for ${ref} · ${pn}`,
+      body: `Dear Sir/Madam,\n\nThis is a kind reminder that our ${ref} for ${pn} was certified${r.certified_at ? " on " + day(r.certified_at) : ""} for ${opsMoney(r.certified_amount || r.amount, cur)} and has not been paid yet.\n\nWe would be grateful if you could arrange the payment at your earliest convenience. Please let us know if you need anything from our side.` + end };
+  }
+  return { subject: `Certification of ${ref} · ${pn}`,
+    body: `Dear Sir/Madam,\n\nThis is a kind reminder that our ${ref} for ${pn}${r.period_to ? " (period to " + day(r.period_to) + ")" : ""}, for ${opsMoney(r.amount, cur)}, was submitted${r.submitted_at ? " on " + day(r.submitted_at) : ""} and is still waiting for certification.\n\nWe would be grateful if you could review and certify it at your earliest convenience. Please let us know if any further information is needed.` + end };
+}
+function OpsRemind({ kind, row, pn, cur }) {
+  const [open, setOpen] = useState(false); const [to, setTo] = useState("");
+  const [msg, setMsg] = useState({ subject: "", body: "" }); const [last, setLast] = useState(row.last_reminded_at || null);
+  const start = async (e) => { e.stopPropagation(); const sign = await opsMyName(); setMsg(opsRemindText(kind, row, pn, cur, sign)); setOpen(true); };
+  const mark = async (how) => {
+    const t = new Date().toISOString(); setLast(t); setOpen(false);
+    try { await sb.from(kind === "inspection" ? "project_inspections" : "project_applications").update({ last_reminded_at: t }).eq("id", row.id); } catch (_) {}
+    qPop({ kind: "success", title: "Reminder ready ✓", message: how });
+  };
+  const days = last ? opsDays(last) : null;
+  return (
+    <span style={{ flex: "none" }} onClick={e => e.stopPropagation()}>
+      <button type="button" className="qp-btn" style={{ fontSize: 11.5, padding: "3px 9px", whiteSpace: "nowrap" }} onClick={start}
+        title={last ? "Last reminder " + fmtDay(last) : "Write a polite reminder"}>{last ? (days ? `Reminded ${days}d ago` : "Reminded today") : "✉ Remind"}</button>
+      {open && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" onClick={() => setOpen(false)}>
+          <div className="qp-card" style={{ maxWidth: 560, width: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto", textAlign: "left" }} onClick={e => e.stopPropagation()}>
+            <h4>{kind === "inspection" ? "Remind the consultant" : "Remind the client"}</h4>
+            <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 10px" }}>Ready to send from your own email or WhatsApp. Change anything you like.</p>
+            <label style={{ fontSize: 12, fontWeight: 700 }}>To (email, optional)</label>
+            <input type="email" className="w-full border rounded-lg px-3 py-2 text-sm" style={{ margin: "4px 0 10px" }} value={to} onChange={e => setTo(e.target.value)} placeholder="name@company.com" />
+            <label style={{ fontSize: 12, fontWeight: 700 }}>Subject</label>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" style={{ margin: "4px 0 10px" }} value={msg.subject} onChange={e => setMsg({ ...msg, subject: e.target.value })} />
+            <label style={{ fontSize: 12, fontWeight: 700 }}>Message</label>
+            <textarea rows="10" className="w-full border rounded-lg px-3 py-2 text-sm" style={{ marginTop: 4 }} value={msg.body} onChange={e => setMsg({ ...msg, body: e.target.value })} />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 12 }}>
+              <button type="button" className="qp-btn" onClick={() => setOpen(false)}>Cancel</button>
+              <button type="button" className="qp-btn" onClick={() => { try { navigator.clipboard.writeText(msg.subject + "\n\n" + msg.body); } catch (_) {} mark("Copied. Paste it anywhere."); }}>Copy</button>
+              <button type="button" className="qp-btn" onClick={() => { window.open("https://wa.me/?text=" + encodeURIComponent(msg.subject + "\n\n" + msg.body), "_blank", "noopener"); mark("Opened in WhatsApp"); }}>WhatsApp</button>
+              <button type="button" className="qp-btn pri" onClick={() => { const href = `mailto:${encodeURIComponent(to.trim())}?subject=${encodeURIComponent(msg.subject)}&body=${encodeURIComponent(msg.body)}`; mark("Opened in your email app"); try { const l = document.createElement("a"); l.href = href; l.rel = "noopener"; document.body.appendChild(l); l.click(); l.remove(); } catch (_) { window.location.href = href; } }}>Open in email</button>
+            </div>
+          </div>
+        </div>)}
+    </span>);
+}
+
+// ---------------------------------------------------------------------------
 // My day (Project Manager) and Material tracker (Operations Manager), 2026-11-03.
 // ---------------------------------------------------------------------------
 function OpsMyDay({ D, onReload }) {
@@ -31201,20 +31338,36 @@ function OpsMyDay({ D, onReload }) {
   const paySum = pay.reduce((s, a) => s + Number(a.status === "certified" ? a.certified_amount || 0 : a.amount || 0), 0);
   const todayStr = new Date().toISOString().slice(0, 10);
   const reportedToday = new Set(reports.filter(r => r.report_date === todayStr).map(r => r.project_id));
+  const addPhotos = (e) => {
+    const files = Array.from(e.target.files || []).filter(f => /^image\//.test(f.type || "") || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name || "")); e.target.value = "";
+    setForm(f => ({ ...f, photos: [...(f.photos || []), ...files.map(file => ({ file, preview: URL.createObjectURL(file) }))].slice(0, OPS_PHOTO_MAX) }));
+  };
   const save = async (e) => {
     e.preventDefault(); setBusy(true);
     try {
+      const photos = [], list = form.photos || [];
+      for (let i = 0; i < list.length; i++) {
+        setBusy(`Uploading photo ${i + 1} of ${list.length}…`);
+        const blob = await opsShrinkPhoto(list[i].file);
+        const path = `${form.project_id}/site/${todayStr}/${Date.now()}_${i + 1}.jpg`;
+        const { error: upErr } = await sb.storage.from("drawings").upload(path, blob, { contentType: "image/jpeg" });
+        if (upErr) throw new Error(`Photo ${i + 1} could not be uploaded: ${upErr.message || upErr}`);
+        photos.push(path);
+      }
+      setBusy("Saving…");
       const row = { project_id: form.project_id, report_date: todayStr, manpower: form.manpower === "" ? null : Number(form.manpower),
-        work_done: form.work_done.trim() || null, delays: form.delays.trim() || null, weather: form.weather || null };
+        work_done: form.work_done.trim() || null, delays: form.delays.trim() || null, weather: form.weather || null, photos };
       const { error } = await sb.from("site_reports").insert(row); if (error) throw error;
-      setForm(null); await loadReports(); qPop({ kind: "success", title: "Site report saved ✓", message: `${name(row.project_id)} · today` });
+      list.forEach(x => { try { URL.revokeObjectURL(x.preview); } catch (_) {} });
+      setForm(null); await loadReports(); qPop({ kind: "success", title: "Site report saved ✓", message: `${name(row.project_id)} · today${photos.length ? ` · ${photos.length} photo${photos.length > 1 ? "s" : ""}` : ""}` });
     } catch (ex) { qPop({ kind: "warn", title: "Could not save the report", message: ex.message || String(ex) }); }
     setBusy(false);
   };
-  const Row = ({ tag, tone, title, sub }) => (
-    <div style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: "1px solid var(--q-line,rgba(148,163,184,.18))" }}>
+  const Row = ({ tag, tone, title, sub, extra }) => (
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "9px 0", borderTop: "1px solid var(--q-line,rgba(148,163,184,.18))" }}>
       {tag != null ? <DivPill tone={tone}>{tag}</DivPill> : <span style={{ width: 10, height: 10, marginTop: 5, borderRadius: 99, flex: "none", background: tone === "bad" ? DIV_BAD : tone === "warn" ? DIV_WARN : DIV_GOOD }} />}
-      <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13 }}>{title}</div><div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>{sub}</div></div>
+      <div style={{ minWidth: 0, flex: 1 }}><div style={{ fontWeight: 700, fontSize: 13 }}>{title}</div><div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>{sub}</div></div>
+      {extra || null}
     </div>);
   const dayName = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
   const hr = new Date().getHours();
@@ -31223,7 +31376,7 @@ function OpsMyDay({ D, onReload }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
         <div><div style={{ fontSize: 18, fontWeight: 800 }}>{hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening"}{me.name ? ", " + me.name : ""} · My day</div>
           <div style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)" }}>{dayName} · {D.projects.length} project{D.projects.length === 1 ? "" : "s"}</div></div>
-        <button className="qp-btn pri" onClick={() => setForm({ project_id: (D.projects.find(p => !reportedToday.has(p.id)) || D.projects[0]).id, manpower: "", work_done: "", delays: "", weather: "Clear" })}>＋ Daily site report</button>
+        <button className="qp-btn pri" onClick={() => setForm({ project_id: (D.projects.find(p => !reportedToday.has(p.id)) || D.projects[0]).id, manpower: "", work_done: "", delays: "", weather: "Clear", photos: [] })}>＋ Daily site report</button>
       </div>
       <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))" }}>
         <DivStat label="Inspections waiting" value={insp.length} note={insp.length ? `oldest ${opsDays(insp[0].raised_at) ?? 0} days` : "none waiting"} />
@@ -31239,18 +31392,18 @@ function OpsMyDay({ D, onReload }) {
               return <Row key={m.id} tag={late ? "late" : new Date(m.planned_date).toLocaleDateString("en-GB", { weekday: "short" })} tone={late ? "bad" : "flat"} title={m.name} sub={`${m.pn} · planned ${fmtDay(m.planned_date)}`} />; })}</div>
         <div className="qp-card"><h4>Inspections waiting</h4>
           {insp.length === 0 ? <div className="qp-empty">Nothing waiting for the consultant.</div> :
-            insp.slice(0, 8).map(i => <Row key={i.id} tag={`${opsDays(i.raised_at) ?? 0}d`} tone={(opsDays(i.raised_at) ?? 0) > 3 ? "warn" : "flat"} title={`${i.ref ? i.ref + " · " : ""}${i.title || i.kind || "Inspection"}`} sub={`${i.pn}${i.location ? " · " + i.location : ""}`} />)}</div>
+            insp.slice(0, 8).map(i => <Row key={i.id} tag={`${opsDays(i.raised_at) ?? 0}d`} tone={(opsDays(i.raised_at) ?? 0) > 3 ? "warn" : "flat"} title={`${i.ref ? i.ref + " · " : ""}${i.title || i.kind || "Inspection"}`} sub={`${i.pn}${i.location ? " · " + i.location : ""}`} extra={<OpsRemind kind="inspection" row={i} pn={i.pn} />} />)}</div>
         <div className="qp-card"><h4>My issues and waiting on others</h4>
           {myIssues.length === 0 && pay.length === 0 ? <div className="qp-empty">Nothing open.</div> : null}
           {myIssues.slice(0, 5).map(i => <Row key={i.id} tone={i.severity === "critical" || opsDays(i.opened_at) > 7 ? "bad" : "warn"} title={i.title} sub={`${i.pn} · ${opsDays(i.opened_at)} days open${i.owner_id ? "" : " · no owner"}`} />)}
           {pay.slice(0, 5).map(a => <Row key={a.id} tone={a.status === "certified" && (opsDays(a.certified_at) ?? 0) > 30 ? "bad" : "warn"} title={`${a.ref || "Payment"} · ${a.status === "certified" ? "certified, not paid" : "not certified yet"}`}
-            sub={`${a.pn} · ${opsMoney(a.status === "certified" ? a.certified_amount : a.amount, a.cur)} · ${a.status === "certified" ? opsDays(a.certified_at) : opsDays(a.submitted_at)} days`} />)}</div>
+            sub={`${a.pn} · ${opsMoney(a.status === "certified" ? a.certified_amount : a.amount, a.cur)} · ${a.status === "certified" ? opsDays(a.certified_at) : opsDays(a.submitted_at)} days`} extra={<OpsRemind kind="payment" row={a} pn={a.pn} cur={a.cur} />} />)}</div>
       </div>
       <div className="qp-card"><h4>Site diary · last 7 days</h4>
-        {reports.length === 0 ? <div className="qp-empty">No site report yet. Press “Daily site report”: manpower, work done, delays, weather. It takes two minutes and builds the project diary.</div> :
-          <div style={{ overflowX: "auto" }}><table className="qp-table"><thead><tr><th>Date</th><th>Project</th><th style={{ textAlign: "right" }}>Manpower</th><th>Work done</th><th>Delays</th><th>Weather</th></tr></thead>
+        {reports.length === 0 ? <div className="qp-empty">No site report yet. Press “Daily site report”: manpower, work done, delays, weather and site photos. It takes two minutes and builds the project diary.</div> :
+          <div style={{ overflowX: "auto" }}><table className="qp-table"><thead><tr><th>Date</th><th>Project</th><th style={{ textAlign: "right" }}>Manpower</th><th>Work done</th><th>Delays</th><th>Weather</th><th>Photos</th></tr></thead>
             <tbody>{reports.map(r => <tr key={r.id}><td style={{ whiteSpace: "nowrap" }}>{fmtDay(r.report_date)}</td><td style={{ fontWeight: 700 }}>{name(r.project_id)}</td><td style={{ textAlign: "right" }}>{r.manpower ?? "—"}</td>
-              <td style={{ fontSize: 12.5 }}>{r.work_done || "—"}</td><td style={{ fontSize: 12.5, color: r.delays ? "#f59e0b" : undefined }}>{r.delays || "—"}</td><td>{r.weather || ""}</td></tr>)}</tbody></table></div>}</div>
+              <td style={{ fontSize: 12.5 }}>{r.work_done || "—"}</td><td style={{ fontSize: 12.5, color: r.delays ? "#f59e0b" : undefined }}>{r.delays || "—"}</td><td>{r.weather || ""}</td><td><OpsPhotos paths={r.photos} /></td></tr>)}</tbody></table></div>}</div>
       {form && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" onClick={() => setForm(null)}>
           <form className="qp-card" style={{ maxWidth: 520, width: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto" }} onClick={e => e.stopPropagation()} onSubmit={save}>
@@ -31269,9 +31422,22 @@ function OpsMyDay({ D, onReload }) {
             <textarea rows="3" required className="w-full border rounded-lg px-3 py-2 text-sm" style={{ marginTop: 4 }} value={form.work_done} onChange={e => setForm({ ...form, work_done: e.target.value })} placeholder="e.g. L4 cable pulling 60% · GF CCTV devices fixed" />
             <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginTop: 10 }}>Delays or problems (optional)</label>
             <textarea rows="2" className="w-full border rounded-lg px-3 py-2 text-sm" style={{ marginTop: 4 }} value={form.delays} onChange={e => setForm({ ...form, delays: e.target.value })} placeholder="e.g. Waiting for FR cable delivery" />
+            <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginTop: 10 }}>Site photos (optional, up to {OPS_PHOTO_MAX})</label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+              {(form.photos || []).map((ph, i) => (
+                <div key={i} style={{ position: "relative" }}>
+                  <img src={ph.preview} alt="" style={{ width: 66, height: 66, objectFit: "cover", borderRadius: 8, border: "1px solid rgba(148,163,184,.35)" }} />
+                  <button type="button" aria-label="Remove photo" onClick={() => setForm(f => ({ ...f, photos: f.photos.filter((_, j) => j !== i) }))}
+                    style={{ position: "absolute", top: -7, right: -7, width: 22, height: 22, borderRadius: 99, background: "#0b1430", color: "#fff", border: "1px solid rgba(148,163,184,.5)", fontSize: 13, lineHeight: "18px" }}>×</button>
+                </div>))}
+              {(form.photos || []).length < OPS_PHOTO_MAX && (
+                <label style={{ width: 66, height: 66, borderRadius: 8, border: "1.5px dashed rgba(148,163,184,.55)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "var(--q-text-dim,#64748b)" }}>
+                  <span style={{ fontSize: 20, lineHeight: 1 }}>📷</span>Add
+                  <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={addPhotos} /></label>)}
+            </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
               <button type="button" className="qp-btn" onClick={() => setForm(null)}>Cancel</button>
-              <button className="qp-btn pri" disabled={busy}>{busy ? "Saving…" : "Save report"}</button></div>
+              <button className="qp-btn pri" disabled={!!busy}>{busy ? (typeof busy === "string" ? busy : "Saving…") : "Save report"}</button></div>
           </form>
         </div>)}
     </div>
