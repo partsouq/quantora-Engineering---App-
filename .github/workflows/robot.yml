@@ -1,14 +1,12 @@
 name: Test robot
 
 # Uses the live website like a customer every 30 minutes (and after every release).
-# No AI BOQ generation on these runs (it costs AI credit).
-# Once a day (07:17 Dubai) the run also generates a real AI BOQ on the 1-page test drawing (~$0.45).
-# A manual run can include the AI BOQ step too (Run workflow -> tick "Include the AI BOQ step").
+# No AI BOQ generation (it costs AI credit); real users' BOQ errors are caught by the error watch.
+# A manual run can include the AI BOQ step (Run workflow -> tick "Include the AI BOQ step").
 # Results go to the database; a failure raises an alert on the admin's phone.
 on:
   schedule:
     - cron: "*/30 * * * *"
-    - cron: "17 3 * * *"      # daily full run with the AI BOQ step (03:17 UTC = 07:17 Dubai)
   push:
     branches: [main]
     paths: [index.html]
@@ -57,7 +55,6 @@ jobs:
           if [ -z "$ROBOT_EMAIL" ] || [ -z "$ROBOT_PASSWORD" ]; then echo "Robot account not set up yet (secrets ROBOT_EMAIL / ROBOT_PASSWORD). Skipping."; exit 0; fi
           FULL=0
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.full }}" = "true" ]; then FULL=1; fi
-          if [ "${{ github.event.schedule }}" = "17 3 * * *" ]; then FULL=1; fi
           echo "Full run (with AI BOQ): $FULL"
           ROBOT_FULL=$FULL node robot.js
 
