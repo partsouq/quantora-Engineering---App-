@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-02.21"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-03.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -11494,8 +11494,9 @@ function ComparisonTab({ project }) {
 
   // Upload a supplier quotation. Goes to the tenders bucket under the tender id,
   // because that is the only place procurement-engine looks.
-  async function uploadQuote(files) {
-    if (!files || !files.length || !pkgId || !tender) return;
+  async function uploadQuote(fileList) {
+    const files = Array.from(fileList || []);   // copied before the input is cleared (see uploadSpec)
+    if (!files.length || !pkgId || !tender) return;
     if (!vendorName.trim()) { setError("Enter the supplier's name first — the comparison is meaningless without knowing whose quote this is."); return; }
     setBusyQ("upload"); setError(null);
     try {
@@ -19498,6 +19499,7 @@ function SpecificationTab({ project }) {
   // The specification the customer actually gave us, extracted from their own
   // document by tender-engine. Kept strictly apart from anything the AI wrote.
   const [tender, setTender] = useState(null);
+  const tenderState = tender;
   const [specItems, setSpecItems] = useState([]);
   const [specDocs, setSpecDocs] = useState([]);
   const [busySpec, setBusySpec] = useState(null);
@@ -19535,10 +19537,15 @@ function SpecificationTab({ project }) {
 
   // Same table and bucket as Tender Intelligence, so a document uploaded on
   // either page is visible and readable from both.
-  async function uploadSpec(files) {
-    if (!files || !files.length || !tender) return;
+  async function uploadSpec(fileList) {
+    // Copy the files first: the input is cleared straight after this call, which empties a live FileList.
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
     setBusySpec("upload"); setError(null);
     try {
+      // A file chosen before the page finished loading used to be ignored without a word.
+      const tender = tenderState || await ensureTender(project);
+      if (!tenderState) setTender(tender);
       const { data: { user } } = await sb.auth.getUser();
       for (const f of files) {
         // tenders bucket, tender id first -- see the note on the Tender

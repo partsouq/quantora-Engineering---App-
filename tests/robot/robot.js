@@ -57,6 +57,15 @@ async function step(name, fn, { optional = false } = {}) {
     const msg = String(e && e.message || e).split("\n")[0].slice(0, 400);
     steps.push({ step: name, ok: false, s: Math.round((Date.now() - t0) / 1000), error: msg });
     log("  FAILED:", msg);
+    // What the screen showed at that moment (pop-ups first), so a failure can be read from the log alone.
+    try {
+      const seen = await page.evaluate(() => {
+        const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+        const dlg = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],.fixed')].filter(vis).map(e => e.innerText.trim()).filter(Boolean).slice(0, 3);
+        return { url: location.href, dialogs: dlg.map(t => t.replace(/\s+/g, " ").slice(0, 300)), screen: document.body.innerText.replace(/\s+/g, " ").slice(0, 700) };
+      });
+      log("  SCREEN:", JSON.stringify(seen));
+    } catch (_) {}
     await shot("FAILED-" + name.replace(/\W+/g, "-"));
     if (!optional) throw Object.assign(new Error(msg), { robotStep: name });
   }
@@ -123,10 +132,21 @@ async function report(ok, failedStep, message) {
     await step("Create a project", async () => {
       await page.getByText("Open projects").first().click();
       await page.getByRole("button", { name: "+ New Project" }).first().click({ timeout: 20000 });
-      const inputs = page.locator('form input[type="text"]');
-      await inputs.nth(0).fill(PROJECT);          // Project name
-      await inputs.nth(2).fill("United Arab Emirates");  // Country
-      await inputs.nth(3).fill("Dubai");          // City
+      const form = page.locator("form").filter({ hasText: "Project Name" }).first();
+      await form.locator("input").first().fill(PROJECT);                 // Project name
+      // Country and city are lists of supported places (typed boxes when the list is not loaded).
+      const ctry = form.locator("select").filter({ has: page.locator("option", { hasText: "Select country" }) }).first();
+      if (await ctry.count()) {
+        const v = await ctry.locator("option", { hasText: /^UAE/ }).first().getAttribute("value");
+        await ctry.selectOption(v);
+        await page.waitForTimeout(300);
+        const city = form.locator("select").filter({ has: page.locator("option", { hasText: "Dubai" }) }).first();
+        if (await city.count()) await city.selectOption({ label: "Dubai" });
+        else { const ci = form.locator('input[placeholder="City name"]'); if (await ci.count()) await ci.fill("Dubai"); }
+      } else {
+        await form.locator('input[placeholder="Country name"]').first().fill("United Arab Emirates").catch(() => {});
+        await form.locator('input[placeholder="City name"]').first().fill("Dubai").catch(() => {});
+      }
       const typeSel = page.locator("form select").filter({ has: page.locator("option", { hasText: "Choose the type of project" }) });
       if (await typeSel.count()) {
         const v = await typeSel.locator("option").nth(1).getAttribute("value");
@@ -182,7 +202,8 @@ async function report(ok, failedStep, message) {
 
     if (process.env.ROBOT_SKIP !== "spec") await step("Upload a specification", async () => {
       await page.locator("nav").getByText("Specification", { exact: true }).first().click();
-      await page.waitForTimeout(2000);
+      await page.getByText("Upload the project specification").first().waitFor({ timeout: 30000 });
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});   // the page finishes loading first
       await page.locator("label", { hasText: "Upload specification" }).first().locator('input[type="file"]').setInputFiles(SPEC);
       await page.getByText(path.basename(SPEC), { exact: true }).first().waitFor({ timeout: 90000 });
     });
@@ -195,7 +216,33 @@ async function report(ok, failedStep, message) {
 
     await step("Open Manual Take-off", async () => {
       await page.locator("nav").getByText("Manual Take-off").first().click();
-      await page.getByText(/Choose the drawing for this floor|Pick from the library|Manual Take-off/).first().waitFor({ timeout: 30000 });
+      // The drawing chooser is a list box; its first option is not "visible" text, so wait for the list itself.
+      await page.locator("select").filter({ has: page.locator("option", { hasText: "Choose the drawing for this floor" }) }).first().waitFor({ timeout: 30000 });
+    });
+
+    // Manual Take-off end to end (no AI): attach the drawing, mark three cameras, get the Designed BOQ.
+    await step("Manual Take-off: attach the drawing", async () => {
+      const ds = page.locator("select").filter({ has: page.locator("option", { hasText: "Choose the drawing for this floor" }) }).first();
+      const v = await ds.locator("option", { hasText: path.basename(DRAWING) }).first().getAttribute("value", { timeout: 20000 });
+      await ds.selectOption(v);
+      await page.locator('div[style*="crosshair"] svg, div[style*="default"] svg').first().waitFor({ timeout: 60000 });
+      await page.waitForFunction(() => { const c = document.querySelector("canvas"); return c && c.width > 50; }, null, { timeout: 60000 });
+    });
+
+    await step("Manual Take-off: mark and design the BOQ", async () => {
+      const sys = page.locator("select").filter({ has: page.locator("option[value=\"cctv\"]") }).first();
+      await sys.selectOption("cctv"); await page.waitForTimeout(300);
+      const eq = page.locator("select").filter({ has: page.locator('option[value="__own"]') }).first();
+      await eq.selectOption(await eq.locator("option", { hasText: "Dome camera" }).first().getAttribute("value"));
+      await page.waitForTimeout(500);
+      const sheet = page.locator('div[style*="crosshair"] svg').first();
+      for (const [fx, fy] of [[0.3, 0.4], [0.5, 0.5], [0.7, 0.6]]) {
+        const b = await sheet.boundingBox(); await page.mouse.click(b.x + b.width * fx, b.y + b.height * fy); await page.waitForTimeout(400);
+      }
+      await page.getByText(/^D3$/).first().waitFor({ timeout: 15000 });
+      await page.locator("button", { hasText: "Design BOQ for these systems" }).first().click();
+      await page.getByText("Engineered by Quantora").first().waitFor({ timeout: 30000 });
+      if (!(await page.getByText(/NVR/).count())) throw new Error("Designed BOQ has no NVR line for 3 cameras");
     });
   } catch (e) {
     failedStep = e.robotStep || "robot"; failMsg = e.message;
