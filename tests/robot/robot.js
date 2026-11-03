@@ -274,7 +274,10 @@ async function report(ok, failedStep, message) {
     const box = page.locator("label", { hasText: "I understand" }).locator('input[type="checkbox"]').first();
     if (!(await box.isChecked())) await box.check();
     await page.getByRole("button", { name: "Delete permanently" }).click({ timeout: 20000 });
-    await page.getByRole("button", { name: "Delete permanently" }).waitFor({ state: "detached", timeout: 60000 }).catch(() => {});
+    // Let the delete finish before moving on (leaving the page early stops it half-way).
+    await page.getByText("Deleting…").first().waitFor({ state: "detached", timeout: 90000 }).catch(() => {});
+    await page.locator("h1, h2, h3", { hasText: name }).first().waitFor({ state: "detached", timeout: 60000 }).catch(() => {});
+    await page.waitForTimeout(3000);
     return true;
   }
   await step("Delete the test project", async () => {
