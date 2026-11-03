@@ -31,6 +31,12 @@ function log(...a) { console.log(new Date().toISOString().slice(11, 19), ...a); 
 async function shot(name) { try { await page.screenshot({ path: path.join(SHOTS, name + ".png") }); } catch (_) {} }
 
 // An error pop-up while the robot works is a failure of that step.
+// The Activity panel (bottom centre) opens after an AI run and can sit over the drawing: fold it away.
+async function hideActivity() {
+  const hide = page.locator("button", { hasText: /^Hide$/ }).filter({ has: page.locator("xpath=..") });
+  if (await hide.count()) await hide.first().click({ timeout: 3000 }).catch(() => {});
+}
+
 async function closePops() {
   const dlg = page.locator('[role="alertdialog"]');
   for (let i = 0; i < 5 && (await dlg.count()); i++) {
@@ -62,7 +68,10 @@ async function step(name, fn, { optional = false } = {}) {
       const seen = await page.evaluate(() => {
         const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
         const dlg = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],.fixed')].filter(vis).map(e => e.innerText.trim()).filter(Boolean).slice(0, 3);
-        return { url: location.href, dialogs: dlg.map(t => t.replace(/\s+/g, " ").slice(0, 300)), screen: document.body.innerText.replace(/\s+/g, " ").slice(0, 700) };
+        const main = document.querySelector("main") || document.body;
+        const txt = main.innerText.replace(/\s+/g, " "); const il = txt.indexOf("Item list");
+        return { url: location.href, dialogs: dlg.map(t => t.replace(/\s+/g, " ").slice(0, 300)), screen: txt.slice(0, 700),
+          items: il >= 0 ? txt.slice(il, il + 500) : null, marks: document.querySelectorAll("[data-mark]").length, scrollY: Math.round(scrollY), vh: innerHeight };
       });
       log("  SCREEN:", JSON.stringify(seen));
     } catch (_) {}
@@ -181,7 +190,8 @@ async function report(ok, failedStep, message) {
         // a confirm or page-choice window may open: accept it
         for (let i = 0; i < 3; i++) {
           await page.waitForTimeout(2500);
-          const go = page.locator("button", { hasText: /^(Start|Analyze|Analyse|Continue|Run|Confirm)\b/ }).filter({ hasNot: page.locator("[disabled]") });
+          // Only buttons inside an open window: pressing "Analyze with AI" again would start (and pay for) a second run.
+          const go = page.locator('[role="dialog"] button, .fixed button').filter({ hasText: /^(Start|Analyze|Analyse|Continue|Run|Confirm)\b/ }).filter({ hasNot: page.locator("[disabled]") });
           if (await go.count()) { await go.last().click().catch(() => {}); } else break;
         }
         const done = page.getByText(/Done · \d+ BOQ lines/).first();
@@ -236,8 +246,24 @@ async function report(ok, failedStep, message) {
       await eq.selectOption(await eq.locator("option", { hasText: "Dome camera" }).first().getAttribute("value"));
       await page.waitForTimeout(500);
       const sheet = page.locator('div[style*="crosshair"] svg').first();
+      // Notices from the AI run can arrive late and sit on top of the sheet: clear them, and retry a click that did not count.
+      let n = 0;
+      await hideActivity();
       for (const [fx, fy] of [[0.3, 0.4], [0.5, 0.5], [0.7, 0.6]]) {
-        const b = await sheet.boundingBox(); await page.mouse.click(b.x + b.width * fx, b.y + b.height * fy); await page.waitForTimeout(400);
+        for (let tries = 0; tries < 4; tries++) {
+          await closePops();
+          const b = await sheet.boundingBox();
+          await sheet.click({ position: { x: b.width * fx, y: b.height * fy }, timeout: 10000 }).catch(async e => {
+            const why = String(e.message).split("\n").find(l => /intercepts pointer events/.test(l)) || String(e.message).split("\n")[0];
+            const top = await page.evaluate(([x, y]) => { const el = document.elementFromPoint(x, y); if (!el) return null;
+              const c = el.closest('[role],[class*="fixed"],[id]') || el; return (c.tagName + " " + (c.id || "") + " " + (c.getAttribute("role") || "") + " " + (c.className || "")).slice(0, 160) + " | " + (c.innerText || "").replace(/\s+/g, " ").slice(0, 160); },
+              [b.x + b.width * fx, b.y + b.height * fy]).catch(() => null);
+            log("  click blocked:", why.trim().slice(0, 300), "| on top:", top);
+            throw e;
+          }).catch(() => {});
+          await page.waitForTimeout(600);
+          if (await page.getByText(new RegExp("^D" + (n + 1) + "$")).count()) { n++; break; }
+        }
       }
       await page.getByText(/^D3$/).first().waitFor({ timeout: 15000 });
       await page.locator("button", { hasText: "Design BOQ for these systems" }).first().click();
@@ -248,26 +274,45 @@ async function report(ok, failedStep, message) {
     failedStep = e.robotStep || "robot"; failMsg = e.message;
   }
 
-  // Always clean up: delete the test project.
-  await step("Delete the test project", async () => {
-    await closePops();
-    if (!(await page.getByRole("button", { name: "Delete", exact: true }).count())) {
+  // Always clean up: delete this run's test project, and any left over from an earlier run.
+  async function deleteProject(name) {
+    await closePops(); await hideActivity();
+    if (!(await page.getByRole("button", { name: "Delete", exact: true }).count()) || !(await page.getByText(name).count())) {
       await page.goto(BASE, { waitUntil: "domcontentloaded" });
       await page.getByText("Where are you working today").first().waitFor({ timeout: 45000 });
       await page.getByText("Open projects").first().click();
-      const card = page.getByText(PROJECT).first();
+      const card = page.getByText(name).first();
       if (!(await card.count())) { await page.waitForTimeout(3000); }
-      if (!(await card.count())) return;          // nothing was created
+      if (!(await card.count())) return false;          // nothing to delete
       await card.click();
     }
+    await closePops();
     await page.getByRole("button", { name: "Delete", exact: true }).first().click({ timeout: 20000 });
+    await page.waitForTimeout(800);
     const sel = page.locator("select").filter({ has: page.locator("option", { hasText: "Choose a reason" }) }).first();
-    const v = await sel.locator("option").nth(1).getAttribute("value", { timeout: 15000 });
-    await sel.selectOption(v);
+    await sel.selectOption("test");
     const box = page.locator("label", { hasText: "I understand" }).locator('input[type="checkbox"]').first();
     if (!(await box.isChecked())) await box.check();
     await page.getByRole("button", { name: "Delete permanently" }).click({ timeout: 20000 });
-    await page.getByText(PROJECT).first().waitFor({ state: "detached", timeout: 60000 }).catch(() => {});
+    // Let the delete finish before moving on (leaving the page early stops it half-way).
+    await page.getByText("Deleting…").first().waitFor({ state: "detached", timeout: 90000 }).catch(() => {});
+    await page.locator("h1, h2, h3", { hasText: name }).first().waitFor({ state: "detached", timeout: 60000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+    return true;
+  }
+  await step("Delete the test project", async () => {
+    await deleteProject(PROJECT);
+    // leftovers from a run that stopped half-way
+    for (let i = 0; i < 5; i++) {
+      await page.goto(BASE, { waitUntil: "domcontentloaded" });
+      await page.getByText("Where are you working today").first().waitFor({ timeout: 45000 });
+      await page.getByText("Open projects").first().click(); await page.waitForTimeout(2500);
+      const left = page.getByText(/^ROBOT TEST \d{4}-\d{2}-\d{2}/).first();
+      if (!(await left.count())) break;
+      const name = (await left.innerText()).trim();
+      log("old test project:", name);
+      if (!(await deleteProject(name))) break;
+    }
   }, { optional: true });
 
   const cleanupFailed = steps.some(s => s.step === "Delete the test project" && !s.ok);
