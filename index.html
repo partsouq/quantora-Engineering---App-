@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-03.03"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-03.04"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -30448,6 +30448,350 @@ function OpsField({ label, value, onChange, type, placeholder }) {
 }
 
 
+// ---------------------------------------------------------------------------
+// Operations insights (2026-11-03): Portfolio health and Cash position for the Operations
+// Head, and the one-click monthly Progress report for the PMO. Built only from what the team
+// already records (programme, payment applications, inspections, issues, budgets, POs).
+// A light is grey ("not set") when there is nothing to judge it on, never a guessed green.
+// ---------------------------------------------------------------------------
+const OPS_DAY = 86400000;
+const opsDays = (d) => d ? Math.floor((Date.now() - new Date(d).getTime()) / OPS_DAY) : null;
+function opsMoney(v, cur) {
+  if (v == null || isNaN(v)) return "—";
+  const n = Number(v), a = Math.abs(n);
+  const t = a >= 1e6 ? (n / 1e6).toFixed(2).replace(/\.?0+$/, "") + "M" : a >= 1e4 ? Math.round(n / 1e3) + "k" : Math.round(n).toLocaleString();
+  return `${cur || ""} ${t}`.trim();
+}
+async function opsLoadAll() {
+  const { data: p, error } = await sb.from("projects")
+    .select("id, project_name, project_ref, city, country, currency, delivery_stage, percent_complete, status, contractor_name")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  const projects = (p || []).filter(x => x.status !== "archived");
+  const ids = projects.map(x => x.id);
+  const empty = { data: [] };
+  const q = (t, sel = "*") => ids.length ? sb.from(t).select(sel).in("project_id", ids) : Promise.resolve(empty);
+  const [ms, iss, insp, apps, con, bud, po] = await Promise.all([
+    q("project_milestones"), q("project_issues"), q("project_inspections"), q("project_applications"),
+    q("project_contracts"), q("system_budgets"), q("purchase_orders"),
+  ]);
+  const by = (r) => { const m = {}; for (const x of (r && r.data) || []) (m[x.project_id] ||= []).push(x); return m; };
+  return { projects, ms: by(ms), iss: by(iss), insp: by(insp), apps: by(apps), con: by(con), bud: by(bud), po: by(po) };
+}
+// Planned % today = share of the programme's milestones whose planned date has passed.
+function opsPlannedPct(ms) {
+  const dated = (ms || []).filter(m => m.planned_date);
+  if (!dated.length) return null;
+  return Math.round(dated.filter(m => new Date(m.planned_date) <= new Date()).length / dated.length * 100);
+}
+function opsHealth(D, p) {
+  const ms = D.ms[p.id] || [], iss = (D.iss[p.id] || []).filter(i => i.status === "open"),
+        insp = D.insp[p.id] || [], apps = D.apps[p.id] || [];
+  const cur = ((D.con[p.id] || [])[0] || {}).currency || projectCurrency(p);
+  const why = []; const risks = [];
+  // Time
+  const late = ms.filter(m => !m.actual_date && m.planned_date && new Date(m.planned_date) < new Date());
+  const worstLate = late.reduce((a, m) => Math.max(a, opsDays(m.planned_date)), 0);
+  const planned = opsPlannedPct(ms), actual = p.percent_complete == null ? null : Number(p.percent_complete);
+  let time = ms.length || actual != null ? "G" : null;
+  if (late.length || (planned != null && actual != null && actual < planned)) time = "A";
+  if (worstLate > 7 || (planned != null && actual != null && actual < planned - 10)) time = "R";
+  if (late.length) {
+    why.push(`${late.length} milestone${late.length > 1 ? "s" : ""} late`);
+    const m = late.sort((a, b) => new Date(a.planned_date) - new Date(b.planned_date))[0];
+    risks.push({ sev: worstLate > 7 ? 3 : 2, kind: "time", text: `${p.project_name}: ${m.name} ${opsDays(m.planned_date)} days late`, sub: "Planned " + fmtDay(m.planned_date) });
+  }
+  // Money
+  let money = apps.length ? "G" : null; let stuck = 0, unpaid = 0;
+  for (const a of apps) {
+    const cert = Number(a.certified_amount || 0);
+    if (a.status === "certified" && !a.paid_at) {
+      unpaid += cert;
+      const d = opsDays(a.certified_at);
+      if (d != null && d > 30) { stuck += cert; money = "R"; risks.push({ sev: 3, kind: "money", text: `${p.project_name}: ${opsMoney(cert, cur)} certified ${d} days ago`, sub: `${a.ref || "Application"} not paid. Send a reminder` }); }
+      else if (money !== "R") money = "G";
+    }
+    if (a.status === "submitted") {
+      const d = opsDays(a.submitted_at);
+      if (d != null && d > 21) { if (money !== "R") money = "A"; risks.push({ sev: 2, kind: "money", text: `${p.project_name}: ${a.ref || "application"} not certified after ${d} days`, sub: opsMoney(a.amount, cur) + " applied" }); }
+    }
+  }
+  if (stuck) why.push(`${opsMoney(stuck, cur)} certified, unpaid over 30 days`);
+  // Site
+  const rejected = insp.filter(i => i.status === "rejected" && !i.closed_at);
+  const oldIssues = iss.filter(i => opsDays(i.opened_at) > 7);
+  let site = (iss.length || insp.length) ? "G" : null;
+  if (iss.length || rejected.length) site = "A";
+  if (iss.some(i => i.severity === "critical") || rejected.length || oldIssues.length) site = "R";
+  if (rejected.length) { why.push(`${rejected.length} inspection${rejected.length > 1 ? "s" : ""} rejected`); risks.push({ sev: 3, kind: "site", text: `${p.project_name}: ${rejected.length} inspection${rejected.length > 1 ? "s" : ""} rejected`, sub: rejected[0].title || rejected[0].ref || "Re-inspection needed" }); }
+  for (const i of iss.filter(i => i.severity === "critical" || opsDays(i.opened_at) > 7).slice(0, 2))
+    risks.push({ sev: i.severity === "critical" ? 3 : 2, kind: "site", text: `${p.project_name}: ${i.title}`, sub: `${opsDays(i.opened_at)} days open${i.owner_id ? "" : " · no owner set"}` });
+  if (iss.length && !rejected.length) why.push(`${iss.length} open issue${iss.length > 1 ? "s" : ""}${oldIssues.length ? `, ${oldIssues.length} over 7 days` : ""}`);
+  const score = ["R", "A", "G", null].reduce((s, k, i) => s, 0) + [time, money, site].reduce((s, x) => s + (x === "R" ? 10 : x === "A" ? 3 : 0), 0);
+  return { p, cur, time, money, site, planned, actual, why: why.join(" · ") || (time || money || site ? "Nothing needs attention" : "Add the programme, payments or issues to judge this project"),
+           risks, unpaid, stuck, openIssues: iss.length, oldIssues: oldIssues.length,
+           waitingInsp: insp.filter(i => i.status === "raised").length, late: late.length, score };
+}
+function OpsLight({ v, title }) {
+  const c = v === "R" ? "#e05252" : v === "A" ? "#c98500" : v === "G" ? "#2e9e5b" : null;
+  return <span title={title + ": " + (v === "R" ? "needs action" : v === "A" ? "watch" : v === "G" ? "fine" : "not set yet")}
+    style={{ display: "inline-block", width: 12, height: 12, borderRadius: 99, background: c || "transparent", border: c ? 0 : "2px solid var(--q-text-dimmer,#94a3b8)" }} />;
+}
+function opsCsv(name, rows) {
+  const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const blob = new Blob([rows.map(r => r.map(esc).join(",")).join("\n")], { type: "text/csv" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+function OpsPortfolio({ D, onOpen }) {
+  const rows = useMemo(() => D.projects.map(p => opsHealth(D, p)).sort((a, b) => b.score - a.score), [D]);
+  const risks = rows.flatMap(r => r.risks).sort((a, b) => b.sev - a.sev).slice(0, 5);
+  const cur = rows[0] ? rows[0].cur : "AED";
+  const unpaid = rows.reduce((a, r) => a + r.unpaid, 0), stuck = rows.reduce((a, r) => a + r.stuck, 0);
+  const behind = rows.filter(r => r.time === "R" || r.time === "A").length;
+  const issues = rows.reduce((a, r) => a + r.openIssues, 0), old = rows.reduce((a, r) => a + r.oldIssues, 0);
+  const waiting = rows.reduce((a, r) => a + r.waitingInsp, 0);
+  const attention = rows.filter(r => [r.time, r.money, r.site].includes("R")).length;
+  const exportIt = () => opsCsv("portfolio-health.csv", [["Project", "Stage", "Time", "Money", "Site", "Actual %", "Planned %", "Why"],
+    ...rows.map(r => [r.p.project_name, DELIVERY_LABEL[r.p.delivery_stage] || "", r.time || "", r.money || "", r.site || "", r.actual ?? "", r.planned ?? "", r.why])]);
+  const ico = { time: "⏱", money: "\u{1F4B0}", site: "⚠" };
+  return (
+    <div>
+      <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))" }}>
+        <DivStat label="Active projects" value={rows.length} note={attention ? `${attention} need attention` : "none need attention"} tone={attention ? DIV_BAD : undefined} />
+        <DivStat label="Behind programme" value={behind} tone={behind ? DIV_BAD : undefined} note="late milestones or progress under plan" />
+        <DivStat label="Certified, not paid" value={opsMoney(unpaid, cur)} tone={stuck ? DIV_WARN : undefined} note={stuck ? `${opsMoney(stuck, cur)} over 30 days` : "nothing over 30 days"} />
+        <DivStat label="Open issues" value={issues} tone={old ? DIV_BAD : issues ? DIV_WARN : undefined} note={old ? `${old} older than 7 days` : "none older than 7 days"} />
+        <DivStat label="Inspections waiting" value={waiting} note="raised, not yet answered" />
+      </div>
+      <div className="qp-cols" style={{ gridTemplateColumns: "minmax(0,1.6fr) minmax(0,1fr)" }}>
+        <div className="qp-card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <h4>Projects, worst first</h4><button className="qp-btn" style={{ fontSize: 11.5 }} onClick={exportIt}>Export</button></div>
+          <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 10px" }}>Time · Money · Site. Red needs action, amber to watch, green fine, an empty circle is not set yet.</p>
+          <div style={{ overflowX: "auto" }}><table className="qp-table">
+            <thead><tr><th>Project · why</th><th>Stage</th><th title="Programme">Time</th><th title="Payments">Money</th><th title="Issues and inspections">Site</th><th style={{ width: "24%" }}>Actual vs plan</th></tr></thead>
+            <tbody>{rows.map(r => (
+              <tr key={r.p.id} style={{ cursor: "pointer" }} onClick={() => onOpen(r.p)}>
+                <td><div style={{ fontWeight: 700 }}>{r.p.project_name}</div>
+                  <div style={{ fontSize: 12, color: r.score >= 10 ? "#f87171" : "var(--q-text-dim,#64748b)", marginTop: 2 }}>{r.why}</div></td>
+                <td>{r.p.delivery_stage ? <DivPill tone="flat">{DELIVERY_LABEL[r.p.delivery_stage]}</DivPill> : <span style={{ fontSize: 12, color: "#b45309" }}>set a stage</span>}</td>
+                <td><OpsLight v={r.time} title="Time" /></td><td><OpsLight v={r.money} title="Money" /></td><td><OpsLight v={r.site} title="Site" /></td>
+                <td>{r.actual == null ? <span style={{ fontSize: 12, color: "var(--q-text-dimmer,#94a3b8)" }}>progress not set</span> :
+                  <div><DivBullet actual={r.actual} target={r.planned ?? 0} colour={r.time === "R" ? DIV_BAD : r.time === "A" ? DIV_WARN : DIV_SERIES[2]} />
+                    <div style={{ fontSize: 11, marginTop: 3 }}><b>{r.actual}%</b>{r.planned != null ? <span style={{ color: "var(--q-text-dimmer,#94a3b8)" }}> / plan {r.planned}%</span> : null}</div></div>}</td>
+              </tr>))}</tbody></table></div>
+        </div>
+        <div className="qp-card">
+          <h4>Top 5 risks this week</h4>
+          <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 8px" }}>Picked automatically from every project.</p>
+          {risks.length === 0 ? <div className="qp-empty">Nothing urgent. Late milestones, unpaid certificates, rejected inspections and old issues show here.</div> :
+            risks.map((k, i) => (
+              <div key={i} style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: i ? "1px solid var(--q-line,rgba(148,163,184,.2))" : 0 }}>
+                <span style={{ width: 28, height: 28, borderRadius: 8, flex: "none", display: "grid", placeItems: "center", background: k.sev >= 3 ? "rgba(224,82,82,.16)" : "rgba(201,133,0,.16)" }}>{ico[k.kind]}</span>
+                <div><div style={{ fontWeight: 700, fontSize: 13 }}>{k.text}</div><div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>{k.sub}</div></div>
+              </div>))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OpsCash({ D }) {
+  const rows = useMemo(() => D.projects.map(p => {
+    const apps = D.apps[p.id] || [], con = (D.con[p.id] || [])[0] || {};
+    const cur = con.currency || projectCurrency(p);
+    const applied = apps.filter(a => a.status !== "draft").reduce((s, a) => s + Number(a.amount || 0), 0);
+    const certified = apps.filter(a => a.status === "certified" || a.status === "paid").reduce((s, a) => s + Number(a.certified_amount || 0), 0);
+    const paid = apps.filter(a => a.status === "paid" || a.paid_at).reduce((s, a) => s + Number(a.certified_amount || a.amount || 0), 0);
+    const budget = (D.bud[p.id] || []).reduce((s, b) => s + Number(b.budget_cents || 0), 0) / 100;
+    const spent = (D.po[p.id] || []).filter(o => o.status !== "cancelled").reduce((s, o) => s + Number(o.amount_cents || 0), 0) / 100;
+    const chase = [];
+    for (const a of apps) {
+      if (a.status === "certified" && !a.paid_at) chase.push({ d: opsDays(a.certified_at) ?? 0, bad: (opsDays(a.certified_at) ?? 0) > 30, text: `${p.project_name} · ${a.ref || "Application"}`, sub: `${opsMoney(a.certified_amount, cur)} · certified ${opsDays(a.certified_at) ?? "?"} days ago, not paid` });
+      if (a.status === "submitted") chase.push({ d: opsDays(a.submitted_at) ?? 0, bad: false, text: `${p.project_name} · ${a.ref || "Application"}`, sub: `${opsMoney(a.amount, cur)} · submitted ${opsDays(a.submitted_at) ?? "?"} days ago, not certified` });
+    }
+    return { p, cur, contract: con.contract_value == null ? null : Number(con.contract_value), applied, certified, paid, budget, spent,
+             used: budget ? Math.round(spent / budget * 100) : null, pc: p.percent_complete == null ? null : Number(p.percent_complete), chase, n: apps.length };
+  }), [D]);
+  const cur = rows[0] ? rows[0].cur : "AED";
+  const T = k => rows.reduce((s, r) => s + (r[k] || 0), 0);
+  const stuck = rows.flatMap(r => r.chase).filter(c => c.bad);
+  const stuckSum = rows.reduce((s, r) => s + (D.apps[r.p.id] || []).filter(a => a.status === "certified" && !a.paid_at && (opsDays(a.certified_at) ?? 0) > 30).reduce((x, a) => x + Number(a.certified_amount || 0), 0), 0);
+  const chase = rows.flatMap(r => r.chase).sort((a, b) => b.d - a.d).slice(0, 8);
+  const exportIt = () => opsCsv("cash-position.csv", [["Project", "Currency", "Contract", "Applied", "Certified", "Paid", "Budget", "Committed (POs)", "Budget used %", "Progress %"],
+    ...rows.map(r => [r.p.project_name, r.cur, r.contract ?? "", r.applied, r.certified, r.paid, r.budget || "", r.spent || "", r.used ?? "", r.pc ?? ""])]);
+  return (
+    <div>
+      <div className="qp-tiles" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))" }}>
+        <DivStat label="Applied" value={opsMoney(T("applied"), cur)} note={`${rows.reduce((s, r) => s + r.n, 0)} applications`} />
+        <DivStat label="Certified" value={opsMoney(T("certified"), cur)} note={T("applied") > T("certified") ? `${opsMoney(T("applied") - T("certified"), cur)} not certified yet` : "all certified"} />
+        <DivStat label="Paid" value={opsMoney(T("paid"), cur)} note={T("certified") ? `${Math.round(T("paid") / T("certified") * 100)}% of certified` : "nothing certified yet"} />
+        <DivStat label="Money stuck (certified, unpaid over 30 days)" value={opsMoney(stuckSum, cur)} tone={stuckSum ? DIV_BAD : undefined} note={stuck.length ? `${stuck.length} certificate${stuck.length > 1 ? "s" : ""}` : "none"} />
+      </div>
+      <div className="qp-cols" style={{ gridTemplateColumns: "minmax(0,1.6fr) minmax(0,1fr)" }}>
+        <div className="qp-card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><h4>By project</h4><button className="qp-btn" style={{ fontSize: 11.5 }} onClick={exportIt}>Export</button></div>
+          <div style={{ overflowX: "auto", marginTop: 8 }}><table className="qp-table">
+            <thead><tr><th>Project</th><th style={{ textAlign: "right" }}>Contract</th><th style={{ textAlign: "right" }}>Applied</th><th style={{ textAlign: "right" }}>Certified</th><th style={{ textAlign: "right" }}>Paid</th><th style={{ width: "16%" }}>Paid of contract</th><th style={{ textAlign: "right" }}>Budget used</th></tr></thead>
+            <tbody>{rows.map(r => (
+              <tr key={r.p.id}><td style={{ fontWeight: 700 }}>{r.p.project_name}</td>
+                <td style={{ textAlign: "right" }}>{r.contract == null ? <span style={{ color: "var(--q-text-dimmer,#94a3b8)" }}>not set</span> : opsMoney(r.contract, r.cur)}</td>
+                <td style={{ textAlign: "right" }}>{opsMoney(r.applied, r.cur)}</td><td style={{ textAlign: "right" }}>{opsMoney(r.certified, r.cur)}</td><td style={{ textAlign: "right" }}>{opsMoney(r.paid, r.cur)}</td>
+                <td>{r.contract ? <div><DivBullet actual={Math.round(r.paid / r.contract * 100)} target={100} colour={DIV_SERIES[0]} />
+                  <div style={{ fontSize: 11, marginTop: 3 }}>{Math.round(r.paid / r.contract * 100)}%</div></div> : null}</td>
+                <td style={{ textAlign: "right" }}>{r.used == null ? <span style={{ fontSize: 12, color: "var(--q-text-dimmer,#94a3b8)" }}>no budget</span> :
+                  <DivPill tone={r.pc != null && r.used > r.pc + 10 ? "bad" : r.used > 90 ? "warn" : "good"}>{r.used}%{r.pc != null ? ` at ${r.pc}% done` : ""}</DivPill>}</td></tr>))}</tbody></table></div>
+          <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", marginTop: 8 }}>Budget used = purchase orders against the system budgets. It turns red when it runs more than 10% ahead of progress.</p>
+        </div>
+        <div className="qp-card">
+          <h4>Chase list</h4><p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 8px" }}>Oldest first.</p>
+          {chase.length === 0 ? <div className="qp-empty">Nothing waiting. Submitted and certified applications that are not paid show here.</div> :
+            chase.map((c, i) => (
+              <div key={i} style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: i ? "1px solid var(--q-line,rgba(148,163,184,.2))" : 0 }}>
+                <span style={{ width: 10, height: 10, marginTop: 5, borderRadius: 99, flex: "none", background: c.bad ? DIV_BAD : DIV_WARN }} />
+                <div><div style={{ fontWeight: 700, fontSize: 13 }}>{c.text}</div><div style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)" }}>{c.sub}</div></div>
+              </div>))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Monthly progress report: a client-ready PDF built from the records for that month.
+async function opsProgressPdf(D, p, ym, inc, companyName) {
+  if (!window.jspdf) throw new Error("The PDF tool is still loading. Try again in a moment.");
+  const { jsPDF } = window.jspdf;
+  const [y, m] = ym.split("-").map(Number);
+  const start = new Date(y, m - 1, 1), end = new Date(y, m, 0, 23, 59, 59);
+  const inMonth = d => d && new Date(d) >= start && new Date(d) <= end;
+  const monthName = start.toLocaleString("en-GB", { month: "long", year: "numeric" });
+  const ms = (D.ms[p.id] || []).slice().sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || new Date(a.planned_date || 0) - new Date(b.planned_date || 0));
+  const insp = (D.insp[p.id] || []).filter(i => inMonth(i.raised_at) || inMonth(i.closed_at));
+  const apps = (D.apps[p.id] || []).slice().sort((a, b) => new Date(a.period_to || a.created_at) - new Date(b.period_to || b.created_at));
+  const iss = (D.iss[p.id] || []).filter(i => i.status === "open");
+  const cur = ((D.con[p.id] || [])[0] || {}).currency || projectCurrency(p);
+  const h = opsHealth(D, p);
+  const doc = new jsPDF({ unit: "mm", format: "a4" }); const W = 210, M = 14; let yy = 0;
+  const fmt = d => d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) : "—";
+  const section = t => { if (yy > 260) { doc.addPage(); yy = 18; } doc.setFont("helvetica", "bold"); doc.setFontSize(11.5); doc.setTextColor(11, 20, 48); doc.text(t, M, yy); yy += 2; };
+  const table = (head, body) => { doc.autoTable({ startY: yy + 1, head: [head], body, margin: { left: M, right: M }, styles: { fontSize: 8.5, cellPadding: 1.8 }, headStyles: { fillColor: [11, 20, 48] }, theme: "grid" }); yy = doc.lastAutoTable.finalY + 8; };
+  // header
+  doc.setFillColor(11, 20, 48); doc.rect(0, 0, W, 26, "F");
+  doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.text(`Monthly Progress Report · ${monthName}`, M, 11);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.text(`${p.project_name}${p.project_ref ? " · " + p.project_ref : ""}${p.city ? " · " + p.city : ""}`, M, 18);
+  doc.text(companyName || "", W - M, 11, { align: "right" });
+  doc.setFont("helvetica", "bold"); doc.text(`Progress ${h.actual ?? "—"}%${h.planned != null ? ` · Plan ${h.planned}%` : ""}`, W - M, 18, { align: "right" });
+  yy = 36;
+  if (inc.summary) {
+    section("1. Summary");
+    const asOf = Math.min(end.getTime(), Date.now());
+    const late = ms.filter(x => !x.actual_date && x.planned_date && new Date(x.planned_date).getTime() < asOf);
+    const done = ms.filter(x => inMonth(x.actual_date));
+    const appr = insp.filter(i => (i.status === "approved" || i.status === "approved_comments") && inMonth(i.closed_at)).length, rej = insp.filter(i => i.status === "rejected").length;
+    const lines = [
+      h.actual != null ? `Progress is ${h.actual}%${h.planned != null ? ` against a plan of ${h.planned}% (${h.actual >= h.planned ? "on or ahead of plan" : (h.planned - h.actual) + "% behind"})` : ""}.` : "Progress has not been recorded yet.",
+      done.length ? `Milestones completed this month: ${done.map(x => x.name).join(", ")}.` : "No milestone was completed this month.",
+      late.length ? `Late: ${late.map(x => x.name).join(", ")}.` : "No milestone is late.",
+      `Inspections this month: ${insp.length}${insp.length ? ` (${appr} approved${rej ? `, ${rej} rejected` : ""})` : ""}. Open issues: ${iss.length}.`,
+    ];
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(51, 65, 85);
+    const t = doc.splitTextToSize(lines.join(" "), W - 2 * M); doc.text(t, M, yy + 4); yy += 6 + t.length * 4.4;
+  }
+  if (inc.curve && ms.some(x => x.planned_date)) {
+    section("2. Planned vs actual");
+    const dated = ms.filter(x => x.planned_date); const n = dated.length;
+    const dates = dated.map(x => new Date(x.planned_date).getTime()).concat(dated.filter(x => x.actual_date).map(x => new Date(x.actual_date).getTime()), [Date.now()]);
+    const t0 = Math.min(...dates), t1 = Math.max(...dates) || t0 + 1;
+    const X = t => M + 8 + (t - t0) / Math.max(1, t1 - t0) * (W - 2 * M - 16), Y = v => yy + 44 - v / 100 * 40;
+    doc.setDrawColor(226, 232, 240); for (let i = 0; i <= 4; i++) doc.line(M + 8, Y(i * 25), W - M - 8, Y(i * 25));
+    doc.setFontSize(7); doc.setTextColor(100, 116, 139); for (let i = 0; i <= 4; i++) doc.text(`${i * 25}%`, M, Y(i * 25) + 1);
+    const step = (arr, color, dash) => { const pts = arr.sort((a, b) => a - b).map((t, i) => [X(t), Y((i + 1) / n * 100)]); let last = [X(t0), Y(0)];
+      doc.setDrawColor(...color); doc.setLineWidth(0.7); if (dash && doc.setLineDashPattern) doc.setLineDashPattern([1.5, 1.2], 0);
+      for (const q of pts) { doc.line(last[0], last[1], q[0], last[1]); doc.line(q[0], last[1], q[0], q[1]); last = q; }
+      if (doc.setLineDashPattern) doc.setLineDashPattern([], 0); doc.setLineWidth(0.2); };
+    step(dated.map(x => new Date(x.planned_date).getTime()), [148, 163, 184], true);
+    step(dated.filter(x => x.actual_date).map(x => new Date(x.actual_date).getTime()), [37, 99, 235], false);
+    doc.setFontSize(7.5); doc.setTextColor(37, 99, 235); doc.text("Actual (milestones achieved)", M + 10, yy + 50); doc.setTextColor(100, 116, 139); doc.text("Plan", M + 60, yy + 50);
+    yy += 58;
+  }
+  if (inc.milestones && ms.length) { section("3. Milestones"); table(["Milestone", "Planned", "Actual", "Status"], ms.map(x => [x.name, fmt(x.planned_date), fmt(x.actual_date),
+    x.actual_date ? (x.planned_date && new Date(x.actual_date) > new Date(x.planned_date) ? `done ${Math.round((new Date(x.actual_date) - new Date(x.planned_date)) / OPS_DAY)} days late` : "done") : (x.planned_date && new Date(x.planned_date) < new Date() ? "late" : "on track")])); }
+  if (inc.inspections) { section("4. Inspections this month"); if (insp.length) table(["Ref", "Inspection", "Location", "Raised", "Status"], insp.map(i => [i.ref || "", i.title || i.kind || "", i.location || "", fmt(i.raised_at), OPS_WIR_LABEL[i.status] || i.status || ""])); else { doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(100, 116, 139); doc.text("No inspections this month.", M, yy + 4); yy += 10; } }
+  if (inc.payments && apps.length) { section("5. Payments"); table(["Application", "Period to", "Applied", "Certified", "Paid"], apps.map(a => [a.ref || "", fmt(a.period_to), opsMoney(a.amount, cur), a.certified_amount != null ? opsMoney(a.certified_amount, cur) : "pending", a.paid_at ? fmt(a.paid_at) : "—"])); }
+  if (inc.issues) {
+    section("6. Open issues and look-ahead");
+    const ahead = ms.filter(x => !x.actual_date && x.planned_date && new Date(x.planned_date) > end && new Date(x.planned_date) <= new Date(end.getTime() + 31 * OPS_DAY));
+    const body = iss.map(i => ["Issue", i.title, i.severity || "", `${opsDays(i.opened_at)} days open`]).concat(ahead.map(x => ["Next month", x.name, "", "planned " + fmt(x.planned_date)]));
+    if (body.length) table(["Type", "What", "Severity", "When"], body); else { doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(100, 116, 139); doc.text("No open issues and nothing planned next month.", M, yy + 4); yy += 10; }
+  }
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) { doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(148, 163, 184);
+    doc.text(`${p.project_name} · ${monthName} · page ${i} of ${pages}`, M, 290); doc.text("Prepared with Quantora Engineering", W - M, 290, { align: "right" }); }
+  doc.save(`${String(p.project_name).replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-")}-progress-${ym}.pdf`);
+}
+
+function OpsReport({ D }) {
+  const now = new Date();
+  const months = Array.from({ length: 12 }, (_, i) => { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); return [`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, d.toLocaleString("en-GB", { month: "long", year: "numeric" })]; });
+  const [pid, setPid] = useState(D.projects[0] ? D.projects[0].id : "");
+  const [ym, setYm] = useState(months[0][0]);
+  const [inc, setInc] = useState({ summary: true, curve: true, milestones: true, inspections: true, payments: true, issues: true });
+  const [busy, setBusy] = useState(false);
+  const p = D.projects.find(x => x.id === pid);
+  const L = [["summary", "Progress summary"], ["curve", "Planned vs actual curve"], ["milestones", "Milestones: planned vs actual"], ["inspections", "Inspections this month"], ["payments", "Payments"], ["issues", "Open issues and look-ahead"]];
+  const has = p ? { ms: (D.ms[p.id] || []).length, apps: (D.apps[p.id] || []).length, insp: (D.insp[p.id] || []).length } : {};
+  const go = async () => {
+    setBusy(true);
+    try { let co = ""; try { const { data: { user } } = await sb.auth.getUser(); const { data: pr } = await sb.from("profiles").select("company_id").eq("id", user.id).maybeSingle();
+            if (pr && pr.company_id) { const { data: c } = await sb.from("companies").select("name").eq("id", pr.company_id).maybeSingle(); co = (c && c.name) || ""; } } catch (_) {}
+      await opsProgressPdf(D, p, ym, inc, co); qPop({ kind: "success", title: "Report downloaded ✓", message: `${p.project_name} · ${months.find(m => m[0] === ym)[1]}` }); }
+    catch (e) { qPop({ kind: "warn", title: "Could not make the report", message: e.message || String(e) }); }
+    setBusy(false);
+  };
+  if (!D.projects.length) return <div className="qp-empty">Create a project first.</div>;
+  return (
+    <div className="qp-cols" style={{ gridTemplateColumns: "minmax(260px,360px) minmax(0,1fr)" }}>
+      <div className="qp-card">
+        <h4>Monthly progress report</h4>
+        <p style={{ fontSize: 12, color: "var(--q-text-dim,#64748b)", margin: "4px 0 12px" }}>A client-ready PDF for any project and month, built from what the team recorded.</p>
+        <label style={{ fontSize: 12, fontWeight: 700 }}>Project</label>
+        <select className="w-full border rounded-lg px-3 py-2 text-sm" style={{ margin: "4px 0 10px" }} value={pid} onChange={e => setPid(e.target.value)}>
+          {D.projects.map(x => <option key={x.id} value={x.id}>{x.project_name}</option>)}</select>
+        <label style={{ fontSize: 12, fontWeight: 700 }}>Month</label>
+        <select className="w-full border rounded-lg px-3 py-2 text-sm" style={{ margin: "4px 0 12px" }} value={ym} onChange={e => setYm(e.target.value)}>
+          {months.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Include</div>
+        {L.map(([k, l]) => <label key={k} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, padding: "4px 0" }}>
+          <input type="checkbox" checked={inc[k]} onChange={e => setInc({ ...inc, [k]: e.target.checked })} />{l}</label>)}
+        <button className="qp-btn pri" style={{ width: "100%", marginTop: 14 }} disabled={busy || !p} onClick={go}>{busy ? "Making the PDF…" : "⬇ Download PDF"}</button>
+      </div>
+      <div className="qp-card">
+        <h4>What goes in</h4>
+        {p && <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+          <div>Progress: <b>{p.percent_complete == null ? "not set" : p.percent_complete + "%"}</b>{opsPlannedPct(D.ms[p.id]) != null ? ` · plan ${opsPlannedPct(D.ms[p.id])}%` : ""}</div>
+          <div>Milestones: <b>{has.ms}</b> {has.ms ? "" : <span style={{ color: "#b45309" }}>(add the programme to get the curve and milestone table)</span>}</div>
+          <div>Inspections recorded: <b>{has.insp}</b> · Payment applications: <b>{has.apps}</b></div>
+          <div style={{ color: "var(--q-text-dim,#64748b)", fontSize: 12, marginTop: 8 }}>Open the project under Projects &amp; issues to add milestones, inspections, payments and issues. The report only uses what has been recorded, so nothing is guessed.</div>
+        </div>}
+      </div>
+    </div>
+  );
+}
+
+function OpsInsights({ tab, onOpen }) {
+  const [D, setD] = useState(null); const [err, setErr] = useQErr("");
+  const load = async () => { try { setD(await opsLoadAll()); } catch (e) { setErr(e.message || String(e)); } };
+  useEffect(() => { load(); }, []);
+  useQAutoRefresh(() => load(), 60);
+  if (err) return <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>;
+  if (!D) return <div className="qp-card">Loading…</div>;
+  if (!D.projects.length) return <DivEmpty title="No projects yet" body="Create a project and record its programme, payments and issues, and this fills in." />;
+  if (tab === "health") return <OpsPortfolio D={D} onOpen={onOpen} />;
+  if (tab === "cash") return <OpsCash D={D} />;
+  return <OpsReport D={D} />;
+}
+
 function OperationsPage({ onNavigate }) {
   const [projects, setProjects] = useState(null);
   const [milestones, setMilestones] = useState([]);
@@ -30459,6 +30803,8 @@ function OperationsPage({ onNavigate }) {
   const [issueTitle, setIssueTitle] = useState("");
   const [issueSev, setIssueSev] = useState("warning");
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState(() => { try { return localStorage.getItem("q_ops_tab") || "health"; } catch (_) { return "health"; } });
+  const pickTab = (t) => { setTab(t); try { localStorage.setItem("q_ops_tab", t); } catch (_) {} };
 
   async function load() {
     setErr("");
@@ -30539,8 +30885,16 @@ function OperationsPage({ onNavigate }) {
     <div>
       <PageHead title="Operations" sub="Delivery stage, progress against programme, and what is blocking site." />
       {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 14px" }}>
+        {[["health", "Portfolio health"], ["cash", "Cash position"], ["report", "Progress report"], ["overview", "Projects & issues"]].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => pickTab(k)}
+            style={{ fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer",
+              border: "1px solid " + (tab === k ? "transparent" : "rgba(148,163,184,.35)"),
+              background: tab === k ? "linear-gradient(90deg,#2563eb,#7c3aed)" : "transparent", color: tab === k ? "#fff" : "inherit" }}>{l}</button>))}
+      </div>
+      {tab !== "overview" && projects.length > 0 ? <OpsInsights tab={tab} onOpen={setOpen} /> : null}
 
-      {projects.length === 0 ? (
+      {(tab === "overview" || projects.length === 0) && (projects.length === 0 ? (
         <DivEmpty title="No projects yet"
           body="Operations follows the projects you are delivering. Create a project and set its delivery stage, and this fills in."
           actionLabel="Create a project" onAction={() => onNavigate("new")} />
@@ -30639,7 +30993,7 @@ function OperationsPage({ onNavigate }) {
             </div>
           </div>
         </>
-      )}
+      ))}
 
       {edit && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 60,
