@@ -57,6 +57,15 @@ async function step(name, fn, { optional = false } = {}) {
     const msg = String(e && e.message || e).split("\n")[0].slice(0, 400);
     steps.push({ step: name, ok: false, s: Math.round((Date.now() - t0) / 1000), error: msg });
     log("  FAILED:", msg);
+    // What the screen showed at that moment (pop-ups first), so a failure can be read from the log alone.
+    try {
+      const seen = await page.evaluate(() => {
+        const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+        const dlg = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],.fixed')].filter(vis).map(e => e.innerText.trim()).filter(Boolean).slice(0, 3);
+        return { url: location.href, dialogs: dlg.map(t => t.replace(/\s+/g, " ").slice(0, 300)), screen: document.body.innerText.replace(/\s+/g, " ").slice(0, 700) };
+      });
+      log("  SCREEN:", JSON.stringify(seen));
+    } catch (_) {}
     await shot("FAILED-" + name.replace(/\W+/g, "-"));
     if (!optional) throw Object.assign(new Error(msg), { robotStep: name });
   }
