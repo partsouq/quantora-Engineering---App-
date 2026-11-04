@@ -176,3 +176,28 @@ Deno.test("ELV tiles: camera types stay apart, readers combine", () => {
   assertEquals(r.rows.filter((x: any) => x.system_category === "access_control").map((x: any) => x.quantity), [36]);
   assertEquals(q(/^Single leaf door/), [9]);
 });
+
+
+Deno.test("types inside one family stay apart; same spots under two names count once", () => {
+  const P = { quantity_source_type: "physical_count", unit: "nr" };
+  const rows = [
+    { ...P, system_category: "fire_alarm", description: "Optical smoke detector, addressable", quantity: 40 },
+    { ...P, system_category: "fire_alarm", description: "Heat detector, rate of rise", quantity: 8 },
+    { ...P, system_category: "fire_alarm", description: "Manual call point, addressable", quantity: 6 },
+    { ...P, system_category: "fire_alarm", description: "Smoke detector (ceiling)", quantity: 5 },
+    { ...P, system_category: "lighting", description: "LED downlight 12W", quantity: 30 },
+    { ...P, system_category: "lighting", description: "Exit sign, maintained", quantity: 4 },
+    { ...P, system_category: "access_control", description: "Card reader", quantity: 3,
+      coordinates: { x: 0.1, y: 0.1, instances: [{ x: 0.2, y: 0.2 }, { x: 0.3, y: 0.3 }] } },
+    { ...P, system_category: "access_control", description: "Door access control reader", quantity: 3,
+      coordinates: { x: 0.1005, y: 0.1, instances: [{ x: 0.2, y: 0.2004 }, { x: 0.6, y: 0.6 }] } },
+  ];
+  const r = mergeSameKindRows(rows);
+  const q = (re: RegExp) => r.rows.filter((x: any) => re.test(x.description)).map((x: any) => x.quantity);
+  assertEquals(q(/smoke/i), [45]);
+  assertEquals(q(/^Heat/), [8]);
+  assertEquals(q(/call point/), [6]);
+  assertEquals(q(/downlight/), [30]);
+  assertEquals(q(/Exit sign/), [4]);
+  assertEquals(r.rows.filter((x: any) => x.system_category === "access_control").map((x: any) => x.quantity), [4]);
+});
