@@ -154,3 +154,25 @@ Deno.test("equipment lines read like something you can buy", () => {
   assertEquals(/total load 19\.33 kW/.test(fcu.description), true);
   assertEquals(/supply air 1142 L\/s/i.test(fcu.description), true);
 });
+
+// 2026-11-04: an ELV ground floor read in 6 tiles (live run). Dome and bullet cameras were added into
+// one "bullet" line, and the two reader lines never combined because one was filed as a door.
+Deno.test("ELV tiles: camera types stay apart, readers combine", () => {
+  const P = { quantity_source_type: "physical_count", unit: "nr" };
+  const rows = [
+    { ...P, system_category: "cctv", description: "Dome IP CCTV Camera (dome symbol, exterior zone)", quantity: 6 },
+    { ...P, system_category: "cctv", description: "Bullet/box IP CCTV Camera (symbol shows directional camera icon with arrow)", quantity: 11 },
+    { ...P, system_category: "cctv", description: "IP CCTV Camera, bullet type", quantity: 3 },
+    { ...P, system_category: "cctv", description: "CCTV camera (type not stated)", quantity: 2 },
+    { ...P, system_category: "access_control", description: "Door Access Control Reader (wall-mounted card reader symbol)", quantity: 20 },
+    { ...P, system_category: "access_control", description: "Card reader/access control point (paired arrow icons)", quantity: 16 },
+    { ...P, system_category: "doors", description: "Single leaf door", quantity: 9 },
+  ];
+  const r = mergeSameKindRows(rows);
+  const q = (re: RegExp) => r.rows.filter((x: any) => re.test(x.description)).map((x: any) => x.quantity);
+  assertEquals(q(/^Dome/), [6]);
+  assertEquals(q(/bullet|Bullet/), [14]);
+  assertEquals(q(/type not stated/), [2]);
+  assertEquals(r.rows.filter((x: any) => x.system_category === "access_control").map((x: any) => x.quantity), [36]);
+  assertEquals(q(/^Single leaf door/), [9]);
+});
