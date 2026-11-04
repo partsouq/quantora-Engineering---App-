@@ -363,7 +363,9 @@ function validateMeasuredRoutes(raw: any): { description: string; metres: number
   const out = [];
   for (const r of raw.slice(0, 20)) {
     const m = Number(r?.metres);
-    if (!Number.isFinite(m) || m <= 0 || m > 200000) continue;
+    // 2026-11-04: under 2.5 m is a note whose colour was hardly found on the plan, not a real run;
+    // publishing "1 m" of tray would be wrong, so that tray keeps the AI's own line instead
+    if (!Number.isFinite(m) || m < 2.5 || m > 200000) continue;
     out.push({ description: String(r?.description ?? "").replace(/\s+/g, " ").trim().slice(0, 120), metres: Math.round(m),
                double: r?.double === true, scale: String(r?.scale ?? "").slice(0, 20), colour: String(r?.colour ?? "").slice(0, 20) });
   }
@@ -1607,6 +1609,15 @@ function engineeringRuleSubjectText(description: string): string {
   return m ? text.slice(0, m.index) : text;
 }
 
+// 2026-11-04: an access-control rule written for "door" also fires on a reader counted as a
+// "card reader / access control point": one reader is one controlled door. One match per item and
+// rule, so a description with both words is still counted once.
+function ruleTriggers(keyword: string, system: string): string[] {
+  const k = String(keyword || "").toLowerCase();
+  if (k === "door" && system === "access_control") return ["door", "reader", "access control point", "access point"];
+  return [k];
+}
+
 async function deriveEngineeringItems(admin: any, insertedRows: any[]) {
   const { data: rules } = await admin.from("engineering_rules").select("*");
   if (!rules || !rules.length) return [];
@@ -1631,7 +1642,7 @@ async function deriveEngineeringItems(admin: any, insertedRows: any[]) {
     const itemSubjectText = engineeringRuleSubjectText(item.description).toLowerCase();
     for (const rule of rules) {
       if (rule.system_category !== item.system_category && rule.system_category !== RULE_SYSTEM_ALIAS[item.system_category]) continue;
-      if (!item.description || !itemSubjectText.includes(rule.trigger_keyword.toLowerCase())) continue;
+      if (!item.description || !ruleTriggers(rule.trigger_keyword, item.system_category).some((k) => itemSubjectText.includes(k))) continue;
 
       // A rule exists to fill a gap the drawing left. If the analysis already
       // produced this equipment for the same system, adding the generic version

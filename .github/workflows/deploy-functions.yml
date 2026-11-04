@@ -1,0 +1,56 @@
+name: Deploy server functions
+
+# Puts the Supabase edge functions live from this repository.
+# - After a merge to main that changes supabase/functions/<name>/, that function is deployed.
+# - "Run workflow" deploys one function by name (for example ai-engine).
+# Needs the repository secret SUPABASE_ACCESS_TOKEN (Supabase -> Account -> Access tokens).
+on:
+  push:
+    branches: [main]
+    paths: ["supabase/functions/**"]
+  workflow_dispatch:
+    inputs:
+      function:
+        description: "Function to deploy (folder name under supabase/functions)"
+        required: true
+        default: ai-engine
+
+concurrency:
+  group: deploy-functions
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: mcwcvyuvlkmqsivnzvjy
+      # these functions check their own secret instead of a signed-in user
+      NO_VERIFY_JWT: "dodo-webhook razorpay-webhook welcome-cleanup run-doctor model-export-tmp"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Work out which functions to deploy
+        id: which
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            LIST="${{ inputs.function }}"
+          else
+            LIST=$(git diff --name-only HEAD~1 HEAD -- supabase/functions | cut -d/ -f3 | sort -u | tr '\n' ' ')
+          fi
+          echo "list=$LIST" >> "$GITHUB_OUTPUT"
+          echo "Functions: $LIST"
+      - name: Deploy
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then echo "SUPABASE_ACCESS_TOKEN secret is missing"; exit 1; fi
+          for f in ${{ steps.which.outputs.list }}; do
+            [ -f "supabase/functions/$f/index.ts" ] || { echo "skip $f (no index.ts)"; continue; }
+            FLAG=""; case " $NO_VERIFY_JWT " in *" $f "*) FLAG="--no-verify-jwt";; esac
+            echo "Deploying $f $FLAG"
+            supabase functions deploy "$f" --project-ref "$PROJECT_REF" $FLAG --use-api
+          done

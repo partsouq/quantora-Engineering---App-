@@ -127,6 +127,9 @@ const FAMILIES: Family[] = [
   { name: "fire fighting equipment", re: /\b(hose\s*reels?|extinguishers?|fire\s*hose\s*cabinets?|fhc|landing\s*valves?)\b/i, system: "fire_fighting" },
   { name: "fire alarm device", re: /\b(detectors?|call\s*points?|sounders?|strobes?|beacons?)\b/i, system: "fire_alarm" },
   { name: "camera", re: /\b(cameras?|cctv)\b/i, system: "cctv" },
+  // 2026-11-04: readers before "door", or "Door Access Control Reader" is filed as a door and never
+  // combines with "Card reader / access control point" counted on another tile
+  { name: "access control reader", re: /\b(card\s*readers?|proximity\s*readers?|biometric\s*readers?|readers?|access\s*control\s*(points?|readers?))\b/i, system: "access_control" },
   { name: "light fitting", re: /\b(light(ing)?\s*fix(ture|ing)s?|luminaires?|downlights?|light\s*fittings?|led\s*(panel|strip|light)s?|spot\s*lights?|emergency\s*lights?|exit\s*signs?)\b/i, system: "lighting" },
   { name: "distribution board", re: /\b(distribution\s*boards?|smdb|mdb|db|panel\s*boards?|lv\s*panels?)\b/i, system: "db_panels" },
   { name: "socket outlet", re: /\b(socket|power\s*outlet|isolator|fused\s*spur)s?\b/i, system: "power_distribution" },
@@ -319,6 +322,14 @@ export function mergeSameKindRows(rows: any[]): { rows: any[]; merged: number } 
       return `${r.system_category}§controller§${String(r.unit).toLowerCase()}`;
     }
     const side = (subj.match(/\b(supply|return|exhaust|extract|fresh|transfer|smoke|motori[sz]ed|fire|volume|square|round|linear)\b/gi) || []).map((w) => w.toLowerCase()).sort().join("+");
+    // 2026-11-04: a dome camera is not a bullet camera. Cameras combine only with the same form factor;
+    // the type is read from the whole description, as tiles often write it in brackets.
+    if (fam.name === "camera") {
+      const ff = /\b(ptz|pan[\s-]*tilt)\b/i.test(r.description) ? "ptz" : /\b(fish\s*-?eye|360|panoramic)\b/i.test(r.description) ? "fisheye"
+        : /\b(anpr|lpr|number\s*plate)\b/i.test(r.description) ? "anpr" : /\bdome\b/i.test(subj) ? "dome" : /\bturret\b/i.test(subj) ? "turret"
+        : /\b(bullet|box)\b/i.test(subj) ? "bullet" : /\bdome\b/i.test(r.description) ? "dome" : /\b(bullet|box)\b/i.test(r.description) ? "bullet" : "unspecified";
+      return `${r.system_category}§camera§${ff}§${String(r.unit).toLowerCase().replace(/^(nos|no|ea|each|pcs)$/, "nr")}`;
+    }
     return `${r.system_category}§${fam.name}§${side}§${String(r.unit).toLowerCase().replace(/^(nos|no|ea|each|pcs)$/, "nr")}`;
   };
   const groups = new Map<string, any>();
