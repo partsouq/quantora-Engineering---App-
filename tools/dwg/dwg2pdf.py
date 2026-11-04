@@ -104,12 +104,16 @@ class Dwg:
                 self.by_owner[b.get("handle")] = b["entities"]
         self.model_handle = (self.blocks.get("*Model_Space") or {}).get("handle", "1F")
         self.layouts = [l for l in (d.get("objects", {}).get("LAYOUT") or []) if l.get("layoutName") != "Model"]
+        # Older DWG versions have no plot flag and read back as "not plotted" on every layer.
+        self.trust_plot_flag = any((l.get("plotFlag", 1) or 0) != 0 for l in self.layers.values())
         self.stats = {"drawn": 0, "text": 0, "skipped_types": {}}
 
     def layer_visible(self, name):
         l = self.layers.get(name)
         if not l: return True
-        return not (l.get("off") or l.get("frozen")) and l.get("plotFlag", 1) != 0
+        if l.get("off") or l.get("frozen"): return False
+        if self.trust_plot_flag and l.get("plotFlag", 1) == 0: return False
+        return True
 
     def color(self, e, inherited):
         ci = e.get("colorIndex", 256)
@@ -157,10 +161,13 @@ class Painter:
         px, py = self.to_page(x, y)
         hp = h
         if hp < 0.6 or hp > 600: return
+        if self.clip is not None and not self.clip.contains(pymupdf.Point(px, py)): return
+        # text goes straight onto the sheet (never inside an embedded viewport picture), so it stays readable text
+        target = getattr(self, "text_page", None) or self.page
         try:
             m = pymupdf.Matrix(-math.degrees(ang))
             pt = pymupdf.Point(px, py)
-            self.page.insert_text(pt, s, fontsize=hp, fontname="helv", color=color, morph=(pt, m))
+            target.insert_text(pt, s, fontsize=hp, fontname="helv", color=color, morph=(pt, m))
         except Exception:
             pass
 
@@ -374,16 +381,23 @@ def collect_points(dw, ents, mat, out, depth=0, cap=400000):
 
 
 def robust_box(pts):
+    """The drawing's real extent. Stray objects far away (a block left at a huge coordinate, a
+    construction point) would otherwise shrink the whole plan to a dot, so points beyond a wide fence
+    around the middle half of the drawing are ignored, as long as they are only a small share."""
     if not pts: return None
     xs = sorted(p[0] for p in pts); ys = sorted(p[1] for p in pts)
     n = len(xs)
-    lo, hi = int(n * 0.002), max(0, int(n * 0.998) - 1)
-    x0, x1, y0, y1 = xs[lo], xs[hi], ys[lo], ys[hi]
-    # keep the true extents when they are not far outliers
-    if xs[0] > x0 - (x1 - x0) * 0.15: x0 = xs[0]
-    if xs[-1] < x1 + (x1 - x0) * 0.15: x1 = xs[-1]
-    if ys[0] > y0 - (y1 - y0) * 0.15: y0 = ys[0]
-    if ys[-1] < y1 + (y1 - y0) * 0.15: y1 = ys[-1]
+
+    def fence(v):
+        q1, q3 = v[n // 4], v[(3 * n) // 4]
+        iqr = q3 - q1
+        if iqr <= 0: return v[0], v[-1]
+        lo, hi = q1 - 6 * iqr, q3 + 6 * iqr
+        keep = [a for a in v if lo <= a <= hi]
+        if len(keep) < n * 0.9: return v[0], v[-1]      # many far points: they are real content
+        return keep[0], keep[-1]
+
+    x0, x1 = fence(xs); y0, y1 = fence(ys)
     if x1 - x0 <= 0 or y1 - y0 <= 0: return None
     return x0, y0, x1, y1
 
@@ -451,7 +465,7 @@ def layout_pages(doc, dw, report):
             r0 = to_page(cx - vw / 2, cy + vh / 2); r1 = to_page(cx + vw / 2, cy - vh / 2)
             clip = pymupdf.Rect(r0, r1)
             sub = pymupdf.open(); sp = sub.new_page(width=page.rect.width, height=page.rect.height)
-            pv = Painter(sp, to_page); pv.unit_scale = u * MM
+            pv = Painter(sp, to_page, clip=clip); pv.unit_scale = u * MM; pv.text_page = page
             frozen = set(v.get("frozenLayerIds") or [])
             draw_entities(dw, dw.by_owner.get(dw.model_handle, []), m, pv, (0, 0, 0), 0)
             pv.flush()
@@ -475,7 +489,8 @@ def main():
     if not made:
         model_page(doc, dw, report)
     if doc.page_count == 0:
-        raise SystemExit("nothing to draw")
+        only3d = all(e.get("type") in ("3DSOLID", "REGION", "BODY", "MESH", "SURFACE", "POLYLINE3D", "MTEXT", "VIEWPORT") for e in dw.d.get("entities", []))
+        raise SystemExit("This DWG holds a 3D model with no 2D plan to read." if only3d else "This DWG has no drawing content to read.")
     doc.save(out, garbage=3, deflate=True)
     report.update(dw.stats)
     if len(sys.argv) > 3: json.dump(report, open(sys.argv[3], "w"))
