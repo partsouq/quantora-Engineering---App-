@@ -87,7 +87,9 @@ async function convert(lib, job, dir) {
     seconds: Math.round((Date.now() - t0) / 1000),
     // sizes and counts only: no layer or layout names leave the database
     report: { pages: report.pages.map((p) => ({ width_mm: p.width_mm, height_mm: p.height_mm, viewports: p.viewports || 0 })),
-              drawn: report.drawn, text: report.text, skipped: report.skipped_types, dwg_bytes: bytes.length },
+              drawn: report.drawn, text: report.text, skipped: report.skipped_types, dwg_bytes: bytes.length,
+              xref_blocks: report.xref_blocks, xref_inserts: report.xref_inserts, model_entities: report.model_entities,
+              viewports: report.viewports || null },
   };
 }
 
