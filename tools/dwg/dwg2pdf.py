@@ -107,6 +107,11 @@ class Dwg:
         # Older DWG versions have no plot flag and read back as "not plotted" on every layer.
         self.trust_plot_flag = any((l.get("plotFlag", 1) or 0) != 0 for l in self.layers.values())
         self.stats = {"drawn": 0, "text": 0, "skipped_types": {}}
+        # linked drawings (XREF): their content is in another file that was not uploaded
+        xref_handles = {b.get("handle") for b in self.blocks.values() if (int(b.get("flags") or 0) & 12)}
+        self.stats["xref_blocks"] = len(xref_handles)
+        self.stats["xref_inserts"] = sum(1 for e in d.get("entities", []) if e.get("type") == "INSERT" and (self.blocks.get(e.get("name")) or {}).get("handle") in xref_handles)
+        self.stats["model_entities"] = len(self.by_owner.get(self.model_handle, []))
 
     def layer_visible(self, name):
         l = self.layers.get(name)
@@ -331,7 +336,35 @@ def draw_entities(dw, ents, mat, painter, ink, depth, layer_of_insert=None):
                     draw_entities(dw, dw.by_owner.get(b.get("handle"), []), mat @ T(ix, iy), painter, col, depth + 1, lay_eff)
             elif t == "LEADER":
                 painter.line([mat.p(*P(v)) for v in (e.get("vertices") or [])], col)
-            elif t in ("VIEWPORT", "POINT", "XLINE", "RAY", "WIPEOUT", "3DSOLID", "REGION", "BODY", "IMAGE", "OLE2FRAME", "MLINE", "MULTILEADER", "TOLERANCE", "HELIX", "MESH", "PROXY"):
+            elif t == "MULTILEADER":
+                # leader lines: start point(s) -> landing point; then the label text or the tag block
+                for sec in e.get("leaderSections") or []:
+                    land = P(sec.get("lastLeaderLinePoint") or {})
+                    for ll in sec.get("leaderLines") or []:
+                        pts = [P(v) for v in (ll.get("vertices") or [])] + [land]
+                        painter.line([mat.p(*q) for q in pts], col)
+                    dv = P(sec.get("doglegVector") or {}); dl = float(sec.get("doglegLength") or 0)
+                    if dl and (dv[0] or dv[1]):
+                        painter.line([mat.p(*land), mat.p(land[0] + dv[0] * dl, land[1] + dv[1] * dl)], col)
+                if e.get("hasMText") and e.get("textContent"):
+                    x, y = P(e.get("textAnchor") or e.get("contentBasePosition") or {})
+                    h = float(e.get("textHeight") or 2.5) * float(e.get("contentScale") or 1)
+                    ang = float(e.get("textRotation") or 0)
+                    dx, dy = P(e.get("textDirection") or {})
+                    if (dx or dy) and not ang: ang = math.atan2(dy, dx)
+                    for i, ln in enumerate(mtext_lines(e["textContent"])):
+                        off = h + i * h * 1.67
+                        _text(painter, mat, x + math.sin(ang) * off, y - math.cos(ang) * off, ln, h, ang, col, dw)
+                if e.get("hasBlock"):
+                    bid = e.get("blockContentId") or e.get("blockRecordId") or e.get("blockContentBlockId")
+                    b = next((bb for bb in dw.blocks.values() if bb.get("handle") == bid), None) if bid else None
+                    if b:
+                        bx, by = P(b.get("basePoint"))
+                        ix, iy = P(e.get("blockContentPosition") or e.get("contentBasePosition") or {})
+                        sc_ = e.get("blockContentScale") or {}
+                        local = T(ix, iy) @ R(float(e.get("blockContentRotation") or 0)) @ S(float(sc_.get("x") or 1), float(sc_.get("y") or 1)) @ T(-bx, -by)
+                        draw_entities(dw, dw.by_owner.get(b.get("handle"), []), mat @ local, painter, col, depth + 1, lay_eff)
+            elif t in ("VIEWPORT", "POINT", "XLINE", "RAY", "WIPEOUT", "3DSOLID", "REGION", "BODY", "IMAGE", "OLE2FRAME", "MLINE", "TOLERANCE", "HELIX", "MESH", "PROXY"):
                 dw.stats["skipped_types"][t] = dw.stats["skipped_types"].get(t, 0) + 1
                 continue
             else:
@@ -467,8 +500,13 @@ def layout_pages(doc, dw, report):
             sub = pymupdf.open(); sp = sub.new_page(width=page.rect.width, height=page.rect.height)
             pv = Painter(sp, to_page, clip=clip); pv.unit_scale = u * MM; pv.text_page = page
             frozen = set(v.get("frozenLayerIds") or [])
+            before = dw.stats["drawn"]
             draw_entities(dw, dw.by_owner.get(dw.model_handle, []), m, pv, (0, 0, 0), 0)
             pv.flush()
+            # how much of the model really lands inside this viewport's frame
+            mp = []; collect_points(dw, dw.by_owner.get(dw.model_handle, []), M(), mp, cap=50000)
+            inside = sum(1 for q in mp if clip.contains(pymupdf.Point(*to_page(*m.p(*q)))))
+            dw.stats.setdefault("viewports", []).append({"drawn": dw.stats["drawn"] - before, "model_points": len(mp), "inside": inside})
             page.show_pdf_page(clip, sub, 0, clip=clip)
             sub.close()
         p = Painter(page, to_page); p.unit_scale = u * MM
