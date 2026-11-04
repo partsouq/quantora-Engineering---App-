@@ -1,12 +1,13 @@
 name: Test robot
 
 # Uses the live website like a customer every 30 minutes (and after every release).
+# Runs at :13 and :43, not :00/:30: GitHub delays or drops many free scheduled jobs at the top of the hour.
 # No AI BOQ generation (it costs AI credit); real users' BOQ errors are caught by the error watch.
 # A manual run can include the AI BOQ step (Run workflow -> tick "Include the AI BOQ step").
 # Results go to the database; a failure raises an alert on the admin's phone.
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "13,43 * * * *"
   push:
     branches: [main]
     paths: [index.html]
