@@ -1,0 +1,10 @@
+{
+  "name": "quantora-dwg-worker",
+  "private": true,
+  "type": "module",
+  "description": "Converts uploaded DWG files to vector PDF on the build server. GPL-3.0 because it uses LibreDWG.",
+  "license": "GPL-3.0-or-later",
+  "dependencies": {
+    "@mlightcad/libredwg-web": "0.8.4"
+  }
+}

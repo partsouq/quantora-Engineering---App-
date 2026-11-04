@@ -1,0 +1,61 @@
+name: Convert DWG
+
+# Turns uploaded DWG files into vector PDFs so the take-off can read them (tools/dwg).
+# Started by the database the moment a DWG is uploaded; the schedule is only a backup.
+# This repository is public: the log shows job ids only, never file names or links.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+concurrency:
+  group: dwg-convert
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # GitHub signs a token that proves to dwg-worker this is our workflow
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Anything to convert?
+        id: peek
+        run: |
+          TOK=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=quantora-dwg" | python3 -c "import sys,json;print(json.load(sys.stdin)['value'])")
+          echo "::add-mask::$TOK"
+          N=$(curl -sS -X POST https://mcwcvyuvlkmqsivnzvjy.supabase.co/functions/v1/dwg-worker \
+            -H "content-type: application/json" -H "x-github-oidc: $TOK" -d '{"action":"pending"}' | python3 -c "import sys,json;print(json.load(sys.stdin).get('queued',0))")
+          echo "queued=$N" >> "$GITHUB_OUTPUT"
+          echo "DWG files waiting: $N"
+
+      - uses: actions/checkout@v4
+        if: steps.peek.outputs.queued != '0'
+        with:
+          sparse-checkout: tools/dwg
+
+      - uses: actions/setup-node@v4
+        if: steps.peek.outputs.queued != '0'
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        if: steps.peek.outputs.queued != '0'
+        with:
+          python-version: "3.12"
+
+      - name: Install converter
+        if: steps.peek.outputs.queued != '0'
+        working-directory: tools/dwg
+        run: |
+          npm ci --no-audit --no-fund
+          pip install --quiet ezdxf==1.4.4 pymupdf==1.28.2
+
+      - name: Convert queued DWG files
+        if: steps.peek.outputs.queued != '0'
+        working-directory: tools/dwg
+        env:
+          DWG_WORKER_URL: https://mcwcvyuvlkmqsivnzvjy.supabase.co/functions/v1/dwg-worker
+        run: node worker.mjs
