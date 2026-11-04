@@ -185,6 +185,8 @@ function panelToPageRect(p: any, tile: TileSpec): { x0: number; y0: number; x1: 
   // A panel claiming to cover essentially the whole tile is not information --
   // honouring it would delete every device found there.
   if (w >= 0.98 && h >= 0.98) return null;
+  // 2026-11-04: nor is one covering most of it -- devices inside would be deleted
+  if (w * h > 0.6) return null;
   return {
     x0: tile.x0 + Math.max(0, x) * tw,
     y0: tile.y0 + Math.max(0, y) * th,
@@ -204,7 +206,7 @@ function validateZones(raw: any): { x0: number; y0: number; x1: number; y1: numb
     if (![x0, y0, x1, y1].every((v) => Number.isFinite(v) && v >= -0.01 && v <= 1.01)) continue;
     if (!(x1 > x0) || !(y1 > y0)) continue;
     // a zone covering most of the sheet is not a reference panel -- ignore it rather than lose the plan
-    if ((x1 - x0) * (y1 - y0) > 0.6) continue;
+    if ((x1 - x0) * (y1 - y0) > 0.35) continue;      // 2026-11-04: was 0.6 -- a box that big holds plan, not legend
     out.push({ x0: Math.max(0, x0), y0: Math.max(0, y0), x1: Math.min(1, x1), y1: Math.min(1, y1),
                kind: String(z?.kind ?? "").slice(0, 20), label: String(z?.label ?? "").slice(0, 60) });
   }
@@ -1662,7 +1664,9 @@ async function deriveEngineeringItems(admin: any, insertedRows: any[]) {
         description: rule.derived_description, technical_specification: rule.notes,
         quantity: Number(item.quantity || 0) * Number(rule.quantity_per_trigger || 1),
         unit: rule.derived_unit, location: item.location,
-        confidence_score: 100, source: "engineering_rule",
+        // 2026-11-04: an accessory is only as sure as the count it comes from (was always 100)
+        confidence_score: Number.isFinite(Number(item.confidence_score)) ? Math.min(100, Number(item.confidence_score)) : 80,
+        source: "engineering_rule",
         optimization_status: "engineered",
         optimization_note: `Derived from "${item.description}" (qty ${item.quantity}) via engineering rule: ${rule.quantity_per_trigger} per trigger.`,
       });
@@ -1681,6 +1685,7 @@ async function deriveEngineeringItems(admin: any, insertedRows: any[]) {
     if (!hit) { byKey.set(key, d); continue; }
     hit.quantity = Number(hit.quantity || 0) + Number(d.quantity || 0);
     hit.optimization_note = `${hit.optimization_note} + ${d.optimization_note}`;
+    hit.confidence_score = Math.min(Number(hit.confidence_score) || 0, Number(d.confidence_score) || 0);
   }
   const finalDerived = [...byKey.values()];
 

@@ -310,6 +310,32 @@ export function applyScheduleItems(rows: any[], items: ScheduleItem[], base: any
 // Tiles describe the same item in different words ("Fire Damper (FD), 3-hour..." on one tile,
 // "Fire Damper (FD), red bar symbol..." on the next), so the per-tile merge keeps them as separate
 // lines. Each tile only counted its own core area, so the lines add up: one line per kind of item.
+const SUBTYPES: Record<string, [string, RegExp][]> = {
+  "fire alarm device": [["call point", /\b(manual\s*)?call\s*points?|\bmcp\b|break\s*glass/i], ["beam", /\bbeam\b/i],
+    ["multi", /\b(multi[\s-]*(sensor|criteria)|combined|optical[\s/-]*heat)\b/i], ["heat", /\bheat\b/i],
+    ["smoke", /\b(smoke|optical|photo[\s-]*electric|ionisation|ionization)\b/i], ["sounder strobe", /\bsounder[\s/-]*(strobe|beacon)\b/i],
+    ["sounder", /\bsounders?\b/i], ["strobe", /\b(strobes?|beacons?|vad)\b/i]],
+  "light fitting": [["exit sign", /\bexit\s*signs?\b/i], ["emergency", /\bemergency\b/i], ["downlight", /\bdown\s*lights?\b/i],
+    ["panel", /\bpanels?\b/i], ["strip", /\b(strip|linear|batten)\b/i], ["spot", /\bspot\s*lights?\b/i],
+    ["flood", /\bflood\s*lights?\b/i], ["bulkhead", /\bbulkhead\b/i]],
+  "socket outlet": [["isolator", /\bisolators?\b/i], ["fused spur", /\bfused\s*spur|fcu\b/i], ["twin", /\b(twin|double|2\s*gang)\b/i],
+    ["single", /\b(single|1\s*gang)\b/i], ["floor", /\bfloor\b/i]],
+  "sanitary fixture": [["wc", /\b(wc|water\s*closets?)\b/i], ["urinal", /\burinals?\b/i], ["basin", /\b(wash\s*)?basins?\b/i],
+    ["sink", /\bsinks?\b/i], ["shower", /\bshowers?\b/i], ["bidet", /\bbidets?\b/i]],
+  "split / VRF unit": [["outdoor", /\b(outdoor|odu|condensing)\b/i], ["cassette", /\bcassette\b/i], ["ducted", /\bducted\b/i],
+    ["wall", /\b(wall[\s-]*mounted|high\s*wall)\b/i]],
+  "sprinkler": [["sidewall", /\bside\s*wall\b/i], ["upright", /\bupright\b/i], ["pendent", /\bpendent|pendant\b/i], ["concealed", /\bconcealed\b/i]],
+};
+
+// Two positions closer than this (fraction of the page, ~10 mm on A1) are one symbol.
+const SAME_SPOT = 0.012;
+function pointsOf(r: any): { x: number; y: number }[] {
+  const c = r?.coordinates;
+  if (!c || c.x == null) return [];
+  return [{ x: Number(c.x), y: Number(c.y) }, ...((Array.isArray(c.instances) ? c.instances : [])
+    .filter((p: any) => p && p.x != null).map((p: any) => ({ x: Number(p.x), y: Number(p.y) })))];
+}
+
 export function mergeSameKindRows(rows: any[]): { rows: any[]; merged: number } {
   const keyOf = (r: any) => {
     if (!["physical_count", null, undefined].includes(r.quantity_source_type)) return null;
@@ -330,7 +356,11 @@ export function mergeSameKindRows(rows: any[]): { rows: any[]; merged: number } 
         : /\b(bullet|box)\b/i.test(subj) ? "bullet" : /\bdome\b/i.test(r.description) ? "dome" : /\b(bullet|box)\b/i.test(r.description) ? "bullet" : "unspecified";
       return `${r.system_category}§camera§${ff}§${String(r.unit).toLowerCase().replace(/^(nos|no|ea|each|pcs)$/, "nr")}`;
     }
-    return `${r.system_category}§${fam.name}§${side}§${String(r.unit).toLowerCase().replace(/^(nos|no|ea|each|pcs)$/, "nr")}`;
+    // 2026-11-04: inside a broad family the buyable type still differs -- a heat detector is not a call
+    // point, an exit sign is not a downlight. Only lines of the same type combine.
+    const sub = (SUBTYPES[fam.name] || []).find(([, re]) => re.test(subj))?.[0]
+      ?? (SUBTYPES[fam.name] || []).find(([, re]) => re.test(String(r.description || "")))?.[0] ?? "";
+    return `${r.system_category}§${fam.name}§${sub}§${side}§${String(r.unit).toLowerCase().replace(/^(nos|no|ea|each|pcs)$/, "nr")}`;
   };
   const groups = new Map<string, any>();
   const out: any[] = [];
@@ -340,14 +370,22 @@ export function mergeSameKindRows(rows: any[]): { rows: any[]; merged: number } 
     if (!k) { out.push(r); continue; }
     const g = groups.get(k);
     if (!g) { const c = { ...r }; groups.set(k, c); out.push(c); continue; }
-    g.quantity = (Number(g.quantity) || 0) + (Number(r.quantity) || 0);
+    // 2026-11-04: the same symbol can be described two ways by two tiles (Anish: "card reader" 16 and
+    // "door access control reader" 20). A position this line shares with the group is the same device,
+    // so it is counted once; only the rest is added.
+    const gp = pointsOf(g), rp = pointsOf(r);
+    const same = rp.filter((p) => gp.some((a) => Math.hypot(a.x - p.x, a.y - p.y) < SAME_SPOT)).length;
+    g.quantity = (Number(g.quantity) || 0) + Math.max(0, (Number(r.quantity) || 0) - same);
     if (String(r.description || "").length > String(g.description || "").length) g.description = r.description;
     const gc = g.coordinates, rc = r.coordinates;
-    if (gc && rc) gc.instances = [...(gc.instances || []), { x: rc.x, y: rc.y }, ...(rc.instances || [])];
+    const fresh = rp.filter((p) => !gp.some((a) => Math.hypot(a.x - p.x, a.y - p.y) < SAME_SPOT));
+    if (gc && rc) gc.instances = [...(gc.instances || []), ...fresh.map((p) => ({ x: p.x, y: p.y }))];
     else if (!gc && rc) g.coordinates = rc;
+    if (same) g.quantity_basis_notes = [g.quantity_basis_notes,
+      `${same} of the ${r.quantity} described as "${String(r.description || "").slice(0, 60)}" sit on the same spots as this line's own and are counted once.`].filter(Boolean).join(" ");
     const c = Number(r.confidence_score), cc = Number(g.confidence_score);
     if (Number.isFinite(c) && (!Number.isFinite(cc) || c < cc)) g.confidence_score = c;
-    g.quantity_basis_notes = [g.quantity_basis_notes, `Plus ${r.quantity} counted on another part of the sheet and described differently there.`].filter(Boolean).join(" ");
+    if (Number(r.quantity) - same > 0) g.quantity_basis_notes = [g.quantity_basis_notes, `Plus ${Number(r.quantity) - same} counted on another part of the sheet and described differently there.`].filter(Boolean).join(" ");
     merged++;
   }
   return { rows: out, merged };
