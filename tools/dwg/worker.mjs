@@ -23,18 +23,27 @@ async function oidc() {
   if (!j.value) throw new Error("OIDC token request failed");
   return j.value;
 }
-const DEADLINE = Date.now() + 12 * 60 * 1000;     // stop claiming after 12 minutes; the job has 20
+const DEADLINE = Date.now() + 22 * 60 * 1000;     // stop claiming after 22 minutes; the job has 35
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 
+// A dropped connection (common after a long conversion) is retried, not fatal.
 async function call(action, body = {}) {
-  const r = await fetch(FN, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-github-oidc": await oidc() },
-    body: JSON.stringify({ action, ...body }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`${action} failed: ${r.status} ${j.error || ""}`);
-  return j;
+  let last = "";
+  for (let i = 0; i < 4; i++) {
+    try {
+      const r = await fetch(FN, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-github-oidc": await oidc(), connection: "close" },
+        body: JSON.stringify({ action, ...body }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) return j;
+      last = `${r.status} ${j.error || ""}`;
+      if (r.status < 500) break;           // a real refusal: do not hammer
+    } catch (e) { last = e.cause?.code || e.message; }
+    await new Promise((res) => setTimeout(res, 3000 * (i + 1)));
+  }
+  throw new Error(`${action} failed: ${last}`);
 }
 
 // Keeps only what the renderer reads; a big DWG's full JSON can be hundreds of MB.
@@ -58,7 +67,7 @@ async function convert(lib, job, dir) {
   try { lib.dwg_free(dwg); } catch (_) {}
   if (!db?.entities?.length) throw new Error("The DWG opened but has no drawing content.");
   fs.writeFileSync(js, toJson(db));
-  const r = spawnSync("python3", [path.join(HERE, "dwg2pdf.py"), js, pdf, rep], { encoding: "utf8", maxBuffer: 1 << 20, timeout: 8 * 60 * 1000 });
+  const r = spawnSync("python3", [path.join(HERE, "dwg2pdf.py"), js, pdf, rep, path.join(dir, "preview.jpg")], { encoding: "utf8", maxBuffer: 1 << 20, timeout: 10 * 60 * 1000 });
   if (r.status !== 0 || !fs.existsSync(pdf)) throw new Error("Drawing the DWG failed" + (r.status === null ? " (took too long)" : ""));
   const report = JSON.parse(fs.readFileSync(rep, "utf8"));
   // a kept-alive connection can be closed by the server during a long conversion: retry the upload
@@ -69,7 +78,11 @@ async function convert(lib, job, dir) {
   }
   if (!up) throw new Error("upload: " + lastErr);
   if (!up.ok) throw new Error(`upload ${up.status}`);
+  // a small picture of sheet 1, kept with the job so the admin can check the conversion
+  let preview = null;
+  try { const pv = path.join(dir, "preview.jpg"); if (fs.existsSync(pv)) preview = fs.readFileSync(pv).toString("base64"); } catch (_) {}
   return {
+    preview,
     pages: report.pages.length,
     seconds: Math.round((Date.now() - t0) / 1000),
     // sizes and counts only: no layer or layout names leave the database
@@ -83,7 +96,8 @@ async function convert(lib, job, dir) {
   const lib = await LibreDwg.create(path.join(HERE, "node_modules/@mlightcad/libredwg-web/wasm/"));
   let done = 0, failed = 0;
   while (Date.now() < DEADLINE) {
-    const { jobs } = await call("claim", { limit: 2 });
+    let jobs = [];
+    try { ({ jobs } = await call("claim", { limit: 2 })); } catch (e) { console.log("claim failed, stopping this run"); break; }
     if (!jobs?.length) break;
     for (const job of jobs) {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dwg-"));
