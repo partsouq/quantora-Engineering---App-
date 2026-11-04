@@ -75,6 +75,8 @@ Deno.serve(async (req) => {
     const report = body.report && typeof body.report === "object" ? body.report : null;
     const { error } = await admin.rpc("q_dwg_finish", { p_job: job.id, p_ok: true, p_error: null, p_path: path, p_pages: pages, p_report: { ...report, seconds: Number(body.seconds) || null } });
     if (error) return json({ error: error.message }, 500);
+    const preview = typeof body.preview === "string" && body.preview.length < 600_000 ? body.preview : null;
+    if (preview) await admin.from("dwg_jobs").update({ preview_jpg: preview }).eq("id", job.id);
     return json({ ok: true });
   }
 

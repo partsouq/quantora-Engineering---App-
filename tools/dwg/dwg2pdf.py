@@ -493,6 +493,13 @@ def main():
         raise SystemExit("This DWG holds a 3D model with no 2D plan to read." if only3d else "This DWG has no drawing content to read.")
     doc.save(out, garbage=3, deflate=True)
     report.update(dw.stats)
+    if len(sys.argv) > 4:
+        try:  # small preview of sheet 1 (about 1000 px wide) for the admin check
+            pg = doc[0]
+            z = 1000 / max(pg.rect.width, pg.rect.height)
+            doc[0].get_pixmap(matrix=pymupdf.Matrix(z, z)).save(sys.argv[4], jpg_quality=70)
+        except Exception:
+            pass
     if len(sys.argv) > 3: json.dump(report, open(sys.argv[3], "w"))
     else: print(json.dumps(report))
 
