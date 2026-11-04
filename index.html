@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-04.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-04.02"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -12935,9 +12935,9 @@ function DrawingsTab({ project }) {
     (r||[]).forEach(run => { grouped[run.drawing_id] = grouped[run.drawing_id] || []; grouped[run.drawing_id].push(run); });
     setRuns(grouped);
     // DWG files are converted to PDF automatically on our server; show where each one is.
-    const dwgIds = (data || []).filter(x => x.file_type === "dwg" && !x.analysis_source_path).map(x => x.id);
+    const dwgIds = (data || []).filter(x => x.file_type === "dwg").map(x => x.id);
     if (dwgIds.length) {
-      const { data: jobs } = await sb.from("dwg_jobs").select("drawing_id, status, error, created_at").in("drawing_id", dwgIds).order("created_at", { ascending: false });
+      const { data: jobs } = await sb.from("dwg_jobs").select("drawing_id, status, error, created_at, xref:report->xref_inserts").in("drawing_id", dwgIds).order("created_at", { ascending: false });
       const byDrawing = {};
       (jobs || []).forEach(j => { if (!byDrawing[j.drawing_id]) byDrawing[j.drawing_id] = j; });
       setDwgJobs(byDrawing);
@@ -12964,7 +12964,7 @@ function DrawingsTab({ project }) {
   // While the worker measures a sheet (about a minute), check back so the row moves on by itself.
   useEffect(() => {
     const busy = Object.values(runs).some(rs => rs && rs[0] && rs[0].status === "processing")
-      || Object.values(dwgJobs).some(j => j && (j.status === "queued" || j.status === "working"));
+      || drawings.some(d => d.file_type === "dwg" && !d.analysis_source_path && dwgJobs[d.id] && ["queued", "working"].includes(dwgJobs[d.id].status));
     if (!busy) return;
     const t = setTimeout(() => load(), 6000);
     return () => clearTimeout(t);
@@ -13655,6 +13655,13 @@ function DrawingsTab({ project }) {
                 )}
                 {NEEDS_EXPORT_TYPES.includes(d.file_type) && d.analysis_source_path && (
                   <div className="text-[10px] text-blue-700 bg-blue-50 inline-block px-2 py-0.5 rounded-full mt-1">{/_dwg_[0-9a-f-]{36}\.pdf$/.test(d.analysis_source_path) ? "Read from your DWG" : "AI analysis via attached export"}</div>
+                )}
+                {/* 2026-11-04: a DWG that links other drawings (XREF) shows only its own part; say so before Analyze. */}
+                {d.file_type === "dwg" && /_dwg_[0-9a-f-]{36}\.pdf$/.test(d.analysis_source_path || "") && Number(dwgJobs[d.id] && dwgJobs[d.id].xref) > 0 && (
+                  <div className="text-[11px] mt-2 px-3 py-2 rounded-lg" style={{ color: "#b45309", background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.45)", maxWidth: 560 }}>
+                    <b>This DWG uses {Number(dwgJobs[d.id].xref)} linked drawing{Number(dwgJobs[d.id].xref) === 1 ? "" : "s"} (XREF) that {Number(dwgJobs[d.id].xref) === 1 ? "wasn\u2019t" : "weren\u2019t"} uploaded</b>, so part of the sheet may be missing.
+                    {" "}For a complete take-off, upload a PDF plot of the sheet, or in AutoCAD use <b>eTransmit</b> or <b>Bind</b> and upload the DWG again.
+                  </div>
                 )}
                 </div>
               </div>
