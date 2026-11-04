@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-04.02"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-05.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -22144,6 +22144,9 @@ const QADMIN_CSS = `
 
 /* ---------------- detail drawer ---------------- */
 .qadmin .detail{margin-top:14px;padding:18px 20px;}
+.qadmin .cust-pop-bg{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.55);display:flex;align-items:flex-start;justify-content:center;padding:4vh 16px;overflow-y:auto;}
+.qadmin .cust-pop{margin:0;width:min(1100px,100%);background:var(--card);border:1px solid var(--border-soft);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,0.5);}
+.qadmin .cust-pop>.panel-head{position:sticky;top:-18px;background:var(--card);z-index:1;padding-top:4px;}
 .qadmin .detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:14px;}
 .qadmin .detail-cols{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px;}
 .qadmin .detail-stat{background:rgba(255,255,255,0.028);border:1px solid var(--border-soft);border-radius:11px;padding:12px 14px;}
@@ -24057,6 +24060,15 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
     })();
     return () => { alive = false; };
   }, [companies.length]);
+  // Esc closes the pop-up; the page behind it does not scroll while it is open
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = e => { if (e.key === "Escape") onSelect(null); };
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
+  }, [selected && selected.id]);
   const selectedFin = selected ? perCompanyById[selected.id] : null;
   const selectedTrial = selected ? trialByCompanyId[selected.id] : null;
   const selectedPayments = selected ? payments.filter(p => p.company_id === selected.id) : [];
@@ -24125,8 +24137,10 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
         </table>
       </div>
 
+      {/* the company opens in a pop-up where the admin clicked, not at the foot of a long list (2026-11-05) */}
       {selected && (
-        <div className="detail open">
+        <div className="cust-pop-bg" onClick={() => onSelect(null)}>
+        <div className="detail open cust-pop" role="dialog" aria-label={selected.name} onClick={e => e.stopPropagation()}>
           <div className="panel-head"><h3>{selected.name}</h3><span className="close-detail" onClick={() => onSelect(null)}>Close ✕</span></div>
           <div className="detail-grid">
             <div className="detail-stat"><div className="l">Plan</div><div className="v" style={{ textTransform: "capitalize" }}>{selected.plan}</div></div>
@@ -24161,6 +24175,7 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
           <div className="detail" style={{ marginTop: 8 }}>
             <AdminQuotaControls company={selected} onChanged={onQuotaChanged} />
           </div>
+        </div>
         </div>
       )}
     </div>
