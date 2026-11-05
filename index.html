@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-05.07"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-05.08"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -24496,6 +24496,17 @@ function QPaymentsView() {
     return downloadWorkbook([{ name: "Payments", rows }], `Quantora_Payments_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
+  const [testBusy, setTestBusy] = useState(false);
+  const qs = (k) => { try { return new URLSearchParams(window.location.search).get(k); } catch (_) { return null; } };
+  async function startTest() {
+    setTestBusy(true); setErr("");
+    try {
+      const back = window.location.origin + window.location.pathname + "?paytest=1";
+      const res = await callPay("test_payment", { return_url: back });
+      if (!res || !res.checkout_url) throw new Error((res && res.error) || "Dodo did not return a checkout page.");
+      window.location.href = res.checkout_url;
+    } catch (e) { setErr(e.message || "Could not start the test payment."); setTestBusy(false); }
+  }
   useEffect(() => { run(); }, []);
   async function run() {
     setBusy(true); setErr("");
@@ -24652,6 +24663,21 @@ function QPaymentsView() {
                     <td style={{ ...td, fontWeight: 600 }}>{e.event}</td><td style={td}>{e.company || "—"}</td>
                     <td style={{ ...td, fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>{e.subscription_id || "—"}{e.status ? ` · ${e.status}` : ""}</td></tr>
                 ))}</tbody></table></div>}
+        </div>
+      )}
+
+      {data && data.keys_configured && (
+        <div className="card panel" style={{ marginBottom: 16 }}>
+          <div className="panel-head"><h3>Test the payment flow</h3></div>
+          <div style={{ padding: "14px 18px", fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.7 }}>
+            <p style={{ margin: "0 0 10px" }}>
+              A real <b style={{ color: "var(--text)" }}>$2 one-time card payment</b> from your own account. It checks the whole chain:
+              checkout, payment, Dodo's webhook, and the payment showing in <b style={{ color: "var(--text)" }}>All payments</b> and
+              <b style={{ color: "var(--text)" }}> Latest Dodo events</b> above. It does not change any plan. Refund it in the Dodo dashboard afterwards.
+            </p>
+            <button className="btn btn-sm" disabled={testBusy} onClick={startTest}>{testBusy ? "Opening checkout…" : "Pay $2 test"}</button>
+            {qs("paytest") && <span style={{ marginLeft: 10, color: "var(--text)" }}>Back from the test checkout. Press <b>Re-check</b> in a few seconds to see it arrive.</span>}
+          </div>
         </div>
       )}
 

@@ -16,6 +16,7 @@
 //   cancel             — { subscription_id } cancels at the end of the paid month
 //   invoice            — { payment_id } -> the official invoice PDF from Dodo (my company's payments only)
 //   readiness          — platform admins: keys, API check, recent events, paying companies
+//   test_payment       — platform admins: a real $2 one-time checkout to test the whole payment chain
 // ===========================================================================
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { applySubscription, creditMtPack, dodo, loadKeys, recordPayment, type DodoKeys } from "./dodo.ts";
@@ -147,6 +148,24 @@ Deno.serve(async (req) => {
 
     if (!keys) return json({ error: NOT_OPEN }, 503);
     const customer = { email: user.email ?? "", name: prof.full_name || company?.name || user.email || "Customer" };
+
+    // Platform admins only (2026-11-05): a real $2 one-time card payment that proves the whole chain:
+    // checkout -> Dodo -> webhook -> payment recorded. It switches nothing on; refund it in Dodo afterwards.
+    if (action === "test_payment") {
+      const { data: isAdmin } = await admin.from("platform_admins").select("user_id").eq("user_id", user.id).maybeSingle();
+      if (!isAdmin) return json({ error: "Platform admin access only." }, 403);
+      const productId = await dodoProductFor(keys, "test:2", "Quantora payment test",
+        "Admin test payment to check the payment flow. Refund it in Dodo after checking.", 2, true);
+      const session = await dodo(keys, "/checkouts", {
+        method: "POST",
+        body: {
+          product_cart: [{ product_id: productId, quantity: 1 }],
+          customer, return_url: safeReturn(body.return_url),
+          metadata: { company_id: companyId, kind: "test_payment", user_id: user.id },
+        },
+      });
+      return json({ checkout_url: session.checkout_url, session_id: session.session_id });
+    }
 
     // Manual Take-off: one-time pack of 30 marked drawings for $10, valid 30 days.
     if (action === "buy_mt_pack") {
