@@ -5,6 +5,10 @@ name: Test robot
 # No AI BOQ generation (it costs AI credit); real users' BOQ errors are caught by the error watch.
 # A manual run can include the AI BOQ step (Run workflow -> tick "Include the AI BOQ step").
 # Results go to the database; a failure raises an alert on the admin's phone.
+# 2026-11-05: GitHub often skips free scheduled runs (4-5 hours apart instead of 30 minutes), which raised
+# "robot has not reported" alerts. So each run now starts the next one itself, about 25 minutes after it
+# finishes, with the workflow's own GITHUB_TOKEN (no personal token needed). The schedule stays as a backup
+# that restarts the chain if it ever stops. Only one run is active at a time (concurrency group below).
 on:
   schedule:
     - cron: "13,43 * * * *"
@@ -21,6 +25,10 @@ on:
 concurrency:
   group: test-robot
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write      # lets "next" start the following run
 
 jobs:
   robot:
@@ -67,3 +75,21 @@ jobs:
           path: robot-shots
           retention-days: 3
           if-no-files-found: ignore
+
+  # wait about 25 minutes, then start the next run (keeps the 30-minute rhythm whatever GitHub's schedule does)
+  next:
+    needs: robot
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Start the next robot run in about 25 minutes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sleep 1500
+          waiting=$(gh run list --workflow robot.yml --status queued --json databaseId --jq 'length')
+          if [ "$waiting" != "0" ]; then echo "A robot run is already waiting; not starting another."; exit 0; fi
+          gh workflow run robot.yml --ref main
+          echo "Next robot run started."
