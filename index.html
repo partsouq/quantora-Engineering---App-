@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-05.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-05.02"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -28795,7 +28795,7 @@ function SupportThreadView({ ticket, messages, isAdmin, onChanged, compact }) {
         <div ref={endRef} />
       </div>
 
-      <textarea rows={compact ? 2 : 3} value={body} onChange={e => setBody(e.target.value)}
+      <textarea rows={5} value={body} onChange={e => setBody(e.target.value)}
         placeholder={isAdmin ? "Reply to the customer…" : "Write a message…"}
         onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }}
         style={{
