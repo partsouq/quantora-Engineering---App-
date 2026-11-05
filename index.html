@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-05.05"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-05.06"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -28348,7 +28348,7 @@ function AdminLiveChatWatcher({ onOpen }) {
     const alert = (txt) => {
       const msg = txt || "A customer is waiting in Live Chat.";
       qChime();
-      if (!qPushOn) qNotify("New chat message", msg, { tag: "q-live-" + Date.now(), whenUnfocused: true });   // with push on, the server's notification already arrives
+      if (!qPushOn) qNotify("New chat message", msg, { tag: "q-live-chat", whenUnfocused: true });   // with push on, the server's notification already arrives
       setBanner({ text: msg, at: Date.now() });
     };
     const off = qLiveListen((p) => { if (p.to === "admin" && p.ticket_id) { window.dispatchEvent(new CustomEvent("q-live-chat", { detail: p })); alert("A customer just wrote in Live Chat."); } });
