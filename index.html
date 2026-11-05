@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-05.05"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-05.07"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4405,6 +4405,14 @@ async function qPushSubscribe() {
     qPushOn = true; return true;
   } catch (_) { return false; }
 }
+// A push that arrives while the person is using Quantora: the service worker hands it here, and it shows
+// as a card on their screen that stays until they close it (2026-11-05), instead of a system pop-up.
+try {
+  if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", (ev) => {
+    const d = ev.data || {};
+    if (d.type === "q-push") qPop({ kind: "info", title: d.title || "Quantora", message: d.body || "" });
+  });
+} catch (_) {}
 async function qPushTest() {
   try {
     const { data: { session } } = await sb.auth.getSession(); if (!session) return null;
@@ -28348,7 +28356,7 @@ function AdminLiveChatWatcher({ onOpen }) {
     const alert = (txt) => {
       const msg = txt || "A customer is waiting in Live Chat.";
       qChime();
-      if (!qPushOn) qNotify("New chat message", msg, { tag: "q-live-" + Date.now(), whenUnfocused: true });   // with push on, the server's notification already arrives
+      if (!qPushOn) qNotify("New chat message", msg, { tag: "q-live-chat", whenUnfocused: true });   // with push on, the server's notification already arrives
       setBanner({ text: msg, at: Date.now() });
     };
     const off = qLiveListen((p) => { if (p.to === "admin" && p.ticket_id) { window.dispatchEvent(new CustomEvent("q-live-chat", { detail: p })); alert("A customer just wrote in Live Chat."); } });
