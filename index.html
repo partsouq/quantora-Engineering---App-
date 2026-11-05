@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-05.03"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-05.04"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4367,6 +4367,13 @@ try {
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("/sw.js").then(r => { qSwReg = r; }).catch(() => {});
   }
+} catch (_) {}
+// "Install the app" (2026-11-05): Chrome on Android offers this event once the site qualifies as an app;
+// it is kept here so the Quantora banner can show the real install dialog when the user taps Install.
+window.__qInstall = null;
+try {
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); window.__qInstall = e; window.dispatchEvent(new Event("q-install-ready")); });
+  window.addEventListener("appinstalled", () => { window.__qInstall = null; window.dispatchEvent(new Event("q-install-ready")); });
 } catch (_) {}
 // Real push (works with the app closed). Subscribes this browser/phone and stores its address.
 let qPushOn = false;
@@ -21549,7 +21556,7 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
     const sums = await Promise.all(sent.map(e => e.p));
     total += sums.reduce((a, x) => a + (x.item_count || 0), 0);
     if (sums.every(x => x.failed)) throw sums[0].failed;
-    qNotify("BOQ ready", `${drawing.file_name || "Drawing"}: ${total} BOQ lines.`);
+    if (!qPushOn) qNotify("BOQ ready", `${drawing.file_name || "Drawing"}: ${total} BOQ lines.`);   // with push on, the server sends it
   }
   if (!read) throw new Error("Every page of this drawing is blank, so there was nothing to read.");
   return { item_count: total, pages_processed: read, method: `high resolution, ${tilesUsed} tiles` };
@@ -28243,7 +28250,7 @@ function LiveChatWidget({ session, pageName }) {
     if (p.presence) { setOnline(qLivePresence.admins > 0); return; }
     if (p.to === "customer" && ticket && p.ticket_id === ticket.id) {
       load();
-      if (!openRef.current || document.hidden) { qChime(); qNotify("Quantora Team replied", "Open the chat to read the reply."); }
+      if (!openRef.current || document.hidden) { qChime(); if (!qPushOn) qNotify("Quantora Team replied", "Open the chat to read the reply."); }
     }
   }), [ticket && ticket.id]);
   useEffect(() => { qLiveChannel(); }, []);
@@ -38330,6 +38337,73 @@ function QFeedbackView({ companyNameById }) {
   );
 }
 
+// Install-the-app and notifications prompt (2026-11-05).
+// Phone, not installed yet: "Install the Quantora app". Android Chrome shows its real install dialog;
+// iPhone cannot (Apple allows no install button), so it shows the two taps (Share, Add to Home Screen).
+// Installed, or on a computer: "Get notified when your BOQ is ready" turns on push, which reaches the
+// phone or laptop even with Quantora closed. Each card is shown once, and again a week later if ignored.
+function qPromptSeen(k, set) {
+  try { if (set) { localStorage.setItem("q-prompt-" + k, String(Date.now())); return true; }
+        const v = Number(localStorage.getItem("q-prompt-" + k) || 0); return v && Date.now() - v < 7 * 86400000; } catch (_) { return false; }
+}
+function QAppPrompt() {
+  const ua = navigator.userAgent || "";
+  const ios = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const phone = ios || /Android|Mobile/i.test(ua);
+  const standalone = (() => { try { return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true; } catch (_) { return false; } })();
+  const [, bump] = useState(0);
+  const [hide, setHide] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { const h = () => bump(n => n + 1); window.addEventListener("q-install-ready", h); return () => window.removeEventListener("q-install-ready", h); }, []);
+  // already allowed on this device: make sure this device is registered for push
+  useEffect(() => { try { if ("Notification" in window && Notification.permission === "granted") qPushSubscribe(); } catch (_) {} }, []);
+  if (hide) return null;
+  const canNotify = "Notification" in window && "serviceWorker" in navigator && "PushManager" in window;
+  const askInstall = phone && !standalone && !qPromptSeen("install");
+  const askNotify = !askInstall && canNotify && Notification.permission === "default" && !qPromptSeen("notify");
+  if (!askInstall && !askNotify) return null;
+  const later = () => { qPromptSeen(askInstall ? "install" : "notify", true); setHide(true); };
+  const install = async () => {
+    const ev = window.__qInstall; if (!ev) return;
+    setBusy(true);
+    try { ev.prompt(); const r = await ev.userChoice; window.__qInstall = null; if (r && r.outcome === "accepted") { qPromptSeen("install", true); setHide(true); } } catch (_) {}
+    setBusy(false);
+  };
+  const notify = async () => {
+    setBusy(true);
+    try { const p = await Notification.requestPermission(); if (p === "granted") await qPushSubscribe(); } catch (_) {}
+    qPromptSeen("notify", true); setBusy(false); setHide(true);
+  };
+  const btn = { border: 0, borderRadius: 10, padding: "10px 16px", fontWeight: 800, fontSize: 14, cursor: "pointer" };
+  return (
+    <div role="dialog" aria-label={askInstall ? "Install the Quantora app" : "Turn on notifications"}
+      style={{ position: "fixed", left: 12, right: 12, bottom: 12, zIndex: 60, maxWidth: 460, margin: "0 auto",
+        background: "#0b1530", color: "#fff", border: "1px solid rgba(56,189,248,.45)", borderRadius: 16,
+        padding: "14px 16px", boxShadow: "0 18px 50px rgba(0,0,0,.55)", fontSize: 14, lineHeight: 1.45 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+        <img src="/icon192.png" alt="" width="40" height="40" style={{ borderRadius: 10, flex: "none" }} />
+        <div style={{ flex: 1 }}>
+          {askInstall ? (<>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>Install the Quantora app</div>
+            <div style={{ color: "#bcd0f0" }}>Open Quantora from your home screen, full screen, and get a notification when your BOQ is ready.</div>
+            {!window.__qInstall && (ios
+              ? <div style={{ marginTop: 8, color: "#fff" }}>Tap <b>Share</b> <span aria-hidden="true">(□↑)</span> at the bottom of Safari, then <b>Add to Home Screen</b>.</div>
+              : <div style={{ marginTop: 8, color: "#fff" }}>Tap the <b>⋮</b> menu in Chrome, then <b>Install app</b> (or <b>Add to Home screen</b>).</div>)}
+          </>) : (<>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>Get notified when your BOQ is ready</div>
+            <div style={{ color: "#bcd0f0" }}>We'll also let you know when our team replies, even when Quantora is closed.</div>
+          </>)}
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            {askInstall && window.__qInstall && <button type="button" disabled={busy} onClick={install} style={{ ...btn, background: "#38bdf8", color: "#03122c" }}>Install</button>}
+            {!askInstall && <button type="button" disabled={busy} onClick={notify} style={{ ...btn, background: "#38bdf8", color: "#03122c" }}>Turn on</button>}
+            <button type="button" onClick={later} style={{ ...btn, background: "transparent", color: "#bcd0f0", border: "1px solid rgba(255,255,255,.2)" }}>{askInstall && !window.__qInstall ? "Got it" : "Not now"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(undefined);
   // Home, not the project list. Signing in should answer "what should I do
@@ -38743,6 +38817,7 @@ function App() {
     <div className={`min-h-screen ${view && view.name === "admin" ? "" : "qx"}`}>
       <LocationGate isPlatformAdmin={isPlatformAdmin} userId={session.user.id} onNeed={setCountryGate} />
       <DuctSizesHost />
+      <QAppPrompt />
       <nav className="qtr-topnav bg-white border-b px-6 py-3 flex items-center justify-between sticky top-0 z-10">
         {/* The real brand mark. This was previously the building-construction
             emoji -- a base character plus a variation selector -- and where the
