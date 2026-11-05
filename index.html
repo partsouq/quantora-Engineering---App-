@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-05.02"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-05.03"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4558,7 +4558,9 @@ function qNotify(title, body, opts) {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     // Normally only when Quantora is not in front; live chat also alerts when the window is open but not focused.
     if (!document.hidden && !(o.whenUnfocused && !document.hasFocus())) return;
-    const opt = { body, icon: "/icon192.png", badge: "/icon192.png", tag: o.tag || ("q-" + title), renotify: !!o.tag, vibrate: [200, 100, 200] };
+    // one short line: a long message made the Windows pop-up tall (2026-11-05); the full text is in the app
+    const short = String(body || "").replace(/\s+/g, " ").trim();
+    const opt = { body: short.length > 70 ? short.slice(0, 67).trimEnd() + "…" : short, icon: "/icon192.png", badge: "/icon192.png", tag: o.tag || ("q-" + title), renotify: !!o.tag, vibrate: [200, 100, 200] };
     // Phones only allow pop-ups through the service worker; computers can use either.
     if (qSwReg) { qSwReg.showNotification(title, opt).catch(() => {}); return; }
     const n = new Notification(title, opt);
