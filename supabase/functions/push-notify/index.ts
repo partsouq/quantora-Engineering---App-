@@ -8,6 +8,7 @@
 //   test        (platform admin)  -> sends a test push to the caller's own devices.
 //   send        (database only)   -> called by the q_push_alert trigger with the internal secret;
 //                                    sends to every platform admin's devices.
+//   send_user   (database only)   -> same secret; sends to the named customer's own devices.
 // Dead subscriptions (device uninstalled, permission removed) are deleted automatically.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -73,6 +74,16 @@ Deno.serve(async (req) => {
       if (!want || req.headers.get("x-push-secret") !== want) return json({ error: "Unauthorized" }, 401);
       const payload = { title: String(body.title || "Quantora"), body: String(body.body || "").slice(0, 300), tag: String(body.tag || "q-push"), url: String(body.url || "/") };
       return json({ ok: true, ...(await pushTo(await adminIds(), payload)) });
+    }
+
+    // a customer's own devices (2026-11-05): "BOQ ready", "Quantora Team replied", "We fixed your run".
+    // Only the database calls this, with the internal secret; it names the user the alert belongs to.
+    if (action === "send_user") {
+      const want = await secret("PUSH_INTERNAL_SECRET");
+      if (!want || req.headers.get("x-push-secret") !== want) return json({ error: "Unauthorized" }, 401);
+      const ids = (Array.isArray(body.user_ids) ? body.user_ids : []).map(String).filter((x: string) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 20);
+      const payload = { title: String(body.title || "Quantora").slice(0, 80), body: String(body.body || "").slice(0, 160), tag: String(body.tag || "q-user"), url: String(body.url || "/") };
+      return json({ ok: true, ...(await pushTo(ids, payload)) });
     }
 
     // everything else needs a signed-in user
