@@ -790,6 +790,17 @@ const ANTHROPIC_MAX_REQUEST_BYTES = 32 * 1024 * 1024;
 const REQUEST_SIZE_SAFETY_MARGIN_BYTES = 2 * 1024 * 1024;
 const MAX_CAD_TEXT_CHARS = 400_000;
 
+// The file the AI reads for a drawing (2026-11-05). A DWG is read from the PDF copy the converter
+// made (analysis_source_path), never the .dwg itself: sent as-is, a DWG reached the AI as a broken
+// "image" ("Could not process image", Vadiraj, E SPACE PUNE).
+function drawingSource(d: any): { path: string; name: string } {
+  const name = String(d?.file_name || "");
+  const exported = d?.analysis_source_path && (d?.analysis_source_type === "pdf" || /\.pdf$/i.test(d.analysis_source_path));
+  if (exported) return { path: d.analysis_source_path, name: name.replace(/\.[a-z0-9]+$/i, "") + ".pdf" };
+  if (/\.(dwg|rvt)$/i.test(name)) throw new Error("This drawing is still being prepared as a PDF. Please try again in a few minutes.");
+  return { path: d.storage_path, name };
+}
+
 function buildFileContentBlock(fileName: string, bytes: Uint8Array): { block: any; kind: "pdf" | "dxf" | "ifc" | "image" } {
   const lower = fileName.toLowerCase();
   if (lower.endsWith(".pdf")) {
@@ -2926,14 +2937,14 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ cached: true, total_pages: drawing.total_pages_detected, pages: pages ?? [] });
       }
 
-      const { data: fileBlob, error: dlErr } = await admin.storage.from("drawings").download(drawing.storage_path);
+      const { data: fileBlob, error: dlErr } = await admin.storage.from("drawings").download(drawingSource(drawing).path);
       if (dlErr || !fileBlob) throw new Error("Could not read drawing file from storage.");
       const arrayBuf = await fileBlob.arrayBuffer();
       const fileBytes = new Uint8Array(arrayBuf);
       if (fileBytes.length > MAX_FILE_BYTES) {
         throw new Error(`This file is ${(fileBytes.length / 1024 / 1024).toFixed(1)}MB, which is over the ${MAX_FILE_BYTES / 1024 / 1024}MB per-file limit for AI processing. Please split it into smaller files before uploading.`);
       }
-      const isPdf = drawing.file_name.toLowerCase().endsWith(".pdf");
+      const isPdf = drawingSource(drawing).name.toLowerCase().endsWith(".pdf");
 
       if (!isPdf) {
         await admin.from("drawing_pages").delete().eq("drawing_id", drawing_id);
@@ -3028,14 +3039,14 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: scopeCheck.error, requires_confirmation: true, confirm_field: "confirm_out_of_scope", discipline: scopeCheck.discipline }, 429);
       }
 
-      const { data: fileBlob, error: dlErr } = await admin.storage.from("drawings").download(drawing.storage_path);
+      const { data: fileBlob, error: dlErr } = await admin.storage.from("drawings").download(drawingSource(drawing).path);
       if (dlErr || !fileBlob) throw new Error("Could not read drawing file from storage.");
       const arrayBuf = await fileBlob.arrayBuffer();
       const fileBytes = new Uint8Array(arrayBuf);
       if (fileBytes.length > MAX_FILE_BYTES) {
         throw new Error(`This file is ${(fileBytes.length / 1024 / 1024).toFixed(1)}MB, which is over the ${MAX_FILE_BYTES / 1024 / 1024}MB per-file limit for AI processing. Please split it into smaller files before uploading.`);
       }
-      const isPdf = drawing.file_name.toLowerCase().endsWith(".pdf");
+      const isPdf = drawingSource(drawing).name.toLowerCase().endsWith(".pdf");
 
       const hasSelection = isPdf && Array.isArray(page_selection) && page_selection.length > 0;
       const requestedPages = hasSelection ? page_selection!.length : await countPdfPages(fileBytes, isPdf);
@@ -3079,7 +3090,7 @@ Deno.serve(async (req: Request) => {
             throw new Error("The chosen sheets could not be separated from this PDF. Nothing was charged. Please try again, or upload the sheets as separate files.");
           }
         }
-        const fileContent = buildFileContentBlock(drawing.file_name, processingBytes);
+        const fileContent = buildFileContentBlock(drawingSource(drawing).name, processingBytes);
         const coordsInstruction = (fileContent.kind === "dxf" || fileContent.kind === "ifc")
           ? `This is raw ${fileContent.kind.toUpperCase()} exchange-format text, not a rendered drawing image, so omit "coordinates" for every item (there is no page image to reference).`
           : MARKUP_COORDS_INSTRUCTION;
@@ -3999,14 +4010,14 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
       const currentItems = (existingItems ?? []).filter((i: any) => i.revision_number === latestRevision);
       const nextRevision = latestRevision + 1;
 
-      const { data: fileBlob, error: dlErr } = await admin.storage.from("drawings").download(drawing.storage_path);
+      const { data: fileBlob, error: dlErr } = await admin.storage.from("drawings").download(drawingSource(drawing).path);
       if (dlErr || !fileBlob) throw new Error("Could not read drawing file from storage.");
       const arrayBuf = await fileBlob.arrayBuffer();
       const fileBytes = new Uint8Array(arrayBuf);
       if (fileBytes.length > MAX_FILE_BYTES) {
         throw new Error(`This file is ${(fileBytes.length / 1024 / 1024).toFixed(1)}MB, which is over the ${MAX_FILE_BYTES / 1024 / 1024}MB per-file limit for AI processing. Please split it into smaller files before uploading.`);
       }
-      const isPdf = drawing.file_name.toLowerCase().endsWith(".pdf");
+      const isPdf = drawingSource(drawing).name.toLowerCase().endsWith(".pdf");
 
       const hasSelection = isPdf && Array.isArray(page_selection) && page_selection.length > 0;
       const requestedPages = hasSelection ? page_selection!.length : await countPdfPages(fileBytes, isPdf);
@@ -4043,7 +4054,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
             throw new Error("The chosen sheets could not be separated from this PDF. Nothing was charged. Please try again, or upload the sheets as separate files.");
           }
         }
-        const fileContent = buildFileContentBlock(drawing.file_name, processingBytes);
+        const fileContent = buildFileContentBlock(drawingSource(drawing).name, processingBytes);
         const coordsInstruction = (fileContent.kind === "dxf" || fileContent.kind === "ifc")
           ? `This is raw ${fileContent.kind.toUpperCase()} exchange-format text, not a rendered drawing image, so omit "coordinates" for every item.`
           : (isCivilDrawing(drawing) ? CIVIL_COORDS_INSTRUCTION : MARKUP_COORDS_INSTRUCTION);
