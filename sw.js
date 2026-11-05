@@ -17,9 +17,9 @@ self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (_) { d = { title: "Quantora", body: e.data ? e.data.text() : "" }; }
   e.waitUntil(self.registration.showNotification(d.title || "Quantora", {
-    body: d.body || "A customer is waiting in Live Chat.",
+    body: (() => { const b = String(d.body || "A customer is waiting in Live Chat.").replace(/\s+/g, " ").trim(); return b.length > 70 ? b.slice(0, 67).trimEnd() + "…" : b; })(),
     icon: "/icon192.png", badge: "/icon192.png",
-    tag: d.tag || "q-push", renotify: true, requireInteraction: true, vibrate: [200, 100, 200],
+    tag: d.tag || "q-push", renotify: true, requireInteraction: false, vibrate: [200, 100, 200],
     data: { url: d.url || "/" },
   }));
 });
