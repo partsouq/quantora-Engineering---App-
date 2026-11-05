@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-05.04"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-05.05"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -38354,7 +38354,12 @@ function QAppPrompt() {
   const [, bump] = useState(0);
   const [hide, setHide] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Android: Chrome lets a site offer its one-tap Install only after the person has used it for a short
+  // while (and longer just after an uninstall). Wait for that instead of showing the menu steps at once;
+  // the steps appear only if Chrome still has not allowed it after 2 minutes.
+  const [waited, setWaited] = useState(false);
   useEffect(() => { const h = () => bump(n => n + 1); window.addEventListener("q-install-ready", h); return () => window.removeEventListener("q-install-ready", h); }, []);
+  useEffect(() => { const t = setTimeout(() => setWaited(true), 120000); return () => clearTimeout(t); }, []);
   // already allowed on this device: make sure this device is registered for push
   useEffect(() => { try { if ("Notification" in window && Notification.permission === "granted") qPushSubscribe(); } catch (_) {} }, []);
   if (hide) return null;
@@ -38362,6 +38367,7 @@ function QAppPrompt() {
   const askInstall = phone && !standalone && !qPromptSeen("install");
   const askNotify = !askInstall && canNotify && Notification.permission === "default" && !qPromptSeen("notify");
   if (!askInstall && !askNotify) return null;
+  if (askInstall && !ios && !window.__qInstall && !waited) return null;
   const later = () => { qPromptSeen(askInstall ? "install" : "notify", true); setHide(true); };
   const install = async () => {
     const ev = window.__qInstall; if (!ev) return;
@@ -38394,9 +38400,9 @@ function QAppPrompt() {
             <div style={{ color: "#bcd0f0" }}>We'll also let you know when our team replies, even when Quantora is closed.</div>
           </>)}
           <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            {askInstall && window.__qInstall && <button type="button" disabled={busy} onClick={install} style={{ ...btn, background: "#38bdf8", color: "#03122c" }}>Install</button>}
+            {askInstall && window.__qInstall && <button type="button" disabled={busy} onClick={install} style={{ ...btn, background: "#38bdf8", color: "#03122c" }}>Install app</button>}
             {!askInstall && <button type="button" disabled={busy} onClick={notify} style={{ ...btn, background: "#38bdf8", color: "#03122c" }}>Turn on</button>}
-            <button type="button" onClick={later} style={{ ...btn, background: "transparent", color: "#bcd0f0", border: "1px solid rgba(255,255,255,.2)" }}>{askInstall && !window.__qInstall ? "Got it" : "Not now"}</button>
+            <button type="button" onClick={later} style={{ ...btn, background: "transparent", color: "#bcd0f0", border: "1px solid rgba(255,255,255,.2)" }}>{askInstall && !window.__qInstall ? "Got it" : "Later"}</button>
           </div>
         </div>
       </div>
