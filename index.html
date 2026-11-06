@@ -22641,20 +22641,29 @@ const QADMIN_NAV = [
 // change, so the owner chooses View only or View & act; the rest are view only. Sections not listed
 // here stay with the owner.
 const Q_STAFF_SECTIONS = [
-  { key: "customers", act: true,  label: "Customers",           does: "Change plans and bonus pages, message customers" },
-  { key: "online",    act: false, label: "Online Users",        does: "" },
-  { key: "livechat",  act: true,  label: "Live Chat",           does: "Reply to customers, start chats, mark resolved" },
-  { key: "support",   act: true,  label: "Support & Feedback",  does: "Reply and close tickets" },
-  { key: "ratings",   act: false, label: "User Ratings",        does: "" },
-  { key: "alerts",    act: true,  label: "Platform Alerts",     does: "Mark alerts done" },
-  { key: "hourly",    act: false, label: "Hourly Reports",      does: "" },
-  { key: "health",    act: false, label: "System Health",       does: "" },
-  { key: "projects",  act: false, label: "Project Monitoring",  does: "" },
-  { key: "exec",      act: false, label: "Executive Dashboard", does: "" },
-  { key: "revenue",   act: false, label: "Revenue & Plans",     does: "" },
-  { key: "ai",        act: false, label: "AI Usage",            does: "" },
-  { key: "payments",  act: false, label: "Payments",            does: "" },
-  { key: "reports",   act: false, label: "Reports & Exports",   does: "" },
+  { group: "Overview", key: "exec",        act: false, label: "Executive Dashboard", does: "" },
+  { group: "Overview", key: "execdash",    act: true,  label: "Project Execution Dashboard", does: "Run Admin Assist take-offs for a customer (uses AI pages)" },
+  { group: "Work",     key: "myprojects",  act: false, label: "My Projects",         does: "" },
+  { group: "Work",     key: "projects",    act: false, label: "Project Monitoring (take-off & draftsman)", does: "" },
+  { group: "Work",     key: "pipeline",    act: false, label: "Estimating & Procurement", does: "" },
+  { group: "Work",     key: "approvals",   act: false, label: "Approval Tracking",   does: "" },
+  { group: "Work",     key: "estima",      act: false, label: "Estima AI",           does: "" },
+  { group: "Business", key: "customers",   act: true,  label: "Customers (Welcome Pack & Subscribed)", does: "Change plans and bonus pages, message customers" },
+  { group: "Business", key: "online",      act: false, label: "Online Users",        does: "" },
+  { group: "Business", key: "revenue",     act: false, label: "Revenue & Plans",     does: "" },
+  { group: "Business", key: "discounts",   act: false, label: "Discounts",           does: "" },
+  { group: "Business", key: "payments",    act: false, label: "Payments",            does: "" },
+  { group: "Business", key: "ai",          act: false, label: "AI Usage",            does: "" },
+  { group: "Platform", key: "livechat",    act: true,  label: "Live Chat",           does: "Reply to customers, start chats, mark resolved" },
+  { group: "Platform", key: "support",     act: true,  label: "Support & Feedback",  does: "Reply and close tickets" },
+  { group: "Platform", key: "ratings",     act: false, label: "User Ratings",        does: "" },
+  { group: "Platform", key: "hourly",      act: false, label: "Hourly Reports",      does: "" },
+  { group: "Platform", key: "alerts",      act: true,  label: "Platform Alerts",     does: "Mark alerts done" },
+  { group: "Platform", key: "health",      act: false, label: "System Health",       does: "" },
+  { group: "Platform", key: "reports",     act: false, label: "Reports & Exports",   does: "" },
+  { group: "Platform", key: "compliance",  act: false, label: "Compliance Rules",    does: "" },
+  { group: "Platform", key: "measurement", act: true,  label: "Measurement Rules",   does: "Change the measurement rules" },
+  { group: "Platform", key: "draftsman",   act: true,  label: "Draftsman Controls",  does: "Switch drawing generation on or off" },
 ];
 
 // One place to name an audit row, so a new adjustment type cannot silently
@@ -24089,8 +24098,13 @@ function AdminQuotaControls({ company, onChanged }) {
   );
 }
 
-function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedId, onSelect, payments, onQuotaChanged }) {
-  const selected = companies.find(c => c.id === selectedId);
+function QCustomersView({ companies: allCompanies, perCompanyById, trialByCompanyId, selectedId, onSelect, payments, onQuotaChanged }) {
+  // two lists (2026-11-06): Welcome Pack customers (free start) and Subscribed customers (paid / granted plan)
+  const [seg, setSeg] = useState("welcome");
+  const welcomeList = allCompanies.filter(c => qIsWelcomePlan(c.plan));
+  const subscribedList = allCompanies.filter(c => !qIsWelcomePlan(c.plan));
+  const companies = seg === "welcome" ? welcomeList : subscribedList;
+  const selected = allCompanies.find(c => c.id === selectedId);
   // Where each customer is: what their people told us (profile country / city)
   // and where the latest sign-in came from (browser time zone).
   const [locByCompany, setLocByCompany] = useState({});
@@ -24121,7 +24135,7 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
       } catch (e) { console.error("customer locations failed (non-fatal):", e); }
     })();
     return () => { alive = false; };
-  }, [companies.length]);
+  }, [allCompanies.length]);
   // Esc closes the pop-up; the page behind it does not scroll while it is open
   useEffect(() => {
     if (!selected) return;
@@ -24136,8 +24150,13 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
   const selectedPayments = selected ? payments.filter(p => p.company_id === selected.id) : [];
 
   return (
+    <>
+    <QSegTabs value={seg} onChange={setSeg} items={[
+      ["welcome", "Welcome Pack customers", welcomeList.length, "rgba(251,191,36,1)"],
+      ["subscribed", "Subscribed customers", subscribedList.length, "rgba(52,211,153,1)"],
+    ]} />
     <div className="card panel">
-      <div className="panel-head"><h3>All Customers</h3><span className="tag">{companies.length} companies</span></div>
+      <div className="panel-head"><h3>{seg === "welcome" ? "Welcome Pack customers" : "Subscribed customers"}</h3><span className="tag">{companies.length} companies</span></div>
       <div className="table-wrap">
         <table>
           <thead><tr><th>Company</th><th>Onboarded</th><th>Location</th><th>Plan</th><th className="num">Projects</th><th className="num">Drawings</th><th className="num">Pages</th><th className="num">Actual AI Cost</th><th className="num">Revenue (mo.)</th><th>Status</th></tr></thead>
@@ -24241,6 +24260,7 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
         </div>
       )}
     </div>
+    </>
   );
 }
 
@@ -28487,6 +28507,22 @@ function AdminLiveChatWatcher({ onOpen }) {
 // 3 minutes; the app checks in every minute), refreshed every 10 s, with a Chat button that opens
 // a live chat with that person straight away.
 // ---------------------------------------------------------------------------
+// Welcome Pack (free start) vs Subscribed (a paid or granted plan), used by Customers and Online Users
+function qIsWelcomePlan(plan) { return !plan || plan === "trial"; }
+function QSegTabs({ value, onChange, items }) {
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+      {items.map(([k, label, n, color]) => (
+        <button key={k} type="button" onClick={() => onChange(k)}
+          style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 18px", borderRadius: 12, cursor: "pointer", fontSize: 14, fontWeight: 800, color: "inherit",
+            border: "1px solid " + (value === k ? color : "rgba(148,163,184,.25)"), background: value === k ? color.replace(/[\d.]+\)$/, ".18)") : "transparent" }}>
+          {label}
+          <span style={{ minWidth: 26, padding: "2px 8px", borderRadius: 99, fontSize: 12.5, background: value === k ? color : "rgba(148,163,184,.2)", color: value === k ? "#04111f" : "inherit" }}>{n == null ? "…" : n}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 function qDeviceOf(ua) {
   const u = String(ua || "");
   const kind = /iPad|Tablet/i.test(u) ? "Tablet" : /iPhone|Android.*Mobile|Mobile/i.test(u) ? "Phone" : "Laptop";
@@ -28503,6 +28539,7 @@ function QOnlineUsersView({ canChat, onChat }) {
   const [err, setErr] = useQErr("");
   const [showTeam, setShowTeam] = useState(false);
   const [busy, setBusy] = useState("");
+  const [seg, setSeg] = useState("welcome");
   async function load() {
     try {
       const { data, error } = await sb.rpc("q_online_users");
@@ -28529,14 +28566,21 @@ function QOnlineUsersView({ canChat, onChat }) {
       onChat && onChat(id);
     } catch (e) { setErr(e.message || "Could not start the chat."); } finally { setBusy(""); }
   }
-  const list = (rows || []).filter(r => showTeam || !r.is_team);
+  const people = (rows || []).filter(r => showTeam || !r.is_team);
+  const welcomeOn = people.filter(r => qIsWelcomePlan(r.plan)), subscribedOn = people.filter(r => !qIsWelcomePlan(r.plan));
+  const list = seg === "welcome" ? welcomeOn : subscribedOn;
   const teamCount = (rows || []).filter(r => r.is_team).length;
   return (
+    <>
+    <QSegTabs value={seg} onChange={setSeg} items={[
+      ["welcome", "Welcome Pack customers online", rows === null ? null : welcomeOn.length, "rgba(251,191,36,1)"],
+      ["subscribed", "Subscribed customers online", rows === null ? null : subscribedOn.length, "rgba(52,211,153,1)"],
+    ]} />
     <div className="card panel">
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ width: 10, height: 10, borderRadius: 99, background: "#22c55e", boxShadow: "0 0 0 4px rgba(34,197,94,.2)" }} />
-          <b style={{ fontSize: 16 }}>{rows === null ? "Checking…" : list.length === 0 ? "No customers online right now" : `${list.length} online now`}</b>
+          <b style={{ fontSize: 16 }}>{rows === null ? "Checking…" : list.length === 0 ? (seg === "welcome" ? "No Welcome Pack customers online right now" : "No subscribed customers online right now") : `${list.length} online now`}</b>
         </div>
         <span style={{ fontSize: 12, color: "var(--text-dimmer)" }}>Updates every 10 seconds</span>
         <label style={{ marginLeft: "auto", fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", color: "var(--text-dim)" }}>
@@ -28573,6 +28617,7 @@ function QOnlineUsersView({ canChat, onChat }) {
         ))}
       </div>
     </div>
+    </>
   );
 }
 
@@ -28584,6 +28629,7 @@ const Q_STAFF_PRESETS = [
   ["Customers + Live Chat", { customers: "view", online: "view", livechat: "act" }],
   ["Support team", { customers: "view", online: "view", livechat: "act", support: "act", ratings: "view" }],
   ["Read-only reports", { exec: "view", revenue: "view", ai: "view", reports: "view", hourly: "view" }],
+  ["Everything (view only)", Object.fromEntries(["exec","execdash","myprojects","projects","pipeline","approvals","estima","customers","online","revenue","discounts","payments","ai","livechat","support","ratings","hourly","alerts","health","reports","compliance","measurement","draftsman"].map(k => [k, "view"]))],
 ];
 function QStaffPermEditor({ perms, onChange }) {
   const set = (k, v) => { const n = { ...perms }; if (v) n[k] = v; else delete n[k]; onChange(n); };
@@ -28602,10 +28648,12 @@ function QStaffPermEditor({ perms, onChange }) {
         <button type="button" onClick={() => onChange({})} style={{ padding: "5px 10px", borderRadius: 99, fontSize: 12, border: "1px dashed var(--border-soft)", background: "transparent", color: "var(--text-dim)", cursor: "pointer" }}>Clear all</button>
       </div>
       <div style={{ display: "grid", gap: 6 }}>
-        {Q_STAFF_SECTIONS.map(sct => {
+        {Q_STAFF_SECTIONS.map((sct, i) => {
           const v = perms[sct.key] || "";
           return (
-            <div key={sct.key} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "7px 10px", borderRadius: 10, background: v ? "rgba(91,140,255,.06)" : "transparent", border: "1px solid var(--border-soft)" }}>
+            <React.Fragment key={sct.key}>
+            {(i === 0 || Q_STAFF_SECTIONS[i - 1].group !== sct.group) && <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--text-dimmer)", marginTop: i ? 8 : 0 }}>{sct.group}</div>}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "7px 10px", borderRadius: 10, background: v ? "rgba(91,140,255,.06)" : "transparent", border: "1px solid var(--border-soft)" }}>
               <div style={{ flex: "1 1 200px" }}>
                 <b style={{ fontSize: 13 }}>{sct.label}</b>
                 {sct.act && <div style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>View &amp; act: {sct.does}</div>}
@@ -28616,6 +28664,7 @@ function QStaffPermEditor({ perms, onChange }) {
                 {sct.act && opt(sct.key, "act", "View & act", v === "act")}
               </div>
             </div>
+            </React.Fragment>
           );
         })}
       </div>

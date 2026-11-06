@@ -261,3 +261,32 @@ revoke all on function public.q_staff_list(), public.q_staff_save(text, jsonb), 
   public.q_staff_remove(text), public.q_staff_audit_list(), public.q_online_users(), public.q_staff_me(), public.q_staff_link() from public, anon;
 grant execute on function public.q_staff_list(), public.q_staff_save(text, jsonb), public.q_staff_set_status(text, text),
   public.q_staff_remove(text), public.q_staff_audit_list(), public.q_online_users(), public.q_staff_me(), public.q_staff_link() to authenticated;
+
+-- ---------- the remaining sections, so the owner can give each and every one (2026-11-06, part 2) ----------
+-- Project Execution Dashboard / Admin Assist
+create or replace function public.admin_drawing_classification(p_drawing_id uuid)
+ returns table(classification_status text, total_pages_detected integer)
+ language plpgsql security definer set search_path to 'public' as $function$
+begin
+  if not (is_platform_admin() or public.q_staff_level('execdash') >= 1) then raise exception 'Only a platform admin can read another company''s drawing.'; end if;
+  return query select d.classification_status, d.total_pages_detected from drawings d where d.id = p_drawing_id;
+end $function$;
+create or replace function public.admin_run_status(p_run_id uuid)
+ returns table(status text, summary jsonb, error_message text, run_kind text, change_reason text, project_id uuid)
+ language plpgsql security definer set search_path to 'public' as $function$
+begin
+  if not (is_platform_admin() or public.q_staff_level('execdash') >= 1) then raise exception 'Only a platform admin can read another company''s run.'; end if;
+  return query select r.status, r.summary, r.error_message, r.run_kind, r.change_reason, r.project_id
+    from analysis_runs r where r.id = p_run_id;
+end $function$;
+-- Measurement Rules (change = act)
+drop policy if exists staff_write_measure_rules on public.civil_measurement_rules;
+create policy staff_write_measure_rules on public.civil_measurement_rules for all to authenticated
+  using (public.q_staff_level('measurement') >= 2) with check (public.q_staff_level('measurement') >= 2);
+-- Draftsman Controls (switches live in platform_settings)
+drop policy if exists staff_update_settings on public.platform_settings;
+create policy staff_update_settings on public.platform_settings for update to authenticated
+  using (public.q_staff_level('draftsman') >= 2) with check (public.q_staff_level('draftsman') >= 2);
+drop policy if exists staff_insert_settings on public.platform_settings;
+create policy staff_insert_settings on public.platform_settings for insert to authenticated
+  with check (public.q_staff_level('draftsman') >= 2);

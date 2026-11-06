@@ -94,8 +94,8 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any }): Pro
         list_projects: () => lv("execdash") >= 1, list_drawings: () => lv("execdash") >= 1,
         grant_bonus_pages: () => lv("customers") >= 2, extend_trial: () => lv("customers") >= 2,
         list_quota_adjustments: () => has("customers"),
-        trial_overview: () => has("customers", "exec", "revenue"),
-        overview: () => has("customers", "projects", "exec", "revenue", "ai"),
+        trial_overview: () => has("customers", "exec", "revenue", "execdash"),
+        overview: () => has("customers", "projects", "exec", "revenue", "ai", "execdash"),
         system_status: () => has("health", "exec"),
         reports_export: () => has("customers", "reports", "exec", "revenue", "ai"),
         project_boq: () => has("customers", "projects"),
@@ -106,10 +106,10 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any }): Pro
         return jsonResponse({ error: "Forbidden: your admin access does not include this." }, 403);
       }
       // a shared response is cut to what this member's sections show
-      if (action === "overview" && !has("exec", "revenue", "ai")) {
+      if (action === "overview" && !has("exec", "revenue", "ai", "execdash")) {
         ctx.trim = (o: any) => ({ per_company: has("customers") ? o.per_company : [], per_project: has("projects") ? o.per_project : [] });
       }
-      if (action === "trial_overview" && !has("exec", "revenue")) ctx.trim = (o: any) => ({ per_trial_company: o.per_trial_company });
+      if (action === "trial_overview" && !has("exec", "revenue", "execdash")) ctx.trim = (o: any) => ({ per_trial_company: o.per_trial_company });
       if (action === "reports_export" && !has("reports", "exec", "revenue", "ai")) ctx.trim = (o: any) => ({ payments: o.payments });
     }
 
