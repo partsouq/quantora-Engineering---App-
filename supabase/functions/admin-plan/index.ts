@@ -80,13 +80,17 @@ Deno.serve(async (req: Request) => {
     const userId = userData.user.id;
 
     const admin = createClient(supabaseUrl, serviceKey);
-    const { data: adminRow } = await admin.from("platform_admins")
-      .select("user_id").eq("user_id", userId).maybeSingle();
-    if (!adminRow) return jsonResponse({ error: "Forbidden: platform admin access only." }, 403);
-
     let body: any = {};
     try { body = await req.json(); } catch { /* no body is fine */ }
     const action = body?.action ?? "list_plans";
+
+    // owner, or an Admin Team member with Customers (view to list, act to change a plan) -- 2026-11-06
+    const { data: adminRow } = await admin.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
+    if (!adminRow) {
+      const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: userId, p_section: "customers" });
+      const need = action === "list_plans" ? 1 : 2;
+      if (Number(lvl || 0) < need) return jsonResponse({ error: "Forbidden: your admin access does not include this." }, 403);
+    }
 
     // ---- list_plans ---------------------------------------------------
     // Feeds the dropdown in the admin portal, and shows at a glance which

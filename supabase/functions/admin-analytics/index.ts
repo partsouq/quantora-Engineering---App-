@@ -59,7 +59,7 @@ function jsonResponse(body: unknown, status = 200) {
 // Must match ai-engine checkPlanLimit() and billing usage_summary.
 const PAGE_ACTIONS = ["analyze_drawing", "analyze_drawing_tiled", "analyze_drawings_combined", "rework", "page_refund"];
 
-Deno.serve(async (req: Request) => {
+async function handleRequest(req: Request, ctx: { trim?: (o: any) => any }): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
@@ -77,14 +77,41 @@ Deno.serve(async (req: Request) => {
     const userId = userData.user.id;
     const admin = createClient(supabaseUrl, serviceKey);
 
-    const { data: adminRow } = await admin.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
-    if (!adminRow) {
-      return jsonResponse({ error: "Forbidden: platform admin access only." }, 403);
-    }
-
     let body: any = {};
     try { body = await req.json(); } catch { /* GET-style calls with no body are fine */ }
     const action = body?.action ?? "overview";
+
+    // Owner (platform_admins) sees everything. An Admin Team member (platform_staff, 2026-11-06) gets
+    // only the actions their sections need, and the parts of a shared response those sections show.
+    const { data: adminRow } = await admin.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
+    if (!adminRow) {
+      const { data: staff } = await admin.from("platform_staff").select("perms, status").eq("user_id", userId).maybeSingle();
+      const perms: Record<string, string> = staff && staff.status === "active" ? (staff.perms || {}) : {};
+      const lv = (k: string) => perms[k] === "act" ? 2 : perms[k] === "view" ? 1 : 0;
+      const has = (...ks: string[]) => ks.some(k => lv(k) >= 1);
+      const NEED: Record<string, () => boolean> = {
+        list_companies: () => Object.keys(perms).length > 0,
+        list_projects: () => lv("execdash") >= 1, list_drawings: () => lv("execdash") >= 1,
+        grant_bonus_pages: () => lv("customers") >= 2, extend_trial: () => lv("customers") >= 2,
+        list_quota_adjustments: () => has("customers"),
+        trial_overview: () => has("customers", "exec", "revenue"),
+        overview: () => has("customers", "projects", "exec", "revenue", "ai"),
+        system_status: () => has("health", "exec"),
+        reports_export: () => has("customers", "reports", "exec", "revenue", "ai"),
+        project_boq: () => has("customers", "projects"),
+        project_monitoring: () => has("projects"),
+        pipeline_overview: () => has("pipeline", "projects"),
+      };
+      if (!Object.keys(perms).length || !NEED[action] || !NEED[action]()) {
+        return jsonResponse({ error: "Forbidden: your admin access does not include this." }, 403);
+      }
+      // a shared response is cut to what this member's sections show
+      if (action === "overview" && !has("exec", "revenue", "ai")) {
+        ctx.trim = (o: any) => ({ per_company: has("customers") ? o.per_company : [], per_project: has("projects") ? o.per_project : [] });
+      }
+      if (action === "trial_overview" && !has("exec", "revenue")) ctx.trim = (o: any) => ({ per_trial_company: o.per_trial_company });
+      if (action === "reports_export" && !has("reports", "exec", "revenue", "ai")) ctx.trim = (o: any) => ({ payments: o.payments });
+    }
 
     if (action === "is_admin") {
       return jsonResponse({ is_admin: true });
@@ -1026,4 +1053,11 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     return jsonResponse({ error: String(err instanceof Error ? err.message : err) }, 500);
   }
+}
+
+Deno.serve(async (req: Request) => {
+  const ctx: { trim?: (o: any) => any } = {};
+  const res = await handleRequest(req, ctx);
+  if (!ctx.trim || res.status !== 200) return res;
+  return jsonResponse(ctx.trim(await res.json()), 200);
 });

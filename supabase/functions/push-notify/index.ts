@@ -58,9 +58,17 @@ async function pushTo(userIds: string[], payload: Record<string, unknown>) {
   return { sent, failed, removed, devices: (subs || []).length };
 }
 
-async function adminIds(): Promise<string[]> {
+async function adminIds(tag = ""): Promise<string[]> {
   const { data } = await admin.from("platform_admins").select("user_id");
-  return (data || []).map((r: any) => r.user_id).filter(Boolean);
+  const ids = (data || []).map((r: any) => r.user_id).filter(Boolean);
+  // Admin Team members (2026-11-06) get the alerts of the sections they were given
+  const section = /^q-live/.test(tag) ? "livechat" : /^q-alert/.test(tag) ? "alerts" : /^q-(fb|feedback)/.test(tag) ? "ratings"
+    : /^q-ticket/.test(tag) ? "support" : "";
+  if (section) {
+    const { data: staff } = await admin.from("platform_staff").select("user_id, perms, status").eq("status", "active");
+    for (const s of staff || []) if (s.user_id && s.perms && s.perms[section]) ids.push(s.user_id);
+  }
+  return [...new Set(ids)];
 }
 
 Deno.serve(async (req) => {
@@ -73,7 +81,7 @@ Deno.serve(async (req) => {
       const want = await secret("PUSH_INTERNAL_SECRET");
       if (!want || req.headers.get("x-push-secret") !== want) return json({ error: "Unauthorized" }, 401);
       const payload = { title: String(body.title || "Quantora"), body: String(body.body || "").slice(0, 300), tag: String(body.tag || "q-push"), url: String(body.url || "/") };
-      return json({ ok: true, ...(await pushTo(await adminIds(), payload)) });
+      return json({ ok: true, ...(await pushTo(await adminIds(payload.tag), payload)) });
     }
 
     // a customer's own devices (2026-11-05): "BOQ ready", "Quantora Team replied", "We fixed your run".
