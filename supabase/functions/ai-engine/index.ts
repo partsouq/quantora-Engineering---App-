@@ -2863,7 +2863,12 @@ Deno.serve(async (req: Request) => {
     let companyId: string, project: any, company: any, plan: any;
 
     if (isAdminOverride) {
-      const { data: adminRow } = isDoctor ? { data: { user_id: userId } } : await admin.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
+      let { data: adminRow } = isDoctor ? { data: { user_id: userId } } : await admin.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
+      if (!adminRow) {
+        // an Admin Team member given "Project Execution Dashboard: View & act" may run Admin Assist (2026-11-06)
+        const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: userId, p_section: "execdash" });
+        if (Number(lvl || 0) >= 2) adminRow = { user_id: userId };
+      }
       if (!adminRow) {
         return jsonResponse({ error: "Forbidden: platform admin access only." }, 403);
       }

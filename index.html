@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-05.08"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-06.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -22241,6 +22241,8 @@ function QIcon({ paths }) {
   return <svg className="icon" width="16" height="16" viewBox="0 0 24 24">{paths}</svg>;
 }
 const QICONS = {
+  online: <QIcon paths={<><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/><circle cx="19" cy="5" r="2.2" fill="#22c55e" stroke="#22c55e"/></>} />,
+  team: <QIcon paths={<><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></>} />,
   exec: <QIcon paths={<><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></>} />,
   execdash: <QIcon paths={<><circle cx="4" cy="11" r="2"/><circle cx="12" cy="9" r="2"/><circle cx="20" cy="15" r="2"/><path d="M4 21v-6M4 9V3M12 21v-10M12 7V3M20 21v-4M20 13V3"/></>} />,
   customers: <QIcon paths={<><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.3 3-5.5 6.5-5.5s6.5 2.2 6.5 5.5"/><circle cx="18" cy="8.5" r="2.3"/><path d="M15.8 14.7c2.6.4 4.7 2.4 4.7 5.3"/></>} />,
@@ -22616,6 +22618,7 @@ const QADMIN_NAV = [
   { group: "Work", key: "approvals", label: "Approval Tracking", sub: "Where every approval on your own projects is sitting" },
   { group: "Work", key: "estima", label: "Estima AI", sub: "Ask about a project's drawings, quantities and rules" },
   { group: "Business", key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
+  { group: "Business", key: "online", label: "Online Users", sub: "Everyone using Quantora right now — start a live chat with one click" },
   { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
   { group: "Business", key: "discounts", label: "Discounts", sub: "Discount codes and hand-granted plans" },
   { group: "Business", key: "payments", label: "Payments", sub: "Dodo Payments readiness, paying customers and latest payments" },
@@ -22630,7 +22633,37 @@ const QADMIN_NAV = [
   { group: "Platform", key: "compliance", label: "Compliance Rules", sub: "The authority library, by country and city" },
   { group: "Platform", key: "measurement", label: "Measurement Rules", sub: "Civil & architectural rules per method of measurement; QS verification" },
   { group: "Platform", key: "draftsman", label: "Draftsman Controls", sub: "Switch drawing generation on or off per discipline" },
+  { group: "Platform", key: "team", label: "Admin Team", sub: "Add team members and choose exactly what each one can see and do" },
   { group: "Platform", key: "settings", label: "Settings", sub: "Your account details and sign-in" },
+];
+
+// The sections an Admin Team member can be given (2026-11-06). "act" = the section has things to
+// change, so the owner chooses View only or View & act; the rest are view only. Sections not listed
+// here stay with the owner.
+const Q_STAFF_SECTIONS = [
+  { group: "Overview", key: "exec",        act: false, label: "Executive Dashboard", does: "" },
+  { group: "Overview", key: "execdash",    act: true,  label: "Project Execution Dashboard", does: "Run Admin Assist take-offs for a customer (uses AI pages)" },
+  { group: "Work",     key: "myprojects",  act: false, label: "My Projects",         does: "" },
+  { group: "Work",     key: "projects",    act: false, label: "Project Monitoring (take-off & draftsman)", does: "" },
+  { group: "Work",     key: "pipeline",    act: false, label: "Estimating & Procurement", does: "" },
+  { group: "Work",     key: "approvals",   act: false, label: "Approval Tracking",   does: "" },
+  { group: "Work",     key: "estima",      act: false, label: "Estima AI",           does: "" },
+  { group: "Business", key: "customers",   act: true,  label: "Customers (Welcome Pack & Subscribed)", does: "Change plans and bonus pages, message customers" },
+  { group: "Business", key: "online",      act: false, label: "Online Users",        does: "" },
+  { group: "Business", key: "revenue",     act: false, label: "Revenue & Plans",     does: "" },
+  { group: "Business", key: "discounts",   act: false, label: "Discounts",           does: "" },
+  { group: "Business", key: "payments",    act: false, label: "Payments",            does: "" },
+  { group: "Business", key: "ai",          act: false, label: "AI Usage",            does: "" },
+  { group: "Platform", key: "livechat",    act: true,  label: "Live Chat",           does: "Reply to customers, start chats, mark resolved" },
+  { group: "Platform", key: "support",     act: true,  label: "Support & Feedback",  does: "Reply and close tickets" },
+  { group: "Platform", key: "ratings",     act: false, label: "User Ratings",        does: "" },
+  { group: "Platform", key: "hourly",      act: false, label: "Hourly Reports",      does: "" },
+  { group: "Platform", key: "alerts",      act: true,  label: "Platform Alerts",     does: "Mark alerts done" },
+  { group: "Platform", key: "health",      act: false, label: "System Health",       does: "" },
+  { group: "Platform", key: "reports",     act: false, label: "Reports & Exports",   does: "" },
+  { group: "Platform", key: "compliance",  act: false, label: "Compliance Rules",    does: "" },
+  { group: "Platform", key: "measurement", act: true,  label: "Measurement Rules",   does: "Change the measurement rules" },
+  { group: "Platform", key: "draftsman",   act: true,  label: "Draftsman Controls",  does: "Switch drawing generation on or off" },
 ];
 
 // One place to name an audit row, so a new adjustment type cannot silently
@@ -23219,7 +23252,11 @@ function AdminDraftsmanControls() {
   );
 }
 
-function AdminPortal({ onBack }) {
+function AdminPortal({ onBack, staffPerms }) {
+  // Owner (staffPerms null) sees every section. An Admin Team member sees only the sections the
+  // owner gave them; "view" ones open read-only. The database and edge functions enforce the same.
+  const isOwner = !staffPerms;
+  const lvl = (k) => isOwner ? 2 : k === "settings" ? 2 : staffPerms[k] === "act" ? 2 : staffPerms[k] === "view" ? 1 : 0;
   const [activeView, setActiveView] = useState(() => { try { const w = window.__qAdminWant; window.__qAdminWant = null; return w || "exec"; } catch (_) { return "exec"; } });
   useEffect(() => {
     const h = (e) => { if (e.detail) { setActiveView(e.detail); try { window.__qAdminWant = null; } catch (_) {} } };
@@ -23252,7 +23289,7 @@ function AdminPortal({ onBack }) {
       callAdminAnalytics("pipeline_overview", {}),
     ]);
     const [ov, tr, co, sys, rep, pipe] = results;
-    if (ov.status === "fulfilled") setOverview(ov.value); else setLoadError(ov.reason?.message || "Failed to load admin analytics.");
+    if (ov.status === "fulfilled") setOverview(ov.value); else if (isOwner) setLoadError(ov.reason?.message || "Failed to load admin analytics.");
     if (tr.status === "fulfilled") setTrial(tr.value);
     if (co.status === "fulfilled") setCompanies(co.value.companies || []);
     if (sys.status === "fulfilled") setSystemStatus(sys.value);
@@ -23272,8 +23309,11 @@ function AdminPortal({ onBack }) {
   const trialByCompanyId = {};
   (trial?.per_trial_company || []).forEach(c => { trialByCompanyId[c.company_id] = c; });
 
-  const nav = QADMIN_NAV;
+  const nav = QADMIN_NAV.filter(n => isOwner ? true : (n.key === "settings" || (Q_STAFF_SECTIONS.some(x => x.key === n.key) && lvl(n.key) >= 1)));
   const current = nav.find(n => n.key === activeView) || nav[0];
+  // a member opening a section they were not given lands on their first one
+  useEffect(() => { if (!nav.some(n => n.key === activeView) && nav[0]) setActiveView(nav[0].key); }, [activeView, nav.length]);
+  const viewOnly = !isOwner && Q_STAFF_SECTIONS.some(x => x.key === current.key && x.act) && lvl(current.key) < 2;
   // red count on Platform Alerts: open alerts from the run-doctor agent
   const [openAlerts, setOpenAlerts] = useState(0);
   useEffect(() => {
@@ -23442,7 +23482,7 @@ function AdminPortal({ onBack }) {
           <div className="sidebar-foot">
             <div className="who-row">
               <div className="avatar">PA</div>
-              <div className="who"><b>Platform Admin</b><span>Quantora</span></div>
+              <div className="who"><b>{isOwner ? "Platform Admin" : "Admin Team"}</b><span>Quantora</span></div>
             </div>
             <button type="button" className="back-to-app" onClick={onBack}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
@@ -23466,13 +23506,19 @@ function AdminPortal({ onBack }) {
                 <p>{current.sub}</p>
               </div>
             </div>
-            <span className="badge-admin">Platform Admin</span>
+            <span className="badge-admin">{isOwner ? "Platform Admin" : (viewOnly ? "Admin Team · view only" : "Admin Team")}</span>
           </header>
 
           <div className="content">
             {loading && <div style={{ color: "var(--text-dimmer)", fontSize: "13px", marginBottom: "16px" }}>Loading platform data…</div>}
             {loadError && <div className="card panel" style={{ borderColor: "rgba(239,68,68,0.4)", marginBottom: "16px", color: "#fca5a5" }}>{loadError}</div>}
 
+            {viewOnly && (
+              <div style={{ marginBottom: 14, padding: "9px 14px", borderRadius: 10, fontSize: 12.5, background: "rgba(148,163,184,.12)", border: "1px solid rgba(148,163,184,.3)", color: "var(--text-dim)" }}>
+                View only. Ask the owner if you need to make changes here.
+              </div>
+            )}
+            <fieldset disabled={viewOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             {activeView === "exec" && (
               <QExecView overview={overview} trial={trial} systemStatus={systemStatus} reportsData={reportsData}
                 companies={companies} perCompanyById={perCompanyById} />
@@ -23561,6 +23607,14 @@ function AdminPortal({ onBack }) {
                 onStorage={() => runExport("storage", exportStorage)}
                 onFull={() => runExport("full", exportFullReport)} />
             )}
+            {activeView === "online" && (
+              <QOnlineUsersView canChat={lvl("livechat") >= 2}
+                onChat={(ticketId) => { try { window.__qAdminWantTicket = ticketId; } catch (_) {} setActiveView("livechat"); }} />
+            )}
+            {activeView === "team" && isOwner && (
+              <QAdminTeamView />
+            )}
+            </fieldset>
           </div>
         </div>
       </div>
@@ -24044,8 +24098,13 @@ function AdminQuotaControls({ company, onChanged }) {
   );
 }
 
-function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedId, onSelect, payments, onQuotaChanged }) {
-  const selected = companies.find(c => c.id === selectedId);
+function QCustomersView({ companies: allCompanies, perCompanyById, trialByCompanyId, selectedId, onSelect, payments, onQuotaChanged }) {
+  // two lists (2026-11-06): Welcome Pack customers (free start) and Subscribed customers (paid / granted plan)
+  const [seg, setSeg] = useState("welcome");
+  const welcomeList = allCompanies.filter(c => qIsWelcomePlan(c.plan));
+  const subscribedList = allCompanies.filter(c => !qIsWelcomePlan(c.plan));
+  const companies = seg === "welcome" ? welcomeList : subscribedList;
+  const selected = allCompanies.find(c => c.id === selectedId);
   // Where each customer is: what their people told us (profile country / city)
   // and where the latest sign-in came from (browser time zone).
   const [locByCompany, setLocByCompany] = useState({});
@@ -24076,7 +24135,7 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
       } catch (e) { console.error("customer locations failed (non-fatal):", e); }
     })();
     return () => { alive = false; };
-  }, [companies.length]);
+  }, [allCompanies.length]);
   // Esc closes the pop-up; the page behind it does not scroll while it is open
   useEffect(() => {
     if (!selected) return;
@@ -24091,8 +24150,13 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
   const selectedPayments = selected ? payments.filter(p => p.company_id === selected.id) : [];
 
   return (
+    <>
+    <QSegTabs value={seg} onChange={setSeg} items={[
+      ["welcome", "Welcome Pack customers", welcomeList.length, "rgba(251,191,36,1)"],
+      ["subscribed", "Subscribed customers", subscribedList.length, "rgba(52,211,153,1)"],
+    ]} />
     <div className="card panel">
-      <div className="panel-head"><h3>All Customers</h3><span className="tag">{companies.length} companies</span></div>
+      <div className="panel-head"><h3>{seg === "welcome" ? "Welcome Pack customers" : "Subscribed customers"}</h3><span className="tag">{companies.length} companies</span></div>
       <div className="table-wrap">
         <table>
           <thead><tr><th>Company</th><th>Onboarded</th><th>Location</th><th>Plan</th><th className="num">Projects</th><th className="num">Drawings</th><th className="num">Pages</th><th className="num">Actual AI Cost</th><th className="num">Revenue (mo.)</th><th>Status</th></tr></thead>
@@ -24196,6 +24260,7 @@ function QCustomersView({ companies, perCompanyById, trialByCompanyId, selectedI
         </div>
       )}
     </div>
+    </>
   );
 }
 
@@ -28208,7 +28273,7 @@ function QLiveMessages({ ticket, messages, mineIsAdmin }) {
   const endRef = useRef(null);
   const first = ticket ? { id: "__first__", from_admin: false, body: ticket.message || "", created_at: ticket.created_at, attachments: ticket.screenshots || [] } : null;
   // a chat the error watch opened for the user: its first line is an internal note -- only the team sees it
-  const autoNote = ticket && /^auto-error:/.test(ticket.page_context || "");
+  const autoNote = ticket && /^auto-(error|team):/.test(ticket.page_context || "");
   const all = (first && first.body && !(autoNote && !mineIsAdmin) ? [first] : []).concat(messages || []);
   useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ block: "end" }); } catch (_) {} }, [all.length]);
   return (
@@ -28282,11 +28347,13 @@ function LiveChatWidget({ session, pageName }) {
   useEffect(() => { const id = setInterval(load, open ? 5000 : 30000); return () => clearInterval(id); }, [open, userId]);
   useEffect(() => qLiveListen((p) => {
     if (p.presence) { setOnline(qLivePresence.admins > 0); return; }
-    if (p.to === "customer" && ticket && p.ticket_id === ticket.id) {
+    const forMe = p.to === "customer" && ((ticket && p.ticket_id === ticket.id) || (p.user_id && p.user_id === userId));
+    if (forMe) {
       load();
       if (!openRef.current || document.hidden) { qChime(); if (!qPushOn) qNotify("Quantora Team replied", "Open the chat to read the reply."); }
+      if (!openRef.current && p.user_id === userId && (!ticket || p.ticket_id !== ticket.id)) setOpen(true);   // the team started this chat
     }
-  }), [ticket && ticket.id]);
+  }), [ticket && ticket.id, userId]);
   useEffect(() => { qLiveChannel(); }, []);
   const unread = msgs.filter(m => m.from_admin && !m.read_by_customer_at).length;
   async function send(text, file) {
@@ -28435,11 +28502,277 @@ function AdminLiveChatWatcher({ onOpen }) {
   </>);
 }
 
+// ---------------------------------------------------------------------------
+// Admin → Online Users (2026-11-06): only the people using Quantora right now (seen in the last
+// 3 minutes; the app checks in every minute), refreshed every 10 s, with a Chat button that opens
+// a live chat with that person straight away.
+// ---------------------------------------------------------------------------
+// Welcome Pack (free start) vs Subscribed (a paid or granted plan), used by Customers and Online Users
+function qIsWelcomePlan(plan) { return !plan || plan === "trial"; }
+function QSegTabs({ value, onChange, items }) {
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+      {items.map(([k, label, n, color]) => (
+        <button key={k} type="button" onClick={() => onChange(k)}
+          style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 18px", borderRadius: 12, cursor: "pointer", fontSize: 14, fontWeight: 800, color: "inherit",
+            border: "1px solid " + (value === k ? color : "rgba(148,163,184,.25)"), background: value === k ? color.replace(/[\d.]+\)$/, ".18)") : "transparent" }}>
+          {label}
+          <span style={{ minWidth: 26, padding: "2px 8px", borderRadius: 99, fontSize: 12.5, background: value === k ? color : "rgba(148,163,184,.2)", color: value === k ? "#04111f" : "inherit" }}>{n == null ? "…" : n}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+function qDeviceOf(ua) {
+  const u = String(ua || "");
+  const kind = /iPad|Tablet/i.test(u) ? "Tablet" : /iPhone|Android.*Mobile|Mobile/i.test(u) ? "Phone" : "Laptop";
+  const os = /iPhone|iPad/i.test(u) ? "iOS" : /Android/i.test(u) ? "Android" : /Windows/i.test(u) ? "Windows" : /Mac OS/i.test(u) ? "Mac" : /Linux/i.test(u) ? "Linux" : "";
+  const br = /Edg\//.test(u) ? "Edge" : /CriOS|Chrome\//.test(u) ? "Chrome" : /FxiOS|Firefox/.test(u) ? "Firefox" : /Safari/.test(u) ? "Safari" : "";
+  return [kind, [os, br].filter(Boolean).join(" · ")].filter(Boolean).join(" — ");
+}
+function qOnlineFor(d) {
+  const m = Math.max(0, Math.round((Date.now() - new Date(d).getTime()) / 60000));
+  if (m < 1) return "just now"; if (m < 60) return m + " min"; const h = Math.floor(m / 60); return h + " h " + (m % 60) + " min";
+}
+function QOnlineUsersView({ canChat, onChat }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useQErr("");
+  const [showTeam, setShowTeam] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [seg, setSeg] = useState("welcome");
+  async function load() {
+    try {
+      const { data, error } = await sb.rpc("q_online_users");
+      if (error) throw error;
+      setRows(Array.isArray(data) ? data : []); setErr("");
+    } catch (e) { setErr(e.message || "Could not load who is online."); }
+  }
+  useEffect(() => { load(); const id = setInterval(load, 10000); return () => clearInterval(id); }, []);
+  async function chat(u) {
+    setBusy(u.user_id); setErr("");
+    try {
+      const { data: open } = await sb.from("support_tickets").select("id").eq("user_id", u.user_id).eq("kind", "help")
+        .eq("category", Q_LIVE_CATEGORY).neq("status", "resolved").order("created_at", { ascending: false }).limit(1);
+      let id = open && open[0] && open[0].id;
+      if (!id) {
+        const { data, error } = await sb.from("support_tickets").insert({
+          user_id: u.user_id, company_id: u.company_id || null, contact_email: u.email || null, kind: "help", category: Q_LIVE_CATEGORY,
+          message: "Chat started by the Quantora team from Online Users.", page_context: "auto-team: online users · " + (u.page || ""),
+          status: "in_progress", opened_by_admin: true,
+        }).select("id").single();
+        if (error) throw error;
+        id = data.id;
+      }
+      onChat && onChat(id);
+    } catch (e) { setErr(e.message || "Could not start the chat."); } finally { setBusy(""); }
+  }
+  const people = (rows || []).filter(r => showTeam || !r.is_team);
+  const welcomeOn = people.filter(r => qIsWelcomePlan(r.plan)), subscribedOn = people.filter(r => !qIsWelcomePlan(r.plan));
+  const list = seg === "welcome" ? welcomeOn : subscribedOn;
+  const teamCount = (rows || []).filter(r => r.is_team).length;
+  return (
+    <>
+    <QSegTabs value={seg} onChange={setSeg} items={[
+      ["welcome", "Welcome Pack customers online", rows === null ? null : welcomeOn.length, "rgba(251,191,36,1)"],
+      ["subscribed", "Subscribed customers online", rows === null ? null : subscribedOn.length, "rgba(52,211,153,1)"],
+    ]} />
+    <div className="card panel">
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ width: 10, height: 10, borderRadius: 99, background: "#22c55e", boxShadow: "0 0 0 4px rgba(34,197,94,.2)" }} />
+          <b style={{ fontSize: 16 }}>{rows === null ? "Checking…" : list.length === 0 ? (seg === "welcome" ? "No Welcome Pack customers online right now" : "No subscribed customers online right now") : `${list.length} online now`}</b>
+        </div>
+        <span style={{ fontSize: 12, color: "var(--text-dimmer)" }}>Updates every 10 seconds</span>
+        <label style={{ marginLeft: "auto", fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", color: "var(--text-dim)" }}>
+          <input type="checkbox" checked={showTeam} onChange={e => setShowTeam(e.target.checked)} /> Show our team too{teamCount ? ` (${teamCount})` : ""}
+        </label>
+      </div>
+      {err && <div style={{ color: "#fca5a5", fontSize: 12.5, marginBottom: 10 }}>{err}</div>}
+      {!canChat && list.length > 0 && <div style={{ fontSize: 12, color: "var(--text-dimmer)", marginBottom: 10 }}>To chat with someone you need Live Chat "View &amp; act" access.</div>}
+      <div style={{ display: "grid", gap: 10 }}>
+        {list.map(u => (
+          <div key={u.user_id} style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--border-soft)", background: "rgba(34,197,94,.05)" }}>
+            <div style={{ width: 38, height: 38, borderRadius: 99, background: "rgba(91,140,255,.18)", display: "grid", placeItems: "center", fontWeight: 800, flex: "none" }}>
+              {String(u.full_name || u.email || "?").trim().charAt(0).toUpperCase()}
+            </div>
+            <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>{u.full_name || u.email}{u.is_team && <span style={{ marginLeft: 6, fontSize: 10.5, padding: "1px 7px", borderRadius: 99, background: "rgba(139,92,246,.2)", color: "#c4b5fd" }}>Team</span>}</div>
+              <div style={{ fontSize: 12, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.email}{u.company_name ? " · " + u.company_name : ""}{u.plan ? " · " + u.plan : ""}</div>
+            </div>
+            <div style={{ flex: "1 1 200px", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.6 }}>
+              <div>{qDeviceOf(u.user_agent)}</div>
+              <div>{[u.city, u.country].filter(Boolean).join(", ") || u.time_zone || ""}</div>
+            </div>
+            <div style={{ flex: "1 1 160px", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.6 }}>
+              <div>On: <b style={{ color: "var(--text)" }}>{u.page || "—"}</b></div>
+              <div>Online for {qOnlineFor(u.online_since)} · {u.projects} project{u.projects === 1 ? "" : "s"}</div>
+            </div>
+            {canChat && !u.is_team && (
+              <button type="button" disabled={busy === u.user_id} onClick={() => chat(u)}
+                style={{ padding: "9px 16px", borderRadius: 10, border: 0, background: "#10b981", color: "#04261b", fontWeight: 800, cursor: "pointer", flex: "none" }}>
+                {busy === u.user_id ? "Opening…" : "💬 Chat"}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Admin → Admin Team (2026-11-06), owner only. Add a person by email and choose, section by section,
+// No access / View only / View & act. Pause or remove them any time; every change is recorded.
+// ---------------------------------------------------------------------------
+const Q_STAFF_PRESETS = [
+  ["Customers + Live Chat", { customers: "view", online: "view", livechat: "act" }],
+  ["Support team", { customers: "view", online: "view", livechat: "act", support: "act", ratings: "view" }],
+  ["Read-only reports", { exec: "view", revenue: "view", ai: "view", reports: "view", hourly: "view" }],
+  ["Everything (view only)", Object.fromEntries(["exec","execdash","myprojects","projects","pipeline","approvals","estima","customers","online","revenue","discounts","payments","ai","livechat","support","ratings","hourly","alerts","health","reports","compliance","measurement","draftsman"].map(k => [k, "view"]))],
+];
+function QStaffPermEditor({ perms, onChange }) {
+  const set = (k, v) => { const n = { ...perms }; if (v) n[k] = v; else delete n[k]; onChange(n); };
+  const opt = (k, v, label, on) => (
+    <button type="button" onClick={() => set(k, v)}
+      style={{ padding: "5px 10px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer",
+        border: on ? "1px solid #5b8cff" : "1px solid var(--border-soft)", background: on ? "rgba(91,140,255,.22)" : "transparent", color: on ? "#dbe6ff" : "var(--text-dim)" }}>{label}</button>
+  );
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: "var(--text-dimmer)", alignSelf: "center" }}>Quick pick:</span>
+        {Q_STAFF_PRESETS.map(([n, p]) => (
+          <button key={n} type="button" onClick={() => onChange({ ...p })} style={{ padding: "5px 10px", borderRadius: 99, fontSize: 12, border: "1px dashed var(--border-soft)", background: "transparent", color: "var(--text-dim)", cursor: "pointer" }}>{n}</button>
+        ))}
+        <button type="button" onClick={() => onChange({})} style={{ padding: "5px 10px", borderRadius: 99, fontSize: 12, border: "1px dashed var(--border-soft)", background: "transparent", color: "var(--text-dim)", cursor: "pointer" }}>Clear all</button>
+      </div>
+      <div style={{ display: "grid", gap: 6 }}>
+        {Q_STAFF_SECTIONS.map((sct, i) => {
+          const v = perms[sct.key] || "";
+          return (
+            <React.Fragment key={sct.key}>
+            {(i === 0 || Q_STAFF_SECTIONS[i - 1].group !== sct.group) && <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--text-dimmer)", marginTop: i ? 8 : 0 }}>{sct.group}</div>}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "7px 10px", borderRadius: 10, background: v ? "rgba(91,140,255,.06)" : "transparent", border: "1px solid var(--border-soft)" }}>
+              <div style={{ flex: "1 1 200px" }}>
+                <b style={{ fontSize: 13 }}>{sct.label}</b>
+                {sct.act && <div style={{ fontSize: 11.5, color: "var(--text-dimmer)" }}>View &amp; act: {sct.does}</div>}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {opt(sct.key, "", "No access", !v)}
+                {opt(sct.key, "view", "View only", v === "view")}
+                {sct.act && opt(sct.key, "act", "View & act", v === "act")}
+              </div>
+            </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+function qStaffSummary(perms) {
+  return Q_STAFF_SECTIONS.filter(x => perms && perms[x.key]).map(x => x.label + (perms[x.key] === "act" ? " (act)" : " (view)"));
+}
+function QAdminTeamView() {
+  const [members, setMembers] = useState(null);
+  const [audit, setAudit] = useState([]);
+  const [err, setErr] = useQErr("");
+  const [okMsg, setOkMsg] = useState("");
+  const [email, setEmail] = useState("");
+  const [perms, setPerms] = useState({});
+  const [editing, setEditing] = useState(null);       // email being edited, or null for "add"
+  const [busy, setBusy] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState("");
+  async function load() {
+    try {
+      const [{ data: m, error: e1 }, { data: a }] = await Promise.all([sb.rpc("q_staff_list"), sb.rpc("q_staff_audit_list")]);
+      if (e1) throw e1;
+      setMembers(m || []); setAudit(a || []);
+    } catch (e) { setErr(e.message || "Could not load the admin team."); }
+  }
+  useEffect(() => { load(); }, []);
+  async function save() {
+    setBusy(true); setErr(""); setOkMsg("");
+    try {
+      if (!Object.keys(perms).length) throw new Error("Choose at least one section for this person.");
+      const { error } = await sb.rpc("q_staff_save", { p_email: (editing || email).trim(), p_perms: perms });
+      if (error) throw error;
+      setOkMsg(editing ? "Access updated. It applies the next time they open the admin portal." : "Team member added. They sign in with this email and see only what you chose.");
+      setEmail(""); setPerms({}); setEditing(null); load();
+    } catch (e) { setErr(e.message || "Could not save."); } finally { setBusy(false); }
+  }
+  async function setStatus(m, st) { setErr(""); const { error } = await sb.rpc("q_staff_set_status", { p_email: m.email, p_status: st }); if (error) setErr(error.message); load(); }
+  async function remove(m) { setErr(""); const { error } = await sb.rpc("q_staff_remove", { p_email: m.email }); if (error) setErr(error.message); setConfirmRemove(""); load(); }
+  const btn = { padding: "6px 12px", borderRadius: 9, border: "1px solid var(--border-soft)", background: "transparent", color: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer" };
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <div className="card panel">
+        <div className="section-label" style={{ marginTop: 0 }}>{editing ? `Change access — ${editing}` : "Add a team member"}</div>
+        {!editing && (
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="their.email@company.com"
+            style={{ width: "100%", maxWidth: 420, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border-soft)", background: "rgba(2,6,23,.35)", color: "inherit", fontSize: 14, marginBottom: 12 }} />
+        )}
+        <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10 }}>Choose what they can do. Everything left on "No access" is hidden from them, and the server refuses it too.</div>
+        <QStaffPermEditor perms={perms} onChange={setPerms} />
+        {err && <div style={{ color: "#fca5a5", fontSize: 12.5, marginTop: 10 }}>{err}</div>}
+        {okMsg && <div style={{ color: "#86efac", fontSize: 12.5, marginTop: 10 }}>{okMsg}</div>}
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button type="button" disabled={busy || (!editing && !email.trim())} onClick={save}
+            style={{ padding: "10px 18px", borderRadius: 10, border: 0, background: "#5b8cff", color: "#fff", fontWeight: 800, cursor: "pointer" }}>{busy ? "Saving…" : editing ? "Save access" : "Add team member"}</button>
+          {editing && <button type="button" style={btn} onClick={() => { setEditing(null); setPerms({}); }}>Cancel</button>}
+        </div>
+      </div>
+
+      <div className="card panel">
+        <div className="section-label" style={{ marginTop: 0 }}>Team members</div>
+        {members === null ? <div style={{ fontSize: 13, color: "var(--text-dimmer)" }}>Loading…</div>
+          : members.length === 0 ? <div style={{ fontSize: 13, color: "var(--text-dimmer)" }}>No team members yet. You are the owner and see everything.</div>
+          : members.map(m => (
+            <div key={m.email} style={{ padding: "12px 0", borderTop: "1px solid var(--border-soft)", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+              <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+                <div style={{ fontWeight: 800 }}>{m.email}
+                  <span style={{ marginLeft: 8, fontSize: 10.5, padding: "2px 8px", borderRadius: 99, background: m.status === "active" ? "rgba(34,197,94,.18)" : "rgba(148,163,184,.2)", color: m.status === "active" ? "#86efac" : "#cbd5e1" }}>{m.status === "active" ? "Active" : "Paused"}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-dimmer)", marginTop: 2 }}>
+                  {m.has_account ? (m.last_seen ? "Last seen " + new Date(m.last_seen).toLocaleString() : "Has an account · not signed in since being added") : "No account yet — ask them to sign up at quantoraengineering.com with this email"}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                  {qStaffSummary(m.perms).map(x => <span key={x} style={{ fontSize: 11.5, padding: "2px 8px", borderRadius: 99, background: "rgba(91,140,255,.14)", color: "#c7d7ff" }}>{x}</span>)}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button type="button" style={btn} onClick={() => { setEditing(m.email); setPerms({ ...(m.perms || {}) }); setOkMsg(""); try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (_) {} }}>Change access</button>
+                {m.status === "active"
+                  ? <button type="button" style={btn} onClick={() => setStatus(m, "paused")}>Pause</button>
+                  : <button type="button" style={btn} onClick={() => setStatus(m, "active")}>Resume</button>}
+                {confirmRemove === m.email
+                  ? <button type="button" style={{ ...btn, borderColor: "#ef4444", color: "#fca5a5" }} onClick={() => remove(m)}>Yes, remove</button>
+                  : <button type="button" style={btn} onClick={() => setConfirmRemove(m.email)}>Remove</button>}
+              </div>
+            </div>
+          ))}
+      </div>
+
+      {audit.length > 0 && (
+        <div className="card panel">
+          <div className="section-label" style={{ marginTop: 0 }}>Change history</div>
+          {audit.slice(0, 30).map((a, i) => (
+            <div key={i} style={{ fontSize: 12.5, padding: "6px 0", borderTop: "1px solid var(--border-soft)", color: "var(--text-dim)" }}>
+              {new Date(a.at).toLocaleString()} · <b style={{ color: "var(--text)" }}>{a.email}</b> · {a.change}{a.perms ? " — " + qStaffSummary(a.perms).join(", ") : ""}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Admin → Live Chat: every open chat on the left, the conversation on the right.
 function QLiveChatAdmin({ companyNameById }) {
   const [tickets, setTickets] = useState([]);
   const [msgs, setMsgs] = useState({});
-  const [sel, setSel] = useState(null);
+  const [sel, setSel] = useState(() => { try { const w = window.__qAdminWantTicket; window.__qAdminWantTicket = null; return w || null; } catch (_) { return null; } });
   const [busy, setBusy] = useState(false);
   const [showResolved, setShowResolved] = useState(false);
   const [err, setErr] = useQErr("");
@@ -28469,7 +28802,7 @@ function QLiveChatAdmin({ companyNameById }) {
       const { error } = await sb.from("support_messages").insert({ ticket_id: t.id, sender_user_id: user.id, from_admin: true, body: text || "(screenshot)", attachments: paths });
       if (error) throw error;
       if (t.status === "new") { try { await sb.from("support_tickets").update({ status: "in_progress" }).eq("id", t.id); } catch (_) {} }
-      qLiveSignal({ to: "customer", ticket_id: t.id });
+      qLiveSignal({ to: "customer", ticket_id: t.id, user_id: t.user_id });
       await load(); return true;
     } catch (e) { setErr(e.message || "Could not send."); return false; } finally { setBusy(false); }
   }
@@ -28875,7 +29208,7 @@ function qInitials(first, last, email, whole) {
 // Everything about the account, behind the customer's own name. Billing lives
 // here as well as in the sidebar because "where do I pay" is the one thing
 // people hunt for and never find in a left-hand nav.
-function AccountMenu({ session, isPlatformAdmin, onNavigate, onOpenBilling, onOpenWallet }) {
+function AccountMenu({ session, isPlatformAdmin, adminLink, onNavigate, onOpenBilling, onOpenWallet }) {
   const [open, setOpen] = useState(false);
   const [prof, setProf] = useState(null);
   const wrapRef = useRef(null);
@@ -28991,7 +29324,7 @@ function AccountMenu({ session, isPlatformAdmin, onNavigate, onOpenBilling, onOp
                 </button>
               ))}
 
-            {isPlatformAdmin && (
+            {(isPlatformAdmin || adminLink) && (
               <>
                 <div style={{ height: 1, background: "var(--q-border,#e2e8f0)", margin: "5px 0" }} />
                 <button role="menuitem" onClick={go(() => onNavigate("__admin"))} style={{ ...rowStyle, color: "#8b5cf6" }}
@@ -29175,7 +29508,7 @@ function qTzPlace(tz) {
   return city === country ? country : `${city}, ${country}`;
 }
 
-const ACTIVITY_BEAT_MS = 2 * 60 * 1000;
+const ACTIVITY_BEAT_MS = 60 * 1000;   // every minute, so Admin → Online Users is close to live (2026-11-06)
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;   // two missed beats
 
 function qIsOnline(lastSeen) {
@@ -29219,6 +29552,7 @@ function useActivityHeartbeat(session) {
     async function beat(first) {
       try {
         const row = { user_id: uid, session_key: key, last_seen_at: new Date().toISOString() };
+        try { if (window.__qPage) row.page = String(window.__qPage).slice(0, 80); } catch (_) {}
         if (first) {
           row.email = email || null;
           try {
@@ -29232,7 +29566,10 @@ function useActivityHeartbeat(session) {
         }
         // Only the columns present are written, so a later beat updates
         // last_seen_at and leaves started_at and the browser details alone.
-        const { error } = await sb.from("user_activity").upsert(row, { onConflict: "user_id,session_key" });
+        let { error } = await sb.from("user_activity").upsert(row, { onConflict: "user_id,session_key" });
+        if (error && row.page && /page/.test(error.message || "")) {     // database not updated yet: carry on without the page
+          delete row.page; ({ error } = await sb.from("user_activity").upsert(row, { onConflict: "user_id,session_key" }));
+        }
         if (error) throw error;
       } catch (e) {
         // Never let presence tracking interfere with using the product.
@@ -38073,7 +38410,7 @@ function DraftsmanDrawings({ project, basePlate, spec, brief, onGoToDesign, onGo
   );
 }
 
-function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) {
+function PortalBody({ view, setView, session, isPlatformAdmin, staffPerms, onOpenBilling }) {
   const { projects } = useProjects();
   // Which workspace the rail is showing. It follows the page you are on, and is
   // only held in state for the account pages, which belong to no workspace.
@@ -38104,8 +38441,8 @@ function PortalBody({ view, setView, session, isPlatformAdmin, onOpenBilling }) 
       onBack={()=>go("dashboard")} onHome={()=>go("home")}
       onEdit={()=>setView({name:"edit", project:view.project})} onDeleted={()=>go("dashboard")} />;
   }
-  if (view.name === "admin" && isPlatformAdmin) {
-    return <AdminPortal onBack={()=>go("home")} />;
+  if (view.name === "admin" && (isPlatformAdmin || staffPerms)) {
+    return <AdminPortal onBack={()=>go("home")} staffPerms={isPlatformAdmin ? null : staffPerms} />;
   }
   // The chooser owns the whole width: it is the one page with no rail, because
   // its whole job is to decide which rail you want.
@@ -38482,6 +38819,10 @@ function App() {
   const [billingModal, setBillingModal] = useState({ open: false, reason: "" });
   const [billingBanner, setBillingBanner] = useState(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  // Admin Team member (2026-11-06): the sections the owner gave this person, or null. The server
+  // re-checks every one of them; this only decides what the admin portal shows.
+  const [staffPerms, setStaffPerms] = useState(null);
+  const hasAdminPortal = isPlatformAdmin || !!staffPerms;
   // "Open Live Chat" from the chat alert banner: go to the admin panel on that page.
   useEffect(() => {
     const h = (e) => { try { window.__qAdminWant = e.detail || "livechat"; } catch (_) {} setView({ name: "admin" }); };
@@ -38528,7 +38869,13 @@ function App() {
     if (!session) { setIsPlatformAdmin(false); return; }
     // the draftsman studio shows its in-browser Design / Drawings tabs to platform admins only (2026-10-26)
     const flag = (v) => { window.__qPlatformAdmin = v; try { window.dispatchEvent(new Event("q-admin")); } catch (_) {} };
-    callAdminAnalytics("is_admin", {}).then(() => { setIsPlatformAdmin(true); flag(true); }).catch(() => { setIsPlatformAdmin(false); flag(false); });
+    callAdminAnalytics("is_admin", {}).then(() => { setIsPlatformAdmin(true); setStaffPerms(null); flag(true); }).catch(() => {
+      setIsPlatformAdmin(false); flag(false);
+      Promise.resolve(sb.rpc("q_staff_me")).then(({ data }) => {
+        const p = data && data.perms && Object.keys(data.perms).length ? data.perms : null;
+        setStaffPerms(p);
+      }).catch(() => setStaffPerms(null));
+    });
   }, [session]);
 
   // Existing customers (2026-10-20): anyone who has used the platform (their company
@@ -38740,6 +39087,13 @@ function App() {
   // Records this browser session and keeps it alive, which is what the admin
   // Customers page reads to show who is online and when they last signed in.
   useActivityHeartbeat(session);
+  // the page each person is on, for Admin → Online Users (2026-11-06)
+  useEffect(() => {
+    try {
+      window.__qPage = view.name === "project" ? "Project" + (view.tab ? " · " + view.tab : "")
+        : view.name === "admin" ? "Admin portal" : (PORTAL_LABEL[view.name] || (view.name === "home" ? "Home" : view.name));
+    } catch (_) {}
+  }, [view]);
 
   // Old ?billing=success|cancel return links: show a small banner, then clean
   // the URL so a refresh doesn't re-trigger it.
@@ -38893,7 +39247,7 @@ function App() {
               </span>
             </button>
           )}
-          {isPlatformAdmin && (
+          {hasAdminPortal && (
             <button onClick={()=>setView({name:"admin"})} className="text-xs font-semibold text-violet-700 hover:text-violet-900">Admin</button>
           )}
           {/* Keyed on the user id so signing in as someone else rebuilds the
@@ -38909,6 +39263,7 @@ function App() {
           <AccountMenu
             session={session}
             isPlatformAdmin={isPlatformAdmin}
+            adminLink={hasAdminPortal}
             onNavigate={(k)=> k === "__admin" ? setView({name:"admin"}) : setView({name:k})}
             onOpenBilling={()=>setBillingModal({ open: true, reason: "" })}
             onOpenWallet={()=>setBillingModal({ open: true, reason: "", focus: "wallet" })} />
@@ -38926,6 +39281,7 @@ function App() {
         setView={setView}
         session={session}
         isPlatformAdmin={isPlatformAdmin}
+        staffPerms={staffPerms}
         onOpenBilling={()=>setBillingModal({ open: true, reason: "" })}
       />
       <PaymentResultModal state={payResult} onClose={() => setPayResult(null)} onBilling={() => setView({ name: "billing" })} />
@@ -38941,7 +39297,7 @@ function App() {
           boxShadow: "0 6px 18px rgba(37,99,235,0.35)",
         }}>Help</button>
       <EstimaDock currentProject={view.name === "project" ? view.project : null} />
-      {isPlatformAdmin ? <AdminLiveChatWatcher /> : <LiveChatWidget session={session} pageName={view.name} />}
+      {(isPlatformAdmin || (staffPerms && staffPerms.livechat)) ? <AdminLiveChatWatcher /> : <LiveChatWidget session={session} pageName={view.name} />}
       <ActivityCenter onOpenProject={(p, tab) => setView({ name: "project", project: p, tab })} />
       <PulseBar />
       <SupportModal open={!!supportCtx} initial={supportCtx} onClose={()=>setSupportCtx(null)} />

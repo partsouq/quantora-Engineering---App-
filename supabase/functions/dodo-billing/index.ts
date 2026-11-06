@@ -88,8 +88,12 @@ Deno.serve(async (req) => {
 
     // Platform admins only: is Dodo ready to take money, and what came in lately.
     if (action === "readiness") {
+      // owner, or an Admin Team member with Payments (2026-11-06); the $2 test payment stays owner-only
       const { data: isAdmin } = await admin.from("platform_admins").select("user_id").eq("user_id", user.id).maybeSingle();
-      if (!isAdmin) return json({ error: "Platform admin access only." }, 403);
+      if (!isAdmin) {
+        const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: user.id, p_section: "payments" });
+        if (Number(lvl || 0) < 1) return json({ error: "Platform admin access only." }, 403);
+      }
       let apiOk = false, apiError: string | null = null;
       if (keys) { try { await dodo(keys, "/products?page_size=1"); apiOk = true; } catch (e) { apiError = describe(e); } }
       const { data: plans } = await admin.from("plans").select("id, name, price_usd, is_trial");
