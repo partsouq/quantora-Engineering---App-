@@ -56,6 +56,41 @@ async function raiseAlert(fp: string, service: string, title: string, text: stri
   }
 }
 
+// Sign-up watch (2026-11-07): someone who signed up 30+ minutes ago and has not clicked the confirmation link
+// raises one admin alert (pushed instantly by q_alert_push; the admin can press "Resend confirmation" in
+// Customers -> Waiting for email confirmation). After 1 hour they get ONE automatic reminder: a fresh
+// confirmation link (the platform's own confirmation email). At most 2 reminders per hourly run, so the
+// project's email allowance stays free for new sign-ups. The robot's own test sign-ups are never counted.
+async function watchSignups() {
+  const { data, error } = await admin.rpc("q_pending_signups_ops");
+  if (error) throw error;
+  const list = (data || []) as any[];
+  let stuck = 0, reminded = 0;
+  for (const p of list) {
+    if (p.minutes < 30) continue;
+    stuck++;
+    const who = `${p.full_name || "New user"} (${p.email})`;
+    await raiseAlertOnce(`signup:unconfirmed:${p.id}`, "signup", `Sign-up not confirmed yet: ${p.full_name || p.email}`,
+      `${who} signed up ${p.minutes} minutes ago and has not clicked the confirmation link. ` +
+      `Admin -> Customers -> Waiting for email confirmation -> Resend confirmation.`);
+    if (p.minutes >= 60 && !p.reminded_at && p.minutes < 3 * 24 * 60 && reminded < 2) {
+      const r = await fetch(`${URL_BASE}/auth/v1/resend`, { method: "POST",
+        headers: { "content-type": "application/json", apikey: ANON },
+        body: JSON.stringify({ type: "signup", email: p.email, options: { email_redirect_to: "https://quantoraengineering.com/" } }) }).catch((e) => ({ ok: false, status: 0, text: async () => String(e) } as any));
+      const txt = r.ok ? "sent" : `failed ${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}`;
+      await admin.from("signup_reminders").upsert({ user_id: p.id, sent_at: new Date().toISOString(), result: txt });
+      if (r.ok) reminded++;
+    }
+  }
+  return { stuck, reminded };
+}
+
+// like raiseAlert, but a sign-up alert is raised once per person (no repeat every hour)
+async function raiseAlertOnce(fp: string, service: string, title: string, text: string) {
+  const { data: ex } = await admin.from("admin_alerts").select("id").eq("fingerprint", fp).maybeSingle();
+  if (!ex) await admin.from("admin_alerts").insert({ fingerprint: fp, service, title, error_text: text.slice(0, 4000), examples: [] });
+}
+
 const hhmm = (d: Date) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" });
 
 async function runReport(manual: boolean) {
@@ -74,9 +109,12 @@ async function runReport(manual: boolean) {
   if ((s.stuck_runs || 0) > 0) await raiseAlert("ops:stuck-runs", "ai-engine", `${s.stuck_runs} take-off run(s) stuck for 30+ minutes`, "Runs still processing after 30 minutes at the hourly check.");
   if ((s.stuck_jobs || 0) > 0) await raiseAlert("ops:stuck-jobs", "draftsman", `${s.stuck_jobs} Draftsman job(s) stuck for 60+ minutes`, "Draftsman jobs still queued or running after 60 minutes at the hourly check.");
 
+  const signupWatch = await watchSignups().catch((e) => { console.error("signup watch", e); return { stuck: 0, reminded: 0 }; });
+
   const r = s.runs || {}, j = s.drawings || {}, c = s.chats || {}, rt = s.ratings || {}, u = s.users || {};
   const lines = [
     `Users: ${u.signups || 0} new · ${u.logins || 0} signed in`,
+    `Waiting for email confirmation: ${signupWatch.stuck}${signupWatch.stuck ? " ⚠️" : ""}${signupWatch.reminded ? ` · ${signupWatch.reminded} reminder${signupWatch.reminded === 1 ? "" : "s"} sent` : ""}`,
     `Take-offs: ${r.completed || 0} done · ${r.failed || 0} failed · ${r.empty || 0} empty · ${s.pages || 0} pages`,
     `Drawings (Draftsman): ${j.done || 0} done · ${j.failed || 0} failed`,
     `Live chat: ${c.new_chats || 0} new · ${c.customer_messages || 0} messages · ${c.waiting || 0} waiting for a reply`,
@@ -96,7 +134,7 @@ async function runReport(manual: boolean) {
   // one push for the report; its own tag so it never replaces or mixes with an alert
   const push = await secret("PUSH_INTERNAL_SECRET");
   if (push) {
-    const short = [`${u.signups || 0} new users · ${u.logins || 0} signed in`, `${r.completed || 0} take-offs · ${r.failed || 0} failed`,
+    const short = [`${u.signups || 0} new users · ${u.logins || 0} signed in`, ...(signupWatch.stuck ? [`${signupWatch.stuck} waiting for email confirmation ⚠️`] : []), `${r.completed || 0} take-offs · ${r.failed || 0} failed`,
       `${c.new_chats || 0} chats · ${c.waiting || 0} waiting`, `${s.user_errors || 0} user errors`, ...(s.uploads_not_saved ? [`${s.uploads_not_saved} uploads not saved ❌`] : []), `Engines ${health.length - down.length}/${health.length}` + (down.length ? " ❌" : " ✅")].join(" · ");
     await fetch(`${URL_BASE}/functions/v1/push-notify`, { method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${ANON}`, apikey: ANON, "x-push-secret": push },
