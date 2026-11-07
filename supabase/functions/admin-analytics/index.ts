@@ -145,6 +145,7 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden
         const batch = data?.users ?? [];
         for (const u of batch) {
           if (u.email_confirmed_at || u.confirmed_at || !u.email) continue;
+          if (/^quantoraengineering01\+signup[0-9a-z._-]*@gmail\.com$/i.test(u.email)) continue;   // the robot's own sign-up test
           users.push({ id: u.id, email: u.email, full_name: (u.user_metadata as any)?.full_name ?? null,
             created_at: u.created_at, confirmation_sent_at: (u as any).confirmation_sent_at ?? null });
         }

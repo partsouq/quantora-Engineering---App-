@@ -1,0 +1,56 @@
+name: Sign-up robot
+
+# Once a day the robot signs up like a brand-new customer: form -> confirmation email sent ->
+# confirmation link works -> company + Welcome Pack created, then it removes its test account.
+# No AI is used. Results go to the database (mode "signup"); a failure raises an alert on the admin's phone.
+# Runs at 05:37 UTC (09:37 Dubai), off the top of the hour so GitHub does not skip it.
+on:
+  schedule:
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: signup-robot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  signup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests/robot
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install browser
+        working-directory: tests/robot
+        run: |
+          npm install --no-audit --no-fund playwright@1.48.2
+          npx playwright install --with-deps chromium
+
+      - name: Run the sign-up robot
+        working-directory: tests/robot
+        env:
+          ROBOT_EMAIL: ${{ secrets.ROBOT_EMAIL }}
+          ROBOT_PASSWORD: ${{ secrets.ROBOT_PASSWORD }}
+          ROBOT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ROBOT_SHOTS: ${{ github.workspace }}/robot-shots
+        run: |
+          if [ -z "$ROBOT_EMAIL" ] || [ -z "$ROBOT_PASSWORD" ]; then echo "Robot account not set up yet. Skipping."; exit 0; fi
+          node signup.js
+
+      - name: Keep screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signup-robot-screenshots
+          path: robot-shots
+          retention-days: 3
+          if-no-files-found: ignore
