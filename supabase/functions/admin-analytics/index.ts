@@ -94,6 +94,7 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden
         list_projects: () => lv("execdash") >= 1, list_drawings: () => lv("execdash") >= 1,
         grant_bonus_pages: () => lv("customers") >= 2, extend_trial: () => lv("customers") >= 2,
         list_quota_adjustments: () => has("customers"),
+        pending_signups: () => has("customers"),
         trial_overview: () => has("customers", "exec", "revenue", "execdash"),
         overview: () => has("customers", "projects", "exec", "revenue", "ai", "execdash"),
         system_status: () => has("health", "exec"),
@@ -135,6 +136,24 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden
     // company's plan's own default, joined in so the frontend can show
     // "plan default + bonus = effective limit" without a second call).
     // -----------------------------------------------------------------
+    // sign-ups that have not confirmed their email yet (no company exists for them until they do) -- 2026-11-07
+    if (action === "pending_signups") {
+      const users: any[] = [];
+      for (let page = 1; page <= 20; page++) {
+        const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
+        if (error) throw error;
+        const batch = data?.users ?? [];
+        for (const u of batch) {
+          if (u.email_confirmed_at || u.confirmed_at || !u.email) continue;
+          users.push({ id: u.id, email: u.email, full_name: (u.user_metadata as any)?.full_name ?? null,
+            created_at: u.created_at, confirmation_sent_at: (u as any).confirmation_sent_at ?? null });
+        }
+        if (batch.length < 1000) break;
+      }
+      users.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+      return jsonResponse({ users });
+    }
+
     if (action === "list_companies") {
       const [{ data: companies, error }, { data: plans }] = await Promise.all([
         admin.from("companies").select("id, name, plan, trial_end_date, bonus_drawing_pages, created_at").order("created_at", { ascending: false }),   // newest customer first (2026-10-29)
