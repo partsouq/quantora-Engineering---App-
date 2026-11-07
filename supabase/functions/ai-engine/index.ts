@@ -2867,7 +2867,7 @@ Deno.serve(async (req: Request) => {
       if (!adminRow) {
         // an Admin Team member given "Project Execution Dashboard: View & act" may run Admin Assist (2026-11-06)
         const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: userId, p_section: "execdash" });
-        if (Number(lvl || 0) >= 2) adminRow = { user_id: userId };
+        if (Number(lvl || 0) >= 2) adminRow = { user_id: userId, staff: true } as any;
       }
       if (!adminRow) {
         return jsonResponse({ error: "Forbidden: platform admin access only." }, 403);
@@ -2879,6 +2879,11 @@ Deno.serve(async (req: Request) => {
       const { data: proj, error: projErr } = await admin.from("projects").select("*").eq("id", targetProjectId).maybeSingle();
       if (projErr || !proj) {
         return jsonResponse({ error: "Project not found." }, 404);
+      }
+      if ((adminRow as any)?.staff) {
+        // a team member can never run Admin Assist on the owner's own projects (2026-11-07)
+        const { data: oid } = await admin.rpc("q_owner_ids");
+        if (oid?.company && proj.company_id === oid.company) return jsonResponse({ error: "Forbidden: this account is protected." }, 403);
       }
       project = proj;
       companyId = proj.company_id;
