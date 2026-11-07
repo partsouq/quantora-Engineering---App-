@@ -153,3 +153,7 @@ begin
       jsonb_build_object('at', now(), 'file', coalesce(v_step, 'run'), 'source_kind', 'robot', 'page', p->>'run_url', 'user_email', 'test robot'));
   end if;
 end $$;
+
+-- (applied 2026-11-07, migration signup_robot_welcome_exception_2026_11_07)
+-- bootstrap_company_for_user: the robot's test addresses (q_is_robot_signup) are never a repeat trial.
+-- q_robot_signup_cleanup: also removes the signup_checks row of the robot's test company.
