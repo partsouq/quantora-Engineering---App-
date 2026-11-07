@@ -168,6 +168,8 @@ Deno.serve(async (req) => {
           .eq("ip", ip).neq("company_id", companyId).gte("created_at", since).in("outcome", ["welcome", "welcome_work_email"]);
         if ((sameIp ?? 0) >= 3) flags.push("busy_connection");
       }
+      // 2026-11-07: the daily sign-up robot's own test addresses always get the normal Welcome Pack
+      if (/^quantoraengineering01\+signup[0-9a-z._-]*@gmail\.com$/i.test(email)) flags.length = 0;
       let outcome = "welcome";
       if (flags.length) {
         outcome = "free_repeat";
