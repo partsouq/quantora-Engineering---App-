@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-06.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-07.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -24101,6 +24101,10 @@ function AdminQuotaControls({ company, onChanged }) {
 function QCustomersView({ companies: allCompanies, perCompanyById, trialByCompanyId, selectedId, onSelect, payments, onQuotaChanged }) {
   // two lists (2026-11-06): Welcome Pack customers (free start) and Subscribed customers (paid / granted plan)
   const [seg, setSeg] = useState("welcome");
+  // sign-ups that have not confirmed their email yet have no company, so they get their own list (2026-11-07)
+  const [pending, setPending] = useState(null);
+  const loadPending = () => callAdminAnalytics("pending_signups").then(r => setPending(r.users || [])).catch(e => { console.error("pending sign-ups failed (non-fatal):", e); setPending([]); });
+  useEffect(() => { loadPending(); }, []);
   const welcomeList = allCompanies.filter(c => qIsWelcomePlan(c.plan));
   const subscribedList = allCompanies.filter(c => !qIsWelcomePlan(c.plan));
   const companies = seg === "welcome" ? welcomeList : subscribedList;
@@ -24154,7 +24158,9 @@ function QCustomersView({ companies: allCompanies, perCompanyById, trialByCompan
     <QSegTabs value={seg} onChange={setSeg} items={[
       ["welcome", "Welcome Pack customers", welcomeList.length, "rgba(251,191,36,1)"],
       ["subscribed", "Subscribed customers", subscribedList.length, "rgba(52,211,153,1)"],
+      ["waiting", "Waiting for email confirmation", pending ? pending.length : 0, "rgba(96,165,250,1)"],
     ]} />
+    {seg === "waiting" ? <QPendingSignupsView users={pending} onReload={loadPending} /> :
     <div className="card panel">
       <div className="panel-head"><h3>{seg === "welcome" ? "Welcome Pack customers" : "Subscribed customers"}</h3><span className="tag">{companies.length} companies</span></div>
       <div className="table-wrap">
@@ -24259,8 +24265,51 @@ function QCustomersView({ companies: allCompanies, perCompanyById, trialByCompan
         </div>
         </div>
       )}
-    </div>
+    </div>}
     </>
+  );
+}
+
+// People who signed up but have not clicked the confirmation link yet (2026-11-07).
+// "Resend confirmation" sends the standard sign-up confirmation email again.
+function QPendingSignupsView({ users, onReload }) {
+  const [busy, setBusy] = useState({});
+  const [msg, setMsg] = useState({});
+  const resend = async (email) => {
+    setBusy(b => ({ ...b, [email]: true }));
+    try {
+      const { error } = await sb.auth.resend({ type: "signup", email, options: { emailRedirectTo: window.location.origin + "/" } });
+      setMsg(m => ({ ...m, [email]: error ? ("Could not send: " + (error.message || "try again in a minute")) : "Sent ✓" }));
+    } catch (e) { setMsg(m => ({ ...m, [email]: "Could not send: " + (e.message || e) })); }
+    setBusy(b => ({ ...b, [email]: false }));
+  };
+  const list = users || [];
+  return (
+    <div className="card panel">
+      <div className="panel-head"><h3>Waiting for email confirmation</h3><span className="tag">{list.length} people</span>
+        <button className="btn" style={{ marginLeft: "auto" }} onClick={onReload}>Refresh</button></div>
+      <div style={{ fontSize: 12.5, color: "var(--text-dimmer)", margin: "0 0 10px" }}>These people signed up but have not clicked the link in their confirmation email yet. Their company and Welcome Pack are created when they confirm.</div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Signed up</th><th>Last email sent</th><th></th></tr></thead>
+          <tbody>
+            {users == null ? <tr><td colSpan="5" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>Loading…</td></tr>
+              : list.length === 0 ? <tr><td colSpan="5" style={{ textAlign: "center", color: "var(--text-dimmer)" }}>Everyone has confirmed.</td></tr>
+              : list.map(u => (
+              <tr key={u.id}>
+                <td className="name">{u.full_name || "—"}</td>
+                <td style={{ fontSize: 12.5 }}>{u.email}</td>
+                <td style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>{u.created_at ? new Date(u.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}<div style={{ fontSize: 11, color: "var(--text-dimmer)" }}>{u.created_at ? qAgo(u.created_at) : ""}</div></td>
+                <td style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>{u.confirmation_sent_at ? qAgo(u.confirmation_sent_at) : "—"}</td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="btn" disabled={!!busy[u.email]} onClick={() => resend(u.email)}>{busy[u.email] ? "Sending…" : "Resend confirmation"}</button>
+                  {msg[u.email] && <div style={{ fontSize: 11, marginTop: 4, color: /✓/.test(msg[u.email]) ? "#34d399" : "#f87171" }}>{msg[u.email]}</div>}
+                </td>
+              </tr>))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
