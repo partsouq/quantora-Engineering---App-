@@ -59,7 +59,7 @@ function jsonResponse(body: unknown, status = 200) {
 // Must match ai-engine checkPlanLimit() and billing usage_summary.
 const PAGE_ACTIONS = ["analyze_drawing", "analyze_drawing_tiled", "analyze_drawings_combined", "rework", "page_refund"];
 
-async function handleRequest(req: Request, ctx: { trim?: (o: any) => any }): Promise<Response> {
+async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden?: Set<string> }): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
@@ -105,6 +105,13 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any }): Pro
       if (!Object.keys(perms).length || !NEED[action] || !NEED[action]()) {
         return jsonResponse({ error: "Forbidden: your admin access does not include this." }, 403);
       }
+      // the owner account and the owner's company are never visible to, or changeable by, a team member (2026-11-07)
+      const { data: oid } = await admin.rpc("q_owner_ids");
+      const hidden = new Set([oid?.uid, oid?.email, oid?.company].filter(Boolean).map((v: string) => String(v).toLowerCase()));
+      if (body?.company_id && hidden.has(String(body.company_id).toLowerCase())) {
+        return jsonResponse({ error: "Forbidden: this account is protected." }, 403);
+      }
+      ctx.hidden = hidden;
       // a shared response is cut to what this member's sections show
       if (action === "overview" && !has("exec", "revenue", "ai", "execdash")) {
         ctx.trim = (o: any) => ({ per_company: has("customers") ? o.per_company : [], per_project: has("projects") ? o.per_project : [] });
@@ -1055,9 +1062,28 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any }): Pro
   }
 }
 
+// Drops every row that points at a hidden id (the owner, the owner's email or the owner's company).
+const OWNER_KEYS = ["id", "user_id", "company_id", "owner_id", "created_by", "email", "admin_user_id"];
+function scrubOwner(o: any, hidden: Set<string>): any {
+  if (Array.isArray(o)) {
+    return o.filter((e) => !(e && typeof e === "object" && !Array.isArray(e) &&
+      OWNER_KEYS.some((k) => typeof e[k] === "string" && hidden.has(e[k].toLowerCase()))))
+      .map((e) => scrubOwner(e, hidden));
+  }
+  if (o && typeof o === "object") {
+    const out: any = {};
+    for (const [k, v] of Object.entries(o)) out[k] = scrubOwner(v, hidden);
+    return out;
+  }
+  return o;
+}
+
 Deno.serve(async (req: Request) => {
-  const ctx: { trim?: (o: any) => any } = {};
+  const ctx: { trim?: (o: any) => any; hidden?: Set<string> } = {};
   const res = await handleRequest(req, ctx);
-  if (!ctx.trim || res.status !== 200) return res;
-  return jsonResponse(ctx.trim(await res.json()), 200);
+  if ((!ctx.trim && !ctx.hidden) || res.status !== 200) return res;
+  let out = await res.json();
+  if (ctx.trim) out = ctx.trim(out);
+  if (ctx.hidden && ctx.hidden.size) out = scrubOwner(out, ctx.hidden);
+  return jsonResponse(out, 200);
 });

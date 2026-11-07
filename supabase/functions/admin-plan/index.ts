@@ -90,6 +90,11 @@ Deno.serve(async (req: Request) => {
       const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: userId, p_section: "customers" });
       const need = action === "list_plans" ? 1 : 2;
       if (Number(lvl || 0) < need) return jsonResponse({ error: "Forbidden: your admin access does not include this." }, 403);
+      // the owner's company can never be changed by a team member (2026-11-07)
+      const { data: oid } = await admin.rpc("q_owner_ids");
+      if (oid?.company && body?.company_id && String(body.company_id) === String(oid.company)) {
+        return jsonResponse({ error: "Forbidden: this account is protected." }, 403);
+      }
     }
 
     // ---- list_plans ---------------------------------------------------
