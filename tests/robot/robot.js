@@ -109,7 +109,7 @@ async function report(ok, failedStep, message) {
   // The robot never answers rating questions (they would block the screen and count as real feedback).
   await ctx.addInitScript(() => {
     const g = Storage.prototype.getItem;
-    Storage.prototype.getItem = function (k) { if (/^qfb:|^q_feedback_asked_at$|^q_pulse_at$/.test(k)) return String(Date.now()); return g.call(this, k); };
+    Storage.prototype.getItem = function (k) { if (/^qfb:|^q_feedback_asked_at$|^q_pulse_at$|^q_assist_asked:/.test(k)) return String(Date.now()); return g.call(this, k); };
   });
   page = await ctx.newPage();
   if (process.env.ROBOT_MOCK) await require(process.env.ROBOT_MOCK).install(page, { indexFile: process.env.ROBOT_INDEX });   // local test only
