@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.04"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.05"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -21471,7 +21471,129 @@ const ESTIMA_ROBOT = (size = 26) => (
   </svg>
 );
 const ESTIMA_SUGGEST = ["Summarise the BOQ", "How many CCTV cameras?", "Which codes apply here?", "Where can I save cost?"];
+// Assistant name (2026-11-09): the platform calls it "Estima"; each person can give it their own name
+// (Settings → AI assistant, or the one-time pop-up). Stored on the person's profile.
+const Q_ASSIST_DEFAULT = "Estima";
+const Q_ASSIST_PICKS = ["Estima", "Noor", "Max", "Sara", "Atlas"];
+const Q_ASSIST_OK = /^[\p{L}\p{N} ]{2,20}$/u;
+function qAssistClean(v) { return String(v || "").replace(/\s+/g, " ").trim(); }
+const qAssistStore = { name: Q_ASSIST_DEFAULT, namedAt: null, loaded: false, uid: null };
+async function qAssistLoad(force) {
+  if (qAssistStore.loaded && !force) return qAssistStore;
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const uid = session?.user?.id; if (!uid) return qAssistStore;
+    const { data } = await sb.from("profiles").select("assistant_name, assistant_named_at").eq("id", uid).maybeSingle();
+    qAssistStore.uid = uid; qAssistStore.loaded = true;
+    qAssistStore.name = qAssistClean(data && data.assistant_name) || Q_ASSIST_DEFAULT;
+    qAssistStore.namedAt = (data && data.assistant_named_at) || null;
+    window.dispatchEvent(new CustomEvent("q-assist-name"));
+  } catch (_) {}
+  return qAssistStore;
+}
+async function qAssistSave(name) {
+  const v = qAssistClean(name) || Q_ASSIST_DEFAULT;
+  if (!Q_ASSIST_OK.test(v)) throw new Error("Use 2–20 letters, numbers or spaces.");
+  const { data: { session } } = await sb.auth.getSession();
+  const uid = session?.user?.id; if (!uid) throw new Error("Please sign in again.");
+  const at = new Date().toISOString();
+  const { error } = await sb.from("profiles").update({ assistant_name: v === Q_ASSIST_DEFAULT ? null : v, assistant_named_at: at }).eq("id", uid);
+  if (error) throw error;
+  qAssistStore.name = v; qAssistStore.namedAt = at; qAssistStore.loaded = true; qAssistStore.uid = uid;
+  try { localStorage.setItem("q_assist_asked:" + uid, "1"); } catch (_) {}
+  window.dispatchEvent(new CustomEvent("q-assist-name"));
+  return v;
+}
+function useAssistantName() {
+  const [name, setName] = useState(qAssistStore.name);
+  useEffect(() => {
+    const on = () => setName(qAssistStore.name);
+    window.addEventListener("q-assist-name", on);
+    qAssistLoad().then(on);
+    return () => window.removeEventListener("q-assist-name", on);
+  }, []);
+  return name;
+}
+// The launcher's picture: the robot with a glowing ring and a small skyline.
+const ESTIMA_BADGE = (size = 54) => (
+  <svg width={size} height={size} viewBox="0 0 120 120" fill="none" aria-hidden="true">
+    <defs>
+      <radialGradient id="qbHead" cx=".4" cy=".3" r=".85"><stop offset="0" stopColor="#ffffff" /><stop offset=".6" stopColor="#dbe4ff" /><stop offset="1" stopColor="#9aa8f5" /></radialGradient>
+      <linearGradient id="qbRing" x1="0" x2="1"><stop offset="0" stopColor="#22d3ee" /><stop offset=".5" stopColor="#3b82f6" /><stop offset="1" stopColor="#a855f7" /></linearGradient>
+      <linearGradient id="qbBld" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#60a5fa" /><stop offset="1" stopColor="#4338ca" /></linearGradient>
+      <filter id="qbGlow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2" /><feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+    </defs>
+    <circle cx="56" cy="54" r="46" stroke="url(#qbRing)" strokeWidth="4.5" strokeDasharray="210 80" transform="rotate(-140 56 54)" filter="url(#qbGlow)" />
+    <circle cx="56" cy="54" r="38" fill="rgba(59,130,246,.12)" />
+    <path d="M56 16v9" stroke="#c7d2fe" strokeWidth="3" strokeLinecap="round" />
+    <circle cx="56" cy="14" r="4" fill="#22d3ee" filter="url(#qbGlow)" className="qe-bulb" />
+    <rect x="22" y="40" width="9" height="24" rx="4.5" fill="#a5b4fc" /><rect x="81" y="40" width="9" height="24" rx="4.5" fill="#a5b4fc" />
+    <rect x="28" y="24" width="56" height="54" rx="24" fill="url(#qbHead)" />
+    <rect x="35" y="38" width="42" height="26" rx="12" fill="#0a1033" />
+    <rect x="45" y="44" width="6" height="14" rx="3" fill="#22d3ee" filter="url(#qbGlow)" className="qe-eye" />
+    <rect x="61" y="44" width="6" height="14" rx="3" fill="#22d3ee" filter="url(#qbGlow)" className="qe-eye" />
+    <path d="M51 70q5 2.6 10 0" stroke="#8b9be8" strokeWidth="2" strokeLinecap="round" />
+    <g transform="translate(70 66)">
+      <rect x="0" y="22" width="11" height="28" fill="url(#qbBld)" />
+      <path d="M14 50V14l3-8 2-6 2 6 3 8v36z" fill="url(#qbBld)" />
+      <rect x="27" y="18" width="13" height="32" fill="url(#qbBld)" />
+      <rect x="42" y="31" width="8" height="19" fill="url(#qbBld)" />
+    </g>
+    <path d="M6 104c30 14 84 11 112-4-25 9-75 12-112 4z" fill="url(#qbRing)" filter="url(#qbGlow)" />
+  </svg>
+);
+// One-time pop-up after sign-in: name your assistant (or keep "Estima").
+function AssistantNamePrompt() {
+  const [show, setShow] = useState(false);
+  const [val, setVal] = useState(Q_ASSIST_DEFAULT);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(async () => {
+      const st = await qAssistLoad();
+      if (!alive || !st.uid || st.namedAt) return;
+      try { if (localStorage.getItem("q_assist_asked:" + st.uid)) return; } catch (_) {}
+      setVal(st.name || Q_ASSIST_DEFAULT); setShow(true);
+    }, 6000);
+    return () => { alive = false; clearTimeout(t); };
+  }, []);
+  if (!show) return null;
+  async function save(v) {
+    setBusy(true); setErr("");
+    try { await qAssistSave(v); setShow(false); qPop && qPop({ kind: "success", title: `Say hello to ${qAssistStore.name}`, message: "You can change the name any time in Settings." }); }
+    catch (e) { setErr(e.message || "Could not save the name."); }
+    finally { setBusy(false); }
+  }
+  function later() { try { localStorage.setItem("q_assist_asked:" + qAssistStore.uid, "1"); } catch (_) {} setShow(false); }
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 60, display: "grid", placeItems: "center", background: "rgba(2,6,23,.55)", padding: 16 }}>
+      <div className="qe-name-pop" role="dialog" aria-label="Name your AI assistant">
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          {ESTIMA_BADGE(64)}
+          <div><b style={{ fontSize: 18 }}>Name your AI assistant</b>
+            <div style={{ fontSize: 13, color: "#a5b4fc" }}>It answers about your drawings, BOQ and rules.</div></div>
+        </div>
+        <label style={{ display: "block", fontSize: 12.5, color: "#cbd5e1", margin: "16px 0 6px" }}>Assistant name</label>
+        <input value={val} maxLength={20} autoFocus onChange={e => setVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter") save(val); }} />
+        <div style={{ marginTop: 4 }}>
+          {Q_ASSIST_PICKS.map(n => (
+            <button key={n} type="button" onClick={() => setVal(n)} className={"qe-pick" + (qAssistClean(val) === n ? " on" : "")}>{n}</button>
+          ))}
+        </div>
+        {err && <div style={{ color: "#fda4af", fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 10 }}>You can change it any time in Settings.</div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16, flexWrap: "wrap" }}>
+          <button type="button" disabled={busy} onClick={() => save(Q_ASSIST_DEFAULT)} className="qe-pop-btn ghost">Keep "{Q_ASSIST_DEFAULT}"</button>
+          <button type="button" disabled={busy} onClick={() => save(val)} className="qe-pop-btn">{busy ? "Saving…" : "Save name"}</button>
+        </div>
+        <button type="button" onClick={later} style={{ marginTop: 10, background: "none", border: 0, color: "#64748b", fontSize: 12, cursor: "pointer" }}>Ask me later</button>
+      </div>
+    </div>
+  );
+}
 function EstimaDock({ currentProject }) {
+  const aName = useAssistantName();
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState(null);
   const [pid, setPid] = useState(currentProject?.id || "");
@@ -21507,18 +21629,18 @@ function EstimaDock({ currentProject }) {
   return (
     <React.Fragment>
       {open && (
-        <div className="qe-panel" role="dialog" aria-label="Estima AI">
+        <div className="qe-panel" role="dialog" aria-label={aName + " AI"}>
           <div className="qe-head">
             <div className="qe-av">{ESTIMA_ROBOT(46)}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="qe-name">Estima AI</div>
+              <div className="qe-name">{aName} <span style={{ fontWeight: 600, opacity: .7, fontSize: ".8em" }}>· AI Construction Assistant</span></div>
               <div className="qe-status"><i />Online · answers from your project's data</div>
             </div>
             <button className="qe-x" onClick={() => setOpen(false)} aria-label="Close">&times;</button>
           </div>
           <div className="qe-proj">
             {projects && projects.length === 0 ? (
-              <div className="qe-note">Estima answers questions about a project. Create a project first, then ask here.</div>
+              <div className="qe-note">{aName} answers questions about a project. Create a project first, then ask here.</div>
             ) : (
               <label>
                 <span>Project</span>
@@ -21534,7 +21656,7 @@ function EstimaDock({ currentProject }) {
             {proj && (
               <div className="qe-hello">
                 <div className="qe-hello-av">{ESTIMA_ROBOT(68)}</div>
-                <b>Hi, I'm Estima.</b>
+                <b>Hi, I'm {aName}.</b>
                 <span>Ask me anything about <em>{proj.project_name}</em>: quantities, specification, compliance or cost.</span>
                 {msgs.length === 0 && (
                   <div className="qe-chips">{ESTIMA_SUGGEST.map(t => <button key={t} onClick={() => ask(t)} disabled={busy}>{t}</button>)}</div>
@@ -21551,17 +21673,20 @@ function EstimaDock({ currentProject }) {
             <div ref={endRef} />
           </div>
           <form className="qe-form" onSubmit={e => { e.preventDefault(); ask(input); }}>
-            <input value={input} onChange={e => setInput(e.target.value)} disabled={!pid} placeholder="Ask Estima about this project…" />
+            <input value={input} onChange={e => setInput(e.target.value)} disabled={!pid} placeholder={`Ask ${aName} about this project…`} />
             <button disabled={busy || !pid || !input.trim()} aria-label="Send">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
             </button>
           </form>
         </div>
       )}
-      <button className={"qe-launch" + (open ? " on" : "")} onClick={() => setOpen(o => !o)} title="Ask Estima AI" aria-expanded={open}>
-        <span className="qe-ring">{ESTIMA_ROBOT(46)}<i className="qe-dot" /></span>
-        <span className="qe-txt"><b>{open ? "Close Estima" : "Ask Estima"}</b><small>AI assistant</small></span>
+      <button className={"qe-launch" + (open ? " on" : "")} onClick={() => setOpen(o => !o)} title={`Ask ${aName} — AI Construction Assistant`} aria-expanded={open}>
+        <span className="qe-ring">{ESTIMA_BADGE(54)}<i className="qe-dot" /></span>
+        <span className="qe-sep" />
+        <span className="qe-txt"><b>{open ? "Close" : "Ask"} <em>{aName}</em></b><small>AI Construction Assistant</small></span>
+        <svg className="qe-spark" width="12" height="12" viewBox="0 0 56 56" aria-hidden="true"><path d="M28 0C30 20 36 26 56 28 36 30 30 36 28 56 26 36 20 30 0 28 20 26 26 20 28 0Z" fill="#c4b5fd" /></svg>
       </button>
+      <AssistantNamePrompt />
     </React.Fragment>
   );
 }
@@ -27317,6 +27442,16 @@ function SettingsPage({ email, bare }) {
     finally { setBusy(""); }
   }
 
+  const aName = useAssistantName();
+  const [aVal, setAVal] = useState("");
+  useEffect(() => { setAVal(aName); }, [aName]);
+  async function saveAssistant(v) {
+    setBusy("assist"); setMsg(null);
+    try { const n = await qAssistSave(v); setMsg({ ok: true, text: `Your AI assistant is now called ${n}.` }); }
+    catch (e) { setMsg({ ok: false, text: e.message }); }
+    finally { setBusy(""); }
+  }
+
   async function savePassword() {
     setMsg(null);
     if (pw1.length < 8) { setMsg({ ok: false, text: "Use at least 8 characters." }); return; }
@@ -27362,6 +27497,29 @@ function SettingsPage({ email, bare }) {
       </div>
 
       <LocationSettingsCard />
+
+      <div className="qp-card">
+        <h4>AI assistant</h4>
+        <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+          {ESTIMA_BADGE(52)}
+          <div style={{ flex: "1 1 220px" }}>
+            <label className="text-xs font-semibold text-slate-600">Assistant name</label>
+            <input value={aVal} maxLength={20} onChange={e => setAVal(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm mt-1" placeholder={Q_ASSIST_DEFAULT} />
+          </div>
+        </div>
+        <p style={{ fontSize: 11.5, color: "var(--q-text-dimmer,#94a3b8)", margin: "8px 0 12px" }}>
+          Shown on the assistant button and in the chat. 2–20 letters, numbers or spaces. Only you see this name.
+        </p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button className="qp-btn pri" disabled={busy === "assist"} onClick={() => saveAssistant(aVal)}>
+            {busy === "assist" ? "Saving…" : "Save assistant name"}
+          </button>
+          <button className="qp-btn" disabled={busy === "assist" || aName === Q_ASSIST_DEFAULT} onClick={() => saveAssistant(Q_ASSIST_DEFAULT)}>
+            Reset to "{Q_ASSIST_DEFAULT}"
+          </button>
+        </div>
+      </div>
 
       <div className="qp-card">
         <h4>Change password</h4>
@@ -40773,6 +40931,24 @@ html:has(.qx),html:has(.qx) body{background:#f5f8fc !important}
 .qe-txt{display:flex;flex-direction:column;line-height:1.15}
 .qe-txt b{font-size:14px;font-weight:800;letter-spacing:.01em}
 .qe-txt small{font-size:11px;color:#a5b4fc;font-weight:600}
+/* 2026-11-09: glowing pill like the brand picture, with the person's own assistant name */
+.qe-launch{padding:5px 22px 5px 8px;border-width:2px;background:linear-gradient(180deg,#0e1640,#090f30) padding-box,linear-gradient(90deg,#38bdf8,#3b82f6 40%,#8b5cf6 75%,#c084fc) border-box;
+  box-shadow:0 0 18px rgba(59,130,246,.45),0 0 34px rgba(139,92,246,.3),0 12px 30px -8px rgba(0,0,0,.6)}
+.qe-launch:hover{box-shadow:0 0 24px rgba(59,130,246,.6),0 0 44px rgba(168,85,247,.45),0 14px 34px -8px rgba(0,0,0,.6)}
+.qe-launch .qe-ring{width:54px;height:54px;border-radius:999px}
+.qe-launch:not(.on) .qe-ring::after{border-radius:999px;inset:-2px;border-color:rgba(56,189,248,.45)}
+.qe-sep{width:1.5px;height:32px;border-radius:2px;background:linear-gradient(#3b82f6,#a855f7);box-shadow:0 0 6px #6366f1}
+.qe-launch .qe-txt b{font-size:16px}
+.qe-launch .qe-txt b em{font-style:normal;background:linear-gradient(90deg,#38bdf8,#60a5fa 35%,#a78bfa 70%,#c084fc);-webkit-background-clip:text;background-clip:text;color:transparent}
+.qe-launch .qe-txt small{color:#c7d2fe;font-weight:500}
+.qe-spark{position:absolute;right:12px;top:6px;filter:drop-shadow(0 0 4px #a78bfa)}
+.qe-name-pop{width:min(440px,100%);background:#0e1640;color:#e2e8f0;border:1px solid #6366f1;border-radius:18px;padding:22px;box-shadow:0 0 40px rgba(99,102,241,.35),0 30px 70px -10px rgba(0,0,0,.6)}
+.qe-name-pop input{width:100%;box-sizing:border-box;padding:11px 12px;border-radius:10px;border:1px solid #6366f1;background:#070d24;color:#fff;font-size:15px}
+.qe-pick{font-size:12.5px;padding:5px 11px;border-radius:99px;border:1px solid rgba(148,163,184,.4);margin:6px 6px 0 0;background:transparent;color:#e2e8f0;cursor:pointer}
+.qe-pick.on{background:#2563eb;border-color:#2563eb;color:#fff}
+.qe-pop-btn{padding:10px 18px;border-radius:10px;border:0;font-weight:800;font-size:14px;cursor:pointer;background:linear-gradient(90deg,#3b82f6,#8b5cf6);color:#fff}
+.qe-pop-btn.ghost{background:transparent;color:#cbd5e1;border:1px solid #475569}
+.qe-pop-btn:disabled{opacity:.6}
 .qe-eye{animation:qeBlink 5s infinite;transform-origin:center;transform-box:fill-box}
 @keyframes qePulse{0%{transform:scale(.92);opacity:.9}100%{transform:scale(1.28);opacity:0}}
 @keyframes qeBlink{0%,93%,100%{transform:scaleY(1)}96%{transform:scaleY(.15)}}
