@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.06"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.08"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -8389,7 +8389,7 @@ const PT_STAGE_ORDER = { priced: 0, taken_off: 1, drawings: 2, new: 3 };
 const qCoverCache = new Map();               // storage path -> { url, exp }
 const qCoverPaths = {};                       // project id -> path, after a change in this tab
 async function qCoverUrls(paths) {
-  const want = [...new Set(paths.filter(Boolean))];
+  const want = [...new Set(paths.filter(x => x && !qIsStd(x)))];
   const need = want.filter(x => !((qCoverCache.get(x) || {}).exp > Date.now()));
   if (need.length) {
     try {
@@ -8407,12 +8407,58 @@ function useProjectCovers(projects) {
   const key = (projects || []).map(p => p.id + ":" + (qCoverPathOf(p) || "")).join("|");
   useEffect(() => {
     let alive = true;
-    const paths = (projects || []).map(qCoverPathOf).filter(Boolean);
+    const paths = (projects || []).map(qCoverPathOf).filter(x => x && !qIsStd(x));
     if (!paths.length) { setUrls({}); return; }
     qCoverUrls(paths).then(u => { if (alive) setUrls(u); });
     return () => { alive = false; };
   }, [key, ver]);
-  return p => { const x = qCoverPathOf(p); return x ? urls[x] || null : null; };
+  return p => { const x = qCoverPathOf(p); return !x ? null : qIsStd(x) ? qStdCoverUrl(x) : (urls[x] || null); };
+}
+// Standard project pictures (2026-11-09). The glass towers are the standard for every project without
+// a photo; a user can instead pick one of the other standard pictures (saved as "std:<key>") or upload
+// their own photo.
+const Q_STD_COVERS = [
+  ["towers", "Glass towers (standard)", "/ws-art/project-default.jpg"],
+  ["tower",  "City tower",              "/ws-art/project-tower.jpg"],
+  ["corner", "Glass corner",            "/ws-art/project-glass-corner.jpg"],
+];
+function qDefaultCover() { return Q_STD_COVERS[0][2]; }
+function qStdCoverUrl(path) { const k = String(path || "").replace(/^std:/, ""); const f = Q_STD_COVERS.find(x => x[0] === k); return f ? f[2] : null; }
+const qIsStd = x => /^std:/.test(String(x || ""));
+// Small chooser: the standard pictures, or upload your own. Resolves {std:key} | {upload:true} | null.
+function qChooseCover(currentPath) {
+  return new Promise(resolve => {
+    const wrap = document.createElement("div");
+    wrap.setAttribute("role", "dialog"); wrap.setAttribute("aria-label", "Project picture");
+    wrap.style.cssText = "position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:rgba(2,6,23,.6);padding:16px";
+    const cur = qIsStd(currentPath) ? currentPath.slice(4) : (currentPath ? "" : "towers");
+    wrap.innerHTML = `<div style="width:min(620px,100%);background:#0e1640;color:#e6eaf7;border:1px solid #6366f1;border-radius:18px;padding:20px;box-shadow:0 30px 70px -10px rgba(0,0,0,.6);font-family:inherit">
+      <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:18px">Project picture</b><button data-x style="background:none;border:0;color:#94a3b8;font-size:22px;cursor:pointer">&times;</button></div>
+      <div style="font-size:13px;color:#a8b3dc;margin:4px 0 14px">Pick a standard picture, or upload a photo of your own project.</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">${Q_STD_COVERS.map(([k, l, u]) => `
+        <button data-std="${k}" style="padding:0;border-radius:12px;overflow:hidden;cursor:pointer;background:#070d24;color:#e6eaf7;text-align:left;border:2px solid ${k === cur ? "#8b5cf6" : "rgba(129,140,248,.25)"}">
+          <img src="${u}" alt="" style="display:block;width:100%;height:90px;object-fit:cover">
+          <span style="display:block;padding:7px 9px;font-size:12px;font-weight:700">${k === cur ? "✓ " : ""}${l}</span></button>`).join("")}</div>
+      <button data-up style="margin-top:14px;width:100%;padding:12px;border-radius:12px;border:1.5px dashed rgba(167,139,250,.7);background:rgba(99,102,241,.12);color:#c4b5fd;font-weight:800;font-size:14px;cursor:pointer">⤒ Upload your own photo (JPG, PNG or WebP)</button>
+    </div>`;
+    const done = v => { wrap.remove(); resolve(v); };
+    wrap.addEventListener("click", e => {
+      if (e.target === wrap || e.target.closest("[data-x]")) return done(null);
+      const b = e.target.closest("[data-std]"); if (b) return done({ std: b.getAttribute("data-std") });
+      if (e.target.closest("[data-up]")) return done({ upload: true });
+    });
+    document.addEventListener("keydown", function k(e) { if (e.key === "Escape") { document.removeEventListener("keydown", k); done(null); } });
+    document.body.appendChild(wrap);
+  });
+}
+async function qSetStdCover(project, key) {
+  const old = qCoverPathOf(project);
+  const path = key === "towers" ? null : "std:" + key;
+  const { error } = await sb.from("projects").update({ cover_path: path, cover_updated_at: new Date().toISOString() }).eq("id", project.id);
+  if (error) throw new Error(/row-level|policy|permission/i.test(error.message) ? "You don't have permission to change this project's picture." : error.message);
+  if (old && !qIsStd(old)) sb.storage.from("project-covers").remove([old]).catch(() => {});
+  qCoverPaths[project.id] = path; project.cover_path = path;
+  window.dispatchEvent(new CustomEvent("q-cover", { detail: { id: project.id, path } }));
 }
 function qPickImage() {
   return new Promise(res => {
@@ -8440,7 +8486,7 @@ async function qSetProjectCover(project, file) {
   if (up.error) throw new Error(/row-level|policy|permission|403/i.test(up.error.message) ? "You don't have permission to change this project's photo." : up.error.message);
   const { error } = await sb.from("projects").update({ cover_path: path, cover_updated_at: new Date().toISOString() }).eq("id", project.id);
   if (error) { sb.storage.from("project-covers").remove([path]).catch(() => {}); throw new Error(/row-level|policy|permission/i.test(error.message) ? "You don't have permission to change this project's photo." : error.message); }
-  if (old) sb.storage.from("project-covers").remove([old]).catch(() => {});
+  if (old && !qIsStd(old)) sb.storage.from("project-covers").remove([old]).catch(() => {});
   qCoverPaths[project.id] = path; project.cover_path = path;
   window.dispatchEvent(new CustomEvent("q-cover", { detail: { id: project.id, path } }));
 }
@@ -8448,7 +8494,7 @@ async function qRemoveProjectCover(project) {
   const old = qCoverPathOf(project);
   const { error } = await sb.from("projects").update({ cover_path: null, cover_updated_at: new Date().toISOString() }).eq("id", project.id);
   if (error) throw new Error(/row-level|policy|permission/i.test(error.message) ? "You don't have permission to change this project's photo." : error.message);
-  if (old) sb.storage.from("project-covers").remove([old]).catch(() => {});
+  if (old && !qIsStd(old)) sb.storage.from("project-covers").remove([old]).catch(() => {});
   qCoverPaths[project.id] = null; project.cover_path = null;
   window.dispatchEvent(new CustomEvent("q-cover", { detail: { id: project.id, path: null } }));
 }
@@ -8456,9 +8502,11 @@ function useCoverAction(project) {
   const [busy, setBusy] = useState(false);
   async function change(e) {
     if (e) { e.stopPropagation(); e.preventDefault(); }
-    const f = await qPickImage(); if (!f) return;
+    const pick = await qChooseCover(qCoverPathOf(project)); if (!pick) return;
+    let f = null;
+    if (pick.upload) { f = await qPickImage(); if (!f) return; }
     setBusy(true);
-    try { await qSetProjectCover(project, f); }
+    try { if (pick.std) await qSetStdCover(project, pick.std); else await qSetProjectCover(project, f); }
     catch (ex) { qPop({ kind: "error", title: "Photo not saved", message: ex.message || String(ex) }); }
     finally { setBusy(false); }
   }
@@ -8474,42 +8522,27 @@ function useCoverAction(project) {
 // Small picture in a projects list; "+ Photo" when there is none.
 function ProjectThumb({ project, url }) {
   const { busy, change } = useCoverAction(project);
-  if (url) return <span className="qnl-th"><img src={url} alt="" loading="lazy" /><button type="button" className="qnl-th-cam" title="Change photo" onClick={change}>{busy ? "…" : "📷"}</button></span>;
-  return <button type="button" className="qnl-th qnl-th-add" title="Add a project photo" onClick={change}>{busy ? "Saving…" : <>＋<br />Photo</>}</button>;
+  return <span className="qnl-th"><img src={url || qDefaultCover(project)} alt="" loading="lazy" />
+    <button type="button" className="qnl-th-cam" title="Change picture" onClick={change}>{busy ? "…" : "📷"}</button></span>;
 }
 // Big picture on a project card or the project page, with Change / Remove (or Add photo).
 function ProjectCover({ project, url, tall, children }) {
   const { busy, change, remove } = useCoverAction(project);
   return (
-    <div className={"qnl-cover" + (tall ? " tall" : "") + (url ? "" : " empty")} style={url ? { backgroundImage: `url("${url}")` } : null}>
-      {url ? (
-        <div className="qnl-cover-btns">
-          <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : "📷 Change photo"}</button>
-          {tall && <button type="button" onClick={remove} disabled={busy}>✕ Remove</button>}
-        </div>
-      ) : (
-        <div className="qnl-cover-add">
-          <span aria-hidden="true">🏙️</span>
-          <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : "⤒ Add photo"}</button>
-          {tall && <small>JPG, PNG or WebP. Resized and saved with the project.</small>}
-        </div>
-      )}
+    <div className={"qnl-cover" + (tall ? " tall" : "")} style={{ backgroundImage: `url("${url || qDefaultCover(project)}")` }}>
+      <div className="qnl-cover-btns">
+        <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : "📷 Change picture"}</button>
+        {tall && url && <button type="button" onClick={remove} disabled={busy} title="Back to the standard glass towers">✕ Remove</button>}
+      </div>
       {children}
     </div>
   );
 }
 
-// The project page: a cover banner when there is a photo; otherwise a small "Add project photo" button.
+// The project page: a cover banner with the own photo, or the standard picture.
 function ProjectPageCover({ project }) {
   const coverOf = useProjectCovers([project]);
-  const url = coverOf(project);
-  const { busy, change } = useCoverAction(project);
-  if (url) return <ProjectCover project={project} url={url} tall />;
-  return (
-    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
-      <button type="button" className="qnl-addphoto" onClick={change} disabled={busy}>{busy ? "Saving…" : "📷 Add project photo"}</button>
-    </div>
-  );
+  return <ProjectCover project={project} url={coverOf(project)} tall />;
 }
 
 function ProjectTable({ projects, metrics, onOpen, compact, limit, stageFilter }) {
@@ -8795,7 +8828,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
         {shownProjects.length > 0 && <div className="grp">Your projects</div>}
         {shownProjects.slice(0, 12).map(p => (
           <button key={`nav-${p.id}`} className="proj qnl-navproj" onClick={() => onOpenProject(p)} title={p.project_name}>
-            {coverOf(p) ? <img src={coverOf(p)} alt="" /> : <i aria-hidden="true" />}{p.project_name}
+            <img src={coverOf(p) || qDefaultCover(p)} alt="" />{p.project_name}
           </button>
         ))}
         {shownProjects.length > 12 && <div className="grp" style={{ paddingTop: 6 }}>+{shownProjects.length - 12} more below</div>}
@@ -41831,7 +41864,7 @@ html:root .qx .qnl-th-add{display:grid;place-items:center;text-align:center;font
   background:rgba(99,102,241,.12)!important;border:1.5px dashed rgba(167,139,250,.7)!important}
 html:root .qx .qnl-cover{position:relative;height:130px;margin:-16px -16px 12px;background:#14114a center/cover no-repeat;border-radius:18px 18px 0 0;overflow:hidden}
 html:root .qx .qnl-cover.tall{height:200px;margin:0 0 14px;border-radius:20px;border:1px solid rgba(129,140,248,.28)}
-html:root .qx .qnl-cover:not(.empty):after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 45%,rgba(6,10,31,.75));pointer-events:none}
+html:root .qx .qnl-cover:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 45%,rgba(6,10,31,.75));pointer-events:none}
 html:root .qx .qnl-cover.empty{background:linear-gradient(135deg,#1e1b6b,#0e1a5a)!important;display:grid;place-items:center}
 html:root .qx .qnl-cover-btns{position:absolute;right:10px;top:10px;z-index:2;display:flex;gap:8px}
 html:root .qx .qnl-cover-btns button{font-size:12px;font-weight:700;padding:6px 10px;border-radius:9px;color:#fff!important;background:rgba(6,10,31,.72)!important;border:1px solid rgba(255,255,255,.28)!important;cursor:pointer}
