@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.03"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.04"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -12859,6 +12859,37 @@ function OverviewTab({ project, onViewFloors }) {
 // ---------------------------------------------------------------------------
 // Drawings & AI Analysis tab
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Drawing status (2026-11-09). While a drawing is analysed the row shows a step tracker, a progress
+// bar with the time, and a short status; the project shows a summary with filters. The long
+// messages from the analysis are turned into a step and a percentage here.
+// ---------------------------------------------------------------------------
+const Q_DRAW_STEPS = ["Checking drawing", "Preparing sheet", "Legend & measuring", "Reading with AI", "Building BOQ"];
+function qDrawStage(msg) {
+  const m = String(msg || "");
+  const sh = m.match(/sheet (\d+) of (\d+)/i);
+  const i = sh ? Number(sh[1]) : 0, n = sh ? Number(sh[2]) : 0;
+  let step = 3, inner = 0.3;
+  let r;
+  if (/Checking drawing|Looking at the sheets/i.test(m)) { step = 0; inner = 0.5; }
+  else if ((r = m.match(/row (\d+)\/(\d+)/i))) { step = 1; inner = 0.6 * Number(r[1]) / Math.max(1, Number(r[2])); }
+  else if ((r = m.match(/Uploading (\d+)\/(\d+)/i))) { step = 1; inner = 0.6 + 0.4 * Number(r[1]) / Math.max(1, Number(r[2])); }
+  else if (/title block/i.test(m)) { step = 2; inner = 0.2; }
+  else if (/tray and conduit/i.test(m)) { step = 2; inner = 0.5; }
+  else if (/schedules/i.test(m)) { step = 2; inner = 0.8; }
+  else if (/All \d+ sheets sent/i.test(m)) { step = 4; inner = 0.2; }
+  else if (/Waiting for a sheet|server is busy/i.test(m)) { step = 3; inner = 0.1; }
+  let pct;
+  if (step === 0) pct = 3;
+  else if (step === 4) pct = 86;
+  else if (n) {
+    const per = step === 1 ? 0.4 * inner : step === 2 ? 0.4 + 0.3 * inner : 0.7 + 0.3 * inner;
+    pct = 5 + 80 * ((i - 1) + per) / n;
+  } else pct = step === 1 ? 6 + 30 * inner : step === 2 ? 38 + 20 * inner : 62;
+  return { step, pct: Math.round(Math.max(1, Math.min(97, pct))), sheet: i, of: n, keepOpen: /keep this tab open/i.test(m) };
+}
+function qSecsAgo(sec) { sec = Math.max(0, Math.round(sec)); return sec < 60 ? `${sec} s` : `${Math.floor(sec / 60)} min ${sec % 60} s`; }
+
 function DrawingsTab({ project }) {
   const [drawings, setDrawings] = useState([]);
   // No default (2026-09-03). This used to open on "architectural", and because
@@ -13177,6 +13208,62 @@ function DrawingsTab({ project }) {
   // workflow is exactly how a customer ends up with a security layout whose BOQ
   // contains no cameras at all.
   const [tiling, setTiling] = useState({});
+  const [statusFilter, setStatusFilter] = useState("all");
+  const startedRef = useRef({});                  // drawing id -> when this tab saw it start
+  const [tickNow, setTickNow] = useState(Date.now());
+  // Where each drawing is, in one place: used by the row, the project summary and the filters.
+  function drawStatus(d) {
+    const r0 = runs[d.id] && runs[d.id][0];
+    const sm = (r0 && r0.summary) || {};
+    const msg = tiling[d.id] || "";
+    const busy = !!(analyzing[d.id] || msg || (r0 && (r0.status === "processing" || r0.status === "pending")));
+    if (d.discipline === "specification") return { cat: "ref" };
+    if (busy) {
+      const t0 = startedRef.current[d.id] || (r0 && (r0.status === "processing" || r0.status === "pending") ? Date.parse(r0.created_at) : tickNow);
+      const el = Math.max(0, (tickNow - t0) / 1000);
+      const expect = r0 && r0.run_kind === "tiled" ? 200 : 120;
+      let st;
+      if (msg) {
+        st = qDrawStage(msg);
+        if (st.step < 3) st.keepOpen = true;
+        if (st.step === 3 && !st.of && !/Waiting|busy/i.test(msg)) st.pct = Math.round(Math.min(95, 62 + 33 * el / expect));   // one sheet being read: moves with the time
+      }
+      else if (sm.measuring) st = { step: 4, pct: 88, keepOpen: false };
+      else st = { step: 3, pct: Math.round(Math.min(95, 10 + 85 * el / expect)), keepOpen: false };
+      if (st.step === 4 && !sm.measuring) st.pct = Math.round(Math.min(97, st.pct + 10 * el / (expect * 3)));
+      return { cat: "running", busy: true, ...st, el, expect, detail: msg || (sm.measuring ? "Measuring the lines from the drawing…" : "The server is reading the drawing and counting…") };
+    }
+    const dj = d.file_type === "dwg" && !d.analysis_source_path ? dwgJobs[d.id] : null;
+    if (dj && (dj.status === "queued" || dj.status === "working")) return { cat: "running", dwg: true };
+    if (!r0) return { cat: "none" };
+    if (r0.status === "failed") return { cat: "failed", error: String(r0.error_message || "see details").replace(/\s+/g, " ") };
+    if (r0.status === "completed") return { cat: "done", count: Number(sm.item_count ?? 0) };
+    return { cat: "none" };
+  }
+  // remember when each drawing started on this tab; tick every second while one runs
+  const anyRowBusy = drawings.some(d => analyzing[d.id] || tiling[d.id] || (runs[d.id] && runs[d.id][0] && ["processing", "pending"].includes(runs[d.id][0].status)));
+  useEffect(() => {
+    for (const d of drawings) {
+      const b = analyzing[d.id] || tiling[d.id];
+      if (b && !startedRef.current[d.id]) startedRef.current[d.id] = Date.now();
+      if (!b && startedRef.current[d.id]) {
+        const r0 = runs[d.id] && runs[d.id][0];
+        if (!(r0 && ["processing", "pending"].includes(r0.status))) delete startedRef.current[d.id];
+      }
+    }
+  }, [analyzing, tiling, runs, drawings]);
+  useEffect(() => { if (!anyRowBusy) return; const t = setInterval(() => setTickNow(Date.now()), 1000); return () => clearInterval(t); }, [anyRowBusy]);
+  // the activity panel at the bottom of every page shows the same step and percentage
+  useEffect(() => {
+    for (const d of drawings) {
+      const msg = tiling[d.id];
+      if (msg) {
+        const st = qDrawStage(msg);
+        qActivity({ phase: "progress", id: "dw:" + d.id, label: "Take-off", sub: [project.project_name, d.file_name].filter(Boolean).join(" · "),
+          status: st.of ? `${Q_DRAW_STEPS[st.step]} · sheet ${st.sheet} of ${st.of}` : Q_DRAW_STEPS[st.step], pct: st.pct, steps: Q_DRAW_STEPS, step: st.step });
+      } else qActivity({ phase: "clear", id: "dw:" + d.id });
+    }
+  }, [tiling]);
   const [sheetCheck, setSheetCheck] = useState(null);   // the "choose the sheets" panel, open while it waits for the user
   const askSheets = (st) => new Promise(resolve => setSheetCheck({ ...st, resolve }));
   const [, setPendTick] = useState(0);   // a set that stopped part-way shows "Send the rest"
@@ -13623,9 +13710,41 @@ function DrawingsTab({ project }) {
         </div>
       </div>
 
+      {drawings.length > 0 && (() => {
+        const cats = drawings.map(drawStatus).filter(x => x.cat !== "ref");
+        const n = c => cats.filter(x => x.cat === c).length;
+        const items = [["all", "All", cats.length, "#94a3b8"], ["running", "Analysing", n("running"), "#3b82f6"], ["done", "Done", n("done"), "#10b981"],
+          ["failed", "Failed", n("failed"), "#f43f5e"], ["none", "Not analysed", n("none"), "#94a3b8"]];
+        return (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", padding: "10px 14px", borderRadius: 12, marginBottom: 8, fontSize: 13.5,
+              background: n("running") ? "rgba(59,130,246,.12)" : "rgba(148,163,184,.08)", border: "1px solid " + (n("running") ? "rgba(59,130,246,.45)" : "rgba(148,163,184,.3)") }}>
+              <b>This project:</b>
+              {items.slice(1).map(([k, label, c, col]) => (
+                <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span className={k === "running" && c ? "animate-pulse" : ""} style={{ width: 10, height: 10, borderRadius: 99, background: col }} />{c} {label.toLowerCase()}
+                </span>
+              ))}
+              {n("running") > 0 && <span style={{ marginLeft: "auto", fontSize: 12.5, opacity: .75 }}>We will tell you when the BOQ is ready</span>}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {items.map(([k, label, c]) => (
+                <button key={k} type="button" onClick={() => setStatusFilter(k)}
+                  style={{ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                    border: "1px solid " + (statusFilter === k ? "#2563eb" : "rgba(148,163,184,.4)"), background: statusFilter === k ? "#2563eb" : "transparent", color: statusFilter === k ? "#fff" : "inherit" }}>
+                  {label} {c}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
       <div className="bg-white border rounded-xl divide-y">
         {drawings.length === 0 && <div className="p-6 text-center text-slate-400 text-sm">No drawings uploaded yet.</div>}
-        {drawings.map(d => (
+        {drawings.length > 0 && statusFilter !== "all" && !drawings.some(d => drawStatus(d).cat === statusFilter) && (
+          <div className="p-6 text-center text-slate-400 text-sm">No drawings here. <button type="button" onClick={() => setStatusFilter("all")} className="text-blue-600 font-semibold">Show all</button></div>
+        )}
+        {drawings.filter(d => statusFilter === "all" || drawStatus(d).cat === statusFilter).map(d => (
           <div key={d.id} className="p-4">
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-start gap-2">
@@ -13692,18 +13811,19 @@ function DrawingsTab({ project }) {
               {(() => {
                 const r0 = runs[d.id] && runs[d.id][0];
                 const sm = (r0 && r0.summary) || {};
-                const busy = analyzing[d.id] || tiling[d.id] || (r0 && r0.status === "processing");
+                const ds = drawStatus(d);
+                const busy = !!ds.busy;
                 const dj = d.file_type === "dwg" && !d.analysis_source_path ? dwgJobs[d.id] : null;
-                const [txt, col, bg] = busy ? [tiling[d.id] || (sm.measuring ? "Measuring…" : "Analysing…"), "#3b82f6", "rgba(59,130,246,.16)"]
+                const [txt, col, bg] = busy ? [`● Analysing · ${ds.pct}%`, "#3b82f6", "rgba(59,130,246,.16)"]
                   : dj && (dj.status === "queued" || dj.status === "working") ? ["Preparing your DWG…", "#3b82f6", "rgba(59,130,246,.16)"]
                   : dj && dj.status === "failed" ? ["DWG needs a PDF copy", "#f59e0b", "rgba(245,158,11,.16)"]
                   : !r0 ? ["Not analysed yet", "#94a3b8", "rgba(148,163,184,.16)"]
-                  : r0.status === "failed" ? ["Failed: see details", "#f43f5e", "rgba(244,63,94,.16)"]
-                  : r0.status === "completed" ? [`Done · ${Number(sm.item_count ?? 0)} BOQ lines`, "#10b981", "rgba(16,185,129,.16)"]
+                  : r0.status === "failed" ? ["✗ Failed: " + (String(ds.error || "see details").length > 48 ? String(ds.error).slice(0, 46) + "…" : String(ds.error || "see details")), "#f43f5e", "rgba(244,63,94,.16)"]
+                  : r0.status === "completed" ? [`✓ Done · ${Number(sm.item_count ?? 0)} BOQ lines`, "#10b981", "rgba(16,185,129,.16)"]
                   : [r0.status, "#94a3b8", "rgba(148,163,184,.16)"];
                 return (
                   <div style={{ minWidth: 190, display: "grid", gap: 4, justifyItems: "start" }}>
-                    <span className={busy || (dj && dj.status !== "failed") ? "animate-pulse" : ""} style={{ fontSize: 12, fontWeight: 700, color: col, background: bg, border: "1px solid " + col, padding: "4px 10px", borderRadius: 999 }}>{txt}</span>
+                    <span className={dj && dj.status !== "failed" ? "animate-pulse" : ""} title={ds.cat === "failed" ? ds.error : undefined} style={{ fontSize: 12, fontWeight: 700, color: col, background: bg, border: "1px solid " + col, padding: "4px 10px", borderRadius: 999, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{txt}</span>
                     {dj && dj.status !== "failed" && <span style={{ fontSize: 11, color: "#94a3b8" }}>Usually 1–3 minutes. You can leave this page.</span>}
                     {dj && dj.status === "failed" && <span style={{ fontSize: 11, color: "#94a3b8", maxWidth: 260 }}>This DWG could not be opened. In AutoCAD use Plot → PDF and attach it here.</span>}
                     {runs[d.id] && (
@@ -13736,13 +13856,13 @@ function DrawingsTab({ project }) {
                 })()}
                 {canAnalyze(d) ? (
                   <>
-                    <button onClick={()=>analyzeAuto(d)} disabled={anyAiCallInFlight || !!tiling[d.id]}
+                    <button onClick={()=>analyzeAuto(d)} disabled={anyAiCallInFlight || !!tiling[d.id] || !!drawStatus(d).busy}
                       title={anyAiCallInFlight && !analyzing[d.id] && !tiling[d.id]
                         ? "Another AI analysis is already running -- please wait for it to finish first"
                         : "Quantora measures the sheet and reads it at whatever resolution its symbols need."}
                       className={`text-white text-xs font-bold px-4 py-2 rounded-lg disabled:opacity-50 ${!runs[d.id] && !tiling[d.id] && !analyzing[d.id] ? "ring-2 ring-offset-2 ring-blue-500" : ""}`}
-                      style={{ background: runs[d.id] ? "#334155" : "#2563eb" }}>
-                      {tiling[d.id] || (analyzing[d.id] ? "Analyzing with AI…" : (runs[d.id] ? "Re-analyze" : "Analyze with AI"))}
+                      style={{ background: runs[d.id] && runs[d.id][0].status === "failed" && !tiling[d.id] && !analyzing[d.id] ? "#e11d48" : runs[d.id] ? "#334155" : "#2563eb" }}>
+                      {drawStatus(d).busy ? "Analysing…" : !runs[d.id] ? "Analyze with AI" : runs[d.id][0].status === "failed" ? "Try again" : "Re-analyze"}
                     </button>
 
                   </>
@@ -13782,6 +13902,37 @@ function DrawingsTab({ project }) {
                 )}
               </div>
             </div>
+            {(() => {
+              const ds = drawStatus(d);
+              if (!ds.busy) return null;
+              const mins = ds.of > 1 ? `usually ${Math.max(3, ds.of * 2)}–${Math.max(5, ds.of * 3)} minutes` : ds.expect > 150 ? "usually 3–5 minutes" : "usually 1–3 minutes";
+              return (
+                <div style={{ marginTop: 12, padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(59,130,246,.55)", background: "rgba(59,130,246,.07)" }}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {Q_DRAW_STEPS.map((name, i) => {
+                      const done = i < ds.step, cur = i === ds.step;
+                      return (
+                        <div key={name} style={{ flex: "1 1 110px", fontSize: 11.5, padding: "6px 8px", borderRadius: 8, textAlign: "center", fontWeight: cur ? 800 : 600,
+                          background: done ? "rgba(16,185,129,.15)" : cur ? "rgba(59,130,246,.25)" : "rgba(148,163,184,.1)",
+                          color: done ? "#059669" : cur ? "#2563eb" : "#94a3b8", outline: cur ? "1px solid #3b82f6" : "none" }}>
+                          {done ? "✓ " : `${i + 1} `}{name}{cur && ds.of ? ` · ${ds.sheet} of ${ds.of}` : ""}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ height: 8, borderRadius: 99, background: "rgba(148,163,184,.22)", overflow: "hidden", marginTop: 10 }}>
+                    <div style={{ height: "100%", width: ds.pct + "%", borderRadius: 99, background: "linear-gradient(90deg,#3b82f6,#22d3ee)", transition: "width .8s ease" }} />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", fontSize: 12, marginTop: 6 }}>
+                    <span style={{ color: "#64748b" }}>{ds.pct}% · started {qSecsAgo(ds.el)} ago · {mins}</span>
+                    <span style={{ color: ds.keepOpen ? "#d97706" : "#64748b", fontWeight: ds.keepOpen ? 700 : 500 }}>
+                      {ds.keepOpen ? (ds.of > 1 ? "Keep this tab open until every sheet is sent" : "Keep this tab open until the drawing is sent") : "You can carry on working — we will tell you when it is ready"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 4 }}>{ds.detail.replace(/\s*keep this tab open[^.]*\.?/i, "").replace(/…\s*$/, "…")}</div>
+                </div>
+              );
+            })()}
             {d.page_count > 1 && !runs[d.id] && !tiling[d.id] && (() => {
               const n = d.page_count, can = allow ? allow.total : null, over = can != null && can < n;
               return (
@@ -27913,6 +28064,12 @@ function ActivityCenter({ onOpenProject }) {
         pushError({ key: d.id, title: `${d.label || "Request"} could not start`, message: d.message || "Something went wrong." });
       } else if (d.phase === "refresh") {
         setOpen(true); poll();
+      } else if (d.phase === "progress") {
+        // a drawing being prepared in this tab (2026-11-09): its real step and percentage
+        setLocal(l => ({ ...l, [d.id]: { ...(l[d.id] || { started: Date.now() }), key: d.id, label: d.label, sub: d.sub || "", status: d.status || "",
+          state: "active", expect: 3600, pct: d.pct, steps: d.steps, step: d.step, keep: true } }));
+      } else if (d.phase === "clear") {
+        setLocal(l => { if (!l[d.id]) return l; const n = { ...l }; delete n[d.id]; return n; });
       } else if (d.phase === "toast") {
         pushToast({ key: d.id, title: d.label, sub: d.message || "" });
       }
@@ -27994,6 +28151,7 @@ function ActivityCenter({ onOpenProject }) {
       // a placeholder whose run is now visible from the server is no longer needed
       // and a placeholder the server never turned into a visible run (a quick action) is cleared after a while
       setLocal(l => { const n = { ...l }; for (const k of Object.keys(n)) {
+        if (n[k].keep) continue;   // a drawing's own progress: cleared by the drawing when it ends
         if ((n[k].runId && items.some(i => i.id === n[k].runId)) || Date.now() - n[k].started > Math.max(180, 3 * (n[k].expect || 60)) * 1000) delete n[k];
       } return n; });
     } catch (_) { /* never let the status panel break the page */ }
@@ -28024,7 +28182,7 @@ function ActivityCenter({ onOpenProject }) {
 
   const Row = ({ it }) => {
     const el = ((it.ended || now) - (it.started || now)) / 1000;
-    const pct = it.state === "active" ? (it.queued ? 4 : Math.min(94, Math.max(6, (el / (it.expect || 60)) * 100))) : 100;
+    const pct = it.state === "active" ? (it.pct != null ? it.pct : it.queued ? 4 : Math.min(94, Math.max(6, (el / (it.expect || 60)) * 100))) : 100;
     const col = it.state === "failed" ? "#f43f5e" : it.state === "done" ? "#10b981" : "#3b82f6";
     return (
       <div style={{ minWidth: 0, padding: "10px 12px", borderRadius: 12, background: "rgba(255,255,255,.04)", border: "1px solid rgba(148,163,184,.18)" }}>
@@ -28035,7 +28193,7 @@ function ActivityCenter({ onOpenProject }) {
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
               <b style={{ fontSize: 13 }}>{it.label}</b>
-              <span style={{ fontSize: 11.5, opacity: .7, fontVariantNumeric: "tabular-nums" }}>{it.state === "active" && !it.queued ? qMmSs(el) : ""}</span>
+              <span style={{ fontSize: 11.5, opacity: .7, fontVariantNumeric: "tabular-nums" }}>{it.state === "active" && !it.queued ? (it.pct != null ? `${it.pct}% · ` : "") + qMmSs(el) : ""}</span>
             </div>
             {it.sub && <div style={{ fontSize: 11.5, opacity: .65, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.sub}</div>}
             <div style={{ fontSize: 12, marginTop: 2, color: it.state === "failed" ? "#fda4af" : it.state === "done" ? "#6ee7b7" : "#bfdbfe" }}>{it.status}</div>
