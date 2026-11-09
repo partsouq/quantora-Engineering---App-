@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -23074,6 +23074,7 @@ const QADMIN_NAV = [
   { group: "Business", key: "online", label: "Online Users", sub: "Everyone using Quantora right now — start a live chat with one click" },
   { group: "Business", key: "visitors", label: "Website Visitors", sub: "New people visiting the website: how many, which pages, where they came from" },
   { group: "Business", key: "banners", label: "Home Banners", sub: "Offers and news shown on customers' Home page: picture, text, button, who sees it and when" },
+  { group: "Business", key: "email", label: "Email Center", sub: "Welcome Pack emails, customer updates and leads: send to all, to selected, or one by one" },
   { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
   { group: "Business", key: "discounts", label: "Discounts", sub: "Discount codes and hand-granted plans" },
   { group: "Business", key: "payments", label: "Payments", sub: "Dodo Payments readiness, paying customers and latest payments" },
@@ -23107,6 +23108,7 @@ const Q_STAFF_SECTIONS = [
   { group: "Business", key: "online",      act: false, label: "Online Users",        does: "" },
   { group: "Business", key: "visitors",    act: false, label: "Website Visitors",    does: "" },
   { group: "Business", key: "banners",     act: true,  label: "Home Banners",        does: "Create, change and switch off banners" },
+  { group: "Business", key: "email",       act: true,  label: "Email Center",        does: "Send emails, add and import leads" },
   { group: "Business", key: "revenue",     act: false, label: "Revenue & Plans",     does: "" },
   { group: "Business", key: "discounts",   act: false, label: "Discounts",           does: "" },
   { group: "Business", key: "payments",    act: false, label: "Payments",            does: "" },
@@ -24067,6 +24069,9 @@ function AdminPortal({ onBack, staffPerms }) {
             {activeView === "online" && (
               <QOnlineUsersView canChat={lvl("livechat") >= 2}
                 onChat={(ticketId) => { try { window.__qAdminWantTicket = ticketId; } catch (_) {} setActiveView("livechat"); }} />
+            )}
+            {activeView === "email" && (
+              <QEmailCenterView />
             )}
             {activeView === "banners" && (
               <QHomeBannersView />
@@ -29215,6 +29220,339 @@ function qVisitPage(p) {
   return x.replace(/^\//, "").replace(/\.html$/, "").replace(/-/g, " ");
 }
 // ---------------------------------------------------------------------------
+// Admin → Email Center (2026-11-09). Welcome Pack series, customer updates and leads. Sending is done
+// by the email-center function (Resend for customers, the info@ Zoho mailbox for leads).
+// ---------------------------------------------------------------------------
+async function callEmail(action, payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/email-center`, { method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action, ...(payload || {}) }) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || "Email Center request failed");
+  return j;
+}
+const Q_WELCOME_STAGES = ["Day 2", "Day 4", "Day 7", "Day 10", "Day 15", "Month 1", "Month 2", "Month 3", "Month 6"];
+const Q_PROGRESS = { no_project: ["No project yet", "#fcd34d", "rgba(245,158,11,.2)"], no_drawing: ["Project, no drawing", "#93c5fd", "rgba(59,130,246,.2)"],
+  no_boq: ["Drawing, no BOQ", "#c4b5fd", "rgba(139,92,246,.2)"], boq_done: ["BOQ done", "#6ee7b7", "rgba(16,185,129,.2)"] };
+const Q_LEAD_TRADES = ["MEP contractor", "ELV / low-current", "Electrical", "HVAC", "BMS", "Fire & safety", "Manufacturer / supplier", "Estimation / QS firm"];
+const Q_EMAIL_BANNERS = [["", "Standard banner"], ["https://quantoraengineering.com/ws-art/project-default.jpg", "Blue towers"], ["https://quantoraengineering.com/ws-art/estima-3d.jpg", "3D building"], ["https://quantoraengineering.com/ws-art/city-blue.jpg", "Blue city"]];
+const qAgoDays = t => { const d = Math.floor((Date.now() - Date.parse(t)) / 864e5); return d <= 0 ? "Today" : d === 1 ? "Yesterday" : `${d} days ago`; };
+function QEmailPreview({ html, subject, onClose }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(2,6,23,.65)", display: "grid", placeItems: "center", padding: 16 }} onClick={onClose}>
+      <div style={{ width: "min(680px,100%)", height: "min(86vh,900px)", background: "#fff", borderRadius: 14, overflow: "hidden", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: "10px 14px", background: "#0f172a", color: "#fff", display: "flex", gap: 10, alignItems: "center" }}><b style={{ fontSize: 13 }}>Subject: {subject}</b><button type="button" onClick={onClose} style={{ marginLeft: "auto", background: "none", border: 0, color: "#fff", fontSize: 20, cursor: "pointer" }}>&times;</button></div>
+        <iframe title="Email preview" srcDoc={html} style={{ flex: 1, border: 0, width: "100%" }} />
+      </div>
+    </div>
+  );
+}
+function QStageBoxes({ items, value, onPick }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit,minmax(104px,1fr))`, gap: 8, marginBottom: 12 }}>
+      {items.map(([k, label, n]) => (
+        <button key={k} type="button" onClick={() => onPick(k)} style={{ padding: "10px 6px", borderRadius: 12, cursor: "pointer", color: "inherit", textAlign: "center",
+          border: "1px solid " + (value === k ? "#8b5cf6" : "rgba(129,140,248,.25)"), background: value === k ? "linear-gradient(160deg,rgba(79,70,229,.6),rgba(124,58,237,.4))" : "rgba(255,255,255,.03)" }}>
+          <b style={{ display: "block", fontSize: 20 }}>{n}</b><span style={{ fontSize: 12 }}>{label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+function QSendBar({ title, note, selected, total, busy, onPreview, onSelected, onAll, extra }) {
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "4px 0 10px" }}>
+      <b style={{ fontSize: 14 }}>{title}</b>{note && <span style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)" }}>{note}</span>}
+      <span style={{ marginLeft: "auto" }} />
+      {extra}
+      {onPreview && <button type="button" className="qp-btn" onClick={onPreview}>👁 Preview</button>}
+      <button type="button" className="qp-btn" disabled={busy || !selected} onClick={onSelected}>Send to {selected} selected</button>
+      <button type="button" className="qp-btn pri" disabled={busy || !total} onClick={onAll}>{busy ? "Sending…" : `✉ Send to all ${total}`}</button>
+    </div>
+  );
+}
+function QEmailCenterView() {
+  const [tab, setTab] = useState("welcome");
+  const [st, setSt] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const loadStatus = () => callEmail("status").then(setSt).catch(e => setMsg({ ok: false, text: e.message }));
+  useEffect(() => { loadStatus(); }, []);
+  const report = r => {
+    const parts = [`${r.sent} sent`]; if (r.failed) parts.push(`${r.failed} failed`); if (r.skipped) parts.push(`${r.skipped} skipped`);
+    setMsg({ ok: !r.failed, text: parts.join(" · ") + (r.errors && r.errors.length ? ` — ${r.errors[0]}` : "") }); loadStatus();
+  };
+  const tabs = [["welcome", "Welcome Pack"], ["updates", "Customer Updates"], ["leads", "Leads"], ["log", "Sent log"]];
+  return (
+    <>
+      <div className="card panel" style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 12.5, marginBottom: 12 }}>
+        <span>Customers (Resend): {st ? (st.resend ? <b style={{ color: "#6ee7b7" }}>connected</b> : <b style={{ color: "#fcd34d" }}>not connected — add RESEND_API_KEY in Supabase</b>) : "…"} {st && `· ${st.resend_today}/${st.cap_customers} today`}</span>
+        <span>Leads (Zoho info@): {st ? (st.zoho ? <b style={{ color: "#6ee7b7" }}>connected</b> : <b style={{ color: "#fcd34d" }}>not connected — add ZOHO_SMTP_PASS in Supabase</b>) : "…"} {st && `· ${st.zoho_today}/${st.cap_leads} today`}</span>
+        <span style={{ marginLeft: "auto", color: "var(--text-dim,#94a3b8)" }}>Replies go to info@quantoraengineering.com</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        {tabs.map(([k, l]) => <button key={k} type="button" onClick={() => { setTab(k); setMsg(null); }} className={"qp-btn" + (tab === k ? " pri" : "")}>{l}</button>)}
+      </div>
+      {msg && <div className="card panel" style={{ marginBottom: 12, fontSize: 13, color: msg.ok ? "#6ee7b7" : "#fca5a5" }}>{msg.text}</div>}
+      {tab === "welcome" && <QEmailWelcome onDone={report} setMsg={setMsg} />}
+      {tab === "updates" && <QEmailUpdates onDone={report} setMsg={setMsg} />}
+      {tab === "leads" && <QEmailLeads onDone={report} setMsg={setMsg} />}
+      {tab === "log" && <QEmailLog />}
+    </>
+  );
+}
+function useChecks() {
+  const [sel, setSel] = useState({});
+  const ids = Object.keys(sel).filter(k => sel[k]);
+  return { sel, ids, toggle: id => setSel(s => ({ ...s, [id]: !s[id] })), setAll: (list, on) => setSel(on ? Object.fromEntries(list.map(x => [x, true])) : {}), clear: () => setSel({}) };
+}
+const qTh = { textAlign: "left", fontSize: 11, letterSpacing: ".06em", color: "var(--text-dimmer,#8391c6)", padding: "8px", fontWeight: 600 };
+const qTd = { padding: "9px 8px", borderTop: "1px solid var(--border-soft,#1e293b)", fontSize: 13, verticalAlign: "middle" };
+function QEmailWelcome({ onDone, setMsg }) {
+  const [rows, setRows] = useState(null);
+  const [stage, setStage] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [pv, setPv] = useState(null);
+  const ck = useChecks();
+  const load = () => sb.rpc("q_email_welcome_due").then(({ data, error }) => { if (error) setMsg({ ok: false, text: error.message }); setRows(data || []); });
+  useEffect(() => { load(); }, []);
+  const shown = (rows || []).filter(r => r.stage === stage);
+  async function send(ids) {
+    if (!ids.length) return; setBusy(true);
+    try { onDone(await callEmail("send_welcome", { user_ids: ids })); ck.clear(); await load(); } catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(false); }
+  }
+  const progressOf = (shown[0] && shown[0].progress) || "no_project";
+  return (
+    <div className="card panel">
+      <QStageBoxes value={stage} onPick={v => { setStage(v); ck.clear(); }} items={Q_WELCOME_STAGES.map((l, i) => [i, l, (rows || []).filter(r => r.stage === i).length])} />
+      <QSendBar title={`${Q_WELCOME_STAGES[stage]} email`} note="· only people who have not had it yet; each gets the next step that fits their progress" busy={busy}
+        selected={ck.ids.length} total={shown.length}
+        onPreview={() => callEmail("preview", { kind: "welcome", stage, progress: progressOf }).then(setPv).catch(e => setMsg({ ok: false, text: e.message }))}
+        onSelected={() => send(ck.ids)} onAll={() => send(shown.map(r => r.user_id))} />
+      {rows === null ? <div style={{ fontSize: 13 }}>Loading…</div> : shown.length === 0 ? <div style={{ fontSize: 13, color: "var(--text-dimmer,#64748b)" }}>Nobody is due for this email right now.</div> : (
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={qTh}><input type="checkbox" checked={ck.ids.length === shown.length} onChange={e => ck.setAll(shown.map(r => r.user_id), e.target.checked)} /></th>
+            <th style={qTh}>NAME</th><th style={qTh}>EMAIL</th><th style={qTh}>COUNTRY</th><th style={qTh}>SIGNED UP</th><th style={qTh}>PROGRESS</th><th style={qTh}>LAST EMAIL</th><th style={qTh}></th></tr></thead>
+          <tbody>{shown.map(r => { const [pl, pc, pb] = Q_PROGRESS[r.progress] || Q_PROGRESS.no_project; return (
+            <tr key={r.user_id}>
+              <td style={qTd}><input type="checkbox" checked={!!ck.sel[r.user_id]} onChange={() => ck.toggle(r.user_id)} /></td>
+              <td style={qTd}>{r.name || "—"}</td><td style={qTd}>{r.email}</td><td style={qTd}>{r.country || "—"}</td><td style={qTd}>{qAgoDays(r.signed_up)}</td>
+              <td style={qTd}><span style={{ fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 99, color: pc, background: pb }}>{pl}</span></td>
+              <td style={qTd}>{r.last_sent ? qAgoDays(r.last_sent) : "—"}</td>
+              <td style={qTd}><button type="button" className="qp-btn" disabled={busy} onClick={() => send([r.user_id])}>✉ Send</button></td>
+            </tr>); })}</tbody></table></div>
+      )}
+      <div style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)", marginTop: 10 }}>After sending, each person leaves this list and comes back at the next stage when it is due. Missed days stay here until sent. Unsubscribed people never appear.</div>
+      {pv && <QEmailPreview {...pv} onClose={() => setPv(null)} />}
+    </div>
+  );
+}
+function QEmailUpdates({ onDone, setMsg }) {
+  const [list, setList] = useState(null);
+  const [pick, setPick] = useState(null);
+  const [rcp, setRcp] = useState(null);
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [pv, setPv] = useState(null);
+  const ck = useChecks();
+  const load = () => sb.from("email_campaigns").select("*").order("created_at", { ascending: false }).then(({ data }) => setList(data || []));
+  useEffect(() => { load(); }, []);
+  const loadRcp = id => { setRcp(null); callEmail("updates_list", { campaign_id: id }).then(r => setRcp(r.recipients || [])).catch(e => setMsg({ ok: false, text: e.message })); };
+  useEffect(() => { if (pick) loadRcp(pick); }, [pick]);
+  async function saveForm() {
+    if (!String(form.subject || "").trim()) { setMsg({ ok: false, text: "Please write a subject." }); return; }
+    const { data, error } = await sb.from("email_campaigns").insert({ subject: form.subject.trim(), headline: form.headline || null, body: form.body || null,
+      button_text: form.button_text || null, button_url: form.button_url || null, banner: form.banner || null }).select().single();
+    if (error) { setMsg({ ok: false, text: error.message }); return; }
+    setForm(null); await load(); setPick(data.id);
+  }
+  async function send(ids) {
+    if (!ids.length) return; setBusy(true);
+    try { onDone(await callEmail("send_update", { campaign_id: pick, user_ids: ids })); ck.clear(); loadRcp(pick); } catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(false); }
+  }
+  const inp = { width: "100%", padding: "9px 11px", borderRadius: 10, border: "1px solid var(--border-soft,#334155)", background: "var(--q-surface-2,#0b1433)", color: "inherit", fontSize: 13.5, marginTop: 4 };
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(240px,320px) minmax(0,1fr)", gap: 14, alignItems: "start" }}>
+      <div className="card panel">
+        <div style={{ display: "flex", alignItems: "center" }}><b style={{ fontSize: 14 }}>Updates</b><button type="button" className="qp-btn pri" style={{ marginLeft: "auto" }} onClick={() => setForm({ subject: "", headline: "", body: "", button_text: "Open Quantora", button_url: "https://quantoraengineering.com", banner: "" })}>＋ New update</button></div>
+        {(list || []).map(c => (
+          <button key={c.id} type="button" onClick={() => { setPick(c.id); setForm(null); ck.clear(); }} style={{ display: "block", width: "100%", textAlign: "left", marginTop: 8, padding: "10px 12px", borderRadius: 10, cursor: "pointer", color: "inherit",
+            border: "1px solid " + (pick === c.id ? "#8b5cf6" : "rgba(129,140,248,.2)"), background: pick === c.id ? "rgba(99,102,241,.15)" : "transparent" }}>
+            <b style={{ fontSize: 13 }}>{c.subject}</b><div style={{ fontSize: 11.5, color: "var(--text-dim,#94a3b8)" }}>{new Date(c.created_at).toLocaleDateString("en-GB")}</div></button>
+        ))}
+        {list && list.length === 0 && <div style={{ fontSize: 12.5, color: "var(--text-dimmer,#64748b)", marginTop: 10 }}>No updates yet. Create one, then send it to all customers or to selected ones.</div>}
+      </div>
+      <div className="card panel">
+        {form ? (
+          <>
+            <b style={{ fontSize: 14 }}>New update</b>
+            <label style={{ display: "block", fontSize: 12, marginTop: 10 }}>Subject<input style={inp} value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} /></label>
+            <label style={{ display: "block", fontSize: 12, marginTop: 10 }}>Headline<input style={inp} value={form.headline} onChange={e => setForm(f => ({ ...f, headline: e.target.value }))} /></label>
+            <label style={{ display: "block", fontSize: 12, marginTop: 10 }}>Text (leave an empty line between paragraphs)<textarea style={{ ...inp, minHeight: 110 }} value={form.body} onChange={e => setForm(f => ({ ...f, body: e.target.value }))} /></label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <label style={{ display: "block", fontSize: 12, marginTop: 10 }}>Button text<input style={inp} value={form.button_text} onChange={e => setForm(f => ({ ...f, button_text: e.target.value }))} /></label>
+              <label style={{ display: "block", fontSize: 12, marginTop: 10 }}>Button link<input style={inp} value={form.button_url} onChange={e => setForm(f => ({ ...f, button_url: e.target.value }))} /></label>
+            </div>
+            <label style={{ display: "block", fontSize: 12, marginTop: 10 }}>Banner<select style={inp} value={form.banner} onChange={e => setForm(f => ({ ...f, banner: e.target.value }))}>{Q_EMAIL_BANNERS.map(([v, l]) => <option key={l} value={v}>{l}</option>)}</select></label>
+            <div style={{ display: "flex", gap: 10, marginTop: 14 }}><button type="button" className="qp-btn pri" onClick={saveForm}>Save update</button><button type="button" className="qp-btn" onClick={() => setForm(null)}>Cancel</button></div>
+          </>
+        ) : !pick ? <div style={{ fontSize: 13, color: "var(--text-dimmer,#64748b)" }}>Choose an update on the left, or create a new one.</div> : (
+          <>
+            <QSendBar title="Customers who have not had this update" busy={busy} selected={ck.ids.length} total={(rcp || []).length}
+              onPreview={() => callEmail("preview", { kind: "update", campaign_id: pick }).then(setPv).catch(e => setMsg({ ok: false, text: e.message }))}
+              onSelected={() => send(ck.ids)} onAll={() => send((rcp || []).map(r => r.user_id))} />
+            {rcp === null ? <div style={{ fontSize: 13 }}>Loading…</div> : rcp.length === 0 ? <div style={{ fontSize: 13, color: "var(--text-dimmer,#64748b)" }}>Everyone has had this update.</div> : (
+              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={qTh}><input type="checkbox" checked={ck.ids.length === rcp.length} onChange={e => ck.setAll(rcp.map(r => r.user_id), e.target.checked)} /></th><th style={qTh}>NAME</th><th style={qTh}>EMAIL</th><th style={qTh}>SIGNED UP</th><th style={qTh}></th></tr></thead>
+                <tbody>{rcp.map(r => (
+                  <tr key={r.user_id}><td style={qTd}><input type="checkbox" checked={!!ck.sel[r.user_id]} onChange={() => ck.toggle(r.user_id)} /></td><td style={qTd}>{r.name || "—"}</td><td style={qTd}>{r.email}</td><td style={qTd}>{qAgoDays(r.signed_up)}</td>
+                    <td style={qTd}><button type="button" className="qp-btn" disabled={busy} onClick={() => send([r.user_id])}>✉ Send</button></td></tr>))}</tbody></table></div>
+            )}
+          </>
+        )}
+        {pv && <QEmailPreview {...pv} onClose={() => setPv(null)} />}
+      </div>
+    </div>
+  );
+}
+function QEmailLeads({ onDone, setMsg }) {
+  const [rows, setRows] = useState(null);
+  const [box, setBox] = useState("new");
+  const [trade, setTrade] = useState("");
+  const [country, setCountry] = useState("");
+  const [added, setAdded] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [pv, setPv] = useState(null);
+  const [add, setAdd] = useState(null);
+  const ck = useChecks();
+  const load = () => sb.from("email_leads").select("*").order("created_at", { ascending: false }).limit(5000).then(({ data, error }) => { if (error) setMsg({ ok: false, text: error.message }); setRows(data || []); });
+  useEffect(() => { load(); }, []);
+  const now = Date.now();
+  const due = l => Date.parse(l.next_due_at) <= now;
+  const inBox = (l, k) => k === "new" ? l.status === "new" && l.stage === 0
+    : k === "f1" ? l.status === "contacted" && l.stage === 1 && due(l)
+    : k === "f2" ? l.status === "contacted" && l.stage === 2 && due(l)
+    : k === "later" ? l.status === "contacted" && l.stage >= 3 && due(l)
+    : k === "waiting" ? l.status === "contacted" && !due(l)
+    : l.status === k;
+  const all = rows || [];
+  const boxes = [["new", "New · to contact"], ["f1", "Follow-up 1 due"], ["f2", "Follow-up 2 due"], ["later", "Later news due"], ["waiting", "Waiting"], ["replied", "Replied"], ["customer", "Became customers"], ["dnc", "Do not contact"]];
+  const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+  const shown = all.filter(l => inBox(l, box) && (!trade || l.trade === trade) && (!country || (l.country || "") === country)
+    && (!added || (added === "today" ? Date.parse(l.created_at) >= today0.getTime() : Date.parse(l.created_at) >= now - 7 * 864e5)));
+  const sendable = ["new", "f1", "f2", "later"].includes(box);
+  const withEmail = shown.filter(l => l.email);
+  async function send(ids) {
+    if (!ids.length) return; setBusy(true);
+    try { onDone(await callEmail("send_leads", { lead_ids: ids })); ck.clear(); await load(); } catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(false); }
+  }
+  async function setStatus(l, status) {
+    const { error } = await sb.from("email_leads").update({ status, updated_at: new Date().toISOString() }).eq("id", l.id);
+    if (error) setMsg({ ok: false, text: error.message }); else load();
+  }
+  async function saveLead() {
+    const r = { company: String(add.company || "").trim(), email: String(add.email || "").trim() || null, trade: add.trade || null, country: add.country || null,
+      city: add.city || null, website: add.website || null, phone: add.phone || null, source_url: add.source_url || null, added_by: "manual" };
+    if (!r.company) { setMsg({ ok: false, text: "Please write the company name." }); return; }
+    const { error } = await sb.from("email_leads").insert(r);
+    if (error) { setMsg({ ok: false, text: /duplicate|unique/i.test(error.message) ? "This company or email is already in the list." : error.message }); return; }
+    setAdd(null); setMsg({ ok: true, text: "Lead added." }); load();
+  }
+  async function importCsv(text) {
+    const lines = String(text || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    if (!lines.length) return;
+    const head = lines[0].toLowerCase().split(/[,;\t]/).map(x => x.trim());
+    const hasHead = head.includes("company") || head.includes("email");
+    const cols = hasHead ? head : ["company", "email", "trade", "country", "city", "website", "phone"];
+    let ok = 0, dup = 0;
+    for (const line of lines.slice(hasHead ? 1 : 0)) {
+      const v = line.split(/[,;\t]/).map(x => x.trim().replace(/^"|"$/g, ""));
+      const o = {}; cols.forEach((c, i) => { if (v[i]) o[c] = v[i]; });
+      if (!o.company) continue;
+      const { error } = await sb.from("email_leads").insert({ company: o.company, email: o.email || null, trade: o.trade || null, country: o.country || null, city: o.city || null, website: o.website || null, phone: o.phone || null, source_url: o.source || o.source_url || null, added_by: "import" });
+      if (error) dup++; else ok++;
+    }
+    setMsg({ ok: true, text: `${ok} leads imported${dup ? `, ${dup} skipped (already in the list)` : ""}.` }); setAdd(null); load();
+  }
+  function exportCsv() {
+    const cols = ["company", "trade", "country", "city", "email", "phone", "website", "source_url", "status", "stage", "created_at", "last_sent_at"];
+    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [cols.join(","), ...shown.map(l => cols.map(c => esc(l[c])).join(","))].join("\n");
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); a.download = `quantora-leads-${box}.csv`; a.click();
+  }
+  const countries = [...new Set(all.map(l => l.country).filter(Boolean))].sort();
+  const sel = { padding: "8px 10px", borderRadius: 10, border: "1px solid var(--border-soft,#334155)", background: "var(--q-surface-2,#0b1433)", color: "inherit", fontSize: 13 };
+  const inp = { ...sel, width: "100%" };
+  return (
+    <div className="card panel">
+      <QStageBoxes value={box} onPick={v => { setBox(v); ck.clear(); }} items={boxes.map(([k, l]) => [k, l, all.filter(x => inBox(x, k)).length])} />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+        <select style={sel} value={trade} onChange={e => setTrade(e.target.value)}><option value="">All trades</option>{Q_LEAD_TRADES.map(t => <option key={t}>{t}</option>)}</select>
+        <select style={sel} value={country} onChange={e => setCountry(e.target.value)}><option value="">All countries</option>{countries.map(c => <option key={c}>{c}</option>)}</select>
+        <select style={sel} value={added} onChange={e => setAdded(e.target.value)}><option value="">Added: any time</option><option value="today">Added today</option><option value="week">Added this week</option></select>
+        <button type="button" className="qp-btn" onClick={() => setAdd({ mode: "one" })}>＋ Add lead</button>
+        <button type="button" className="qp-btn" onClick={() => setAdd({ mode: "csv", text: "" })}>⤒ Import list</button>
+        <button type="button" className="qp-btn" onClick={exportCsv}>⤓ Excel</button>
+      </div>
+      {add && add.mode === "one" && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 8, padding: 12, borderRadius: 12, border: "1px solid rgba(129,140,248,.3)", margin: "8px 0" }}>
+          {[["company", "Company *"], ["email", "Business email"], ["phone", "Phone"], ["website", "Website"], ["city", "City"], ["country", "Country"], ["source_url", "Where you found it (link)"]].map(([k, l]) =>
+            <input key={k} style={inp} placeholder={l} value={add[k] || ""} onChange={e => setAdd(a => ({ ...a, [k]: e.target.value }))} />)}
+          <select style={inp} value={add.trade || ""} onChange={e => setAdd(a => ({ ...a, trade: e.target.value }))}><option value="">Trade</option>{Q_LEAD_TRADES.map(t => <option key={t}>{t}</option>)}</select>
+          <div style={{ display: "flex", gap: 8 }}><button type="button" className="qp-btn pri" onClick={saveLead}>Add</button><button type="button" className="qp-btn" onClick={() => setAdd(null)}>Cancel</button></div>
+        </div>
+      )}
+      {add && add.mode === "csv" && (
+        <div style={{ padding: 12, borderRadius: 12, border: "1px solid rgba(129,140,248,.3)", margin: "8px 0" }}>
+          <div style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)", marginBottom: 6 }}>Paste rows from Excel: company, email, trade, country, city, website, phone (a header row is fine). Duplicates are skipped.</div>
+          <textarea style={{ ...inp, minHeight: 120, fontFamily: "monospace" }} value={add.text} onChange={e => setAdd(a => ({ ...a, text: e.target.value }))} />
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}><button type="button" className="qp-btn pri" onClick={() => importCsv(add.text)}>Import</button><button type="button" className="qp-btn" onClick={() => setAdd(null)}>Cancel</button></div>
+        </div>
+      )}
+      {sendable && <QSendBar title={boxes.find(b => b[0] === box)[1]} note="· from info@, about 50 a day; companies without an email are skipped" busy={busy}
+        selected={ck.ids.length} total={withEmail.length}
+        onPreview={() => callEmail("preview", { kind: "lead", stage: { new: 0, f1: 1, f2: 2, later: 3 }[box], company: (shown[0] && shown[0].company) || "Sample Company" }).then(setPv).catch(e => setMsg({ ok: false, text: e.message }))}
+        onSelected={() => send(ck.ids)} onAll={() => send(withEmail.slice(0, 50).map(l => l.id))} />}
+      {rows === null ? <div style={{ fontSize: 13 }}>Loading…</div> : shown.length === 0 ? <div style={{ fontSize: 13, color: "var(--text-dimmer,#64748b)", marginTop: 8 }}>No leads here.</div> : (
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={qTh}>{sendable && <input type="checkbox" checked={ck.ids.length > 0 && ck.ids.length === withEmail.length} onChange={e => ck.setAll(withEmail.map(l => l.id), e.target.checked)} />}</th>
+            <th style={qTh}>COMPANY</th><th style={qTh}>TRADE</th><th style={qTh}>CITY</th><th style={qTh}>BUSINESS EMAIL</th><th style={qTh}>PHONE</th><th style={qTh}>SOURCE</th><th style={qTh}>ADDED</th><th style={qTh}>STATUS</th><th style={qTh}></th></tr></thead>
+          <tbody>{shown.slice(0, 500).map(l => (
+            <tr key={l.id}>
+              <td style={qTd}>{sendable && l.email && <input type="checkbox" checked={!!ck.sel[l.id]} onChange={() => ck.toggle(l.id)} />}</td>
+              <td style={qTd}><b>{l.company}</b>{l.website && <div style={{ fontSize: 11.5 }}><a href={/^https?:/.test(l.website) ? l.website : `https://${l.website}`} target="_blank" rel="noopener" style={{ color: "#93c5fd" }}>{l.website.replace(/^https?:\/\/(www\.)?/, "")}</a></div>}</td>
+              <td style={qTd}>{l.trade || "—"}</td><td style={qTd}>{[l.city, l.country].filter(Boolean).join(", ") || "—"}</td>
+              <td style={qTd}>{l.email || <span style={{ fontSize: 12, color: "var(--text-dimmer,#64748b)" }}>no email published</span>}</td>
+              <td style={qTd}>{l.phone || "—"}</td>
+              <td style={qTd}>{l.source_url ? <a href={l.source_url} target="_blank" rel="noopener" style={{ color: "#93c5fd" }}>link</a> : (l.added_by || "—")}</td>
+              <td style={qTd}>{qAgoDays(l.created_at)}</td>
+              <td style={qTd}><select style={{ ...sel, padding: "4px 6px", fontSize: 12 }} value={l.status} onChange={e => setStatus(l, e.target.value)}>
+                <option value="new">New</option><option value="contacted">Contacted</option><option value="replied">Replied</option><option value="customer">Customer</option><option value="dnc">Do not contact</option></select>
+                {l.stage > 0 && <div style={{ fontSize: 11, color: "var(--text-dimmer,#64748b)" }}>{l.stage} email{l.stage === 1 ? "" : "s"} sent</div>}</td>
+              <td style={qTd}>{sendable && l.email && <button type="button" className="qp-btn" disabled={busy} onClick={() => send([l.id])}>✉ Send</button>}</td>
+            </tr>))}</tbody></table></div>
+      )}
+      <div style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)", marginTop: 10 }}>After the first email a lead waits 7 days for Follow-up 1, 7 more for Follow-up 2, then gets news every few weeks (6 emails at most). Leads are never deleted. Unsubscribe or "Do not contact" stops all emails.</div>
+      {pv && <QEmailPreview {...pv} onClose={() => setPv(null)} />}
+    </div>
+  );
+}
+function QEmailLog() {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { sb.from("email_sends").select("*").order("sent_at", { ascending: false }).limit(300).then(({ data }) => setRows(data || [])); }, []);
+  return (
+    <div className="card panel">
+      {rows === null ? "Loading…" : rows.length === 0 ? <div style={{ fontSize: 13, color: "var(--text-dimmer,#64748b)" }}>Nothing sent yet.</div> : (
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={qTh}>WHEN</th><th style={qTh}>LIST</th><th style={qTh}>EMAIL</th><th style={qTh}>TO</th><th style={qTh}>SENT BY</th></tr></thead>
+          <tbody>{rows.map(r => <tr key={r.id}><td style={qTd}>{new Date(r.sent_at).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+            <td style={qTd}>{{ welcome: "Welcome Pack", updates: "Customer update", leads: "Leads" }[r.list]}</td><td style={qTd}>{r.template}</td><td style={qTd}>{r.email}</td><td style={qTd}>{r.provider}</td></tr>)}</tbody></table></div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Home banners (2026-11-09). Offers and news that take a turn in the customers' Home hero.
 // Admin → Business → Home Banners: picture, label, title, text, one button, who sees it, dates.
 // ---------------------------------------------------------------------------
@@ -29483,7 +29821,7 @@ const Q_STAFF_PRESETS = [
   ["Customers + Live Chat", { customers: "view", online: "view", livechat: "act" }],
   ["Support team", { customers: "view", online: "view", livechat: "act", support: "act", ratings: "view" }],
   ["Read-only reports", { exec: "view", revenue: "view", ai: "view", reports: "view", hourly: "view" }],
-  ["Everything (view only)", Object.fromEntries(["exec","execdash","myprojects","projects","pipeline","approvals","estima","customers","online","visitors","revenue","discounts","payments","ai","livechat","support","ratings","hourly","alerts","health","reports","compliance","measurement","draftsman"].map(k => [k, "view"]))],
+  ["Everything (view only)", Object.fromEntries(["exec","execdash","myprojects","projects","pipeline","approvals","estima","customers","online","visitors","email","revenue","discounts","payments","ai","livechat","support","ratings","hourly","alerts","health","reports","compliance","measurement","draftsman"].map(k => [k, "view"]))],
 ];
 function QStaffPermEditor({ perms, onChange }) {
   const set = (k, v) => { const n = { ...perms }; if (v) n[k] = v; else delete n[k]; onChange(n); };

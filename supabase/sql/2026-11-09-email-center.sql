@@ -1,0 +1,3 @@
+-- 2026-11-09  Email Center (approved by the owner). Applied as migration email_center_2026_11_09:
+-- tables email_leads, email_sends, email_unsubscribes, email_campaigns (staff section "email"),
+-- q_email_welcome_stages(), q_email_welcome_due(), q_email_counts().
