@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.02"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.03"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -22623,6 +22623,7 @@ const QADMIN_NAV = [
   { group: "Work", key: "estima", label: "Estima AI", sub: "Ask about a project's drawings, quantities and rules" },
   { group: "Business", key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
   { group: "Business", key: "online", label: "Online Users", sub: "Everyone using Quantora right now — start a live chat with one click" },
+  { group: "Business", key: "visitors", label: "Website Visitors", sub: "New people visiting the website: how many, which pages, where they came from" },
   { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
   { group: "Business", key: "discounts", label: "Discounts", sub: "Discount codes and hand-granted plans" },
   { group: "Business", key: "payments", label: "Payments", sub: "Dodo Payments readiness, paying customers and latest payments" },
@@ -22654,6 +22655,7 @@ const Q_STAFF_SECTIONS = [
   { group: "Work",     key: "estima",      act: false, label: "Estima AI",           does: "" },
   { group: "Business", key: "customers",   act: true,  label: "Customers (Welcome Pack & Subscribed)", does: "Change plans and bonus pages, message customers" },
   { group: "Business", key: "online",      act: false, label: "Online Users",        does: "" },
+  { group: "Business", key: "visitors",    act: false, label: "Website Visitors",    does: "" },
   { group: "Business", key: "revenue",     act: false, label: "Revenue & Plans",     does: "" },
   { group: "Business", key: "discounts",   act: false, label: "Discounts",           does: "" },
   { group: "Business", key: "payments",    act: false, label: "Payments",            does: "" },
@@ -23614,6 +23616,9 @@ function AdminPortal({ onBack, staffPerms }) {
             {activeView === "online" && (
               <QOnlineUsersView canChat={lvl("livechat") >= 2}
                 onChat={(ticketId) => { try { window.__qAdminWantTicket = ticketId; } catch (_) {} setActiveView("livechat"); }} />
+            )}
+            {activeView === "visitors" && (
+              <QWebsiteVisitorsView />
             )}
             {activeView === "team" && isOwner && (
               <QAdminTeamView />
@@ -28675,6 +28680,118 @@ function QOnlineUsersView({ canChat, onChat }) {
 }
 
 // ---------------------------------------------------------------------------
+// Admin → Website Visitors (2026-11-09). New people visiting the public website. Google's own checks,
+// other bots, and anyone already signed in to Quantora (team, customers, robot) are not counted.
+// Nothing personal is kept: only the page, where they came from, and the country.
+// ---------------------------------------------------------------------------
+const Q_COUNTRY_NAMES = { AE: "UAE", SA: "Saudi Arabia", QA: "Qatar", KW: "Kuwait", OM: "Oman", BH: "Bahrain", IN: "India", PK: "Pakistan", EG: "Egypt", JO: "Jordan", LB: "Lebanon", GB: "United Kingdom", US: "USA", CA: "Canada", AU: "Australia", SG: "Singapore", MY: "Malaysia", PH: "Philippines", BD: "Bangladesh", LK: "Sri Lanka", NP: "Nepal", HK: "Hong Kong", DE: "Germany", FR: "France", TR: "Turkey", NG: "Nigeria", KE: "Kenya", ZA: "South Africa" };
+function qVisitSource(s) {
+  const x = String(s || "direct").toLowerCase();
+  if (x === "direct") return "Typed the address / bookmark";
+  if (/google/.test(x)) return "Google";
+  if (/bing/.test(x)) return "Bing";
+  if (/linkedin|lnkd/.test(x)) return "LinkedIn";
+  if (/tiktok/.test(x)) return "TikTok";
+  if (/facebook|fb\./.test(x)) return "Facebook";
+  if (/instagram/.test(x)) return "Instagram";
+  if (/whatsapp|wa\.me/.test(x)) return "WhatsApp";
+  if (/chatgpt|openai/.test(x)) return "ChatGPT";
+  if (/^t\.co$|twitter|x\.com/.test(x)) return "X (Twitter)";
+  if (/youtube/.test(x)) return "YouTube";
+  if (x === "guide" || x === "guides-top") return "From our guide pages";
+  return x;
+}
+function qVisitPage(p) {
+  const x = String(p || "/");
+  if (x === "/" || x === "/index.html") return "Homepage";
+  return x.replace(/^\//, "").replace(/\.html$/, "").replace(/-/g, " ");
+}
+function QWebsiteVisitorsView() {
+  const [days, setDays] = useState(30);
+  const [d, setD] = useState(null);
+  const [err, setErr] = useQErr("");
+  async function load() {
+    try {
+      const { data, error } = await sb.rpc("q_site_visits_admin", { p_days: days });
+      if (error) throw error;
+      setD(data || {}); setErr("");
+    } catch (e) { setErr(e.message || "Could not load website visitors."); }
+  }
+  useEffect(() => { setD(null); load(); const id = setInterval(load, 60000); return () => clearInterval(id); }, [days]);
+  const tile = (label, n, sub) => (
+    <div className="card panel" style={{ flex: "1 1 160px", padding: 16 }}>
+      <div style={{ fontSize: 12, color: "var(--text-dim)" }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 800, marginTop: 4 }}>{d === null ? "…" : (n || 0)}</div>
+      {sub && <div style={{ fontSize: 11.5, color: "var(--text-dimmer)", marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+  const daily = (d && d.daily) || [];
+  const max = Math.max(1, ...daily.map(x => x.n || 0));
+  const list = (title, rows, label, val) => (
+    <div className="card panel" style={{ flex: "1 1 280px", minWidth: 0 }}>
+      <b style={{ fontSize: 14 }}>{title}</b>
+      <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+        {(rows || []).length === 0 && <div style={{ fontSize: 12.5, color: "var(--text-dimmer)" }}>Nothing yet.</div>}
+        {(rows || []).map((r, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "none" }}>{label(r)}</span>
+            <b>{val(r)}</b>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Real people only. Google's checks, bots, our team and signed-in customers are not counted. Dubai time.</span>
+        <select value={days} onChange={e => setDays(Number(e.target.value))} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 8 }}>
+          <option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option>
+        </select>
+      </div>
+      {err && <div style={{ color: "#fca5a5", fontSize: 12.5, marginBottom: 10 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        {tile("Visitors today", d && d.today)}
+        {tile("Last 7 days", d && d.week)}
+        {tile(`Last ${days} days`, d && d.period, d ? `${d.views || 0} page views` : null)}
+      </div>
+      <div className="card panel" style={{ marginBottom: 12 }}>
+        <b style={{ fontSize: 14 }}>Visitors per day</b>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 120, marginTop: 12 }}>
+          {daily.map(x => (
+            <div key={x.day} title={`${x.day}: ${x.n} visitor${x.n === 1 ? "" : "s"}`} style={{ flex: 1, minWidth: 2, height: `${Math.max(2, (x.n / max) * 100)}%`, background: x.n ? "#3b82f6" : "rgba(148,163,184,.2)", borderRadius: "3px 3px 0 0" }} />
+          ))}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-dimmer)", marginTop: 4 }}>
+          <span>{daily[0] && daily[0].day}</span><span>Today</span>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        {list("Where they came from", d && d.sources, r => qVisitSource(r.s), r => r.n)}
+        {list("Country", d && d.countries, r => Q_COUNTRY_NAMES[r.c] || r.c, r => r.n)}
+      </div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        {list("Pages they opened", d && d.pages, r => qVisitPage(r.path), r => `${r.people} ${r.people === 1 ? "person" : "people"}`)}
+      </div>
+      <div className="card panel">
+        <b style={{ fontSize: 14 }}>Latest visits</b>
+        <div style={{ display: "grid", gap: 4, marginTop: 10 }}>
+          {((d && d.recent) || []).length === 0 && <div style={{ fontSize: 12.5, color: "var(--text-dimmer)" }}>No visits yet.</div>}
+          {((d && d.recent) || []).map((r, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 90px", gap: 10, fontSize: 12.5, padding: "6px 0", borderTop: i ? "1px solid var(--border-soft)" : 0 }}>
+              <span style={{ color: "var(--text-dim)" }}>{new Date(r.at).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{qVisitPage(r.path)}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{qVisitSource(r.s)}</span>
+              <span>{Q_COUNTRY_NAMES[r.c] || r.c || "—"}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Admin → Admin Team (2026-11-06), owner only. Add a person by email and choose, section by section,
 // No access / View only / View & act. Pause or remove them any time; every change is recorded.
 // ---------------------------------------------------------------------------
@@ -28682,7 +28799,7 @@ const Q_STAFF_PRESETS = [
   ["Customers + Live Chat", { customers: "view", online: "view", livechat: "act" }],
   ["Support team", { customers: "view", online: "view", livechat: "act", support: "act", ratings: "view" }],
   ["Read-only reports", { exec: "view", revenue: "view", ai: "view", reports: "view", hourly: "view" }],
-  ["Everything (view only)", Object.fromEntries(["exec","execdash","myprojects","projects","pipeline","approvals","estima","customers","online","revenue","discounts","payments","ai","livechat","support","ratings","hourly","alerts","health","reports","compliance","measurement","draftsman"].map(k => [k, "view"]))],
+  ["Everything (view only)", Object.fromEntries(["exec","execdash","myprojects","projects","pipeline","approvals","estima","customers","online","visitors","revenue","discounts","payments","ai","livechat","support","ratings","hourly","alerts","health","reports","compliance","measurement","draftsman"].map(k => [k, "view"]))],
 ];
 function QStaffPermEditor({ perms, onChange }) {
   const set = (k, v) => { const n = { ...perms }; if (v) n[k] = v; else delete n[k]; onChange(n); };
