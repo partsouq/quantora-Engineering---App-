@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.09"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -23073,6 +23073,7 @@ const QADMIN_NAV = [
   { group: "Business", key: "customers", label: "Customers", sub: "Company profiles, plans, and activity" },
   { group: "Business", key: "online", label: "Online Users", sub: "Everyone using Quantora right now — start a live chat with one click" },
   { group: "Business", key: "visitors", label: "Website Visitors", sub: "New people visiting the website: how many, which pages, where they came from" },
+  { group: "Business", key: "banners", label: "Home Banners", sub: "Offers and news shown on customers' Home page: picture, text, button, who sees it and when" },
   { group: "Business", key: "revenue", label: "Revenue & Plans", sub: "Plans, subscribers, and conversion" },
   { group: "Business", key: "discounts", label: "Discounts", sub: "Discount codes and hand-granted plans" },
   { group: "Business", key: "payments", label: "Payments", sub: "Dodo Payments readiness, paying customers and latest payments" },
@@ -23105,6 +23106,7 @@ const Q_STAFF_SECTIONS = [
   { group: "Business", key: "customers",   act: true,  label: "Customers (Welcome Pack & Subscribed)", does: "Change plans and bonus pages, message customers" },
   { group: "Business", key: "online",      act: false, label: "Online Users",        does: "" },
   { group: "Business", key: "visitors",    act: false, label: "Website Visitors",    does: "" },
+  { group: "Business", key: "banners",     act: true,  label: "Home Banners",        does: "Create, change and switch off banners" },
   { group: "Business", key: "revenue",     act: false, label: "Revenue & Plans",     does: "" },
   { group: "Business", key: "discounts",   act: false, label: "Discounts",           does: "" },
   { group: "Business", key: "payments",    act: false, label: "Payments",            does: "" },
@@ -24065,6 +24067,9 @@ function AdminPortal({ onBack, staffPerms }) {
             {activeView === "online" && (
               <QOnlineUsersView canChat={lvl("livechat") >= 2}
                 onChat={(ticketId) => { try { window.__qAdminWantTicket = ticketId; } catch (_) {} setActiveView("livechat"); }} />
+            )}
+            {activeView === "banners" && (
+              <QHomeBannersView />
             )}
             {activeView === "visitors" && (
               <QWebsiteVisitorsView />
@@ -26297,6 +26302,31 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
     failed: (extra.runs || []).filter(r => r.status === "failed" && r.created_at && new Date(r.created_at).getTime() >= sevenAgo).length,
   };
 
+  // Home banners (admin-managed offers / news) take a turn in the hero after the welcome slide.
+  const [banners, hideBanner] = useHomeBanners();
+  const [slide, setSlide] = useState(0);
+  const [heroHover, setHeroHover] = useState(false);
+  const nSlides = 1 + banners.length;
+  const heroPaused = heroHover || !!q.trim();
+  useEffect(() => { if (slide >= nSlides) setSlide(0); }, [nSlides]);
+  useEffect(() => { if (q.trim()) setSlide(0); }, [q]);
+  useEffect(() => {
+    if (nSlides < 2 || heroPaused) return;
+    const t = setInterval(() => setSlide(x => (x + 1) % nSlides), 7000);
+    return () => clearInterval(t);
+  }, [nSlides, heroPaused]);
+  useEffect(() => {
+    const b = banners[slide - 1]; if (!b) return;
+    try { if (sessionStorage.getItem("q_bv:" + b.id)) return; sessionStorage.setItem("q_bv:" + b.id, "1"); } catch (_) {}
+    sb.rpc("q_banner_event", { p_id: b.id, p_kind: "view" }).then(() => {}, () => {});
+  }, [slide, banners]);
+  function bannerClick(b) {
+    sb.rpc("q_banner_event", { p_id: b.id, p_kind: "click" }).then(() => {}, () => {});
+    const t = b.button_target || "";
+    if (/^https?:/.test(t)) window.open(t, "_blank", "noopener"); else if (t) onNavigate(t);
+  }
+  const curBanner = slide > 0 ? banners[slide - 1] : null;
+
   const hits = q.trim()
     ? projects.filter(p => `${p.project_name} ${p.city || ""} ${p.country || ""}`.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 6)
     : [];
@@ -26312,7 +26342,10 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
   return (
     <div className="qh qnl">
       {/* Hero (new look 2026-11-09): greeting, project search, New Project and Upload Drawings over the building picture. */}
-      <section className="qnl-hero">
+      <section className="qnl-hero" onMouseEnter={() => setHeroHover(true)} onMouseLeave={() => setHeroHover(false)}>
+        {curBanner ? (
+          <QBannerSlide b={curBanner} onButton={() => bannerClick(curBanner)} onHide={() => { hideBanner(curBanner.id); setSlide(0); }} />
+        ) : (<>
         <img className="qnl-hero-img" src="/ws-art/home-hero.jpg" alt="" />
         <div className="qnl-hero-txt">
           <h1 className="qnl-hello">{greetingFor(new Date())}{hello} <span aria-hidden="true">👋</span></h1>
@@ -26335,6 +26368,15 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
             </div>
           )}
         </div>
+        </>)}
+        {nSlides > 1 && (
+          <div className="qnl-dots" role="tablist" aria-label="Home slides">
+            {Array.from({ length: nSlides }).map((_, i) => (
+              <button key={i} type="button" role="tab" aria-selected={i === slide} aria-label={i === 0 ? "Welcome" : `Offer ${i}`}
+                className={i === slide ? "on" : ""} onClick={() => setSlide(i)} />
+            ))}
+          </div>
+        )}
       </section>
 
       <FeedbackNudge />
@@ -29172,6 +29214,182 @@ function qVisitPage(p) {
   if (x === "/" || x === "/index.html") return "Homepage";
   return x.replace(/^\//, "").replace(/\.html$/, "").replace(/-/g, " ");
 }
+// ---------------------------------------------------------------------------
+// Home banners (2026-11-09). Offers and news that take a turn in the customers' Home hero.
+// Admin → Business → Home Banners: picture, label, title, text, one button, who sees it, dates.
+// ---------------------------------------------------------------------------
+const Q_BANNER_TARGETS = [["billing", "Billing & plans"], ["drawings", "Upload drawings"], ["boq", "BOQ"], ["reports", "Reports"],
+  ["compliance", "Compliance"], ["estima", "Estima AI"], ["help", "Help & Support"], ["dashboard", "All projects"], ["url", "A website link…"]];
+function qBannerImg(path) {
+  if (!path) return null;
+  if (/^https?:/.test(path) || path.startsWith("/")) return path;
+  return sb.storage.from("banners").getPublicUrl(path).data.publicUrl;
+}
+function QHomeBannersView() {
+  const [rows, setRows] = useState(null);
+  const [edit, setEdit] = useState(null);
+  const [err, setErr] = useQErr("");
+  const [busy, setBusy] = useState(false);
+  const canAct = (typeof window.__qStaffCanAct === "function") ? window.__qStaffCanAct("banners") : true;
+  async function load() {
+    const { data, error } = await sb.from("home_banners").select("*").order("sort").order("created_at", { ascending: false });
+    if (error) { setErr(error.message); return; }
+    setRows(data || []); setErr("");
+  }
+  useEffect(() => { load(); }, []);
+  const status = b => {
+    const now = Date.now();
+    if (!b.active) return ["OFF", "rgba(148,163,184,.2)", "#cbd5e1"];
+    if (b.ends_at && Date.parse(b.ends_at) <= now) return ["ENDED", "rgba(148,163,184,.2)", "#cbd5e1"];
+    if (b.starts_at && Date.parse(b.starts_at) > now) return ["SCHEDULED", "rgba(245,158,11,.2)", "#fcd34d"];
+    return ["ON", "rgba(16,185,129,.2)", "#6ee7b7"];
+  };
+  const day = x => x ? new Date(x).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "";
+  async function save(b) {
+    setBusy(true); setErr("");
+    try {
+      let image_path = b.image_path || null;
+      if (b._file) {
+        const blob = await qResizeImage(b._file, 2000);
+        const path = `b-${Date.now()}.jpg`;
+        const up = await sb.storage.from("banners").upload(path, blob, { contentType: "image/jpeg" });
+        if (up.error) throw up.error;
+        image_path = path;
+      }
+      if (!String(b.title || "").trim()) throw new Error("Please write a title.");
+      const target = b.target_kind === "url" ? String(b.target_url || "").trim() : b.target_kind;
+      if (b.target_kind === "url" && !/^https:\/\//.test(target)) throw new Error("The website link must start with https://");
+      const row = { label: b.label || null, title: b.title.trim(), body: b.body || null, image_path,
+        button_text: b.button_text || null, button_target: b.button_text ? target : null,
+        audience: b.audience || "all", country: b.country || null,
+        starts_at: b.starts_at ? new Date(b.starts_at + "T00:00:00").toISOString() : null,
+        ends_at: b.ends_at ? new Date(b.ends_at + "T23:59:59").toISOString() : null,
+        active: b.active !== false, sort: Number(b.sort) || 0, updated_at: new Date().toISOString() };
+      const q = b.id ? sb.from("home_banners").update(row).eq("id", b.id) : sb.from("home_banners").insert(row);
+      const { error } = await q; if (error) throw error;
+      setEdit(null); await load();
+      qPop({ kind: "success", title: "Banner saved", message: row.active ? "It shows on Home for the customers you chose." : "Saved as switched off." });
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+  async function del(b) {
+    if (!window.confirm(`Delete the banner “${b.title}”? This cannot be undone.`)) return;
+    const { error } = await sb.from("home_banners").delete().eq("id", b.id);
+    if (error) { setErr(error.message); return; }
+    if (b.image_path && !/^https?:|^\//.test(b.image_path)) sb.storage.from("banners").remove([b.image_path]).catch(() => {});
+    setEdit(null); load();
+  }
+  const open = b => setEdit(b ? { ...b, target_kind: !b.button_target ? "billing" : /^https?:/.test(b.button_target) ? "url" : b.button_target,
+    target_url: /^https?:/.test(b.button_target || "") ? b.button_target : "", starts_at: b.starts_at ? b.starts_at.slice(0, 10) : "", ends_at: b.ends_at ? b.ends_at.slice(0, 10) : "" }
+    : { title: "", label: "", body: "", button_text: "", target_kind: "billing", target_url: "", audience: "all", country: "", starts_at: "", ends_at: "", active: true, sort: 0 });
+  const inp = { width: "100%", padding: "9px 11px", borderRadius: 10, border: "1px solid var(--border-soft,#334155)", background: "var(--q-surface-2,#0b1433)", color: "inherit", fontSize: 13.5 };
+  const lab = t => <div style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)", margin: "10px 0 4px" }}>{t}</div>;
+  return (
+    <>
+      {err && <div style={{ color: "#fca5a5", fontSize: 12.5, marginBottom: 10 }}>{err}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: edit ? "minmax(0,1.2fr) minmax(320px,1fr)" : "1fr", gap: 16, alignItems: "start" }}>
+        <div className="card panel">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <b style={{ fontSize: 15 }}>Home banners</b>
+            {canAct && <button type="button" className="qp-btn pri" onClick={() => open(null)}>＋ New banner</button>}
+          </div>
+          <div style={{ fontSize: 12.5, color: "var(--text-dim,#94a3b8)", margin: "6px 0 10px" }}>Shown in the Home hero after the welcome slide, one at a time (every 7 seconds). Customers can hide one with “Not now”.</div>
+          {rows === null ? <div style={{ fontSize: 13 }}>Loading…</div> : rows.length === 0 ? <div style={{ fontSize: 13, color: "var(--text-dimmer,#64748b)" }}>No banners yet.</div> : (
+            <div style={{ display: "grid", gap: 0 }}>
+              {rows.map(b => { const [st, bg, col] = status(b); return (
+                <button key={b.id} type="button" onClick={() => canAct && open(b)} style={{ display: "grid", gridTemplateColumns: "96px minmax(0,1fr) auto", gap: 14, alignItems: "center", padding: "12px 4px", background: edit && edit.id === b.id ? "rgba(99,102,241,.12)" : "none", border: 0, borderTop: "1px solid var(--border-soft,#1e293b)", borderRadius: 8, color: "inherit", textAlign: "left", cursor: canAct ? "pointer" : "default", fontSize: 13 }}>
+                  {b.image_path ? <img src={qBannerImg(b.image_path)} alt="" style={{ width: 96, height: 54, borderRadius: 8, objectFit: "cover" }} /> : <span style={{ width: 96, height: 54, borderRadius: 8, background: "rgba(99,102,241,.15)" }} />}
+                  <span style={{ minWidth: 0 }}>
+                    {b.label && <small style={{ display: "block", fontSize: 10.5, color: "#fcd34d", fontWeight: 800 }}>{b.label}</small>}
+                    <span style={{ display: "block", fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{b.title}</span>
+                    <span style={{ display: "block", fontSize: 12, color: "var(--text-dim,#94a3b8)", marginTop: 3 }}>
+                      {b.audience === "free" ? "Free & trial users" : b.audience === "paid" ? "Paying customers" : "All customers"}{b.country ? ` · ${b.country}` : ""}
+                      {" · "}{b.starts_at || b.ends_at ? `${day(b.starts_at) || "Now"} – ${day(b.ends_at) || "no end"}` : "Always"}
+                      {" · "}{b.views} views · {b.clicks} clicks
+                    </span>
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: 800, padding: "4px 10px", borderRadius: 99, background: bg, color: col }}>{st}</span>
+                </button>); })}
+            </div>
+          )}
+        </div>
+        {edit && (
+          <div className="card panel">
+            <b style={{ fontSize: 15 }}>{edit.id ? "Edit banner" : "New banner"}</b>
+            {lab("Picture (wide, at least 1600 × 600)")}
+            <label style={{ display: "block", cursor: "pointer", borderRadius: 12, overflow: "hidden", border: "1.5px dashed rgba(167,139,250,.6)", background: "rgba(99,102,241,.08)", textAlign: "center" }}>
+              {edit._preview || edit.image_path ? <img src={edit._preview || qBannerImg(edit.image_path)} alt="" style={{ display: "block", width: "100%", height: 130, objectFit: "cover" }} />
+                : <div style={{ padding: 22, fontSize: 13, color: "#c4b5fd", fontWeight: 700 }}>⤒ Upload picture</div>}
+              <input type="file" accept="image/jpeg,image/png,image/webp" style={{ display: "none" }} onChange={e => { const f = e.target.files && e.target.files[0]; if (f) setEdit(x => ({ ...x, _file: f, _preview: URL.createObjectURL(f) })); }} />
+            </label>
+            {lab("Label (optional, e.g. LIMITED OFFER)")}<input style={inp} maxLength={30} value={edit.label || ""} onChange={e => setEdit(x => ({ ...x, label: e.target.value }))} />
+            {lab("Title")}<input style={inp} maxLength={80} value={edit.title || ""} onChange={e => setEdit(x => ({ ...x, title: e.target.value }))} />
+            {lab("Text")}<textarea style={{ ...inp, minHeight: 64 }} maxLength={220} value={edit.body || ""} onChange={e => setEdit(x => ({ ...x, body: e.target.value }))} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div>{lab("Button text (empty = no button)")}<input style={inp} maxLength={30} value={edit.button_text || ""} onChange={e => setEdit(x => ({ ...x, button_text: e.target.value }))} /></div>
+              <div>{lab("Button opens")}<select style={inp} value={edit.target_kind} onChange={e => setEdit(x => ({ ...x, target_kind: e.target.value }))}>{Q_BANNER_TARGETS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+            </div>
+            {edit.target_kind === "url" && <>{lab("Website link")}<input style={inp} placeholder="https://…" value={edit.target_url || ""} onChange={e => setEdit(x => ({ ...x, target_url: e.target.value }))} /></>}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div>{lab("Show to")}<select style={inp} value={edit.audience} onChange={e => setEdit(x => ({ ...x, audience: e.target.value }))}><option value="all">All customers</option><option value="free">Free &amp; trial users</option><option value="paid">Paying customers</option></select></div>
+              <div>{lab("Country (empty = all)")}<input style={inp} list="q-banner-countries" placeholder="All countries" value={edit.country || ""} onChange={e => setEdit(x => ({ ...x, country: e.target.value }))} />
+                <datalist id="q-banner-countries">{["United Arab Emirates", "Saudi Arabia", "Qatar", "Kuwait", "Oman", "Bahrain", "India", "Egypt", "Jordan", "United Kingdom"].map(c => <option key={c} value={c} />)}</datalist></div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 10 }}>
+              <div>{lab("Start (empty = now)")}<input type="date" style={inp} value={edit.starts_at || ""} onChange={e => setEdit(x => ({ ...x, starts_at: e.target.value }))} /></div>
+              <div>{lab("End (empty = no end)")}<input type="date" style={inp} value={edit.ends_at || ""} onChange={e => setEdit(x => ({ ...x, ends_at: e.target.value }))} /></div>
+              <div>{lab("Order")}<input type="number" style={inp} value={edit.sort || 0} onChange={e => setEdit(x => ({ ...x, sort: e.target.value }))} /></div>
+            </div>
+            <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12, fontSize: 13.5 }}><input type="checkbox" checked={edit.active !== false} onChange={e => setEdit(x => ({ ...x, active: e.target.checked }))} /> Switched on</label>
+            {lab("Preview")}
+            <QBannerSlide b={{ ...edit, image_url: edit._preview || qBannerImg(edit.image_path) }} preview />
+            <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+              <button type="button" className="qp-btn pri" disabled={busy} onClick={() => save(edit)}>{busy ? "Saving…" : "Save & publish"}</button>
+              <button type="button" className="qp-btn" disabled={busy} onClick={() => setEdit(null)}>Cancel</button>
+              {edit.id && <button type="button" className="qp-btn" disabled={busy} style={{ marginLeft: "auto", color: "#f43f5e" }} onClick={() => del(edit)}>Delete</button>}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+// One banner slide (also used as the admin preview).
+function QBannerSlide({ b, onButton, onHide, preview }) {
+  return (
+    <div className={"qnl-slide" + (preview ? " qnl-slide-pv" : "")}>
+      {b.image_url && <img className="qnl-hero-img" src={b.image_url} alt="" />}
+      <div className="qnl-hero-txt">
+        {b.label && <span className="qnl-badge">{b.label}</span>}
+        <div className="qnl-h1">{b.title || "Your title"}</div>
+        {b.body && <p>{b.body}</p>}
+        <div className="qnl-row">
+          {b.button_text && <button type="button" className="qnl-btn pri" onClick={onButton}>{b.button_text} →</button>}
+          {!preview && <button type="button" className="qnl-btn" onClick={onHide}>Not now</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+// Customers' banners for the Home hero: loaded once, minus the ones they hid.
+function useHomeBanners() {
+  const [list, setList] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    sb.rpc("q_home_banners").then(({ data }) => {
+      if (!alive || !Array.isArray(data)) return;
+      let hidden = {}; try { hidden = JSON.parse(localStorage.getItem("q_banner_hidden") || "{}"); } catch (_) {}
+      setList(data.filter(b => !hidden[b.id]).map(b => ({ ...b, image_url: qBannerImg(b.image_path) })));
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  function hide(id) {
+    try { const h = JSON.parse(localStorage.getItem("q_banner_hidden") || "{}"); h[id] = Date.now(); localStorage.setItem("q_banner_hidden", JSON.stringify(h)); } catch (_) {}
+    setList(l => l.filter(b => b.id !== id));
+  }
+  return [list, hide];
+}
+
 function QWebsiteVisitorsView() {
   const [days, setDays] = useState(30);
   const [d, setD] = useState(null);
@@ -41901,6 +42119,20 @@ html:root .qx .qnl-page .qdash-grid:not(.listmode) .qdash-rail{order:2}
 html:root:has(.qx) body .qx .qp-item.on{background:linear-gradient(90deg,#4f46e5,#7c3aed)!important;color:#fff!important;box-shadow:0 8px 24px -8px rgba(124,58,237,.7)!important;border-color:transparent!important}
 html:root:has(.qx) body .qx .qp-item.on .ic{background:rgba(255,255,255,.16)!important;color:#fff!important}
 html:root:has(.qx) body .qx .qp-ws button.on{background:linear-gradient(135deg,rgba(79,70,229,.6),rgba(124,58,237,.5))!important;border-color:rgba(167,139,250,.6)!important;color:#fff!important}
+/* Home banners (2026-11-09) */
+html:root .qx .qnl-slide{position:relative;min-height:300px}
+html:root .qnl-badge{display:inline-block;font-size:11.5px;font-weight:800;letter-spacing:.04em;padding:4px 10px;border-radius:99px;background:#facc15;color:#1f1300;margin-bottom:10px}
+html:root .qx .qnl-dots{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:3;display:flex;gap:7px}
+html:root .qx .qnl-dots button{width:9px;height:9px;border-radius:9px;border:0;padding:0;background:rgba(255,255,255,.4);cursor:pointer;transition:width .2s}
+html:root .qx .qnl-dots button.on{width:26px;background:#fff}
+html:root .qnl-slide-pv{position:relative;min-height:190px;border-radius:14px;overflow:hidden;background:#0b1240;color:#fff;border:1px solid rgba(129,140,248,.3)}
+html:root .qnl-slide-pv:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,#0b1240 0%,#0b1240 34%,rgba(11,18,64,.7) 55%,rgba(11,18,64,0) 85%)}
+html:root .qnl-slide-pv .qnl-hero-img{position:absolute;right:0;top:0;height:100%;width:68%;object-fit:cover}
+html:root .qnl-slide-pv .qnl-hero-txt{position:relative;z-index:1;padding:18px 20px;max-width:75%}
+html:root .qnl-slide-pv .qnl-h1{font-size:22px;font-weight:800;line-height:1.15;color:#fff}
+html:root .qnl-slide-pv p{font-size:12.5px;color:#c4cdee;margin:6px 0 0}
+html:root .qnl-slide-pv .qnl-row{margin-top:10px}
+html:root .qnl-slide-pv .qnl-btn{display:inline-flex;padding:8px 14px;border-radius:10px;font-weight:700;font-size:12.5px;color:#fff;border:0;background:linear-gradient(90deg,#6366f1,#8b5cf6)}
 @media (max-width:760px){
   html:root .qx .qnl-hero-img{width:100%;opacity:.35}
   html:root .qx .qnl-hero:after{background:linear-gradient(180deg,rgba(11,18,64,.4),#0b1240 85%)}
