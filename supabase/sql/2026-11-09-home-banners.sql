@@ -1,0 +1,5 @@
+-- 2026-11-09  Home banners (approved by the owner). Applied as migration home_banners_2026_11_09.
+-- Table home_banners (staff section "banners": view >= 1, manage >= 2), q_home_banners() for customers
+-- (filters by plan and country, only active and within dates), q_banner_event() for view/click counts,
+-- and the public "banners" picture bucket that only banner managers can write to.
+-- See the migration in Supabase for the full text.
