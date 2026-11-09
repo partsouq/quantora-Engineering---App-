@@ -8414,14 +8414,9 @@ function useProjectCovers(projects) {
   }, [key, ver]);
   return p => { const x = qCoverPathOf(p); return x ? urls[x] || null : null; };
 }
-// A standard picture for projects without their own photo (2026-11-09). Each project always gets the
-// same one (picked from its id), so the list looks varied. "Add your photo" replaces it.
-const Q_DEFAULT_COVERS = ["/ws-art/home-hero.jpg", "/ws-art/projects.jpg", "/ws-art/estima-3d.jpg", "/ws-art/skyline.jpg"];
-function qDefaultCover(p) {
-  const id = String((p && p.id) || ""); let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return Q_DEFAULT_COVERS[h % Q_DEFAULT_COVERS.length];
-}
+// The standard picture for every project without its own photo (2026-11-09, one picture for all,
+// as the owner asked). "Add your photo" replaces it.
+function qDefaultCover() { return "/ws-art/home-hero.jpg"; }
 function qPickImage() {
   return new Promise(res => {
     const i = document.createElement("input");
