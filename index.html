@@ -8415,8 +8415,8 @@ function useProjectCovers(projects) {
   return p => { const x = qCoverPathOf(p); return x ? urls[x] || null : null; };
 }
 // The standard picture for every project without its own photo (2026-11-09, one picture for all,
-// as the owner asked). "Add your photo" replaces it.
-function qDefaultCover() { return "/ws-art/home-hero.jpg"; }
+// as the owner asked; different from the page banners). "Add your photo" replaces it.
+function qDefaultCover() { return "/ws-art/projects.jpg"; }
 function qPickImage() {
   return new Promise(res => {
     const i = document.createElement("input");
