@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.10"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.11"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -39264,6 +39264,31 @@ function DraftsmanDrawings({ project, basePlate, spec, brief, onGoToDesign, onGo
   );
 }
 
+// A new user who opens Drawings, BOQ, Estima AI and so on before making a project used to see only
+// "Create a project first" with nothing to click (2026-11-09). This card explains why and offers the
+// button. It checks for itself, so it disappears as soon as the first project exists.
+const Q_FIRST_PROJECT_WHAT = { drawings: "drawings", boq: "BOQ", markup: "markup", compliance: "compliance checks",
+  reports: "reports", estima: "Estima AI answers", approvals: "approvals" };
+function QFirstProjectCard({ page, onNew }) {
+  const [none, setNone] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    sb.from("projects").select("id").limit(1).then(({ data, error }) => { if (alive && !error) setNone(!(data && data.length)); });
+    return () => { alive = false; };
+  }, [page]);
+  if (!none) return null;
+  return (
+    <div className="qnl-first">
+      <div className="qnl-first-txt">
+        <b>Start with your first project</b>
+        <p>{page === "estima" ? "Estima AI answers from a project's own drawings and BOQ" : "Drawings, BOQ, markup, compliance checks and reports are all kept inside a project"}, so the first step is to create one. It takes about a minute.</p>
+        <ol><li><span>1</span>Create a project</li><li><span>2</span>Upload a drawing</li><li><span>3</span>Get your take-off and BOQ</li></ol>
+      </div>
+      <button type="button" className="qnl-btn pri" onClick={onNew}>+ Create your first project</button>
+    </div>
+  );
+}
+
 function PortalBody({ view, setView, session, isPlatformAdmin, staffPerms, onOpenBilling }) {
   const { projects } = useProjects();
   // Which workspace the rail is showing. It follows the page you are on, and is
@@ -39347,7 +39372,10 @@ function PortalBody({ view, setView, session, isPlatformAdmin, staffPerms, onOpe
       workspace={workspace}
       onWorkspace={(ws) => { setWorkspace(ws); go(WORKSPACE_NAV[ws][0][1][0][0]); }}
       onChooser={() => go("chooser")}>
-      <React.Fragment key={refreshKey}>{page}</React.Fragment>
+      <React.Fragment key={refreshKey}>
+        {Q_FIRST_PROJECT_WHAT[view.name] && <QFirstProjectCard page={view.name} onNew={() => go("new")} />}
+        {page}
+      </React.Fragment>
     </PortalShell>
   );
 }
@@ -42119,6 +42147,15 @@ html:root .qx .qnl-page .qdash-grid:not(.listmode) .qdash-rail{order:2}
 html:root:has(.qx) body .qx .qp-item.on{background:linear-gradient(90deg,#4f46e5,#7c3aed)!important;color:#fff!important;box-shadow:0 8px 24px -8px rgba(124,58,237,.7)!important;border-color:transparent!important}
 html:root:has(.qx) body .qx .qp-item.on .ic{background:rgba(255,255,255,.16)!important;color:#fff!important}
 html:root:has(.qx) body .qx .qp-ws button.on{background:linear-gradient(135deg,rgba(79,70,229,.6),rgba(124,58,237,.5))!important;border-color:rgba(167,139,250,.6)!important;color:#fff!important}
+/* First-project card (2026-11-09) */
+html:root .qnl-first{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:16px;padding:20px 22px;border-radius:18px;color:#e6eaf7;
+  background:linear-gradient(120deg,rgba(79,70,229,.35),rgba(15,23,60,.9) 60%),url("/ws-art/project-default.jpg") right center/cover;border:1px solid rgba(167,139,250,.45);box-shadow:0 18px 40px -24px rgba(124,58,237,.7)}
+html:root .qnl-first-txt{flex:1 1 360px}
+html:root .qnl-first b{font-size:18px;color:#fff}
+html:root .qnl-first p{margin:6px 0 10px;font-size:13.5px;color:#d6dcff}
+html:root .qnl-first ol{display:flex;gap:16px;flex-wrap:wrap;list-style:none;margin:0;padding:0;font-size:12.5px;color:#e6eaf7}
+html:root .qnl-first ol span{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;margin-right:6px;font-size:11px;font-weight:800;background:#6366f1;color:#fff}
+html:root .qnl-first .qnl-btn{display:inline-flex;padding:12px 20px;border-radius:13px;font-weight:800;font-size:14px;color:#fff;border:0;cursor:pointer;background:linear-gradient(90deg,#6366f1,#8b5cf6);box-shadow:0 10px 28px -8px rgba(139,92,246,.8)}
 /* Home banners (2026-11-09) */
 html:root .qx .qnl-slide{position:relative;min-height:300px}
 html:root .qnl-badge{display:inline-block;font-size:11.5px;font-weight:800;letter-spacing:.04em;padding:4px 10px;border-radius:99px;background:#facc15;color:#1f1300;margin-bottom:10px}
