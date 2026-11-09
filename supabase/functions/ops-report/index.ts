@@ -109,11 +109,20 @@ async function runReport(manual: boolean) {
   if ((s.stuck_runs || 0) > 0) await raiseAlert("ops:stuck-runs", "ai-engine", `${s.stuck_runs} take-off run(s) stuck for 30+ minutes`, "Runs still processing after 30 minutes at the hourly check.");
   if ((s.stuck_jobs || 0) > 0) await raiseAlert("ops:stuck-jobs", "draftsman", `${s.stuck_jobs} Draftsman job(s) stuck for 60+ minutes`, "Draftsman jobs still queued or running after 60 minutes at the hourly check.");
 
+  // website visitors (2026-11-09): last hour + today (Dubai day)
+  const dayStart = new Date(Math.floor((to.getTime() + 4 * 3600e3) / 86400e3) * 86400e3 - 4 * 3600e3);
+  const [{ data: vh }, { data: vd }] = await Promise.all([
+    admin.rpc("q_site_visit_stats", { p_from: from.toISOString(), p_to: to.toISOString() }),
+    admin.rpc("q_site_visit_stats", { p_from: dayStart.toISOString(), p_to: to.toISOString() })]);
+  const srcTxt = ((vd?.sources || []) as any[]).map((x) => `${x.s} ${x.n}`).join(", ");
+  const visitLine = `Website: ${vh?.visitors ?? 0} visitor${vh?.visitors === 1 ? "" : "s"} this hour · ${vd?.visitors ?? 0} today${srcTxt ? ` (${srcTxt})` : ""}`;
+
   const signupWatch = await watchSignups().catch((e) => { console.error("signup watch", e); return { stuck: 0, reminded: 0 }; });
 
   const r = s.runs || {}, j = s.drawings || {}, c = s.chats || {}, rt = s.ratings || {}, u = s.users || {};
   const lines = [
     `Users: ${u.signups || 0} new · ${u.logins || 0} signed in`,
+    visitLine,
     `Waiting for email confirmation: ${signupWatch.stuck}${signupWatch.stuck ? " ⚠️" : ""}${signupWatch.reminded ? ` · ${signupWatch.reminded} reminder${signupWatch.reminded === 1 ? "" : "s"} sent` : ""}`,
     `Take-offs: ${r.completed || 0} done · ${r.failed || 0} failed · ${r.empty || 0} empty · ${s.pages || 0} pages`,
     `Drawings (Draftsman): ${j.done || 0} done · ${j.failed || 0} failed`,
@@ -134,7 +143,7 @@ async function runReport(manual: boolean) {
   // one push for the report; its own tag so it never replaces or mixes with an alert
   const push = await secret("PUSH_INTERNAL_SECRET");
   if (push) {
-    const short = [`${u.signups || 0} new users · ${u.logins || 0} signed in`, ...(signupWatch.stuck ? [`${signupWatch.stuck} waiting for email confirmation ⚠️`] : []), `${r.completed || 0} take-offs · ${r.failed || 0} failed`,
+    const short = [`${vd?.visitors ?? 0} website visitors today`, `${u.signups || 0} new users · ${u.logins || 0} signed in`, ...(signupWatch.stuck ? [`${signupWatch.stuck} waiting for email confirmation ⚠️`] : []), `${r.completed || 0} take-offs · ${r.failed || 0} failed`,
       `${c.new_chats || 0} chats · ${c.waiting || 0} waiting`, `${s.user_errors || 0} user errors`, ...(s.uploads_not_saved ? [`${s.uploads_not_saved} uploads not saved ❌`] : []), `Engines ${health.length - down.length}/${health.length}` + (down.length ? " ❌" : " ✅")].join(" · ");
     await fetch(`${URL_BASE}/functions/v1/push-notify`, { method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${ANON}`, apikey: ANON, "x-push-secret": push },

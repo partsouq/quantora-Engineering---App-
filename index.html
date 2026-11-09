@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-07.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.01"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ &amp; Take-Off from Drawings | Quantora Engineering</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -1515,8 +1515,6 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
           <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Product Specifications</div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Compliance Report</div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Procurement BOQ</div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span><span style="opacity:.72;">RFQ Package</span><span style="margin-left:8px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#fbbf24;border:1px solid rgba(251,191,36,0.45);border-radius:9999px;padding:1px 7px;vertical-align:1px;">Coming soon</span></div>
-          <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span><span style="opacity:.72;">Technical Submittal</span><span style="margin-left:8px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#fbbf24;border:1px solid rgba(251,191,36,0.45);border-radius:9999px;padding:1px 7px;vertical-align:1px;">Coming soon</span></div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Revision Comparison</div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>AI Assistant (project Q&amp;A)</div>
           <div class="check-item"><span class="check-ic"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Market Price Lookup (pay as you go)</div>
@@ -1652,7 +1650,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:#fff;font-weight:600;font-variant-numeric:tabular-nums;">43</td>
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);">No</td>
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);"><span style="font-size:11px;font-weight:600;color:#34d399;border:1px solid #34d39955;border-radius:9999px;padding:2px 9px;white-space:nowrap;">Confirmed</span></td>
-            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:260px;">Taken from the sheet&rsquo;s FCU schedule; 44 FCU tags found on the plan</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:260px;">From the sheet&rsquo;s FCU schedule; the plan&rsquo;s 44 FCU tags = these 43 + the server-room unit on line 2</td>
           </tr>
           <tr>
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:var(--text-dimmer);">2</td>
@@ -1672,7 +1670,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:#fff;font-weight:600;font-variant-numeric:tabular-nums;">1,031.95</td>
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);">m&sup2;</td>
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);"><span style="font-size:11px;font-weight:600;color:#60a5fa;border:1px solid #60a5fa55;border-radius:9999px;padding:2px 9px;white-space:nowrap;">Measured</span></td>
-            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:260px;">640.96 m measured along the drawn duct edges, 327 straight runs</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:260px;">640.96 m measured along the drawn duct (327 runs) &times; 1.4 m perimeter + 15% for fittings</td>
           </tr>
           <tr>
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:var(--text-dimmer);">4</td>
@@ -1682,7 +1680,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:#fff;font-weight:600;font-variant-numeric:tabular-nums;">449.09</td>
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dim,#9aa3ba);">m&sup2;</td>
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);"><span style="font-size:11px;font-weight:600;color:#60a5fa;border:1px solid #60a5fa55;border-radius:9999px;padding:2px 9px;white-space:nowrap;">Measured</span></td>
-            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:260px;">130.17 m in 83 straight runs; size printed beside the duct</td>
+            <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);color:var(--text-dimmer);font-size:12px;max-width:260px;">130.17 m measured (83 runs) &times; 3.0 m perimeter + 15% for fittings; size printed beside the duct</td>
           </tr>
           <tr>
             <td style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;color:var(--text-dimmer);">5</td>
@@ -1969,7 +1967,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   <div class="wrap">
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18a15 15 0 010-18"/></svg>Global Coverage</div>
     <h2 class="sectitle">Compliance that follows your project, wherever it is</h2>
-    <p class="secsub">Choose the country and city, and Quantora applies that jurisdiction's authorities, approvals, certificates and codes &mdash; not a generic checklist. <strong>532 regulatory rules across 20 countries</strong>, 17 system categories each, from the Middle East and Asia to the UK, Europe, the Americas and Australia. Where a city has its own authority it takes precedence; everywhere else the national requirement applies automatically.</p>
+    <p class="secsub">Choose the country and city, and Quantora applies that jurisdiction's authorities, approvals, certificates and codes &mdash; not a generic checklist. <strong>549 regulatory rules across 20 countries and Hong Kong</strong>, in 17 system categories, from the Middle East and Asia to the UK, Europe, the Americas and Australia. Where a city has its own authority it takes precedence; everywhere else the national requirement applies automatically. Any other country is covered by the international standards (NFPA, EN, IEC) for every line.</p>
     
     <div class="qcov-grid">
       <div class="team-card qcov-card" style="--qc:#22c55e">
@@ -2010,7 +2008,6 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Rest of the EU &mdash; EN 54, EN 12845, HD 60364 and EN 1838 emergency lighting</div>
           <div class="sec-item"><span class="check-ic"><svg class="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></svg></span>Every line states the standard it was checked against</div>
         </div>
-        <div class="qcov-soon">Full authority rule sets for EU states: coming soon</div>
         <div class="qcov-links"><a href="ukcompliance.html">UK guide</a></div>
       </div>
       <div class="team-card qcov-card" style="--qc:#f472b6">
@@ -41210,5 +41207,6 @@ html:root .qx .qwc-jump-h{font-size:12px;font-weight:800;letter-spacing:.2em;tex
 html:root .qx .qwc-jump > div:last-child{border-radius:16px;overflow:hidden}
 @media (max-width:640px){html:root .qx .qwc-sky{max-width:70%;opacity:.45}html:root .qx .qwc-art{width:75%;opacity:.7}html:root .qx .qwc-title{font-size:22px}}
 </style>
+<script src="/visit.js" defer></script>
 </body>
 </html>
