@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.05"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.06"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -8381,8 +8381,140 @@ function ptAgo(iso) {
   return new Date(iso).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
 }
 const PT_STAGE_ORDER = { priced: 0, taken_off: 1, drawings: 2, new: 3 };
+// ---------------------------------------------------------------------------
+// Project cover photos (2026-11-09). One photo per project in the private "project-covers" bucket
+// at <project_id>/cover-<time>.jpg, resized in the browser first. Only people who can see the project
+// see the photo; only people who can edit it can change it (storage + projects policies).
+// ---------------------------------------------------------------------------
+const qCoverCache = new Map();               // storage path -> { url, exp }
+const qCoverPaths = {};                       // project id -> path, after a change in this tab
+async function qCoverUrls(paths) {
+  const want = [...new Set(paths.filter(Boolean))];
+  const need = want.filter(x => !((qCoverCache.get(x) || {}).exp > Date.now()));
+  if (need.length) {
+    try {
+      const { data } = await sb.storage.from("project-covers").createSignedUrls(need, 3600);
+      (data || []).forEach(x => { if (x && x.signedUrl) qCoverCache.set(x.path, { url: x.signedUrl, exp: Date.now() + 3300e3 }); });
+    } catch (_) {}
+  }
+  const out = {}; want.forEach(x => { const c = qCoverCache.get(x); if (c) out[x] = c.url; }); return out;
+}
+function qCoverPathOf(p) { return p ? (Object.prototype.hasOwnProperty.call(qCoverPaths, p.id) ? qCoverPaths[p.id] : p.cover_path) : null; }
+function useProjectCovers(projects) {
+  const [urls, setUrls] = useState({});
+  const [ver, setVer] = useState(0);
+  useEffect(() => { const on = () => setVer(v => v + 1); window.addEventListener("q-cover", on); return () => window.removeEventListener("q-cover", on); }, []);
+  const key = (projects || []).map(p => p.id + ":" + (qCoverPathOf(p) || "")).join("|");
+  useEffect(() => {
+    let alive = true;
+    const paths = (projects || []).map(qCoverPathOf).filter(Boolean);
+    if (!paths.length) { setUrls({}); return; }
+    qCoverUrls(paths).then(u => { if (alive) setUrls(u); });
+    return () => { alive = false; };
+  }, [key, ver]);
+  return p => { const x = qCoverPathOf(p); return x ? urls[x] || null : null; };
+}
+function qPickImage() {
+  return new Promise(res => {
+    const i = document.createElement("input");
+    i.type = "file"; i.accept = "image/jpeg,image/png,image/webp";
+    i.onchange = () => res(i.files && i.files[0] ? i.files[0] : null);
+    i.click();
+  });
+}
+async function qResizeImage(file, max = 1400) {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) throw new Error("Please choose a JPG, PNG or WebP picture.");
+  if (file.size > 15 * 1024 * 1024) throw new Error("That picture is larger than 15 MB. Please choose a smaller one.");
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  return await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error("Could not read that picture.")), "image/jpeg", 0.85));
+}
+async function qSetProjectCover(project, file) {
+  const blob = await qResizeImage(file);
+  const old = qCoverPathOf(project);
+  const path = `${project.id}/cover-${Date.now()}.jpg`;
+  const up = await sb.storage.from("project-covers").upload(path, blob, { contentType: "image/jpeg", upsert: false });
+  if (up.error) throw new Error(/row-level|policy|permission|403/i.test(up.error.message) ? "You don't have permission to change this project's photo." : up.error.message);
+  const { error } = await sb.from("projects").update({ cover_path: path, cover_updated_at: new Date().toISOString() }).eq("id", project.id);
+  if (error) { sb.storage.from("project-covers").remove([path]).catch(() => {}); throw new Error(/row-level|policy|permission/i.test(error.message) ? "You don't have permission to change this project's photo." : error.message); }
+  if (old) sb.storage.from("project-covers").remove([old]).catch(() => {});
+  qCoverPaths[project.id] = path; project.cover_path = path;
+  window.dispatchEvent(new CustomEvent("q-cover", { detail: { id: project.id, path } }));
+}
+async function qRemoveProjectCover(project) {
+  const old = qCoverPathOf(project);
+  const { error } = await sb.from("projects").update({ cover_path: null, cover_updated_at: new Date().toISOString() }).eq("id", project.id);
+  if (error) throw new Error(/row-level|policy|permission/i.test(error.message) ? "You don't have permission to change this project's photo." : error.message);
+  if (old) sb.storage.from("project-covers").remove([old]).catch(() => {});
+  qCoverPaths[project.id] = null; project.cover_path = null;
+  window.dispatchEvent(new CustomEvent("q-cover", { detail: { id: project.id, path: null } }));
+}
+function useCoverAction(project) {
+  const [busy, setBusy] = useState(false);
+  async function change(e) {
+    if (e) { e.stopPropagation(); e.preventDefault(); }
+    const f = await qPickImage(); if (!f) return;
+    setBusy(true);
+    try { await qSetProjectCover(project, f); }
+    catch (ex) { qPop({ kind: "error", title: "Photo not saved", message: ex.message || String(ex) }); }
+    finally { setBusy(false); }
+  }
+  async function remove(e) {
+    if (e) { e.stopPropagation(); e.preventDefault(); }
+    setBusy(true);
+    try { await qRemoveProjectCover(project); }
+    catch (ex) { qPop({ kind: "error", title: "Photo not removed", message: ex.message || String(ex) }); }
+    finally { setBusy(false); }
+  }
+  return { busy, change, remove };
+}
+// Small picture in a projects list; "+ Photo" when there is none.
+function ProjectThumb({ project, url }) {
+  const { busy, change } = useCoverAction(project);
+  if (url) return <span className="qnl-th"><img src={url} alt="" loading="lazy" /><button type="button" className="qnl-th-cam" title="Change photo" onClick={change}>{busy ? "…" : "📷"}</button></span>;
+  return <button type="button" className="qnl-th qnl-th-add" title="Add a project photo" onClick={change}>{busy ? "Saving…" : <>＋<br />Photo</>}</button>;
+}
+// Big picture on a project card or the project page, with Change / Remove (or Add photo).
+function ProjectCover({ project, url, tall, children }) {
+  const { busy, change, remove } = useCoverAction(project);
+  return (
+    <div className={"qnl-cover" + (tall ? " tall" : "") + (url ? "" : " empty")} style={url ? { backgroundImage: `url("${url}")` } : null}>
+      {url ? (
+        <div className="qnl-cover-btns">
+          <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : "📷 Change photo"}</button>
+          {tall && <button type="button" onClick={remove} disabled={busy}>✕ Remove</button>}
+        </div>
+      ) : (
+        <div className="qnl-cover-add">
+          <span aria-hidden="true">🏙️</span>
+          <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : "⤒ Add photo"}</button>
+          {tall && <small>JPG, PNG or WebP. Resized and saved with the project.</small>}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+// The project page: a cover banner when there is a photo; otherwise a small "Add project photo" button.
+function ProjectPageCover({ project }) {
+  const coverOf = useProjectCovers([project]);
+  const url = coverOf(project);
+  const { busy, change } = useCoverAction(project);
+  if (url) return <ProjectCover project={project} url={url} tall />;
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+      <button type="button" className="qnl-addphoto" onClick={change} disabled={busy}>{busy ? "Saving…" : "📷 Add project photo"}</button>
+    </div>
+  );
+}
+
 function ProjectTable({ projects, metrics, onOpen, compact, limit, stageFilter }) {
   const [sort, setSort] = useState(["activity", -1]);
+  const coverOf = useProjectCovers(projects);
   const m = (p) => metrics[p.id] || {};
   const activity = (p) => m(p).lastRun || p.updated_at || p.created_at;
   const cols = compact
@@ -8421,6 +8553,9 @@ function ProjectTable({ projects, metrics, onOpen, compact, limit, stageFilter }
             return (
               <tr key={p.id} tabIndex={0} onClick={() => onOpen(p)} onKeyDown={e => { if (e.key === "Enter") onOpen(p); }} style={{ "--st": colour }}>
                 <td className="nm">
+                  <div className="qnl-nm">
+                  <ProjectThumb project={p} url={coverOf(p)} />
+                  <div style={{ minWidth: 0 }}>
                   <div className="pt-n">
                     <i className="pt-dot" />
                     <span className="pt-t" title={p.project_name}>{p.project_name}</span>
@@ -8432,6 +8567,8 @@ function ProjectTable({ projects, metrics, onOpen, compact, limit, stageFilter }
                     {buildingTypeLabel(p.building_type)}
                     {p.number_of_floors ? ` · ${p.number_of_floors} floor${Number(p.number_of_floors) === 1 ? "" : "s"}` : ""}
                     {p.area_size ? ` · ${Number(p.area_size).toLocaleString()} ${p.area_unit || "sqm"}` : ""}
+                  </div>
+                  </div>
                   </div>
                 </td>
                 <td><StagePill stage={st} /></td>
@@ -8612,6 +8749,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
   // than for the project name, so drawings are searchable too. Capped, because
   // a two-letter query on a large account would otherwise return everything.
   const projectById = Object.fromEntries(projects.map(p => [p.id, p]));
+  const coverOf = useProjectCovers(projects);
   const matchedDrawings = !q ? [] : drawings
     .filter(d => String(d.file_name || "").toLowerCase().includes(q))
     .slice(0, 24);
@@ -8625,17 +8763,18 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
   );
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold">All projects</h1>
-          <p className="text-slate-500 text-sm">Every project you are working on. Open one and the whole workspace switches to it — its documents, drawings, take-off, estimate, suppliers and approvals.</p>
+    <div className="p-6 max-w-7xl mx-auto qnl-page">
+      <section className="qnl-hero qnl-hero-sm">
+        <img className="qnl-hero-img" src="/ws-art/home-hero.jpg" alt="" />
+        <div className="qnl-hero-txt">
+          <h1 className="qnl-h1">All projects</h1>
+          <p>Every project you are working on. Open one and the whole workspace switches to it — its documents, drawings, take-off, estimate, suppliers and approvals.</p>
+          <div className="qnl-row">
+            <SearchBox placeholder="Search projects…" />
+            <button onClick={onNewProject} className="qnl-btn pri">+ New Project</button>
+          </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <SearchBox placeholder="Search projects…" />
-          <button onClick={onNewProject} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-800 shrink-0 whitespace-nowrap">+ New Project</button>
-        </div>
-      </div>
+      </section>
 
       {loadError && (
         <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-6 flex items-center justify-between">
@@ -8655,8 +8794,8 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
         <button onClick={onOpenBilling}>Plan &amp; billing</button>
         {shownProjects.length > 0 && <div className="grp">Your projects</div>}
         {shownProjects.slice(0, 12).map(p => (
-          <button key={`nav-${p.id}`} className="proj" onClick={() => onOpenProject(p)} title={p.project_name}>
-            {p.project_name}
+          <button key={`nav-${p.id}`} className="proj qnl-navproj" onClick={() => onOpenProject(p)} title={p.project_name}>
+            {coverOf(p) ? <img src={coverOf(p)} alt="" /> : <i aria-hidden="true" />}{p.project_name}
           </button>
         ))}
         {shownProjects.length > 12 && <div className="grp" style={{ paddingTop: 6 }}>+{shownProjects.length - 12} more below</div>}
@@ -8696,6 +8835,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
                 <b style={{ color: n ? colour : "var(--q-text-dimmer,#94a3b8)" }}>{n}</b>
                 <span>{label}</span>
                 <em>{help}</em>
+                <i className="qnl-stbar" aria-hidden="true"><i style={{ width: `${projects.length ? Math.round(n / projects.length * 100) : 0}%`, background: colour }} /></i>
               </button>
             );
           })}
@@ -8797,8 +8937,9 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
         ) : (
         <div className="qdash-projs">
           {shownProjects.filter(p => !stageFilter || stageOf(metrics[p.id]) === stageFilter).map(p => (
-            <div key={p.id} onClick={() => onOpenProject(p)} className="qdash-proj"
+            <div key={p.id} onClick={() => onOpenProject(p)} className="qdash-proj qnl-card"
               style={{ "--q-stage": (PROJECT_STAGES.find(x => x[0] === stageOf(metrics[p.id])) || PROJECT_STAGES[3])[2] }}>
+              <ProjectCover project={p} url={coverOf(p)} />
               <div className="flex items-start justify-between gap-3">
                 <div className="pn">{p.project_name}</div>
                 <StagePill stage={stageOf(metrics[p.id])} />
@@ -12671,6 +12812,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
         {onHome && <button onClick={onHome} className="text-sm text-slate-500 hover:text-slate-900">&larr; Home</button>}
         <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-900">All projects</button>
       </div>
+      <ProjectPageCover project={project} />
       <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -25875,7 +26017,7 @@ function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, isPla
             {items.map(Item)}
           </div>
         ))}
-        <div className="qp-side-foot">
+        <div className="qp-side-foot qnl-foot">
           <b>Upgrade your plan</b>
           <p>More AI pages, more projects and more seats for your team.</p>
           <button onClick={onUpgrade}>Upgrade Plan</button>
@@ -26137,29 +26279,19 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
   };
 
   return (
-    <div className="qh">
-      <div className="qh-hi">
-        <div>
-          <h1>{greetingFor(new Date())}{hello} <span aria-hidden="true">👋</span></h1>
-          <p>Turn your construction drawings into a complete BOQ in minutes.</p>
-        </div>
-        <div className="qh-acts">
-          <button className="qh-btn pri" onClick={onNewProject}>+ New Project</button>
-          <button className="qh-btn" onClick={() => onNavigate("drawings")}>Upload Drawings</button>
-        </div>
-      </div>
-
-      <FeedbackNudge />
-
-      {/* Hero. The search is real -- it filters the projects already loaded. */}
-      <section className="qh-hero">
-        <div className="qh-hero-txt">
-          <h3>What would you like to work on today?</h3>
-          <p>Upload drawings, start a new project, or jump back into one you have open.</p>
-          <div className="qh-hero-row">
-            <input className="qh-find" placeholder="Find a project by name or city…"
+    <div className="qh qnl">
+      {/* Hero (new look 2026-11-09): greeting, project search, New Project and Upload Drawings over the building picture. */}
+      <section className="qnl-hero">
+        <img className="qnl-hero-img" src="/ws-art/home-hero.jpg" alt="" />
+        <div className="qnl-hero-txt">
+          <h1 className="qnl-hello">{greetingFor(new Date())}{hello} <span aria-hidden="true">👋</span></h1>
+          <div className="qnl-h1 grad">Turn your drawings into a complete BOQ in minutes.</div>
+          <p>What would you like to work on today? Upload drawings, start a new project, or jump back into one you have open.</p>
+          <div className="qnl-row">
+            <input className="qh-find qnl-find" placeholder="Find a project by name or city…"
               value={q} onChange={e => setQ(e.target.value)} />
-            <button className="qh-btn pri" onClick={onNewProject}>+ New Project</button>
+            <button className="qnl-btn pri" onClick={onNewProject}>+ New Project</button>
+            <button className="qnl-btn" onClick={() => onNavigate("drawings")}>⤒ Upload Drawings</button>
           </div>
           {q.trim() && (
             <div className="qh-hits">
@@ -26172,22 +26304,9 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
             </div>
           )}
         </div>
-        <svg className="qh-iso" viewBox="0 0 300 155" aria-hidden="true">
-          <defs>
-            <linearGradient id="qhg1" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stopColor="#7c3aed" stopOpacity=".85" /><stop offset="1" stopColor="#22d3ee" stopOpacity=".5" /></linearGradient>
-            <linearGradient id="qhg2" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="#7c3aed" stopOpacity=".95" /><stop offset="1" stopColor="#4c1d95" stopOpacity=".5" /></linearGradient>
-          </defs>
-          <path d="M150 118 40 90l110-28 110 28Z" fill="url(#qhg1)" opacity=".55" />
-          <path d="M150 96 55 72l95-24 95 24Z" fill="url(#qhg1)" opacity=".75" />
-          <path d="M150 74 70 54l80-20 80 20Z" fill="url(#qhg1)" />
-          <path d="M150 34 118 42v22l32 8 32-8V42Z" fill="url(#qhg2)" />
-          <path d="M150 12 126 18v24l24 6 24-6V18Z" fill="url(#qhg2)" opacity=".9" />
-          <path d="M150 12 126 18l24 6 24-6Z" fill="#c4b5fd" opacity=".85" />
-          <g stroke="#67e8f9" strokeWidth="1" opacity=".8"><path d="M150 74v22M110 62v22M190 62v22" /></g>
-        </svg>
       </section>
+
+      <FeedbackNudge />
 
       {/* Divisions. Estimation is live for everyone; the other three appear
           only for the platform owner until they have data behind them. */}
@@ -40747,7 +40866,7 @@ select.bg-white:focus,input.bg-white:focus{outline:none;border-color:rgba(99,102
 }
 </style>
 <style id="quantora-light-v3">
-/* Light platform theme (2026-10-17), approved from Irfan's reference picture.
+/* Light platform theme (2026-10-17), approved from the owner's reference picture.
    Scoped to .qx, the class on the signed-in app root, so the public landing
    page and the admin portal keep their own dark look untouched. Every rule is
    ".qx <selector>", one class more specific than the dark-theme rule it
@@ -41622,7 +41741,7 @@ html:root:has(.qx) .qx .bg-slate-900,html:root:has(.qx) .qx .bg-blue-600,html:ro
 html:root:has(.qx) .qx .qh-card,html:root:has(.qx) .qx .qh-kpi,html:root:has(.qx) .qx .qh-act,html:root:has(.qx) .qx .bg-white{background:linear-gradient(180deg,rgba(17,24,64,.82),rgba(12,18,52,.82))!important}
 </style>
 <style id="quantora-home-cards">
-/* Home "Where are you working today?" (2026-10-25), from Irfan's reference picture.
+/* Home "Where are you working today?" (2026-10-25), from the owner's reference picture.
    Big gradient cards with a picture in the top-right, icon in a circle, stats,
    and a full-width button with an icon and arrow. */
 html:root .qx .qwc-hero{position:relative;text-align:center;padding:46px 12px 38px;margin:0 -16px 6px;overflow:hidden;border-radius:0 0 28px 28px}
@@ -41664,6 +41783,99 @@ html:root .qx .qwc-go.locked{background:transparent!important;border:1px solid v
 html:root .qx .qwc-jump-h{font-size:12px;font-weight:800;letter-spacing:.2em;text-transform:uppercase;color:#dbe5f3!important}
 html:root .qx .qwc-jump > div:last-child{border-radius:16px;overflow:hidden}
 @media (max-width:640px){html:root .qx .qwc-sky{max-width:70%;opacity:.45}html:root .qx .qwc-art{width:75%;opacity:.7}html:root .qx .qwc-title{font-size:22px}}
+</style>
+<style id="quantora-new-look">
+/* New look (2026-11-09), approved by the owner: glassy navy/purple cards, the building picture in the
+   hero, gradient headings, and project photos. Only the look changes; every button and section stays. */
+html:root .qx .qnl-hero{position:relative;min-height:300px;border-radius:24px;overflow:hidden;margin-bottom:4px;
+  background:#0b1240!important;border:1px solid rgba(129,140,248,.3)!important;box-shadow:0 30px 60px -30px rgba(79,70,229,.55)}
+html:root .qx .qnl-hero-sm{min-height:200px;margin-bottom:22px}
+html:root .qx .qnl-hero-img{position:absolute;right:0;top:0;height:100%;width:68%;object-fit:cover;object-position:right center;pointer-events:none}
+html:root .qx .qnl-hero:after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(90deg,#0b1240 0%,#0b1240 40%,rgba(11,18,64,.8) 55%,rgba(11,18,64,.15) 80%,rgba(11,18,64,0) 100%)}
+html:root .qx .qnl-hero-txt{position:relative;z-index:1;padding:32px 36px;max-width:760px}
+html:root .qx .qnl-hello{font-size:28px;font-weight:800;color:#fff!important;margin:0}
+html:root .qx .qnl-h1{font-size:clamp(28px,3.1vw,42px);font-weight:800;line-height:1.1;letter-spacing:-.02em;margin-top:6px;color:#fff!important}
+html:root .qx .qnl-h1.grad{background:linear-gradient(90deg,#38bdf8,#818cf8 45%,#c084fc);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent!important}
+html:root .qx .qnl-hero-txt p{color:#c4cdee!important;font-size:15px;margin:10px 0 0;line-height:1.55}
+html:root .qx .qnl-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:18px}
+html:root .qx .qnl-find,html:root .qx .qnl-page .qsearch{flex:0 1 330px;min-width:220px;background:rgba(6,10,31,.72)!important;border:1px solid rgba(129,140,248,.4)!important;color:#e6eaf7!important;border-radius:13px!important}
+html:root .qx .qnl-page .qnl-hero .qsearch{display:flex;align-items:center;padding:0 12px}
+html:root .qx .qnl-page .qsearch input{background:transparent!important;color:#e6eaf7!important;border:0!important;box-shadow:none!important;outline:0;width:100%}
+html:root .qx .qnl-btn{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:13px;font-weight:700;font-size:14px;cursor:pointer;
+  color:#fff!important;border:1px solid rgba(199,210,254,.35);background:rgba(6,10,31,.45)!important;white-space:nowrap}
+html:root .qx .qnl-btn.pri{border:0;background:linear-gradient(90deg,#6366f1,#8b5cf6)!important;box-shadow:0 10px 28px -8px rgba(139,92,246,.8)}
+html:root .qx .qnl-btn:hover{filter:brightness(1.1)}
+html:root .qx .qnl .qh-hits{position:relative;z-index:2;max-width:560px}
+/* cards: glass with a soft glow */
+html:root .qx .qnl .qh-act,html:root .qx .qnl .qh-kpi,html:root .qx .qnl .qh-card,html:root .qx .qnl .qh-strip,
+html:root .qx .qnl-page .qdash-card,html:root .qx .qnl-page .qdash-proj,html:root .qx .qnl-page .qapp-nav,html:root .qx .qnl-page .bg-white.border{
+  background:linear-gradient(165deg,rgba(23,31,82,.88),rgba(9,14,42,.94))!important;border:1px solid rgba(129,140,248,.22)!important;border-radius:18px!important;
+  box-shadow:0 18px 36px -24px rgba(79,70,229,.6),inset 0 1px 0 rgba(255,255,255,.05)!important}
+html:root .qx .qnl .qh-act{transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}
+html:root .qx .qnl .qh-act:hover,html:root .qx .qnl-page .qdash-proj:hover{transform:translateY(-2px);border-color:rgba(167,139,250,.55)!important;box-shadow:0 22px 40px -22px rgba(139,92,246,.75)!important}
+html:root .qx .qnl .qh-act .ic{border-radius:14px!important;box-shadow:0 8px 18px -10px currentColor}
+html:root .qx .qnl .qh-sec{display:flex;align-items:center;gap:10px;color:#fff!important}
+html:root .qx .qnl .qh-sec:before{content:"";width:4px;height:19px;border-radius:3px;background:linear-gradient(#38bdf8,#a855f7)}
+html:root .qx .qnl .qh-kpi .n{color:#fff!important}
+html:root .qx .qnl .qh-ph{color:#fff!important}
+html:root .qx .qnl .qh-upg{background:linear-gradient(90deg,#6366f1,#8b5cf6)!important}
+/* project photos */
+html:root .qx .qnl-nm{display:flex;align-items:center;gap:12px;min-width:0}
+html:root .qx .qnl-th{position:relative;flex:none;width:58px;height:40px;border-radius:9px;overflow:hidden;display:block;border:1px solid rgba(255,255,255,.14)}
+html:root .qx .qnl-th img{width:100%;height:100%;object-fit:cover;display:block}
+html:root .qx .qnl-th-cam{position:absolute;right:2px;bottom:2px;width:18px;height:18px;border-radius:50%;font-size:9px;line-height:1;display:grid;place-items:center;
+  background:#6366f1;border:1.5px solid #0b1240;opacity:0;transition:opacity .15s;cursor:pointer;color:#fff}
+html:root .qx tr:hover .qnl-th-cam,html:root .qx .qnl-th:focus-within .qnl-th-cam{opacity:1}
+html:root .qx .qnl-th-add{display:grid;place-items:center;text-align:center;font-size:10px;line-height:1.1;font-weight:700;color:#c4b5fd!important;cursor:pointer;
+  background:rgba(99,102,241,.12)!important;border:1.5px dashed rgba(167,139,250,.7)!important}
+html:root .qx .qnl-cover{position:relative;height:130px;margin:-16px -16px 12px;background:#14114a center/cover no-repeat;border-radius:18px 18px 0 0;overflow:hidden}
+html:root .qx .qnl-cover.tall{height:200px;margin:0 0 14px;border-radius:20px;border:1px solid rgba(129,140,248,.28)}
+html:root .qx .qnl-cover:not(.empty):after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 45%,rgba(6,10,31,.75));pointer-events:none}
+html:root .qx .qnl-cover.empty{background:linear-gradient(135deg,#1e1b6b,#0e1a5a)!important;display:grid;place-items:center}
+html:root .qx .qnl-cover-btns{position:absolute;right:10px;top:10px;z-index:2;display:flex;gap:8px}
+html:root .qx .qnl-cover-btns button{font-size:12px;font-weight:700;padding:6px 10px;border-radius:9px;color:#fff!important;background:rgba(6,10,31,.72)!important;border:1px solid rgba(255,255,255,.28)!important;cursor:pointer}
+html:root .qx .qnl-cover-add{text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px}
+html:root .qx .qnl-cover-add span{font-size:24px}
+html:root .qx .qnl-cover-add button{font-size:12.5px;font-weight:700;padding:7px 14px;border-radius:10px;color:#fff!important;background:linear-gradient(90deg,#6366f1,#8b5cf6)!important;border:0;cursor:pointer}
+html:root .qx .qnl-cover-add small{font-size:11.5px;color:#a8b3dc}
+html:root .qx .qnl-addphoto{font-size:12.5px;font-weight:700;padding:7px 12px;border-radius:10px;color:#c4b5fd!important;background:rgba(99,102,241,.12)!important;border:1px dashed rgba(167,139,250,.6)!important;cursor:pointer}
+html:root .qx .qnl-navproj{display:flex!important;align-items:center;gap:8px}
+html:root .qx .qnl-navproj img,html:root .qx .qnl-navproj i{width:28px;height:20px;border-radius:5px;object-fit:cover;flex:none;border:1px dashed rgba(167,139,250,.5)}
+html:root .qx .qnl-navproj img{border-style:solid;border-color:rgba(255,255,255,.15)}
+/* side menu upgrade card with the city picture */
+html:root .qx .qnl-foot{position:relative;overflow:hidden;isolation:isolate;border:1px solid rgba(167,139,250,.4)!important;
+  background:linear-gradient(160deg,rgba(49,46,129,.7),rgba(15,23,60,.85)),url("/ws-art/city-blue.jpg") center/cover!important}
+/* All projects, matched to the approved mockup */
+html:root .qx .qnl-page .qdash-kpi{position:relative;padding:16px 18px 16px 22px!important;overflow:hidden}
+html:root .qx .qnl-page .qdash-kpi > i{position:absolute!important;left:0!important;top:14px!important;bottom:14px!important;width:4px!important;height:auto!important;border-radius:0 4px 4px 0!important;box-shadow:0 0 12px currentColor}
+html:root .qx .qnl-page .qdash-kpi b{color:#fff!important;font-size:28px!important;font-weight:800!important}
+html:root .qx .qnl-page .qdash-kpi span{color:#a8b3dc!important}
+html:root .qx .qnl-page .qstage .st{position:relative;overflow:hidden;text-align:left;padding:16px 18px 16px 22px!important;
+  background:linear-gradient(165deg,rgba(23,31,82,.88),rgba(9,14,42,.94))!important;border:1px solid rgba(129,140,248,.22)!important;border-radius:18px!important;box-shadow:0 18px 36px -24px rgba(79,70,229,.6)!important}
+html:root .qx .qnl-page .qstage .st:before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:4px;border-radius:0 4px 4px 0;background:var(--st)}
+html:root .qx .qnl-page .qstage .st b{color:#fff!important;font-size:28px!important;font-weight:800!important}
+html:root .qx .qnl-page .qstage .st span{color:#fff!important;font-weight:700}
+html:root .qx .qnl-page .qstage .st em{color:#a8b3dc!important;font-style:normal}
+html:root .qx .qnl-page .qstage .st.on{border-color:var(--st)!important;box-shadow:0 0 0 1px var(--st),0 18px 36px -20px var(--st)!important}
+html:root .qx .qnl-page .qdash-projs{grid-template-columns:repeat(auto-fill,minmax(250px,1fr))!important}
+html:root .qx .qnl-stbar{display:block;height:7px;border-radius:9px;background:rgba(255,255,255,.1);margin-top:10px;overflow:hidden}
+html:root .qx .qnl-stbar i{display:block;height:100%;border-radius:9px}
+html:root .qx .qnl-page .qapp-nav button.on{background:linear-gradient(90deg,rgba(79,70,229,.65),rgba(124,58,237,.45))!important;color:#fff!important;border-radius:10px;box-shadow:none!important}
+html:root .qx .qnl-page .pt-view button.on{background:linear-gradient(90deg,#6366f1,#8b5cf6)!important;color:#fff!important;border-color:transparent!important}
+html:root .qx .qnl-page .qpt th{background:rgba(255,255,255,.03)!important;color:#8391c6!important}
+html:root .qx .qnl-page .qdash-grid:not(.listmode){grid-template-columns:1fr!important}
+html:root .qx .qnl-page .qdash-grid:not(.listmode) .qdash-rail{order:2}
+/* main side menu and workspace buttons in the purple style */
+html:root:has(.qx) body .qx .qp-item.on{background:linear-gradient(90deg,#4f46e5,#7c3aed)!important;color:#fff!important;box-shadow:0 8px 24px -8px rgba(124,58,237,.7)!important;border-color:transparent!important}
+html:root:has(.qx) body .qx .qp-item.on .ic{background:rgba(255,255,255,.16)!important;color:#fff!important}
+html:root:has(.qx) body .qx .qp-ws button.on{background:linear-gradient(135deg,rgba(79,70,229,.6),rgba(124,58,237,.5))!important;border-color:rgba(167,139,250,.6)!important;color:#fff!important}
+@media (max-width:760px){
+  html:root .qx .qnl-hero-img{width:100%;opacity:.35}
+  html:root .qx .qnl-hero:after{background:linear-gradient(180deg,rgba(11,18,64,.4),#0b1240 85%)}
+  html:root .qx .qnl-hero-txt{padding:24px 18px}
+  html:root .qx .qnl-hello{font-size:22px}
+}
 </style>
 <script src="/visit.js" defer></script>
 </body>
