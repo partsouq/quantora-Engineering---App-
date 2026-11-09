@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.06"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-09.07"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -8414,6 +8414,14 @@ function useProjectCovers(projects) {
   }, [key, ver]);
   return p => { const x = qCoverPathOf(p); return x ? urls[x] || null : null; };
 }
+// A standard picture for projects without their own photo (2026-11-09). Each project always gets the
+// same one (picked from its id), so the list looks varied. "Add your photo" replaces it.
+const Q_DEFAULT_COVERS = ["/ws-art/home-hero.jpg", "/ws-art/projects.jpg", "/ws-art/estima-3d.jpg", "/ws-art/skyline.jpg"];
+function qDefaultCover(p) {
+  const id = String((p && p.id) || ""); let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return Q_DEFAULT_COVERS[h % Q_DEFAULT_COVERS.length];
+}
 function qPickImage() {
   return new Promise(res => {
     const i = document.createElement("input");
@@ -8474,42 +8482,27 @@ function useCoverAction(project) {
 // Small picture in a projects list; "+ Photo" when there is none.
 function ProjectThumb({ project, url }) {
   const { busy, change } = useCoverAction(project);
-  if (url) return <span className="qnl-th"><img src={url} alt="" loading="lazy" /><button type="button" className="qnl-th-cam" title="Change photo" onClick={change}>{busy ? "…" : "📷"}</button></span>;
-  return <button type="button" className="qnl-th qnl-th-add" title="Add a project photo" onClick={change}>{busy ? "Saving…" : <>＋<br />Photo</>}</button>;
+  return <span className="qnl-th"><img src={url || qDefaultCover(project)} alt="" loading="lazy" />
+    <button type="button" className="qnl-th-cam" title={url ? "Change photo" : "Add your own photo"} onClick={change}>{busy ? "…" : "📷"}</button></span>;
 }
 // Big picture on a project card or the project page, with Change / Remove (or Add photo).
 function ProjectCover({ project, url, tall, children }) {
   const { busy, change, remove } = useCoverAction(project);
   return (
-    <div className={"qnl-cover" + (tall ? " tall" : "") + (url ? "" : " empty")} style={url ? { backgroundImage: `url("${url}")` } : null}>
-      {url ? (
-        <div className="qnl-cover-btns">
-          <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : "📷 Change photo"}</button>
-          {tall && <button type="button" onClick={remove} disabled={busy}>✕ Remove</button>}
-        </div>
-      ) : (
-        <div className="qnl-cover-add">
-          <span aria-hidden="true">🏙️</span>
-          <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : "⤒ Add photo"}</button>
-          {tall && <small>JPG, PNG or WebP. Resized and saved with the project.</small>}
-        </div>
-      )}
+    <div className={"qnl-cover" + (tall ? " tall" : "")} style={{ backgroundImage: `url("${url || qDefaultCover(project)}")` }}>
+      <div className="qnl-cover-btns">
+        <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : url ? "📷 Change photo" : "📷 Add your photo"}</button>
+        {tall && url && <button type="button" onClick={remove} disabled={busy}>✕ Remove</button>}
+      </div>
       {children}
     </div>
   );
 }
 
-// The project page: a cover banner when there is a photo; otherwise a small "Add project photo" button.
+// The project page: a cover banner with the own photo, or the standard picture.
 function ProjectPageCover({ project }) {
   const coverOf = useProjectCovers([project]);
-  const url = coverOf(project);
-  const { busy, change } = useCoverAction(project);
-  if (url) return <ProjectCover project={project} url={url} tall />;
-  return (
-    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
-      <button type="button" className="qnl-addphoto" onClick={change} disabled={busy}>{busy ? "Saving…" : "📷 Add project photo"}</button>
-    </div>
-  );
+  return <ProjectCover project={project} url={coverOf(project)} tall />;
 }
 
 function ProjectTable({ projects, metrics, onOpen, compact, limit, stageFilter }) {
@@ -8795,7 +8788,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
         {shownProjects.length > 0 && <div className="grp">Your projects</div>}
         {shownProjects.slice(0, 12).map(p => (
           <button key={`nav-${p.id}`} className="proj qnl-navproj" onClick={() => onOpenProject(p)} title={p.project_name}>
-            {coverOf(p) ? <img src={coverOf(p)} alt="" /> : <i aria-hidden="true" />}{p.project_name}
+            <img src={coverOf(p) || qDefaultCover(p)} alt="" />{p.project_name}
           </button>
         ))}
         {shownProjects.length > 12 && <div className="grp" style={{ paddingTop: 6 }}>+{shownProjects.length - 12} more below</div>}
@@ -41831,7 +41824,7 @@ html:root .qx .qnl-th-add{display:grid;place-items:center;text-align:center;font
   background:rgba(99,102,241,.12)!important;border:1.5px dashed rgba(167,139,250,.7)!important}
 html:root .qx .qnl-cover{position:relative;height:130px;margin:-16px -16px 12px;background:#14114a center/cover no-repeat;border-radius:18px 18px 0 0;overflow:hidden}
 html:root .qx .qnl-cover.tall{height:200px;margin:0 0 14px;border-radius:20px;border:1px solid rgba(129,140,248,.28)}
-html:root .qx .qnl-cover:not(.empty):after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 45%,rgba(6,10,31,.75));pointer-events:none}
+html:root .qx .qnl-cover:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 45%,rgba(6,10,31,.75));pointer-events:none}
 html:root .qx .qnl-cover.empty{background:linear-gradient(135deg,#1e1b6b,#0e1a5a)!important;display:grid;place-items:center}
 html:root .qx .qnl-cover-btns{position:absolute;right:10px;top:10px;z-index:2;display:flex;gap:8px}
 html:root .qx .qnl-cover-btns button{font-size:12px;font-weight:700;padding:6px 10px;border-radius:9px;color:#fff!important;background:rgba(6,10,31,.72)!important;border:1px solid rgba(255,255,255,.28)!important;cursor:pointer}
