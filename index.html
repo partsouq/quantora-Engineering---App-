@@ -8835,6 +8835,7 @@ function Dashboard({ onOpenProject, onNewProject, onOpenBilling, onOpenTeam }) {
                 <b style={{ color: n ? colour : "var(--q-text-dimmer,#94a3b8)" }}>{n}</b>
                 <span>{label}</span>
                 <em>{help}</em>
+                <i className="qnl-stbar" aria-hidden="true"><i style={{ width: `${projects.length ? Math.round(n / projects.length * 100) : 0}%`, background: colour }} /></i>
               </button>
             );
           })}
@@ -41845,6 +41846,30 @@ html:root .qx .qnl-navproj img{border-style:solid;border-color:rgba(255,255,255,
 /* side menu upgrade card with the city picture */
 html:root .qx .qnl-foot{position:relative;overflow:hidden;isolation:isolate;border:1px solid rgba(167,139,250,.4)!important;
   background:linear-gradient(160deg,rgba(49,46,129,.7),rgba(15,23,60,.85)),url("/ws-art/city-blue.jpg") center/cover!important}
+/* All projects, matched to the approved mockup */
+html:root .qx .qnl-page .qdash-kpi{position:relative;padding:16px 18px 16px 22px!important;overflow:hidden}
+html:root .qx .qnl-page .qdash-kpi > i{position:absolute!important;left:0!important;top:14px!important;bottom:14px!important;width:4px!important;height:auto!important;border-radius:0 4px 4px 0!important;box-shadow:0 0 12px currentColor}
+html:root .qx .qnl-page .qdash-kpi b{color:#fff!important;font-size:28px!important;font-weight:800!important}
+html:root .qx .qnl-page .qdash-kpi span{color:#a8b3dc!important}
+html:root .qx .qnl-page .qstage .st{position:relative;overflow:hidden;text-align:left;padding:16px 18px 16px 22px!important;
+  background:linear-gradient(165deg,rgba(23,31,82,.88),rgba(9,14,42,.94))!important;border:1px solid rgba(129,140,248,.22)!important;border-radius:18px!important;box-shadow:0 18px 36px -24px rgba(79,70,229,.6)!important}
+html:root .qx .qnl-page .qstage .st:before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:4px;border-radius:0 4px 4px 0;background:var(--st)}
+html:root .qx .qnl-page .qstage .st b{color:#fff!important;font-size:28px!important;font-weight:800!important}
+html:root .qx .qnl-page .qstage .st span{color:#fff!important;font-weight:700}
+html:root .qx .qnl-page .qstage .st em{color:#a8b3dc!important;font-style:normal}
+html:root .qx .qnl-page .qstage .st.on{border-color:var(--st)!important;box-shadow:0 0 0 1px var(--st),0 18px 36px -20px var(--st)!important}
+html:root .qx .qnl-page .qdash-projs{grid-template-columns:repeat(auto-fill,minmax(250px,1fr))!important}
+html:root .qx .qnl-stbar{display:block;height:7px;border-radius:9px;background:rgba(255,255,255,.1);margin-top:10px;overflow:hidden}
+html:root .qx .qnl-stbar i{display:block;height:100%;border-radius:9px}
+html:root .qx .qnl-page .qapp-nav button.on{background:linear-gradient(90deg,rgba(79,70,229,.65),rgba(124,58,237,.45))!important;color:#fff!important;border-radius:10px;box-shadow:none!important}
+html:root .qx .qnl-page .pt-view button.on{background:linear-gradient(90deg,#6366f1,#8b5cf6)!important;color:#fff!important;border-color:transparent!important}
+html:root .qx .qnl-page .qpt th{background:rgba(255,255,255,.03)!important;color:#8391c6!important}
+html:root .qx .qnl-page .qdash-grid:not(.listmode){grid-template-columns:1fr!important}
+html:root .qx .qnl-page .qdash-grid:not(.listmode) .qdash-rail{order:2}
+/* main side menu and workspace buttons in the purple style */
+html:root:has(.qx) body .qx .qp-item.on{background:linear-gradient(90deg,#4f46e5,#7c3aed)!important;color:#fff!important;box-shadow:0 8px 24px -8px rgba(124,58,237,.7)!important;border-color:transparent!important}
+html:root:has(.qx) body .qx .qp-item.on .ic{background:rgba(255,255,255,.16)!important;color:#fff!important}
+html:root:has(.qx) body .qx .qp-ws button.on{background:linear-gradient(135deg,rgba(79,70,229,.6),rgba(124,58,237,.5))!important;border-color:rgba(167,139,250,.6)!important;color:#fff!important}
 @media (max-width:760px){
   html:root .qx .qnl-hero-img{width:100%;opacity:.35}
   html:root .qx .qnl-hero:after{background:linear-gradient(180deg,rgba(11,18,64,.4),#0b1240 85%)}
