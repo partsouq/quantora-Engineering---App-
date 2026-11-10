@@ -94,8 +94,14 @@ async function welcomeEmail(stage: number, progress: string, name: string, email
 }
 
 // ----- leads -----
-const LEADS = [
-  { subject: "Faster MEP, ELV and electrical take-off for {company}", headline: "Drawings to a complete BOQ in minutes", paras: ["Quantora turns MEP, ELV and electrical drawings into quantities and a BOQ — with AI Take-off, or Manual Take-off where your team marks the drawing.", "It also checks the design against local authority rules in the UAE and the GCC, and prepares shop drawings."], button: "Try it free" },
+// One numbered service box inside an email (used by the first lead email).
+const svc = (n: number, t: string, d: string) => `<table role="presentation" width="100%" style="margin:0 0 12px;border-left:4px solid #4f46e5;background:#f6f7ff;border-radius:8px"><tr><td style="padding:12px 14px"><b style="color:#0f172a;font-size:15px">${n}. ${t}</b><div style="font-size:14px;color:#334155;margin-top:4px;line-height:1.55">${d}</div></td></tr></table>`;
+const LEADS: { subject: string; headline: string; paras: string[]; button: string; manual?: boolean }[] = [
+  { subject: "AI take-off, BOQ and shop drawings for {company}", headline: "From drawings to BOQ and shop drawings, on one platform", manual: false, paras: ["Quantora Engineering gives your team three services on one platform:",
+      svc(1, "AI Take-off &amp; BOQ", "Upload MEP, ELV or electrical drawings (PDF or DWG). AI counts and measures every device, cable, duct and pipe, and every BOQ line is marked on the drawing. Export to Excel or PDF.") +
+      svc(2, "AI Draftsman: shop drawings and 3D", "Upload the architectural plans and choose the systems. AI Draftsman prepares the shop drawings and schematics to your country&#39;s authority rules, plus a full 3D model you can download as IFC for Revit and Navisworks.") +
+      svc(3, "Manual Take-off (new)", "Your team marks the items on the drawing, and Quantora gives you a complete Designed BOQ. 10 drawings free every month, then 30 drawings for $10."),
+      "Every BOQ is also checked against your project specification and the local authority rules in the UAE and the GCC."], button: "Try it free" },
   { subject: "Quick follow-up: take-off and BOQ for your tenders", headline: "Spend less time on take-off", paras: ["A quick follow-up on my last email. Teams use Quantora to price tenders faster: upload the drawings, check the quantities, export the BOQ to Excel."], button: "Start free" },
   { subject: "Free to try: 10 drawings every month", headline: "10 drawings free every month", paras: ["One last note: you can try Quantora on your own drawings at no cost. If it is not useful for your team, just reply STOP and we will not write again."], button: "Try it free" },
   { subject: "Quantora update", headline: "What's new on Quantora", paras: ["New rules, systems and export formats were added this month. Your team can try it free on your own drawings."], button: "See what's new" },
@@ -103,7 +109,7 @@ const LEADS = [
 async function leadEmail(stage: number, company: string, email: string) {
   const l = LEADS[Math.min(stage, LEADS.length - 1)];
   const html = layout({ kicker: "QUANTORA ENGINEERING", headline: l.headline, hello: `Hello ${company} team,`, paras: l.paras,
-    button: l.button, url: `${SITE}/?ref=lead`, unsub: await unsubUrl(email) });
+    button: l.button, url: `${SITE}/?ref=lead`, unsub: await unsubUrl(email), manual: l.manual });
   return { subject: l.subject.replace("{company}", company), html };
 }
 const LEAD_NEXT_DAYS = [7, 7, 21, 30];   // after 1st, 2nd, 3rd, later emails
