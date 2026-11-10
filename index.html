@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-09.12"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-10.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -17969,7 +17969,13 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
       const body = new Blob([JSON.stringify(doc)], { type: "application/json" });
       let { error } = await sb.storage.from("drawings").upload(path, body, { upsert: true, contentType: "application/json" });
       if (error) { await sb.storage.from("drawings").remove([path]).catch(() => {}); ({ error } = await sb.storage.from("drawings").upload(path, body, { contentType: "application/json" })); }
-      if (error) qReportError("save a manual take-off", error);
+      if (error) {
+        // The project was deleted while this save was on its way (storage refuses the write once the
+        // project is gone). Nothing is left to save, so this is not an error: do not report it.
+        const { data: still, error: e2 } = await sb.from("projects").select("id").eq("id", project.id).maybeSingle();
+        if (!e2 && !still) { setSaveState(""); return; }
+        qReportError("save a manual take-off", error);
+      }
       setSaveState(error ? "Not saved — " + (error.message || "storage error") : "Saved");
     }, 1500);
     return () => clearTimeout(saveTimer.current);
