@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-10.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-11.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29430,7 +29430,10 @@ function QEmailLeads({ onDone, setMsg }) {
   const [busy, setBusy] = useState(false);
   const [pv, setPv] = useState(null);
   const [add, setAdd] = useState(null);
+  const [q, setQ] = useState("");
+  const [reloading, setReloading] = useState(false);
   const ck = useChecks();
+  const reload = async () => { setReloading(true); await load(); setReloading(false); };
   const load = () => sb.from("email_leads").select("*").order("created_at", { ascending: false }).limit(5000).then(({ data, error }) => { if (error) setMsg({ ok: false, text: error.message }); setRows(data || []); });
   useEffect(() => { load(); }, []);
   const now = Date.now();
@@ -29445,7 +29448,8 @@ function QEmailLeads({ onDone, setMsg }) {
   const boxes = [["new", "New · to contact"], ["f1", "Follow-up 1 due"], ["f2", "Follow-up 2 due"], ["later", "Later news due"], ["waiting", "Waiting"], ["replied", "Replied"], ["customer", "Became customers"], ["dnc", "Do not contact"]];
   const today0 = new Date(); today0.setHours(0, 0, 0, 0);
   const shown = all.filter(l => inBox(l, box) && (!trade || l.trade === trade) && (!country || (l.country || "") === country)
-    && (!added || (added === "today" ? Date.parse(l.created_at) >= today0.getTime() : Date.parse(l.created_at) >= now - 7 * 864e5)));
+    && (!added || (added === "today" ? Date.parse(l.created_at) >= today0.getTime() : Date.parse(l.created_at) >= now - 7 * 864e5))
+    && (!q.trim() || [l.company, l.email, l.city, l.website, l.phone, l.trade, l.country].some(v => String(v || "").toLowerCase().includes(q.trim().toLowerCase()))));
   const sendable = ["new", "f1", "f2", "later"].includes(box);
   const withEmail = shown.filter(l => l.email);
   async function send(ids) {
@@ -29460,25 +29464,69 @@ function QEmailLeads({ onDone, setMsg }) {
     const r = { company: String(add.company || "").trim(), email: String(add.email || "").trim() || null, trade: add.trade || null, country: add.country || null,
       city: add.city || null, website: add.website || null, phone: add.phone || null, source_url: add.source_url || null, added_by: "manual" };
     if (!r.company) { setMsg({ ok: false, text: "Please write the company name." }); return; }
+    if (/futt?aim/i.test([r.company, r.email, r.website].join(" "))) { setMsg({ ok: false, text: "Al-Futtaim group companies are not added to the leads." }); return; }
     const { error } = await sb.from("email_leads").insert(r);
     if (error) { setMsg({ ok: false, text: /duplicate|unique/i.test(error.message) ? "This company or email is already in the list." : error.message }); return; }
     setAdd(null); setMsg({ ok: true, text: "Lead added." }); load();
   }
-  async function importCsv(text) {
-    const lines = String(text || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-    if (!lines.length) return;
-    const head = lines[0].toLowerCase().split(/[,;\t]/).map(x => x.trim());
-    const hasHead = head.includes("company") || head.includes("email");
-    const cols = hasHead ? head : ["company", "email", "trade", "country", "city", "website", "phone"];
-    let ok = 0, dup = 0;
-    for (const line of lines.slice(hasHead ? 1 : 0)) {
-      const v = line.split(/[,;\t]/).map(x => x.trim().replace(/^"|"$/g, ""));
-      const o = {}; cols.forEach((c, i) => { if (v[i]) o[c] = v[i]; });
+  // One import path for the Excel form and pasted rows: company, business email, country.
+  // Every row needs a company and a valid business email. Al-Futtaim group companies are never added.
+  async function importRows(list) {
+    const isFut = o => /futt?aim/i.test([o.company, o.email, o.website].join(" "));
+    const okMail = m => /^[^\s@<>]+@[^\s@<>]+\.[a-z]{2,}$/i.test(m || "");
+    let ok = 0, dup = 0, badMail = 0, fut = 0;
+    for (const o of list) {
       if (!o.company) continue;
-      const { error } = await sb.from("email_leads").insert({ company: o.company, email: o.email || null, trade: o.trade || null, country: o.country || null, city: o.city || null, website: o.website || null, phone: o.phone || null, source_url: o.source || o.source_url || null, added_by: "import" });
+      if (isFut(o)) { fut++; continue; }
+      if (!okMail(o.email)) { badMail++; continue; }
+      const { error } = await sb.from("email_leads").insert({ company: o.company, email: o.email, trade: o.trade || null, country: o.country || null, city: o.city || null, website: o.website || null, phone: o.phone || null, source_url: o.source || null, added_by: "import" });
       if (error) dup++; else ok++;
     }
-    setMsg({ ok: true, text: `${ok} leads imported${dup ? `, ${dup} skipped (already in the list)` : ""}.` }); setAdd(null); load();
+    const why = [dup && `${dup} already in the list`, badMail && `${badMail} without a valid email`, fut && `${fut} Al-Futtaim (never added)`].filter(Boolean).join(", ");
+    setMsg({ ok: true, text: `${ok} leads imported${why ? ` · skipped: ${why}` : ""}.` }); setAdd(null); load();
+  }
+  const Q_FORM_COLS = [["company", "Company name *"], ["email", "Business email *"], ["country", "Country"]];
+  function normHead(h) {
+    const x = String(h || "").toLowerCase().replace(/\*/g, "").trim();
+    if (/^company|vendor|name/.test(x)) return "company"; if (/mail/.test(x)) return "email"; if (/source|found|url|link/.test(x)) return "source";
+    if (/trade|categor/.test(x)) return "trade"; if (/country/.test(x)) return "country"; if (/city|emirate|state/.test(x)) return "city";
+    if (/web|domain|site/.test(x)) return "website"; if (/phone|tel|mobile/.test(x)) return "phone"; return null;
+  }
+  function rowsFromTable(aoa) {
+    const t = (aoa || []).filter(r => r && r.some(c => String(c ?? "").trim()));
+    if (!t.length) return [];
+    const hasHead = t[0].some(c => normHead(c));
+    const cols = hasHead ? t[0].map(normHead) : ["company", "email", "country"];
+    return t.slice(hasHead ? 1 : 0).map(r => { const o = {}; cols.forEach((c, k) => { const v = String(r[k] ?? "").trim(); if (c && v) o[c] = v; });
+      if (o.email) { const m = o.email.match(/[^\s<>"]+@[^\s<>"]+/); o.email = m ? m[0] : o.email; } return o; });
+  }
+  async function importCsv(text) {
+    const aoa = String(text || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).map(line => line.split(/[,;\t]/).map(x => x.trim().replace(/^"|"$/g, "")));
+    await importRows(rowsFromTable(aoa));
+  }
+  async function importFile(file) {
+    if (!file) return;
+    if (!window.XLSX) { setMsg({ ok: false, text: "Excel reader is still loading, try again in a moment." }); return; }
+    try {
+      const wb = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      await importRows(rowsFromTable(window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" })));
+    } catch (e) { setMsg({ ok: false, text: "Could not read this file: " + (e.message || e) }); }
+  }
+  function downloadForm() {
+    if (!window.XLSX) { setMsg({ ok: false, text: "Excel is still loading, try again in a moment." }); return; }
+    const X = window.XLSX;
+    const ws = X.utils.aoa_to_sheet([Q_FORM_COLS.map(c => c[1]), ["Example Electromechanical LLC", "info@example-mep.com", "UAE"]]);
+    ws["!cols"] = [40, 36, 18].map(w => ({ wch: w }));
+    const help = X.utils.aoa_to_sheet([["How to fill the Quantora leads form"], [""],
+      ["1. One company per row. Delete the example row before importing."],
+      ["2. Company name and Business email are required. Rows without them are skipped. Country is optional (e.g. UAE, Saudi Arabia, Qatar)."],
+      ["3. Use only the business email the company publishes itself (info@, sales@, enquiries@, tenders@ ...)."],
+      ["4. Do not use contacts from an employer's, client's or supplier's own vendor database or private records."],
+      ["5. Al-Futtaim group companies are never added."]]);
+    help["!cols"] = [{ wch: 110 }];
+    const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, "Leads"); X.utils.book_append_sheet(wb, help, "How to fill");
+    X.writeFile(wb, "Quantora-leads-form.xlsx");
   }
   function exportCsv() {
     const cols = ["company", "trade", "country", "city", "email", "phone", "website", "source_url", "status", "stage", "created_at", "last_sent_at"];
@@ -29493,11 +29541,13 @@ function QEmailLeads({ onDone, setMsg }) {
     <div className="card panel">
       <QStageBoxes value={box} onPick={v => { setBox(v); ck.clear(); }} items={boxes.map(([k, l]) => [k, l, all.filter(x => inBox(x, k)).length])} />
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+        <input type="search" style={{ ...sel, minWidth: 240, flex: "1 1 240px" }} placeholder="Search company, email, city, website…" value={q} onChange={e => setQ(e.target.value)} aria-label="Search leads" />
         <select style={sel} value={trade} onChange={e => setTrade(e.target.value)}><option value="">All trades</option>{Q_LEAD_TRADES.map(t => <option key={t}>{t}</option>)}</select>
         <select style={sel} value={country} onChange={e => setCountry(e.target.value)}><option value="">All countries</option>{countries.map(c => <option key={c}>{c}</option>)}</select>
         <select style={sel} value={added} onChange={e => setAdded(e.target.value)}><option value="">Added: any time</option><option value="today">Added today</option><option value="week">Added this week</option></select>
         <button type="button" className="qp-btn" onClick={() => setAdd({ mode: "one" })}>＋ Add lead</button>
-        <button type="button" className="qp-btn" onClick={() => setAdd({ mode: "csv", text: "" })}>⤒ Import list</button>
+        <button type="button" className="qp-btn" onClick={downloadForm}>⤓ Excel form</button>
+        <button type="button" className="qp-btn" onClick={() => setAdd({ mode: "csv", text: "", agree: false })}>⤒ Import list</button>
         <button type="button" className="qp-btn" onClick={exportCsv}>⤓ Excel</button>
       </div>
       {add && add.mode === "one" && (
@@ -29510,9 +29560,20 @@ function QEmailLeads({ onDone, setMsg }) {
       )}
       {add && add.mode === "csv" && (
         <div style={{ padding: 12, borderRadius: 12, border: "1px solid rgba(129,140,248,.3)", margin: "8px 0" }}>
-          <div style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)", marginBottom: 6 }}>Paste rows from Excel: company, email, trade, country, city, website, phone (a header row is fine). Duplicates are skipped.</div>
-          <textarea style={{ ...inp, minHeight: 120, fontFamily: "monospace" }} value={add.text} onChange={e => setAdd(a => ({ ...a, text: e.target.value }))} />
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}><button type="button" className="qp-btn pri" onClick={() => importCsv(add.text)}>Import</button><button type="button" className="qp-btn" onClick={() => setAdd(null)}>Cancel</button></div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Import leads</div>
+          <div style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)", marginBottom: 10 }}>Fill the <b>Excel form</b> (button above) and upload it here, or paste rows below. Columns: company name, business email, country. Duplicates and Al-Futtaim companies are skipped.</div>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, marginBottom: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!add.agree} onChange={e => setAdd(a => ({ ...a, agree: e.target.checked }))} style={{ marginTop: 3 }} />
+            <span>I confirm these are business contacts that each company publishes itself (its website or a public directory), and none come from an employer's, client's or supplier's own vendor list or private records.</span>
+          </label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", opacity: add.agree ? 1 : .5 }}>
+            <label className="qp-btn pri" style={{ cursor: add.agree ? "pointer" : "not-allowed" }}>Upload Excel form
+              <input type="file" accept=".xlsx,.xls,.csv" disabled={!add.agree} style={{ display: "none" }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; importFile(f); }} />
+            </label>
+            <span style={{ fontSize: 12, color: "var(--text-dimmer,#64748b)" }}>or paste rows: company, email, country</span>
+          </div>
+          <textarea disabled={!add.agree} style={{ ...inp, minHeight: 100, fontFamily: "monospace", marginTop: 8 }} value={add.text} onChange={e => setAdd(a => ({ ...a, text: e.target.value }))} />
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}><button type="button" className="qp-btn pri" disabled={!add.agree || !String(add.text || "").trim()} onClick={() => importCsv(add.text)}>Import pasted rows</button><button type="button" className="qp-btn" onClick={() => setAdd(null)}>Cancel</button></div>
         </div>
       )}
       {sendable && <QSendBar title={boxes.find(b => b[0] === box)[1]} note="· from info@, about 50 a day; companies without an email are skipped" busy={busy}
@@ -29538,6 +29599,10 @@ function QEmailLeads({ onDone, setMsg }) {
               <td style={qTd}>{sendable && l.email && <button type="button" className="qp-btn" disabled={busy} onClick={() => send([l.id])}>✉ Send</button>}</td>
             </tr>))}</tbody></table></div>
       )}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
+        <button type="button" className="qp-btn" onClick={reload} disabled={reloading}>{reloading ? "Reloading…" : "↻ Reload"}</button>
+        <span style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)" }}>{rows === null ? "" : `${shown.length} shown${q.trim() ? ` for “${q.trim()}”` : ""} · ${all.length} leads in total`}</span>
+      </div>
       <div style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)", marginTop: 10 }}>After the first email a lead waits 7 days for Follow-up 1, 7 more for Follow-up 2, then gets news every few weeks (6 emails at most). Leads are never deleted. Unsubscribe or "Do not contact" stops all emails.</div>
       {pv && <QEmailPreview {...pv} onClose={() => setPv(null)} />}
     </div>
