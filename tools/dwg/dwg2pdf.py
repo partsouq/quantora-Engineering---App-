@@ -390,33 +390,41 @@ def _text(painter, mat, x, y, s, h, rot, col, dw):
 def collect_points(dw, ents, mat, out, depth=0, cap=400000):
     if depth > 6 or len(out) > cap: return
     for e in ents:
-        t = e.get("type")
-        if not dw.layer_visible(e.get("layer")): continue
-        if t == "LINE":
-            out.append(mat.p(*P(e["startPoint"]))); out.append(mat.p(*P(e["endPoint"])))
-        elif t in ("LWPOLYLINE", "POLYLINE2D", "POLYLINE3D", "LEADER"):
-            for v in (e.get("vertices") or [])[:200]: out.append(mat.p(*P(v)))
-        elif t in ("CIRCLE", "ARC", "ELLIPSE"):
-            out.append(mat.p(*P(e["center"])))
-        elif t == "TEXT":
-            out.append(mat.p(*P(e.get("startPoint"))))
-        elif t == "MTEXT":
-            out.append(mat.p(*P(e.get("insertionPoint"))))
-        elif t == "INSERT":
-            b = dw.blocks.get(e.get("name"))
-            ip = P(e.get("insertionPoint"))
-            if b and depth < 2:
-                bx, by = P(b.get("basePoint"))
-                local = T(*ip) @ R(float(e.get("rotation") or 0)) @ S(float(e.get("xScale") or 1), float(e.get("yScale") or 1)) @ T(-bx, -by)
-                collect_points(dw, dw.by_owner.get(b.get("handle"), [])[:400], mat @ local, out, depth + 1, cap)
-            else:
-                out.append(mat.p(*ip))
+        try:
+            _collect_one(dw, e, mat, out, depth, cap)
+        except Exception:  # one malformed entity (e.g. a circle with no centre) never stops the file
+            pass
+
+
+def _collect_one(dw, e, mat, out, depth, cap):
+    t = e.get("type")
+    if not dw.layer_visible(e.get("layer")): return
+    if t == "LINE":
+        out.append(mat.p(*P(e["startPoint"]))); out.append(mat.p(*P(e["endPoint"])))
+    elif t in ("LWPOLYLINE", "POLYLINE2D", "POLYLINE3D", "LEADER"):
+        for v in (e.get("vertices") or [])[:200]: out.append(mat.p(*P(v)))
+    elif t in ("CIRCLE", "ARC", "ELLIPSE"):
+        out.append(mat.p(*P(e["center"])))
+    elif t == "TEXT":
+        out.append(mat.p(*P(e.get("startPoint"))))
+    elif t == "MTEXT":
+        out.append(mat.p(*P(e.get("insertionPoint"))))
+    elif t == "INSERT":
+        b = dw.blocks.get(e.get("name"))
+        ip = P(e.get("insertionPoint"))
+        if b and depth < 2:
+            bx, by = P(b.get("basePoint"))
+            local = T(*ip) @ R(float(e.get("rotation") or 0)) @ S(float(e.get("xScale") or 1), float(e.get("yScale") or 1)) @ T(-bx, -by)
+            collect_points(dw, dw.by_owner.get(b.get("handle"), [])[:400], mat @ local, out, depth + 1, cap)
+        else:
+            out.append(mat.p(*ip))
 
 
 def robust_box(pts):
     """The drawing's real extent. Stray objects far away (a block left at a huge coordinate, a
     construction point) would otherwise shrink the whole plan to a dot, so points beyond a wide fence
     around the middle half of the drawing are ignored, as long as they are only a small share."""
+    pts = [p for p in pts if math.isfinite(p[0]) and math.isfinite(p[1])]
     if not pts: return None
     xs = sorted(p[0] for p in pts); ys = sorted(p[1] for p in pts)
     n = len(xs)
@@ -462,59 +470,78 @@ def layout_pages(doc, dw, report):
     made = 0
     imperial = int(dw.d.get("header", {}).get("MEASUREMENT", 1) or 0) == 0
     unit_mm = 25.4 if imperial else 1.0
-    for lay in sorted(dw.layouts, key=lambda l: l.get("tabOrder", 0)):
-        bh = lay.get("paperSpaceTableId")
-        ents = dw.by_owner.get(bh, [])
-        vps = [e for e in ents if e.get("type") == "VIEWPORT" and (e.get("status") or 0) >= 0]
-        main_ids = {min((v.get("viewportId") or 0) for v in vps)} if vps else set()
-        content_vps = [v for v in vps if (v.get("viewportId") or 0) not in main_ids and (v.get("width") or 0) > 0]
-        paper_ents = [e for e in ents if e.get("type") != "VIEWPORT"]
-        if not content_vps and len(paper_ents) < 3: continue
-        pts = []; collect_points(dw, paper_ents, M(), pts)
-        for v in content_vps:
-            cx, cy = P(v["viewportCenter"]); w2, h2 = v["width"] / 2, v["height"] / 2
-            pts += [(cx - w2, cy - h2), (cx + w2, cy + h2)]
-        lo, hi = lay.get("minLimit") or {}, lay.get("maxLimit") or {}
-        if lo and hi and (hi.get("x", 0) - lo.get("x", 0)) > 0:
-            pts += [P(lo), P(hi)]
-        box = robust_box(pts)
-        if not box: continue
-        x0, y0, x1, y1 = box
-        pw, ph = (x1 - x0) * unit_mm, (y1 - y0) * unit_mm
-        k = 1.0
-        if max(pw, ph) < 280: k = 420.0 / max(pw, ph)  # tiny paper units: lift to A3
-        if max(pw, ph) * k > 1500: k = 1189.0 / max(pw, ph)
-        pw, ph = pw * k, ph * k
-        page = doc.new_page(width=pw * MM, height=ph * MM)
-        u = unit_mm * k  # mm per paper unit
-        to_page = lambda x, y, x0=x0, y0=y0, u=u, ph=ph: ((x - x0) * u * MM, (ph - (y - y0) * u) * MM)
-        # model space seen through each viewport, clipped to the viewport frame
-        for v in content_vps:
-            cx, cy = P(v["viewportCenter"]); vw, vh = float(v["width"]), float(v["height"])
-            vc = P(v.get("displayCenter") or v.get("viewCenter") or {})
-            zoom = vh / float(v.get("viewHeight") or vh or 1)
-            twist = float(v.get("twistAngle") or v.get("viewTwistAngle") or 0)
-            m = T(cx, cy) @ R(twist) @ S(zoom, zoom) @ T(-vc[0], -vc[1])
-            r0 = to_page(cx - vw / 2, cy + vh / 2); r1 = to_page(cx + vw / 2, cy - vh / 2)
-            clip = pymupdf.Rect(r0, r1)
-            sub = pymupdf.open(); sp = sub.new_page(width=page.rect.width, height=page.rect.height)
-            pv = Painter(sp, to_page, clip=clip); pv.unit_scale = u * MM; pv.text_page = page
-            frozen = set(v.get("frozenLayerIds") or [])
-            before = dw.stats["drawn"]
-            draw_entities(dw, dw.by_owner.get(dw.model_handle, []), m, pv, (0, 0, 0), 0)
-            pv.flush()
-            # how much of the model really lands inside this viewport's frame
-            mp = []; collect_points(dw, dw.by_owner.get(dw.model_handle, []), M(), mp, cap=50000)
-            inside = sum(1 for q in mp if clip.contains(pymupdf.Point(*to_page(*m.p(*q)))))
-            dw.stats.setdefault("viewports", []).append({"drawn": dw.stats["drawn"] - before, "model_points": len(mp), "inside": inside})
-            page.show_pdf_page(clip, sub, 0, clip=clip)
-            sub.close()
-        p = Painter(page, to_page); p.unit_scale = u * MM
-        draw_entities(dw, paper_ents, M(), p, (0, 0, 0), 0)
-        p.flush()
-        report["pages"].append({"name": lay.get("layoutName"), "width_mm": round(pw), "height_mm": round(ph), "viewports": len(content_vps)})
-        made += 1
+    for lay in sorted(dw.layouts, key=lambda l: l.get("tabOrder", 0) or 0):
+        n0 = doc.page_count
+        try:
+            made += _layout_page(doc, dw, report, lay, unit_mm)
+        except Exception:  # one broken sheet never stops the others (or the model-space fallback)
+            while doc.page_count > n0: doc.delete_page(doc.page_count - 1)
+            dw.stats["skipped_types"]["error:layout"] = dw.stats["skipped_types"].get("error:layout", 0) + 1
     return made
+
+
+def _layout_page(doc, dw, report, lay, unit_mm):
+    bh = lay.get("paperSpaceTableId")
+    ents = dw.by_owner.get(bh, [])
+    vps = [e for e in ents if e.get("type") == "VIEWPORT" and (e.get("status") or 0) >= 0]
+    main_ids = {min((v.get("viewportId") or 0) for v in vps)} if vps else set()
+    content_vps = [v for v in vps if (v.get("viewportId") or 0) not in main_ids and (v.get("width") or 0) > 0]
+    paper_ents = [e for e in ents if e.get("type") != "VIEWPORT"]
+    if not content_vps and len(paper_ents) < 3: return 0
+    pts = []; collect_points(dw, paper_ents, M(), pts)
+    content_vps = [v for v in content_vps if isinstance(v.get("viewportCenter"), dict) and (v.get("height") or 0) > 0]
+    for v in content_vps:
+        cx, cy = P(v["viewportCenter"]); w2, h2 = v["width"] / 2, v["height"] / 2
+        pts += [(cx - w2, cy - h2), (cx + w2, cy + h2)]
+    lo, hi = lay.get("minLimit") or {}, lay.get("maxLimit") or {}
+    if lo and hi and (hi.get("x", 0) - lo.get("x", 0)) > 0:
+        pts += [P(lo), P(hi)]
+    box = robust_box(pts)
+    if not box: return 0
+    x0, y0, x1, y1 = box
+    pw, ph = (x1 - x0) * unit_mm, (y1 - y0) * unit_mm
+    k = 1.0
+    if max(pw, ph) < 280: k = 420.0 / max(pw, ph)  # tiny paper units: lift to A3
+    if max(pw, ph) * k > 1500: k = 1189.0 / max(pw, ph)
+    pw, ph = pw * k, ph * k
+    page = doc.new_page(width=pw * MM, height=ph * MM)
+    u = unit_mm * k  # mm per paper unit
+    to_page = lambda x, y, x0=x0, y0=y0, u=u, ph=ph: ((x - x0) * u * MM, (ph - (y - y0) * u) * MM)
+    # model space seen through each viewport, clipped to the viewport frame
+    for v in content_vps:
+        try:
+            _draw_viewport(dw, page, to_page, u, v)
+        except Exception:  # a viewport that cannot be drawn leaves its frame empty, the sheet still prints
+            dw.stats["skipped_types"]["error:viewport"] = dw.stats["skipped_types"].get("error:viewport", 0) + 1
+    p = Painter(page, to_page); p.unit_scale = u * MM
+    draw_entities(dw, paper_ents, M(), p, (0, 0, 0), 0)
+    p.flush()
+    report["pages"].append({"name": lay.get("layoutName"), "width_mm": round(pw), "height_mm": round(ph), "viewports": len(content_vps)})
+    return 1
+
+
+def _draw_viewport(dw, page, to_page, u, v):
+    cx, cy = P(v["viewportCenter"]); vw, vh = float(v["width"]), float(v["height"])
+    vc = P(v.get("displayCenter") or v.get("viewCenter") or {})
+    zoom = vh / float(v.get("viewHeight") or vh or 1)
+    twist = float(v.get("twistAngle") or v.get("viewTwistAngle") or 0)
+    m = T(cx, cy) @ R(twist) @ S(zoom, zoom) @ T(-vc[0], -vc[1])
+    r0 = to_page(cx - vw / 2, cy + vh / 2); r1 = to_page(cx + vw / 2, cy - vh / 2)
+    clip = pymupdf.Rect(r0, r1)
+    sub = pymupdf.open(); sp = sub.new_page(width=page.rect.width, height=page.rect.height)
+    pv = Painter(sp, to_page, clip=clip); pv.unit_scale = u * MM; pv.text_page = page
+    frozen = set(v.get("frozenLayerIds") or [])
+    before = dw.stats["drawn"]
+    draw_entities(dw, dw.by_owner.get(dw.model_handle, []), m, pv, (0, 0, 0), 0)
+    pv.flush()
+    # how much of the model really lands inside this viewport's frame
+    mp = []; collect_points(dw, dw.by_owner.get(dw.model_handle, []), M(), mp, cap=50000)
+    inside = sum(1 for q in mp if clip.contains(pymupdf.Point(*to_page(*m.p(*q)))))
+    dw.stats.setdefault("viewports", []).append({"drawn": dw.stats["drawn"] - before, "model_points": len(mp), "inside": inside})
+    try:
+        if not clip.is_empty: page.show_pdf_page(clip, sub, 0, clip=clip)
+    finally:
+        sub.close()
 
 
 def main():

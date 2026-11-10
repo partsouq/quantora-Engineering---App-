@@ -68,7 +68,11 @@ async function convert(lib, job, dir) {
   if (!db?.entities?.length) throw new Error("The DWG opened but has no drawing content.");
   fs.writeFileSync(js, toJson(db));
   const r = spawnSync("python3", [path.join(HERE, "dwg2pdf.py"), js, pdf, rep, path.join(dir, "preview.jpg")], { encoding: "utf8", maxBuffer: 1 << 20, timeout: 10 * 60 * 1000 });
-  if (r.status !== 0 || !fs.existsSync(pdf)) throw new Error("Drawing the DWG failed" + (r.status === null ? " (took too long)" : ""));
+  if (r.status !== 0 || !fs.existsSync(pdf)) {
+    // keep the last line Python printed (the reason), so the admin sees why; it stays in the database
+    const why = String(r.stderr || "").trim().split("\n").pop()?.slice(0, 160) || "";
+    throw new Error("Drawing the DWG failed" + (r.status === null ? " (took too long)" : "") + (why ? ": " + why : ""));
+  }
   const report = JSON.parse(fs.readFileSync(rep, "utf8"));
   // a kept-alive connection can be closed by the server during a long conversion: retry the upload
   let up = null, lastErr = "";
