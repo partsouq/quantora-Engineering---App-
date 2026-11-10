@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-10.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-11.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29430,7 +29430,10 @@ function QEmailLeads({ onDone, setMsg }) {
   const [busy, setBusy] = useState(false);
   const [pv, setPv] = useState(null);
   const [add, setAdd] = useState(null);
+  const [q, setQ] = useState("");
+  const [reloading, setReloading] = useState(false);
   const ck = useChecks();
+  const reload = async () => { setReloading(true); await load(); setReloading(false); };
   const load = () => sb.from("email_leads").select("*").order("created_at", { ascending: false }).limit(5000).then(({ data, error }) => { if (error) setMsg({ ok: false, text: error.message }); setRows(data || []); });
   useEffect(() => { load(); }, []);
   const now = Date.now();
@@ -29445,7 +29448,8 @@ function QEmailLeads({ onDone, setMsg }) {
   const boxes = [["new", "New · to contact"], ["f1", "Follow-up 1 due"], ["f2", "Follow-up 2 due"], ["later", "Later news due"], ["waiting", "Waiting"], ["replied", "Replied"], ["customer", "Became customers"], ["dnc", "Do not contact"]];
   const today0 = new Date(); today0.setHours(0, 0, 0, 0);
   const shown = all.filter(l => inBox(l, box) && (!trade || l.trade === trade) && (!country || (l.country || "") === country)
-    && (!added || (added === "today" ? Date.parse(l.created_at) >= today0.getTime() : Date.parse(l.created_at) >= now - 7 * 864e5)));
+    && (!added || (added === "today" ? Date.parse(l.created_at) >= today0.getTime() : Date.parse(l.created_at) >= now - 7 * 864e5))
+    && (!q.trim() || [l.company, l.email, l.city, l.website, l.phone, l.trade, l.country].some(v => String(v || "").toLowerCase().includes(q.trim().toLowerCase()))));
   const sendable = ["new", "f1", "f2", "later"].includes(box);
   const withEmail = shown.filter(l => l.email);
   async function send(ids) {
@@ -29493,6 +29497,7 @@ function QEmailLeads({ onDone, setMsg }) {
     <div className="card panel">
       <QStageBoxes value={box} onPick={v => { setBox(v); ck.clear(); }} items={boxes.map(([k, l]) => [k, l, all.filter(x => inBox(x, k)).length])} />
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+        <input type="search" style={{ ...sel, minWidth: 240, flex: "1 1 240px" }} placeholder="Search company, email, city, website…" value={q} onChange={e => setQ(e.target.value)} aria-label="Search leads" />
         <select style={sel} value={trade} onChange={e => setTrade(e.target.value)}><option value="">All trades</option>{Q_LEAD_TRADES.map(t => <option key={t}>{t}</option>)}</select>
         <select style={sel} value={country} onChange={e => setCountry(e.target.value)}><option value="">All countries</option>{countries.map(c => <option key={c}>{c}</option>)}</select>
         <select style={sel} value={added} onChange={e => setAdded(e.target.value)}><option value="">Added: any time</option><option value="today">Added today</option><option value="week">Added this week</option></select>
@@ -29538,6 +29543,10 @@ function QEmailLeads({ onDone, setMsg }) {
               <td style={qTd}>{sendable && l.email && <button type="button" className="qp-btn" disabled={busy} onClick={() => send([l.id])}>✉ Send</button>}</td>
             </tr>))}</tbody></table></div>
       )}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
+        <button type="button" className="qp-btn" onClick={reload} disabled={reloading}>{reloading ? "Reloading…" : "↻ Reload"}</button>
+        <span style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)" }}>{rows === null ? "" : `${shown.length} shown${q.trim() ? ` for “${q.trim()}”` : ""} · ${all.length} leads in total`}</span>
+      </div>
       <div style={{ fontSize: 12, color: "var(--text-dim,#94a3b8)", marginTop: 10 }}>After the first email a lead waits 7 days for Follow-up 1, 7 more for Follow-up 2, then gets news every few weeks (6 emails at most). Leads are never deleted. Unsubscribe or "Do not contact" stops all emails.</div>
       {pv && <QEmailPreview {...pv} onClose={() => setPv(null)} />}
     </div>
