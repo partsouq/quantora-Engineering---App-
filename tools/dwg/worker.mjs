@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { failReason } from "./fail-reason.mjs";
 
 const FN = process.env.DWG_WORKER_URL;            // https://<project>.supabase.co/functions/v1/dwg-worker
 // GitHub's OIDC tokens are short-lived, so a fresh one is fetched for every call.
@@ -68,7 +69,7 @@ async function convert(lib, job, dir) {
   if (!db?.entities?.length) throw new Error("The DWG opened but has no drawing content.");
   fs.writeFileSync(js, toJson(db));
   const r = spawnSync("python3", [path.join(HERE, "dwg2pdf.py"), js, pdf, rep, path.join(dir, "preview.jpg")], { encoding: "utf8", maxBuffer: 1 << 20, timeout: 10 * 60 * 1000 });
-  if (r.status !== 0 || !fs.existsSync(pdf)) throw new Error("Drawing the DWG failed" + (r.status === null ? " (took too long)" : ""));
+  if (r.status !== 0 || !fs.existsSync(pdf)) throw new Error("Drawing the DWG failed" + (r.status === null ? " (took too long)" : failReason(r.stderr)));
   const report = JSON.parse(fs.readFileSync(rep, "utf8"));
   // a kept-alive connection can be closed by the server during a long conversion: retry the upload
   let up = null, lastErr = "";
