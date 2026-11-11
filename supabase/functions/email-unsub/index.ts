@@ -1,4 +1,4 @@
-// email-unsub (2026-11-09): the Unsubscribe link in every Email Center email. Public (no sign-in).
+// email-unsub (2026-11-09, button step 2026-11-11): the Unsubscribe link in every Email Center email. Public (no sign-in).
 // The link carries a signature, so nobody can unsubscribe someone else. The address is added to
 // email_unsubscribes (never emailed again) and any matching lead is set to "Do not contact".
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -13,10 +13,18 @@ const page = (title: string, text: string) => new Response(`<!doctype html><html
 <body style="margin:0;background:#0b1240;font-family:Segoe UI,Arial,sans-serif;color:#e6eaf7;display:grid;place-items:center;min-height:100vh">
 <div style="max-width:440px;padding:28px;text-align:center"><h1 style="font-size:22px">${title}</h1><p style="color:#c4cdee;line-height:1.6">${text}</p>
 <a href="https://quantoraengineering.com" style="color:#a5b4fc">quantoraengineering.com</a></div></body></html>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+// Link scanners in company mail systems open every link (GET) seconds after delivery, so opening the link
+// only shows a button; the unsubscribe happens on the button (POST). Mail apps' one-click unsubscribe
+// (RFC 8058, "List-Unsubscribe=One-Click") also POSTs, so it still works in one step.
 Deno.serve(async (req) => {
   const u = new URL(req.url);
   const e = String(u.searchParams.get("e") || "").toLowerCase().trim(), t = String(u.searchParams.get("t") || "");
   if (!e || !t || t !== await token(e)) return page("Link not valid", "This unsubscribe link is not valid. Reply to the email with STOP and we will remove you.");
+  if (req.method !== "POST") {
+    const esc = (x: string) => x.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+    return page("Unsubscribe from Quantora emails?", `Press the button to stop emails to <b>${esc(e)}</b>.</p>
+<form method="post" action="?e=${encodeURIComponent(e)}&t=${t}"><button type="submit" style="margin:8px 0 18px;padding:12px 26px;border:0;border-radius:10px;background:#6366f1;color:#fff;font-size:15px;font-weight:700;cursor:pointer">Unsubscribe</button></form><p style="color:#c4cdee">`);
+  }
   await admin.from("email_unsubscribes").upsert({ email: e, reason: "link" }, { onConflict: "email" });
   await admin.from("email_leads").update({ status: "dnc", updated_at: new Date().toISOString() }).ilike("email", e);
   return page("You are unsubscribed", "You will not receive these emails from Quantora Engineering again.");
