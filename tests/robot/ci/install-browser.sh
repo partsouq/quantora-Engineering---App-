@@ -5,10 +5,13 @@
 # browser alone: GitHub's ubuntu runners already ship the system libraries.
 set -u
 NPX="${NPX:-npx}"
-TRIES="${TRIES:-3}"
+TRIES="${TRIES:-2}"
 WAIT="${WAIT:-20}"
+# 2026-11-11: when the mirrors are down, apt can hang for many minutes per try and the robot ran out of
+# time before testing anything. Each try with system deps now gets at most LIMIT seconds.
+LIMIT="${LIMIT:-180}"
 for i in $(seq 1 "$TRIES"); do
-  if $NPX playwright install --with-deps chromium; then
+  if timeout "$LIMIT" $NPX playwright install --with-deps chromium; then
     echo "browser installed (with system deps, try $i)"; exit 0
   fi
   echo "install with system deps failed (try $i/$TRIES)"
