@@ -15,7 +15,7 @@ revoke insert, update, delete on public.email_lead_queue from anon, authenticate
 
 -- the scheduler's secret (only the database and the email-center function read it)
 insert into public.app_secrets (key, value)
-select 'EMAIL_QUEUE_SECRET', encode(gen_random_bytes(24), 'hex')
+select 'EMAIL_QUEUE_SECRET', encode(extensions.gen_random_bytes(24), 'hex')
 where not exists (select 1 from public.app_secrets where key = 'EMAIL_QUEUE_SECRET');
 
 create or replace function public.q_email_queue_tick()
