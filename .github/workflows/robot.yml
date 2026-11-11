@@ -47,7 +47,7 @@ jobs:
         working-directory: tests/robot
         run: |
           npm install --no-audit --no-fund playwright@1.48.2
-          npx playwright install --with-deps chromium
+          bash ci/install-browser.sh
 
       - name: Wait for the release to go live
         if: github.event_name == 'push'
