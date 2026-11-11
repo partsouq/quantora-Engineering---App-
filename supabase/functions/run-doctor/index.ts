@@ -58,6 +58,12 @@ function classifyEmpty(notes: string, civil: boolean): { cause: string; msg?: Om
 const INVESTIGATING: Omit<Msg, "kind"> = { title: "We're looking into this run", what_happened: "Your run stopped because of a problem on our side, not with your file.",
   what_we_did: "Our team has been alerted with the details. Nothing was charged for this attempt.", what_to_do: ["You don't need to do anything now. We'll message you here when it's fixed.", "If it's urgent, try the run again later or contact support from Help."] };
 
+// 2026-11-11: a problem on our side also gets a short note from the team in the user's live chat,
+// which opens on its own, so the user knows someone is on it and does not leave.
+const teamNoteText = (file: string, retrying: boolean) => retrying
+  ? `Hi, your take-off for ${file} hit a problem on our side. We're already fixing it and running it again for you now, free. You don't need to do anything. We'll reply here when it's ready.`
+  : `Hi, your work on ${file} stopped because of a problem on our side, not your file. Our team is already working on it and will reply here as soon as it's fixed. Nothing was charged.`;
+
 function fingerprint(service: string, err: string) {
   return service + ":" + err.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "#").replace(/https?:\/\/\S+/g, "URL").replace(/\d+/g, "N").replace(/\s+/g, " ").trim().slice(0, 160);
 }
@@ -113,6 +119,22 @@ Deno.serve(async (req) => {
       await admin.from("admin_alerts").insert({ fingerprint: fp, service, title, error_text: err.slice(0, 4000), examples: [example] });
     }
   }
+  async function teamNote(userId: string | null, body: string) {
+    report.push({ chat_note: userId });
+    if (dry || !userId) return;
+    const { error } = await admin.rpc("q_team_chat_note", { p_user: userId, p_body: body });
+    if (error) console.warn("team note failed:", error.message);
+  }
+  async function startRetry(r: any, file: string, sk: string) {
+    const res = await fetch(`${url}/functions/v1/ai-engine`, { method: "POST", headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "analyze_drawing", doctor_retry: true, doctor_retry_of: r.id, user_id: r.triggered_by, target_project_id: r.project_id, project_id: r.project_id, drawing_id: r.drawing_id }) }).catch(() => null);
+    if (!res || !res.ok) {                // the retry itself could not start: a platform problem, not the user's
+      const t = res ? `HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}` : "no response";
+      await alertAdmin("run-doctor", "Automatic retry could not start", t, { ...(await who(r.triggered_by)), project_id: r.project_id, file, source_kind: sk, source_id: r.id, at: r.created_at });
+      return false;
+    }
+    return true;
+  }
   async function who(userId: string | null) {
     if (!userId) return {};
     const { data } = await admin.auth.admin.getUserById(userId);
@@ -129,11 +151,27 @@ Deno.serve(async (req) => {
     const empty = r.status === "completed" && Number(sum.item_count ?? 1) === 0;
     // a doctor re-run that finished: tell the user it is fixed
     if (sum.doctor_retry_of && r.status === "completed" && !empty && !has(sk, sum.doctor_retry_of, "fixed")) {
-      const { data: orig } = await admin.from("analysis_runs").select("triggered_by").eq("id", sum.doctor_retry_of).maybeSingle();
+      const { data: orig } = await admin.from("analysis_runs").select("triggered_by, error_message").eq("id", sum.doctor_retry_of).maybeSingle();
+      // the chat said "we'll reply here when it's ready" (problems on our side): reply there too
+      if (classifyRunError(String(orig?.error_message ?? "")).cause === "bug")
+        await teamNote(orig?.triggered_by ?? null, `Good news: your take-off is ready, with ${sum.item_count} BOQ lines. Open the BOQ to check it. No extra page was taken from your allowance.`);
       await message(orig?.triggered_by ?? null, sk, sum.doctor_retry_of, r.project_id, { kind: "fixed", title: "Your take-off is ready",
-        what_happened: "The AI service was busy when you ran this drawing, so the take-off stopped before it finished.",
+        what_happened: "The take-off stopped before it finished the first time you ran this drawing.",
         what_we_did: `We ran it again automatically and it finished with ${sum.item_count} BOQ lines. No extra page was taken from your allowance.`,
         what_to_do: ["Open the BOQ and check the lines marked for review."], action_label: "Open BOQ", action_target: { view: "boq" } });
+      continue;
+    }
+    // 2026-11-11: the free re-run failed too: keep the user informed in the chat and alert the admin
+    if (sum.doctor_retry_of && (r.status === "failed" || empty) && !has(sk, sum.doctor_retry_of, "info", "fixed")) {
+      const { data: orig } = await admin.from("analysis_runs").select("triggered_by, is_admin_assisted").eq("id", sum.doctor_retry_of).maybeSingle();
+      if (orig && !orig.is_admin_assisted) {
+        const { data: dr0 } = await admin.from("drawings").select("file_name").eq("id", r.drawing_id).maybeSingle();
+        const f0 = dr0?.file_name ?? "drawing";
+        const err0 = String(r.error_message ?? (empty ? "re-run returned no items" : ""));
+        await alertAdmin("take-off", `Automatic re-run failed: ${err0.slice(0, 80)}`, err0, { ...(await who(orig.triggered_by)), project_id: r.project_id, file: f0, source_kind: sk, source_id: sum.doctor_retry_of, at: r.created_at });
+        await message(orig.triggered_by, sk, sum.doctor_retry_of, r.project_id, { kind: "info", ...INVESTIGATING, must_read: false });
+        await teamNote(orig.triggered_by, teamNoteText(f0, false));
+      }
       continue;
     }
     if (r.is_admin_assisted || sum.doctor_retry_of) continue;          // admin and doctor runs are watched by the admin
@@ -152,12 +190,7 @@ Deno.serve(async (req) => {
         if (!dry) {
           await message(r.triggered_by, sk, r.id, r.project_id, { kind: "investigating", must_read: false, title: "Re-running your drawing",
             what_happened: `The AI service was busy when you ran ${file}.`, what_we_did: "We are running it again for you now, free.", what_to_do: ["Nothing. We'll show you a message when it's ready."] });
-          const res = await fetch(`${url}/functions/v1/ai-engine`, { method: "POST", headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey, "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "analyze_drawing", doctor_retry: true, doctor_retry_of: r.id, user_id: r.triggered_by, target_project_id: r.project_id, project_id: r.project_id, drawing_id: r.drawing_id }) }).catch(() => null);
-          if (!res || !res.ok) {                // the retry itself could not start: a platform problem, not the user's
-            const t = res ? `HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}` : "no response";
-            await alertAdmin("run-doctor", "Automatic retry could not start", t, { ...(await who(r.triggered_by)), project_id: r.project_id, file, source_kind: sk, source_id: r.id, at: r.created_at });
-          }
+          if (!(await startRetry(r, file, sk))) await teamNote(r.triggered_by, teamNoteText(file, false));
         }
         continue;
       }
@@ -169,14 +202,31 @@ Deno.serve(async (req) => {
       }
       if (c.msg) { await message(r.triggered_by, sk, r.id, r.project_id, { kind: "action", ...(c.msg as any) }); continue; }
       await alertAdmin("take-off", `Take-off failed: ${err.slice(0, 90)}`, err, { ...(await who(r.triggered_by)), project_id: r.project_id, file, source_kind: sk, source_id: r.id, at: r.created_at });
-      await message(r.triggered_by, sk, r.id, r.project_id, { kind: "investigating", ...INVESTIGATING });
+      // 2026-11-11: a problem on our side gets one free automatic re-run too (whole sheets; tiled sheets
+      // are drawn in the browser, so there the user gets a Try again button)
+      if (r.run_kind !== "tiled") {
+        report.push({ retry: r.id, cause: "bug" });
+        if (!dry) {
+          await message(r.triggered_by, sk, r.id, r.project_id, { kind: "investigating", must_read: false, title: "We're fixing this, retrying now",
+            what_happened: `Your take-off for ${file} stopped because of a problem on our side, not your file.`,
+            what_we_did: "Our team has been alerted. We are running it again for you now, free.", what_to_do: ["Nothing. We'll show you a message when it's ready."] });
+          const started = await startRetry(r, file, sk);
+          await teamNote(r.triggered_by, teamNoteText(file, started));
+        }
+        continue;
+      }
+      await message(r.triggered_by, sk, r.id, r.project_id, { kind: "investigating", ...INVESTIGATING, must_read: false,
+        what_to_do: ["Press Try again: it often works on the second run.", "We'll also message you here when it's fixed."],
+        action_label: "Try again", action_target: { view: "drawings", drawing_id: r.drawing_id } });
+      await teamNote(r.triggered_by, teamNoteText(file, false));
       continue;
     }
     // empty result
     const c = classifyEmpty(String(sum.notes ?? ""), sum.civil === true);
     if (c.msg) { await message(r.triggered_by, sk, r.id, r.project_id, { kind: "action", ...c.msg }); continue; }
     await alertAdmin("take-off", "Civil sheet measured nothing", `civil plan returned 0 items: ${file}`, { ...(await who(r.triggered_by)), project_id: r.project_id, file, source_kind: sk, source_id: r.id, at: r.created_at });
-    await message(r.triggered_by, sk, r.id, r.project_id, { kind: "investigating", ...INVESTIGATING });
+    await message(r.triggered_by, sk, r.id, r.project_id, { kind: "investigating", ...INVESTIGATING, must_read: false });
+    await teamNote(r.triggered_by, teamNoteText(file, false));
   }
 
   // ---------------------------------------------------------------- Draftsman jobs
@@ -211,7 +261,8 @@ Deno.serve(async (req) => {
     else if (/Already drawn in this package/i.test(err)) m = { title: "These systems are already drawn", what_happened: "The systems you added are already in this drawing package.", what_we_did: "Nothing was charged.", what_to_do: ["Use Rework on the drawing to change it instead of adding it again."] };
     if (m) { await message(j.created_by, sk, j.id, j.project_id, { kind: "action", ...m }); continue; }
     await alertAdmin("draftsman", `Draftsman job failed: ${err.split("\n").slice(-1)[0].slice(0, 90)}`, err, { ...(await who(j.created_by)), project_id: j.project_id, file, source_kind: sk, source_id: j.id, at: j.created_at });
-    await message(j.created_by, sk, j.id, j.project_id, { kind: "investigating", ...INVESTIGATING });
+    await message(j.created_by, sk, j.id, j.project_id, { kind: "investigating", ...INVESTIGATING, must_read: false });
+    await teamNote(j.created_by, teamNoteText(file, false));
   }
   return json({ ok: true, dry_run: dry, since, service_key_kind: serviceKey.startsWith("eyJ") ? "jwt" : "secret", actions: report });
 });

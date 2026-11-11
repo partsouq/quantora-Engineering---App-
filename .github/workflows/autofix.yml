@@ -1,0 +1,138 @@
+name: Auto-fix
+
+# 2026-11-11 (owner approved): an automatic fix goes live by itself when it is safe, so users are not
+# left waiting for a review. Only pull requests from branches named autofix/... (opened by the platform
+# watch) are handled here; every other pull request still waits for the owner.
+#   1. Safety gate (always the copy on main): payments, database, sign-in, workflows or the robot itself
+#      -> NOT merged; the owner gets "Fix waiting for your approval".
+#   2. The test robot (copy on main) uses the fixed website on this machine, plus any tests in the fix.
+#      Fails -> NOT merged, the owner is told.
+#   3. Passed -> merged, website and changed server functions deployed.
+#   4. The robot checks the live website. Fails twice -> the fix is undone automatically (revert pushed
+#      to main, website and functions deployed again) and the owner is told.
+# Every outcome sends a push to the admins' phones.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: autofix
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  pages: write
+
+jobs:
+  autofix:
+    if: startsWith(github.head_ref, 'autofix/') && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      TITLE: ${{ github.event.pull_request.title }}
+      ROBOT_EMAIL: ${{ secrets.ROBOT_EMAIL }}
+      ROBOT_PASSWORD: ${{ secrets.ROBOT_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Use the gate and robot from main (never the copy inside the fix)
+        run: |
+          git fetch -q origin main
+          git worktree add -q "$RUNNER_TEMP/main" origin/main
+          echo "MAIN=$RUNNER_TEMP/main" >> "$GITHUB_ENV"
+          NOTE="node $RUNNER_TEMP/main/tests/robot/ci/notify.js"
+          echo "NOTE=$NOTE" >> "$GITHUB_ENV"
+
+      - name: 1. Safety gate
+        id: gate
+        run: |
+          OUT=$(bash "$MAIN/tests/robot/ci/autofix-gate.sh" origin/main "$HEAD_SHA")
+          echo "$OUT"
+          RES=$(echo "$OUT" | tail -1)
+          echo "result=$RES" >> "$GITHUB_OUTPUT"
+          FILES=$(git diff --name-only origin/main "$HEAD_SHA")
+          SITE=$(echo "$FILES" | grep -Ev '^(supabase/|tests/)' | head -1)
+          FUNCS=$(echo "$FILES" | grep -E '^supabase/functions/[^/]+/' | cut -d/ -f3 | sort -u | tr '\n' ' ')
+          echo "SITE_CHANGED=$([ -n "$SITE" ] && echo 1 || echo 0)" >> "$GITHUB_ENV"
+          echo "FUNCS=$FUNCS" >> "$GITHUB_ENV"
+          if [ "$RES" != "safe" ]; then
+            REASON=$(echo "$OUT" | head -3 | tr '\n' ' ')
+            gh pr comment "$PR" --body "Auto-fix gate: this fix needs the owner's approval before it goes live. ${REASON}" || true
+            $NOTE "Fix waiting for your approval" "PR #$PR: $TITLE (payments, database or sign-in)"
+          fi
+
+      - name: Install the robot's browser
+        if: steps.gate.outputs.result == 'safe'
+        working-directory: ${{ env.MAIN }}/tests/robot
+        run: |
+          npm install --no-audit --no-fund playwright@1.48.2
+          bash ci/install-browser.sh
+
+      - name: 2. Test the fix before it goes live
+        id: pretest
+        if: steps.gate.outputs.result == 'safe'
+        run: |
+          set +e
+          ok=1
+          for t in $(git diff --name-only origin/main "$HEAD_SHA" | grep -E '\.test\.(sh|js|mjs)$'); do
+            [ -f "$t" ] || continue
+            echo "== $t"
+            case "$t" in *.sh) bash "$t" ;; *) node "$t" ;; esac || ok=0
+          done
+          if [ "$SITE_CHANGED" = 1 ]; then
+            python3 -m http.server 8080 --bind 127.0.0.1 >/dev/null 2>&1 &
+            sleep 2
+            (cd "$MAIN/tests/robot" && ROBOT_URL=http://127.0.0.1:8080/ ROBOT_NO_REPORT=1 node robot.js) || ok=0
+          else
+            echo "Website not changed: the robot checks the live site after the deploy."
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          if [ "$ok" != 1 ]; then
+            gh pr comment "$PR" --body "Auto-fix: the tests failed on this fix, so it was NOT put live." || true
+            $NOTE "Auto-fix not put live" "PR #$PR: tests failed on the fix"
+            exit 1
+          fi
+
+      - name: 3. Merge and deploy
+        id: merge
+        if: steps.gate.outputs.result == 'safe' && steps.pretest.outputs.ok == '1'
+        run: |
+          gh pr ready "$PR" || true
+          MERGED=$(gh api -X PUT "repos/$GH_REPO/pulls/$PR/merge" -f merge_method=squash -f sha="$HEAD_SHA" --jq .sha)
+          [ -n "$MERGED" ] || { echo "merge failed"; exit 1; }
+          echo "MERGED=$MERGED" >> "$GITHUB_ENV"
+          bash "$MAIN/tests/robot/ci/autofix-deploy.sh" "$MERGED" "$SITE_CHANGED" "$FUNCS"
+
+      - name: 4. Check the live website (undo the fix if it broke something)
+        if: steps.merge.outcome == 'success'
+        run: |
+          set +e
+          check() { (cd "$MAIN/tests/robot" && ROBOT_NO_REPORT=1 node robot.js); }
+          sleep 60
+          if check || { sleep 90; check; }; then
+            $NOTE "Fixed and live" "PR #$PR: $TITLE"
+            gh pr comment "$PR" --body "Auto-fix: merged, deployed and checked on the live website by the robot." || true
+            exit 0
+          fi
+          echo "Live check failed twice: undoing the fix"
+          git config user.name "quantora-autofix"; git config user.email "autofix@users.noreply.github.com"
+          git fetch -q origin main && git checkout -q -B undo origin/main
+          git revert --no-edit "$MERGED" && git push origin undo:main
+          UNDO=$(git rev-parse HEAD)
+          bash "$MAIN/tests/robot/ci/autofix-deploy.sh" "$UNDO" "$SITE_CHANGED" "$FUNCS"
+          $NOTE "Auto-fix undone" "PR #$PR broke the live check; previous version is back"
+          gh pr comment "$PR" --body "Auto-fix: the live check failed after this fix, so it was undone automatically (revert $UNDO). The previous version is live again." || true
+          exit 1

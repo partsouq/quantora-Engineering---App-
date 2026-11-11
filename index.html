@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-11.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-11.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -28916,6 +28916,16 @@ function LiveChatWidget({ session, pageName }) {
       if (tk) {
         const { data: m } = await sb.from("support_messages").select("*").eq("ticket_id", tk.id).order("created_at", { ascending: true }).limit(500);
         setMsgs(m || []);
+        // 2026-11-11: a new message from the team (or an automatic "our team is on it" note) opens the
+        // chat on its own, once per message, so the user sees it straight away.
+        try {
+          const fresh = (m || []).filter(x => x.from_admin && !x.read_by_customer_at && Date.now() - new Date(x.created_at).getTime() < 30 * 60e3).pop();
+          let seen = ""; try { seen = localStorage.getItem("q-chat-autoopen") || ""; } catch (_) {}
+          if (fresh && fresh.id !== seen && !openRef.current) {
+            try { localStorage.setItem("q-chat-autoopen", fresh.id); } catch (_) {}
+            setOpen(true); openRef.current = true; qChime();
+          }
+        } catch (_) {}
         if (openRef.current) { try { await sb.rpc("mark_support_thread_read", { p_ticket_id: tk.id }); } catch (_) {} }
       } else setMsgs([]);
     } catch (e) { console.warn("live chat load failed:", e); }
