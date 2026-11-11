@@ -63,4 +63,24 @@ def test_broken_viewport_does_not_lose_the_sheet(tmp_path, vp):
 def test_good_sheet_unchanged(tmp_path):
     rep = run(tmp_path, sheet({"width": 100, "height": 80, "viewportCenter": {"x": 300, "y": 200}}))
     assert rep["pages"][0]["viewports"] == 2
-    assert "error:VIEWPORT" not in rep["skipped_types"]
+    assert not any(k.startswith("error:VIEWPORT") for k in rep["skipped_types"])
+    assert not rep.get("model_fallback")
+
+
+def test_broken_viewport_records_only_the_error_type(tmp_path):
+    rep = run(tmp_path, sheet({"width": 100, "height": 100}))  # no centre: filtered before drawing
+    rep2 = run(tmp_path, sheet({"width": 100, "height": 100, "viewportCenter": {"x": 50, "y": 50}, "viewHeight": "x"}))
+    keys = [k for k in rep2["skipped_types"] if k.startswith("error:VIEWPORT")]
+    assert keys == ["error:VIEWPORT:ValueError"]
+
+
+def test_plan_outside_every_viewport_gets_its_own_page_first(tmp_path):
+    """2026-11-11: 8 sheets came out as a title-block strip; the plan was outside every viewport frame."""
+    d = sheet({"width": 1, "height": 1})  # filtered out
+    for e in d["entities"]:
+        if e.get("viewportId") == 2:
+            e["viewCenter"] = {"x": 90000, "y": 90000}  # looks at an empty part of model space
+    rep = run(tmp_path, d)
+    assert rep["model_fallback"] is True
+    assert [p["name"] for p in rep["pages"]] == ["Model", "Sheet 1"]
+    assert all(v["inside"] == 0 for v in rep["viewports"])

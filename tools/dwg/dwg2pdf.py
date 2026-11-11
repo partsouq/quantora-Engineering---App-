@@ -538,14 +538,22 @@ def layout_pages(doc, dw, report):
         for v in content_vps:
             try:
                 _draw_viewport(dw, page, v, to_page, u)
-            except Exception:  # a broken viewport is skipped; the rest of the sheet is still drawn
-                dw.stats["skipped_types"]["error:VIEWPORT"] = dw.stats["skipped_types"].get("error:VIEWPORT", 0) + 1
+            except Exception as ex:  # a broken viewport is skipped; the rest of the sheet is still drawn
+                key = "error:VIEWPORT:" + type(ex).__name__   # the error type only, never its text
+                dw.stats["skipped_types"][key] = dw.stats["skipped_types"].get(key, 0) + 1
         p = Painter(page, to_page); p.unit_scale = u * MM
         draw_entities(dw, paper_ents, M(), p, (0, 0, 0), 0)
         p.flush()
         report["pages"].append({"name": lay.get("layoutName"), "width_mm": round(pw), "height_mm": round(ph), "viewports": len(content_vps)})
         made += 1
     return made
+
+
+def plan_missing_from_sheets(dw):
+    """True when model space has content but none of it landed inside any drawn viewport frame."""
+    if not dw.by_owner.get(dw.model_handle):
+        return False
+    return not any((v.get("inside") or 0) > 0 for v in dw.stats.get("viewports", []))
 
 
 def main():
@@ -561,6 +569,13 @@ def main():
         dw.stats["skipped_types"]["error:LAYOUT"] = 1
     if not made:
         model_page(doc, dw, report)
+    elif plan_missing_from_sheets(dw):
+        # 2026-11-11: sheets came out as a title-block strip with the plan outside every viewport frame.
+        # The plan must never be silently lost: draw model space as its own page, first.
+        if model_page(doc, dw, report):
+            doc.move_page(doc.page_count - 1, 0)
+            report["pages"].insert(0, report["pages"].pop())
+            dw.stats["model_fallback"] = True
     if doc.page_count == 0:
         only3d = all(e.get("type") in ("3DSOLID", "REGION", "BODY", "MESH", "SURFACE", "POLYLINE3D", "MTEXT", "VIEWPORT") for e in dw.d.get("entities", []))
         raise SystemExit("This DWG holds a 3D model with no 2D plan to read." if only3d else "This DWG has no drawing content to read.")
