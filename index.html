@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-13.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-13.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -27699,6 +27699,8 @@ function SettingsPage({ email, bare }) {
         </button>
       </div>
 
+      <LookSettingsCard />
+
       <LocationSettingsCard />
 
       <div className="qp-card">
@@ -40115,6 +40117,90 @@ function QAppPrompt() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// LOOK SWITCH (2026-11-13). Every user has two looks to pick from: Classic (the
+// default, the look the platform always had) and Glass. They choose once after
+// sign-in and any time in Settings. The engine is window.QLook (see the
+// q-look-runtime script): it recolours the style sheets and inline styles only
+// while glass is on, so Classic is byte-for-byte what it was. The admin portal,
+// the public site and every exported file stay Classic.
+const Q_LOOKS = [
+  { id: "classic", name: "Classic", blurb: "Dark and high-contrast. The look you have now." },
+  { id: "glass", name: "Glass", blurb: "Light, frosted panels over a blue backdrop." },
+];
+function useQLook(session) {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const f = () => bump(n => n + 1);
+    window.addEventListener("q-look", f);
+    return () => window.removeEventListener("q-look", f);
+  }, []);
+  const u = session && session.user;
+  return u && window.QLook ? window.QLook.read(u.id, u.user_metadata) : null;
+}
+// Saved on this device at once, and on the account so a new device starts with the same look.
+function qLookSave(uid, look) {
+  if (!window.QLook || !uid) return;
+  window.QLook.save(uid, look);
+  try { Promise.resolve(sb.auth.updateUser({ data: { q_look: look } })).catch(() => {}); } catch (_) {}
+}
+function QLookTile({ look, on, onPick }) {
+  return (
+    <button type="button" className={"qlk-opt" + (on ? " on" : "")} aria-pressed={on} onClick={() => onPick(look.id)}>
+      <span className={"qlk-mock qlk-mock-" + look.id} aria-hidden="true">
+        <i className="s" /><i className="r" /><i className="h" /><i className="p" /><i className="a" /><i className="b" /><i className="c" /><i className="d" />
+      </span>
+      <span className="qlk-row"><b>{look.name}</b>{on && <span className="qlk-tick">Selected</span>}</span>
+      <small>{look.blurb}</small>
+    </button>
+  );
+}
+// One-time pop-up after sign-in. Classic is pre-selected, so one tap keeps things as they are.
+function QLookChooser({ uid, hold }) {
+  const [sel, setSel] = useState("classic");
+  const [show, setShow] = useState(() => { try { return !localStorage.getItem("q_look_asked:" + uid); } catch (_) { return false; } });
+  if (!show || hold) return null;
+  const cur = Q_LOOKS.find(l => l.id === sel) || Q_LOOKS[0];
+  return (
+    <div className="qlk-veil">
+      <div className="qlk-pop" role="dialog" aria-modal="true" aria-label="Choose your look">
+        <b className="qlk-h">Choose your look</b>
+        <p className="qlk-sub">Pick how Quantora looks for you. Your projects and data are the same in both, and you can change it any time in Settings.</p>
+        <div className="qlk-grid">
+          {Q_LOOKS.map(l => <QLookTile key={l.id} look={l} on={sel === l.id} onPick={setSel} />)}
+        </div>
+        <div className="qlk-foot">
+          <button type="button" className="qp-btn pri" onClick={() => { setShow(false); qLookSave(uid, sel); }}>Use {cur.name}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function LookSettingsCard() {
+  const [user, setUser] = useState(null);
+  const [, bump] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    Promise.resolve(sb.auth.getSession()).then(({ data }) => { const u = data && data.session && data.session.user; if (alive && u) setUser(u); }).catch(() => {});
+    const f = () => bump(n => n + 1);
+    window.addEventListener("q-look", f);
+    return () => { alive = false; window.removeEventListener("q-look", f); };
+  }, []);
+  if (!user || !window.QLook) return null;
+  const cur = window.QLook.read(user.id, user.user_metadata) || "classic";
+  return (
+    <div className="qp-card">
+      <h4>Appearance</h4>
+      <p style={{ fontSize: 12.5, color: "var(--q-text-dim,#64748b)", margin: "0 0 12px" }}>
+        Choose how Quantora looks for you. It changes at once; your projects and data stay the same.
+      </p>
+      <div className="qlk-grid">
+        {Q_LOOKS.map(l => <QLookTile key={l.id} look={l} on={cur === l.id} onPick={(id) => { if (id !== cur) qLookSave(user.id, id); }} />)}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(undefined);
   // Home, not the project list. Signing in should answer "what should I do
@@ -40531,6 +40617,18 @@ function App() {
     }
   }, []);
 
+  // Look switch (2026-11-13): Classic unless this user picked Glass. The admin
+  // portal, the public site and the sign-in screens are always Classic.
+  const qLook = useQLook(session);
+  const qLookOn = session === undefined ? !!(window.QLook && window.QLook.want)
+    : !!(session && !recovering && qLook === "glass" && !(view && view.name === "admin"));
+  if (window.QLook) window.QLook.flag(qLookOn);
+  React.useLayoutEffect(() => {
+    if (!window.QLook) return;
+    window.QLook.css(qLookOn);
+    if (session !== undefined) window.QLook.last(session && qLook === "glass" ? "glass" : "classic");
+  }, [qLookOn, session === undefined, qLook]);
+
   if (session === undefined) return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading…</div>;
   // Checked before the signed-in branch: a recovery link DOES create a session,
   // so without this the workspace would open and the password would never get
@@ -40542,8 +40640,9 @@ function App() {
   }
 
   return (
-    <div className={`min-h-screen ${view && view.name === "admin" ? "" : "qx"}`}>
+    <div key={qLookOn ? "look-glass" : "look-classic"} className={`min-h-screen ${view && view.name === "admin" ? "" : "qx"}`}>
       <LocationGate isPlatformAdmin={isPlatformAdmin} userId={session.user.id} onNeed={setCountryGate} />
+      {qLook === null && !(view && view.name === "admin") && <QLookChooser uid={session.user.id} hold={!!countryGate} />}
       <DuctSizesHost />
       <QAppPrompt />
       <nav className="qtr-topnav bg-white border-b px-6 py-3 flex items-center justify-between sticky top-0 z-10">
@@ -40722,6 +40821,263 @@ function App() {
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 try { const popEl = document.createElement("div"); popEl.id = "q-pop-root"; document.body.appendChild(popEl); ReactDOM.createRoot(popEl).render(<QPopHost />); } catch (_) {}
+</script>
+<script id="q-look-runtime">
+/* Look switch (2026-11-13). The customer app has two looks: "classic" (the default, unchanged) and "glass".
+   Glass = the classic colours remapped at run time + the #q-glass sheet. Nothing changes unless the signed-in
+   user picked glass; the admin portal, the public site, PDFs and Excel files always stay as they are. */
+(function () {
+  var QL = window.QLook = { on: false, cssOn: false, want: false, ready: false };
+  var INK = 212, ACC = 199;
+  function hls(r, g, b) {
+    var mx = Math.max(r, g, b), mn = Math.min(r, g, b), sum = mx + mn, rng = mx - mn, l = sum / 2;
+    if (mn === mx) return [0, l, 0];
+    var s = l <= 0.5 ? rng / sum : rng / (2 - mx - mn);
+    var rc = (mx - r) / rng, gc = (mx - g) / rng, bc = (mx - b) / rng;
+    var h = r === mx ? bc - gc : g === mx ? 2 + rc - bc : 4 + gc - rc;
+    h = (((h / 6) % 1) + 1) % 1; return [h, l, s];
+  }
+  function v1(m1, m2, hue) {
+    hue = ((hue % 1) + 1) % 1;
+    if (hue < 1 / 6) return m1 + (m2 - m1) * hue * 6;
+    if (hue < 0.5) return m2;
+    if (hue < 2 / 3) return m1 + (m2 - m1) * (2 / 3 - hue) * 6;
+    return m1;
+  }
+  function t(h, l, s) {
+    h = h / 360; l = Math.max(0, Math.min(1, l)); s = Math.max(0, Math.min(1, s));
+    var r, g, b;
+    if (s === 0) r = g = b = l;
+    else { var m2 = l <= 0.5 ? l * (1 + s) : l + s - l * s, m1 = 2 * l - m2; r = v1(m1, m2, h + 1 / 3); g = v1(m1, m2, h); b = v1(m1, m2, h - 1 / 3); }
+    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255), null];
+  }
+  // dark theme -> light glass. bg = the colour is a background (surface); tx = it is the colour of text,
+  // which always has to end up dark enough to read on a frosted panel
+  function remap(r, g, b, bg, tx) {
+    var x = hls(r / 255, g / 255, b / 255), hd = x[0] * 360, l = x[1], s = x[2];
+    if (s < 0.22 || (hd >= 195 && hd <= 265 && (l < 0.34 || l > 0.72 || (tx && s < 0.40)))) {
+      if (l === 1) return null;
+      var nl = 1 - l;
+      if (nl > 0.78) return bg ? [255, 255, 255, 0.46] : tx ? t(INK, 0.16, 0.5) : t(INK, 0.93, 0.25);
+      if (nl < 0.30) return t(INK, 0.13 + nl * 0.7, 0.5);
+      return t(INK, tx ? Math.min(nl, 0.45) : nl, Math.min(s, 0.22));
+    }
+    if (hd >= 195 && hd <= 300) return tx ? t(ACC, 0.36, 0.88) : t(ACC, l < 0.8 ? Math.min(Math.max(l, 0.40), 0.52) : 0.92, l < 0.8 ? 0.88 : 0.6);
+    if (hd >= 150 && hd < 195) return t(hd, Math.min(l, tx ? 0.30 : 0.36), s);
+    if (tx) { var cap = hd >= 30 && hd < 150 ? 0.32 : 0.42; return l > cap ? t(hd, cap, s) : null; }
+    if (l > 0.52) return t(hd, l - 0.10, s);
+    return null;
+  }
+  var TOK = /#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9a-zA-Z_-])|rgba?\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})(?:\s*[,\/]\s*([\d.]+%?))?\s*\)/g;
+  var PROP = /([a-zA-Z-]+)\s*:\s*[^;:{}]*$/;
+  function r3(n) { return String(+n.toFixed(3)); }
+  function h2(n) { return (n < 16 ? "0" : "") + n.toString(16); }
+  function one(m0, hex, R, G, B, A, bg, tx) {
+    var r, g, b, a = null;
+    if (hex) {
+      if (hex.length === 3) { r = parseInt(hex[0] + hex[0], 16); g = parseInt(hex[1] + hex[1], 16); b = parseInt(hex[2] + hex[2], 16); }
+      else { r = parseInt(hex.slice(0, 2), 16); g = parseInt(hex.slice(2, 4), 16); b = parseInt(hex.slice(4, 6), 16); if (hex.length === 8) a = parseInt(hex.slice(6, 8), 16) / 255; }
+    } else {
+      r = +R; g = +G; b = +B;
+      if (A != null) { var pc = A.charAt(A.length - 1) === "%"; a = Number(pc ? A.slice(0, -1) : A); if (isNaN(a)) return m0; if (pc) a = a / 100; }
+    }
+    if (tx && a !== null && r === g && g === b && (r === 255 || r === 0)) return "rgba(12,36,64," + r3(r ? Math.min(1, a + 0.15) : a) + ")";
+    if (a !== null && r === 255 && g === 255 && b === 255) return bg ? "rgba(255,255,255," + r3(Math.min(1, a * 6 + 0.25)) + ")" : "rgba(12,36,64," + r3(Math.min(a * 0.9, 0.16)) + ")";
+    if (a !== null && r === 0 && g === 0 && b === 0) return "rgba(12,36,64," + r3(a * 0.22) + ")";
+    var n = remap(r, g, b, bg, tx);
+    if (!n) return m0;
+    var al = n[3] !== null ? n[3] : a;
+    if (al === null) return "#" + h2(n[0]) + h2(n[1]) + h2(n[2]);
+    return "rgba(" + n[0] + "," + n[1] + "," + n[2] + "," + r3(n[3] === null ? al : (a === null ? al : al * Math.min(1, a + 0.3))) + ")";
+  }
+  // a whole style sheet: the property name before each colour says whether it is a background
+  function trCss(seg) {
+    return seg.replace(TOK, function (m0, hex, R, G, B, A, off) {
+      var pm = PROP.exec(seg.slice(Math.max(0, off - 90), off)), nm = pm ? pm[1].toLowerCase() : "";
+      return one(m0, hex, R, G, B, A, nm.lastIndexOf("background", 0) === 0, nm === "color" || nm === "-webkit-text-fill-color");
+    }).split("Plus Jakarta Sans").join("Inter");
+  }
+  // one inline value (style prop, svg attribute)
+  var memo = {}, memoN = 0;
+  function trVal(v, bg, tx) {
+    var k = (bg ? "1" : tx ? "2" : "0") + v, c = memo[k];
+    if (c !== undefined) return c;
+    c = v.replace(TOK, function (m0, hex, R, G, B, A) { return one(m0, hex, R, G, B, A, bg, tx); });
+    if (memoN++ > 6000) { memo = {}; memoN = 0; }
+    return (memo[k] = c);
+  }
+  function hasCol(v) { return typeof v === "string" && v.length > 3 && (v.indexOf("#") >= 0 || v.indexOf("rgb") >= 0); }
+  var ATTR = ["fill", "stroke", "stopColor", "floodColor", "color"];
+  function fixProps(type, props) {
+    var out = null, st = props.style, k, v, nv;
+    if (st && typeof st === "object") {
+      // a see-through dark layer over the whole screen is a scrim, not a surface: mark it and keep it dark
+      var veil = typeof type === "string" && st.position === "fixed" && (st.inset === 0 || st.inset === "0" || st.inset === "0px") && typeof st.background === "string" && st.background.indexOf("rgba(") === 0;
+      var ns = null;
+      for (k in st) { v = st[k]; if (veil && k === "background") continue; if (hasCol(v)) { nv = trVal(v, k.lastIndexOf("background", 0) === 0, k === "color" || k === "WebkitTextFillColor"); if (nv !== v) { if (!ns) { ns = {}; for (var j in st) ns[j] = st[j]; } ns[k] = nv; } } }
+      if (ns) { out = {}; for (k in props) out[k] = props[k]; out.style = ns; }
+      if (veil) { if (!out) { out = {}; for (k in props) out[k] = props[k]; } out["data-qveil"] = "1"; }
+    }
+    if (typeof type === "string") {
+      for (var i = 0; i < ATTR.length; i++) { v = props[ATTR[i]]; if (hasCol(v)) { nv = trVal(v, false); if (nv !== v) { if (!out) { out = {}; for (k in props) out[k] = props[k]; } out[ATTR[i]] = nv; } } }
+      if (type === "style" && props.dangerouslySetInnerHTML && typeof props.dangerouslySetInnerHTML.__html === "string") {
+        if (!out) { out = {}; for (k in props) out[k] = props[k]; }
+        out.dangerouslySetInnerHTML = { __html: trCss(props.dangerouslySetInnerHTML.__html) };
+      }
+    }
+    return out || props;
+  }
+  QL.install = function () {
+    var R = window.React; if (!R || R.__qlook) return; R.__qlook = true;
+    var orig = R.createElement;
+    R.createElement = function (type, props) {
+      if (!QL.on) return orig.apply(R, arguments);
+      try {
+        var a = arguments, p = props ? fixProps(type, props) : props, css = type === "style" && a.length > 2;
+        if (p !== props || css) {
+          a = Array.prototype.slice.call(arguments); a[1] = p;
+          if (css) for (var i = 2; i < a.length; i++) if (typeof a[i] === "string") a[i] = trCss(a[i]);
+        }
+        return orig.apply(R, a);
+      } catch (e) { return orig.apply(R, arguments); }
+    };
+  };
+  // ---- legibility guard (glass only) --------------------------------------------------------------
+  // The recolouring cannot know what is behind a piece of text or a pop-up, so after the page changes
+  // this looks at what was actually drawn: white text that ended up on a light panel is inked
+  // (data-qink), and a pop-up or full-screen layer that ended up see-through is made solid
+  // (data-qfloat) over a dimmed, blurred page (data-qveil); data-qflat switches a panel's blur off. The rules for the three marks are in #q-glass.
+  var gq = [], gt = 0, gmo = null, gpid = 0, gfull = false;
+  function col(str) {
+    var m = /rgba?\(([^)]+)\)/.exec(str || ""); if (!m) return null;
+    var p = m[1].split(/[,\s\/]+/); return [+p[0], +p[1], +p[2], p.length > 3 && p[3] !== "" ? +p[3] : 1];
+  }
+  function lum(c) {
+    function f(v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
+    return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+  }
+  // the colour behind an element's text (a picture counts as a mid tone)
+  function behind(el) {
+    var st = [], e = el, n = 0, pic = false;
+    while (e && e !== document.documentElement && n++ < 40) {
+      var cs = getComputedStyle(e), c = col(cs.backgroundColor), gi = cs.backgroundImage;
+      if (c && c[3] > 0.02) { st.push(c); if (c[3] > 0.97) break; }
+      if (gi && gi !== "none") { if (gi.indexOf("url(") >= 0) { pic = true; break; } var g = col(gi); if (g && g[3] > 0.02) { st.push(g); if (g[3] > 0.97) break; } }
+      e = e.parentElement;
+    }
+    var b = pic ? [112, 124, 138] : [190, 218, 234];
+    for (var i = st.length - 1; i >= 0; i--) { var t0 = st[i]; b = [t0[0] * t0[3] + b[0] * (1 - t0[3]), t0[1] * t0[3] + b[1] * (1 - t0[3]), t0[2] * t0[3] + b[2] * (1 - t0[3])]; }
+    return b;
+  }
+  function inkCheck(el) {
+    if (el.__qp === gpid) return; el.__qp = gpid;
+    if (el.hasAttribute("data-qink")) { var b0 = behind(el); if (!b0 || lum(b0) < 0.40) el.removeAttribute("data-qink"); return; }
+    var cs = getComputedStyle(el), c = col(el.tagName === "svg" ? cs.color : (cs.webkitTextFillColor || cs.color));
+    if (!c || c[3] < 0.5 || c[0] < 232 || c[1] < 232 || c[2] < 232) return;
+    var b = behind(el); if (b && lum(b) > 0.46) el.setAttribute("data-qink", "1");
+  }
+  function frosted(c) { return c && c[3] > 0.2 && c[3] < 0.8 && c[0] > 234 && c[1] > 234 && c[2] > 234; }
+  function layerCheck(el, depth, inVeil) {
+    if (!el || el.nodeType !== 1) return;
+    var tn = el.tagName; if (tn === "SCRIPT" || tn === "STYLE" || tn === "svg" || tn === "INPUT" || tn === "TEXTAREA" || tn === "SELECT" || tn === "BUTTON") return;
+    var veil = el.hasAttribute("data-qveil"), fl = el.hasAttribute("data-qfloat");
+    if (!veil && !fl) {
+      var cs = getComputedStyle(el), pos = cs.position, c = col(cs.backgroundColor), gi = cs.backgroundImage;
+      if (!(c && c[3] > 0.02) && gi && gi !== "none" && gi.indexOf("url(") < 0) c = col(gi);
+      // a blurred ancestor would trap a fixed layer inside itself: switch that ancestor's blur off
+      if (pos === "fixed") for (var an = el.parentElement, h = 0; an && an !== document.body && h++ < 30; an = an.parentElement) {
+        if (!an.hasAttribute("data-qflat")) { var bf = getComputedStyle(an); if ((bf.backdropFilter && bf.backdropFilter !== "none") || (bf.webkitBackdropFilter && bf.webkitBackdropFilter !== "none")) an.setAttribute("data-qflat", "1"); }
+      }
+      if (pos === "fixed" && cs.top === "0px" && cs.left === "0px" && cs.right === "0px" && cs.bottom === "0px" && c && c[3] > 0.04 && c[3] < 0.9 && c[0] < 60 && c[1] < 80 && c[2] < 110) { el.setAttribute("data-qveil", "1"); veil = true; }
+      else if (frosted(c) && el.offsetWidth > 120 && el.offsetHeight > 50 && (inVeil || ((pos === "fixed" || pos === "absolute") && +cs.zIndex >= 20))) { el.setAttribute("data-qfloat", "1"); fl = true; }
+    }
+    if (fl || depth >= 3) return;
+    for (var k = el.firstElementChild, n = 0; k && n < 40; k = k.nextElementSibling, n++) layerCheck(k, depth + 1, inVeil || veil);
+  }
+  function scan(root) {
+    if (!root || root.nodeType !== 1 || !root.isConnected) return;
+    layerCheck(root, 0, !!(root.closest && root.closest("[data-qveil]")));
+    var vs = root.querySelectorAll("[data-qveil],.fixed.inset-0");
+    for (var v = 0; v < vs.length && v < 12; v++) layerCheck(vs[v], 0, false);
+    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nd, n = 0;
+    while ((nd = w.nextNode()) && n < 6000) {
+      var el = nd.parentElement; if (!el || el.__qp === gpid || !/\S/.test(nd.nodeValue)) continue;
+      var tn = el.tagName; if (tn === "SCRIPT" || tn === "STYLE" || tn === "OPTION" || tn === "TEXTAREA") continue;
+      n++; inkCheck(el);
+    }
+    var sv = root.tagName === "svg" ? [root] : root.querySelectorAll("svg");
+    for (var i = 0; i < sv.length && i < 1500; i++) inkCheck(sv[i]);
+    var mk = root.querySelectorAll("[data-qink]");
+    for (i = 0; i < mk.length; i++) inkCheck(mk[i]);
+  }
+  function guard() {
+    gt = 0; if (!QL.cssOn) { gq = []; return; }
+    try {
+      gpid++;
+      var q = gq, full = gfull || q.length > 40; gq = []; gfull = false;
+      if (full) scan(document.body);
+      else for (var i = 0; i < q.length; i++) scan(q[i]);
+    } catch (e) {}
+  }
+  function gwake(full) { if (full) gfull = true; if (!gt) gt = setTimeout(guard, 80); }
+  function gwatch(on) {
+    if (on && !gmo && window.MutationObserver) {
+      gmo = new MutationObserver(function (recs) {
+        for (var i = 0; i < recs.length; i++) {
+          var r = recs[i];
+          if (r.type === "attributes") { if (gq.indexOf(r.target) < 0) gq.push(r.target); }
+          else for (var j = 0; j < r.addedNodes.length; j++) { var nd = r.addedNodes[j]; if (nd.nodeType === 1) gq.push(nd); else if (nd.nodeType === 3 && nd.parentElement && gq.indexOf(nd.parentElement) < 0) gq.push(nd.parentElement); }
+        }
+        if (gq.length) gwake(false);
+      });
+      gmo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style"] });
+      gwake(true);
+    } else if (!on && gmo) { gmo.disconnect(); gmo = null; gq = []; }
+  }
+  var sheets = null;
+  function apply() {
+    var on = !!QL.want; if (!QL.ready || on === QL.cssOn) return;
+    try {
+      for (var i = 0; i < sheets.length; i++) { var s = sheets[i]; s.el.textContent = on ? (s.b === null ? (s.b = trCss(s.a)) : s.b) : s.a; }
+      var g = document.getElementById("q-glass"); if (g) g.media = on ? "all" : "not all";
+      if (on && !document.getElementById("q-look-font")) {
+        var l = document.createElement("link"); l.id = "q-look-font"; l.rel = "stylesheet";
+        l.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"; document.head.appendChild(l);
+      }
+      if (on) document.documentElement.setAttribute("data-qlook", "glass"); else document.documentElement.removeAttribute("data-qlook");
+      QL.cssOn = on;
+      gwatch(on);
+    } catch (e) { try { console.error("look switch failed", e); } catch (_) {} }
+  }
+  // called by the app on every render (cheap): flag = colour inline styles too
+  QL.flag = function (on) { QL.on = !!on; };
+  QL.css = function (on) { QL.want = !!on; apply(); };
+  // called once, at the end of the page, when every style sheet has been read
+  QL.start = function () {
+    if (QL.ready) return;
+    var root = document.getElementById("root"), all = document.querySelectorAll("style"); sheets = [];
+    for (var i = 0; i < all.length; i++) { var el = all[i]; if (el.id === "q-glass" || el.getAttribute("data-ql") === "0" || (root && root.contains(el))) continue; sheets.push({ el: el, a: el.textContent, b: null }); }
+    QL.ready = true; apply();
+  };
+  QL.read = function (uid, meta) {
+    try { var v = localStorage.getItem("q_look:" + uid); if (v === "glass" || v === "classic") return v; } catch (_) {}
+    var m = meta && meta.q_look; return m === "glass" || m === "classic" ? m : null;
+  };
+  QL.save = function (uid, look) {
+    if (look !== "glass" && look !== "classic") return;
+    try { localStorage.setItem("q_look:" + uid, look); localStorage.setItem("q_look_asked:" + uid, "1"); } catch (_) {}
+    try { window.dispatchEvent(new Event("q-look")); } catch (_) {}
+  };
+  QL.last = function (look) { try { localStorage.setItem("q_look_last", look); } catch (_) {} };
+  // at start-up: if this browser is signed in and last used glass, show glass straight away (no flash)
+  try {
+    var signedIn = false;
+    for (var i = 0; i < localStorage.length; i++) if (/^sb-.*-auth-token$/.test(localStorage.key(i) || "")) { signedIn = true; break; }
+    if (signedIn && localStorage.getItem("q_look_last") === "glass") { QL.want = true; QL.on = true; }
+  } catch (_) {}
+  QL._tr = trCss; QL._trVal = trVal;
+  if (window.__LIBS_READY__ && window.__LIBS_READY__.then) window.__LIBS_READY__ = window.__LIBS_READY__.then(function (ok) { try { QL.install(); } catch (_) {} return ok; });
+})();
 </script>
 <script>
 (function () {
@@ -42691,5 +43047,233 @@ html:root .qx .qws-jump-ic{display:grid;place-items:center;width:36px;height:36p
 html:root .qx .qws-viewall{font-size:13.5px;font-weight:700;color:#93c5fd!important;background:none;border:0;cursor:pointer}
 @media (max-width:640px){html:root .qx .qws-hero-img{width:100%;opacity:.45}html:root .qx .qws-hero-txt{padding:30px 22px}html:root .qx .qws .qwc-art{width:80%;opacity:.55}}
 </style>
+<style id="q-glass" media="not all">
+/* Quantora glass look (2026-11-13): frosted panels floating over a soft teal-blue backdrop. */
+:root{--ink:#0c2440;--ink2:#3d5673;--glass:rgba(255,255,255,.46);--glass-hi:rgba(255,255,255,.66);--edge:rgba(255,255,255,.72);--cy:#12a5e6;--r:24px}
+html:root:has(.qx),html:root:has(.qx) body{min-height:100vh}
+html:root:has(.qx) body{color:var(--ink);font-family:Inter,system-ui,sans-serif;background:
+  radial-gradient(1100px 760px at 50% 30%,rgba(226,240,248,1) 0%,rgba(200,226,240,.85) 30%,rgba(200,226,240,0) 68%),
+  radial-gradient(760px 700px at 100% 22%,rgba(46,112,196,.95) 0%,rgba(46,112,196,0) 64%),
+  radial-gradient(820px 640px at 86% 104%,rgba(34,170,160,.95) 0%,rgba(34,170,160,0) 60%),
+  radial-gradient(560px 1100px at -4% 50%,rgba(7,36,60,1) 0%,rgba(7,36,60,.85) 40%,rgba(7,36,60,0) 74%),
+  linear-gradient(115deg,#0b3150 0%,#3f8fb0 30%,#b4d6e6 56%,#5b9bcf 80%,#22868c 100%)!important;background-attachment:fixed!important}
+html:root:has(.qx) body .qx{background:transparent!important;color:var(--ink);font-family:Inter,system-ui,sans-serif}
+html:root:has(.qx) body .qx *{text-shadow:none!important}
+html:root:has(.qx) body .qx :is(h1,h2,h3,h4,button,input,b,span,div,p,a,td,th,small){font-family:Inter,system-ui,sans-serif!important;letter-spacing:-.005em}
+
+/* ---- top bar: a floating glass pill ---- */
+html:root:has(.qx) body .qx nav.qtr-topnav{margin:14px 18px 0!important;border-radius:999px!important;background:rgba(9,40,62,.46)!important;border:1px solid rgba(255,255,255,.28)!important;box-shadow:0 14px 30px -18px rgba(6,30,52,.8)!important;backdrop-filter:blur(22px) saturate(1.3);-webkit-backdrop-filter:blur(22px) saturate(1.3);height:56px!important;padding:0 14px 0 20px!important;position:sticky;top:10px}
+html:root:has(.qx) body .qx nav.qtr-topnav>div:first-child{color:#fff!important;font-weight:700!important;font-size:16px!important}
+html:root:has(.qx) body .qx nav.qtr-topnav .text-blue-700{color:#bfe6ff!important}
+html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a){background:rgba(255,255,255,.14)!important;border:1px solid rgba(255,255,255,.3)!important;border-radius:999px!important;color:#fff!important;box-shadow:none!important;height:38px!important}
+html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a) *{color:#fff!important}
+
+/* ---- sidebar: dark glass ---- */
+html:root:has(.qx) body .qx .qp-shell{gap:18px!important;padding:16px 18px 24px!important}
+html:root:has(.qx) body .qx .qp-side{background:rgba(9,40,62,.42)!important;border:1px solid rgba(255,255,255,.22)!important;border-radius:28px!important;box-shadow:0 20px 44px -26px rgba(4,22,40,.9)!important;backdrop-filter:blur(26px) saturate(1.2);-webkit-backdrop-filter:blur(26px) saturate(1.2);padding:14px 12px!important;color:#e7f2fb!important}
+html:root:has(.qx) body .qx .qp-brand b{color:#fff!important;font-weight:700!important}
+html:root:has(.qx) body .qx .qp-brand span span{color:rgba(231,242,251,.7)!important}
+html:root:has(.qx) body .qx .qp-brand img{border-radius:12px!important}
+html:root:has(.qx) body .qx .qp-ws{gap:6px!important}
+html:root:has(.qx) body .qx .qp-ws button{padding:8px 10px!important;min-height:0!important;background:rgba(255,255,255,.1)!important;border:1px solid rgba(255,255,255,.2)!important;border-radius:14px!important;color:#e7f2fb!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-ws button .ic,html:root:has(.qx) body .qx .qp-ws button .lb{color:inherit!important}
+html:root:has(.qx) body .qx .qp-ws button.on{background:#fff!important;border-color:#fff!important;color:var(--ink)!important;box-shadow:0 8px 20px -10px rgba(255,255,255,.8)!important}
+html:root:has(.qx) body .qx .qp-ws-all{background:transparent!important;border:1px dashed rgba(255,255,255,.3)!important;border-radius:999px!important;color:rgba(231,242,251,.85)!important}
+html:root:has(.qx) body .qx .qp-grp{color:rgba(231,242,251,.6)!important;font-size:11px!important;font-weight:600!important;margin:10px 0 2px!important;padding:0 12px!important}
+html:root:has(.qx) body .qx .qp-item{color:#e7f2fb!important;background:transparent!important;border-radius:999px!important;font-weight:500!important;font-size:13.5px!important;padding:7px 12px!important;margin:1px 0!important;min-height:0!important;gap:10px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-item .ic,html:root:has(.qx) body .qx .qp-item.on .ic{background:transparent!important;border:0!important;box-shadow:none!important;color:#fff!important;width:20px!important;height:20px!important}
+html:root:has(.qx) body .qx .qp-item .ic svg{width:17px!important;height:17px!important}
+html:root:has(.qx) body .qx .qp-item:hover{background:rgba(255,255,255,.12)!important;color:#fff!important}
+html:root:has(.qx) body .qx .qp-item.on{background:linear-gradient(180deg,#27b6f2,#0f97dc)!important;color:#fff!important;font-weight:600!important;box-shadow:0 10px 22px -10px rgba(18,165,230,.95),inset 0 1px 0 rgba(255,255,255,.45)!important}
+html:root:has(.qx) body .qx .qp-side-foot{background:rgba(255,255,255,.1)!important;border:1px solid rgba(255,255,255,.22)!important;border-radius:18px!important;color:rgba(231,242,251,.8)!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-side-foot b{color:#fff!important}
+html:root:has(.qx) body .qx .qp-side-foot :is(button,a){background:#fff!important;color:var(--ink)!important;border-radius:999px!important;border:0!important;box-shadow:none!important}
+
+/* ---- main: one big glass sheet with lighter glass cards on it ---- */
+html:root:has(.qx) body .qx .qp-main{padding:0!important}
+html:root:has(.qx) body .qx .qp-refresh-row{display:none!important}
+html:root:has(.qx) body .qx .qh.qnl{background:rgba(255,255,255,.26)!important;border:1px solid rgba(255,255,255,.5)!important;border-radius:34px!important;padding:26px 28px 30px!important;box-shadow:0 30px 60px -36px rgba(6,30,52,.8),inset 0 1px 0 rgba(255,255,255,.6)!important;backdrop-filter:blur(30px) saturate(1.25);-webkit-backdrop-filter:blur(30px) saturate(1.25);gap:14px!important}
+
+/* greeting row */
+html:root .qx .qnl-hero{min-height:0!important;background:transparent!important;border:0!important;box-shadow:none!important;border-radius:0!important;margin:0 0 6px!important;overflow:visible!important}
+html:root .qx .qnl-hero-img,html:root .qx .qnl-hero:after,html:root .qx .qnl-hero:before{display:none!important}
+html:root .qx .qnl-hero-txt{padding:0!important;max-width:none!important;display:grid!important;grid-template-columns:minmax(0,1fr) auto;column-gap:18px;align-items:center}
+html:root .qx .qnl-hero .qnl-hello{font-size:30px!important;font-weight:700!important;letter-spacing:-.02em!important;color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;margin:0!important;line-height:1.15!important}
+html:root .qx .qnl-hero .qnl-h1{background:none!important;-webkit-background-clip:initial!important;background-clip:initial!important;color:var(--ink2)!important;-webkit-text-fill-color:var(--ink2)!important;font-size:14px!important;font-weight:500!important;line-height:1.4!important;margin:4px 0 0!important;grid-column:1}
+html:root .qx .qnl-hero p{display:none!important}
+html:root .qx .qnl-hero .qnl-row{grid-column:2;grid-row:1 / span 2;margin:0!important;display:flex!important;flex-wrap:nowrap!important;gap:10px!important;align-items:center}
+html:root .qx .qnl-hero .qnl-row input{height:44px!important;border-radius:999px!important;background:rgba(255,255,255,.5)!important;border:1px solid var(--edge)!important;color:var(--ink)!important;font-size:14px!important;flex:0 0 260px!important;max-width:260px!important;padding:0 18px!important;box-shadow:none!important}
+html:root .qx .qnl-hero .qnl-row input::placeholder{color:#4a6380!important;opacity:1!important}
+html:root .qx .qnl-hero .qnl-btn{height:44px!important;border-radius:999px!important;padding:0 20px!important;font-size:14px!important;font-weight:600!important;white-space:nowrap!important;background:rgba(255,255,255,.5)!important;border:1px solid var(--edge)!important;color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;box-shadow:none!important}
+html:root .qx .qnl-hero .qnl-btn.pri{background:#0a1320!important;border-color:#0a1320!important;color:#fff!important;-webkit-text-fill-color:#fff!important;box-shadow:0 12px 24px -12px rgba(10,19,32,.9)!important}
+
+/* glass cards */
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip,.qws-box,.qws-jump){background:var(--glass)!important;background-image:none!important;border:1px solid var(--edge)!important;border-radius:var(--r)!important;box-shadow:0 16px 34px -24px rgba(8,40,70,.65),inset 0 1px 0 rgba(255,255,255,.75)!important;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip):before,html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip):after{display:none!important}
+html:root:has(.qx) body .qx .qh-sec{font-size:16px!important;font-weight:700!important;color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;border:0!important;padding:0!important;margin:10px 0 0!important;background:none!important}
+html:root:has(.qx) body .qx .qh-sec:before{display:none!important}
+html:root:has(.qx) body .qx .qh-sec+p{color:var(--ink2)!important;font-size:13px!important;margin:0!important;opacity:1!important}
+html:root:has(.qx) body .qx .qh.qnl p{color:var(--ink2)!important}
+html:root:has(.qx) body .qx .qh-act{padding:16px 18px!important}
+html:root:has(.qx) body .qx .qh-act:hover{background:var(--glass-hi)!important;transform:translateY(-2px)}
+html:root:has(.qx) body .qx .qh-act .ic{width:44px!important;height:44px!important;border-radius:50%!important;box-shadow:0 8px 16px -10px rgba(8,40,70,.6)!important}
+html:root:has(.qx) body .qx .qh-act b,html:root:has(.qx) body .qx .qh-act.qh-tone b{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;font-size:14.5px!important;font-weight:700!important}
+html:root:has(.qx) body .qx .qh-act .tx span{color:var(--ink2)!important;font-size:12.5px!important}
+html:root:has(.qx) body .qx .qh-act .arw{color:var(--ink2)!important}
+html:root:has(.qx) body .qx .qh-strip{overflow:hidden}
+html:root:has(.qx) body .qx .qh-strip button{background:transparent!important;border-color:rgba(255,255,255,.7)!important}
+html:root:has(.qx) body .qx .qh-strip b{color:var(--ink)!important;font-size:13px!important}
+html:root:has(.qx) body .qx .qh-strip .tx span{color:var(--ink2)!important;font-size:12px!important}
+html:root:has(.qx) body .qx .qh-kpi{padding:18px 20px!important}
+html:root:has(.qx) body .qx .qh-kpi .hd .ic{width:34px!important;height:34px!important;border-radius:50%!important;background:rgba(255,255,255,.85)!important;color:var(--ink)!important;font-size:14px!important}
+html:root:has(.qx) body .qx .qh-kpi .hd b{color:var(--ink2)!important;font-size:13px!important;font-weight:600!important}
+html:root:has(.qx) body .qx .qh-kpi .n{font-size:34px!important;font-weight:800!important;color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;letter-spacing:-.02em!important}
+html:root:has(.qx) body .qx .qh-kpi .lb{color:var(--ink2)!important;font-size:12.5px!important}
+html:root:has(.qx) body .qx .qh-ph{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;font-size:16px!important;font-weight:700!important;background:transparent!important}
+html:root:has(.qx) body .qx .qh-ph small{color:var(--ink2)!important}
+html:root:has(.qx) body .qx .qh-card :is(button,a){background:transparent!important;border-color:rgba(255,255,255,.7)!important}
+html:root:has(.qx) body .qx .qh-card b{color:var(--ink)!important}
+html:root:has(.qx) body .qx .qpt{background:transparent!important;border:0!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qpt :is(th,td,div,span){border-color:rgba(255,255,255,.65)!important}
+html:root:has(.qx) body .qx .qpt [class*="head"],html:root:has(.qx) body .qx .qpt thead,html:root:has(.qx) body .qx .qpt th{background:rgba(255,255,255,.35)!important}
+html:root:has(.qx) body .qx .qh-viewall,html:root:has(.qx) body .qx .qws-viewall{color:#0b7fc0!important;font-weight:600!important}
+html:root:has(.qx) body .qx .qh-card :is(button,a)[class*="up"],html:root:has(.qx) body .qx .qh-card .qh-upg{background:#0a1320!important;color:#fff!important;border-radius:999px!important;border:0!important}
+
+/* ---- Workspaces page ---- */
+html:root .qx .qws{max-width:1360px!important;margin-top:16px!important;padding:26px 28px 30px!important;background:rgba(255,255,255,.26)!important;border:1px solid rgba(255,255,255,.5)!important;border-radius:34px!important;box-shadow:0 30px 60px -36px rgba(6,30,52,.8),inset 0 1px 0 rgba(255,255,255,.6)!important;backdrop-filter:blur(30px) saturate(1.25);-webkit-backdrop-filter:blur(30px) saturate(1.25)}
+html:root .qx .qws:before{display:none!important}
+html:root .qx .qws-hero{min-height:0!important;margin:0 0 18px!important;background:transparent!important;border:0!important;box-shadow:none!important;border-radius:0!important}
+html:root .qx .qws-hero-img,html:root .qx .qws-hero:after{display:none!important}
+html:root .qx .qws-hero-txt{padding:0!important;max-width:none!important}
+html:root .qx .qws-eyebrow{text-transform:none!important;letter-spacing:0!important;font-size:13px!important;font-weight:500!important;color:var(--ink2)!important}
+html:root .qx .qws .qwc-h1,html:root .qx .qws .qwc-h1 span{display:inline!important;background:none!important;-webkit-background-clip:initial!important;background-clip:initial!important;color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;font-size:32px!important;font-weight:700!important;letter-spacing:-.02em!important;line-height:1.15!important}
+html:root .qx .qws .qwc-h1{margin-top:2px!important;text-align:left!important}
+html:root .qx .qws .qwc-sub{color:var(--ink2)!important;font-size:14px!important;margin-top:4px!important;text-align:left!important;max-width:none!important}
+html:root .qx .qws-main{gap:16px!important}
+html:root .qx .qws .qwc-grid{gap:16px!important}
+html:root .qx .qws .qwc-card{min-height:0!important;padding:12px 12px 16px!important;border-radius:var(--r)!important;background:var(--glass)!important;border:1px solid var(--edge)!important;box-shadow:0 16px 34px -24px rgba(8,40,70,.65),inset 0 1px 0 rgba(255,255,255,.75)!important;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);color:var(--ink)!important;opacity:1!important;filter:none!important}
+html:root .qx .qws .qwc-card:hover{background:var(--glass-hi)!important}
+html:root .qx .qws .qwc-art{position:static!important;order:-1;width:100%!important;height:150px!important;object-fit:cover!important;border-radius:16px!important;opacity:1!important;-webkit-mask-image:none!important;mask-image:none!important;margin-bottom:12px}
+html:root .qx .qws .qwc-ic{position:absolute!important;left:22px;top:22px;width:40px!important;height:40px!important;border-radius:50%!important;background:rgba(255,255,255,.9)!important;border:0!important;color:var(--ink)!important;box-shadow:0 8px 18px -8px rgba(6,30,52,.7)!important}
+html:root .qx .qws .qwc-ic svg{width:19px;height:19px}
+html:root .qx .qws .qwc-title{margin:0 6px!important;font-size:19px!important;font-weight:700!important;color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+html:root .qx .qws .qwc-blurb{margin:4px 6px 0!important;color:var(--ink2)!important;font-size:13.5px!important;max-width:none!important}
+html:root .qx .qws .qwc-stats{margin:12px 6px 0!important;padding-top:10px!important;border-top:1px solid rgba(255,255,255,.75)!important}
+html:root .qx .qws .qwc-stat b{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;font-size:20px!important;font-weight:800!important}
+html:root .qx .qws .qwc-stat small{color:var(--ink2)!important}
+html:root .qx .qws .qwc-go{margin:14px 6px 0!important;width:calc(100% - 12px)!important;height:42px!important;border-radius:999px!important;background:#0a1320!important;border:0!important;color:#fff!important;-webkit-text-fill-color:#fff!important;font-weight:600!important;backdrop-filter:none!important;box-shadow:0 12px 24px -14px rgba(10,19,32,.9)!important}
+html:root .qx .qws .qwc-go svg:last-child{background:rgba(255,255,255,.18)!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qws-box{padding:16px 18px!important}
+html:root:has(.qx) body .qx .qws-box-h{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;font-size:16px!important;font-weight:700!important}
+html:root:has(.qx) body .qx .qws-qs{border-color:rgba(255,255,255,.7)!important}
+html:root:has(.qx) body .qx .qws-qs-ic{background:rgba(255,255,255,.9)!important;color:var(--ink)!important;box-shadow:0 8px 16px -10px rgba(8,40,70,.6)!important}
+html:root:has(.qx) body .qx .qws-qs b{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+html:root:has(.qx) body .qx .qws-qs small,html:root:has(.qx) body .qx .qws-help small,html:root:has(.qx) body .qx .qws-pow small{color:var(--ink2)!important}
+html:root:has(.qx) body .qx .qws-help-ic{background:rgba(255,255,255,.9)!important;border:0!important;color:var(--ink)!important}
+html:root:has(.qx) body .qx .qws-help b,html:root:has(.qx) body .qx .qws-pow b{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+html:root:has(.qx) body .qx .qws-help-btn{background:#0a1320!important;border:0!important;color:#fff!important;-webkit-text-fill-color:#fff!important;border-radius:999px!important;padding:9px 18px!important}
+html:root:has(.qx) body .qx .qws-box.qws-pow{background:var(--glass)!important;background-image:none!important;min-height:0!important}
+html:root:has(.qx) body .qx .qws-jump{padding:16px 18px 10px!important;margin-top:16px!important}
+html:root:has(.qx) body .qx .qwc-jump-h{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;font-size:16px!important;text-transform:none!important}
+html:root:has(.qx) body .qx .qws-jump-ic{background:rgba(255,255,255,.9)!important;border:0!important;color:var(--ink)!important;border-radius:50%!important}
+
+html:root:has(.qx) body .qx .qe-launch{background:rgba(9,40,62,.55)!important;border:1px solid rgba(255,255,255,.4)!important;backdrop-filter:blur(18px);box-shadow:0 16px 30px -16px rgba(4,22,40,.9)!important}
+
+html:root:has(.qx){background:#0b3150!important}
+html:root .qx .qnl-hero .qnl-row input.qh-find{border:1px solid var(--edge)!important;outline:0!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.8)!important}
+html:root .qx .qws-eyebrow,html:root .qx .qws .qwc-sub{color:var(--ink2)!important;-webkit-text-fill-color:var(--ink2)!important;opacity:1!important}
+html:root:has(.qx) body .qx .qe-launch *{color:#fff!important;-webkit-text-fill-color:#fff!important}
+html:root:has(.qx) body .qx .qe-launch .qe-txt small,html:root:has(.qx) body .qx .qe-launch .qe-txt span span{color:#bfe6ff!important;-webkit-text-fill-color:#bfe6ff!important}
+@media (max-width:1023px){
+  html:root:has(.qx) body .qx nav.qtr-topnav{margin:8px 8px 0!important;height:50px!important}
+  html:root .qx .qws,html:root:has(.qx) body .qx .qh.qnl{padding:16px 14px 20px!important;border-radius:24px!important;margin-left:8px!important;margin-right:8px!important}
+  html:root .qx .qnl-hero-txt{grid-template-columns:1fr!important}
+  html:root .qx .qnl-hero .qnl-row{grid-column:1;grid-row:auto;flex-wrap:wrap!important;margin-top:12px!important}
+  html:root .qx .qnl-hero .qnl-row input{flex:1 1 100%!important;max-width:none!important}
+  html:root .qx .qnl-hero .qnl-hello,html:root .qx .qws .qwc-h1,html:root .qx .qws .qwc-h1 span{font-size:24px!important}
+  html:root:has(.qx) body .qx .qp-shell{padding:10px 0 20px!important}
+}
+
+html:root:has(.qx) body .qx .qnl-hero .qnl-row input.qh-find.qnl-find{border:1px solid rgba(255,255,255,.8)!important;outline:0!important;background:rgba(255,255,255,.5)!important;color:var(--ink)!important}
+html:root:has(.qx) body .qx .qp-strip{gap:8px!important}
+html:root:has(.qx) body .qx .qp-strip button{background:rgba(255,255,255,.42)!important;border:1px solid rgba(255,255,255,.7)!important;border-radius:999px!important;color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;box-shadow:none!important;backdrop-filter:blur(14px)}
+html:root:has(.qx) body .qx .qp-strip button.on{background:#0a1320!important;border-color:#0a1320!important;color:#fff!important;-webkit-text-fill-color:#fff!important}
+html:root:has(.qx) body .qx .qnl-hero .qnl-row input.qh-find.qnl-find::placeholder{color:#4a6380!important;-webkit-text-fill-color:#4a6380!important;opacity:1!important}
+
+/* ---- every other page (2026-11-13): readable type and buttons on frosted panels ---- */
+html:root:has(.qx) body .qx{--q-text-dim:#3d5673;--q-text-dimmer:#56708c}
+html:root:has(.qx) body .qx .qp-btn.pri{background:#0a1320!important;background-image:none!important;border-color:#0a1320!important;color:#fff!important;-webkit-text-fill-color:#fff!important;border-radius:999px!important;box-shadow:0 12px 24px -14px rgba(10,19,32,.9)!important}
+html:root:has(.qx) body .qx .qp-btn.pri:disabled{opacity:.5!important}
+html:root:has(.qx) body .qx .qp-empty{color:var(--ink2)!important}
+html:root:has(.qx) body .qx .qp-empty strong{color:var(--ink)!important}
+html:root:has(.qx) body .qx .qnl-page .qdash-kpi b,html:root:has(.qx) body .qx .qnl-page .qstage .st b,html:root:has(.qx) body .qx .qnl-page .qstage .st span{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+html:root:has(.qx) body .qx .qnl-page .qapp-nav button.on{background:linear-gradient(180deg,#27b6f2,#0f97dc)!important;color:#fff!important}
+html:root:has(.qx) body .qx .qp-side-foot :is(p,span,div,small){color:rgba(231,242,251,.82)!important;-webkit-text-fill-color:rgba(231,242,251,.82)!important}
+html:root:has(.qx) body .qx .qp-side-foot :is(button,a),html:root:has(.qx) body .qx .qp-side-foot :is(button,a) *{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+
+/* ---- marks set by the look engine after it has looked at what was drawn (see the legibility guard) ---- */
+html:root:has(.qx) body [data-qink]:not(#q_){color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+html:root:has(.qx) body [data-qveil]:not(#q_){background:rgba(9,40,62,.46)!important;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+html:root:has(.qx) body [data-qfloat]:not(#q_){background:rgba(246,250,253,.95)!important;border-color:rgba(255,255,255,.9)!important;box-shadow:0 24px 60px -24px rgba(6,30,52,.6)!important;backdrop-filter:blur(22px) saturate(1.2);-webkit-backdrop-filter:blur(22px) saturate(1.2)}
+html:root:has(.qx) body [data-qflat]:not(#q_){backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+
+/* ---- a page without the left rail (an open project): the same big sheet, so nothing sits on the dark edge ---- */
+html:root:has(.qx) body .qx>.max-w-\[1500px\]{max-width:1404px!important;margin:16px auto 28px!important;padding:22px 24px 28px!important;background:rgba(255,255,255,.3)!important;border:1px solid rgba(255,255,255,.5)!important;border-radius:34px!important;box-shadow:0 30px 60px -36px rgba(6,30,52,.8),inset 0 1px 0 rgba(255,255,255,.6)!important}
+@media (max-width:1023px){html:root:has(.qx) body .qx>.max-w-\[1500px\]{margin:10px 8px 20px!important;padding:14px 12px 20px!important;border-radius:24px!important}}
+</style>
+<style id="q-look-ui" data-ql="0">
+/* Look chooser + the Appearance setting (2026-11-13). This sheet is never recoloured: it carries both looks itself. */
+.qlk-veil{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:16px;background:rgba(2,6,23,.64);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);overflow:auto}
+.qlk-pop{width:min(640px,100%);background:#0e1538;color:#eef3fb;border:1px solid #3a4290;border-radius:20px;padding:24px;box-shadow:0 30px 70px -12px rgba(0,0,0,.65)}
+.qlk-h{display:block;font-size:21px;font-weight:700;letter-spacing:-.01em;color:#fff}
+html:root .qx .qlk-sub{margin:6px 0 18px;font-size:13.5px;line-height:1.5;color:#a9b8cc}
+.qlk-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:640px}
+html:root .qx .qlk-opt{display:block;width:100%;height:auto;text-align:left;padding:10px 10px 12px;border-radius:16px;cursor:pointer;background:rgba(255,255,255,.04);border:1.5px solid #272f6e;color:#eef3fb;box-shadow:none;transition:border-color .15s,box-shadow .15s}
+html:root .qx .qlk-opt:hover{border-color:#5b64c9}
+html:root .qx .qlk-opt.on{border-color:#8b7bff;box-shadow:0 0 0 3px rgba(139,123,255,.28)}
+html:root .qx .qlk-opt:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.qlk-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 4px 2px}
+html:root .qx .qlk-row b{font-size:15px;font-weight:700;color:#fff}
+html:root .qx .qlk-tick{font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:999px;background:#8b7bff;color:#0b1030}
+html:root .qx .qlk-opt small{display:block;margin:0 4px;font-size:12.5px;line-height:1.45;color:#a9b8cc}
+.qlk-foot{display:flex;justify-content:flex-end;margin-top:18px}
+.qlk-mock{display:block;position:relative;aspect-ratio:16/9;border-radius:11px;overflow:hidden}
+.qlk-mock i{position:absolute;display:block;border-radius:5px;box-sizing:border-box}
+.qlk-mock .s{left:28%;top:9%;right:5%;bottom:9%;border-radius:9px}
+.qlk-mock .r{left:5%;top:9%;bottom:9%;width:19%;border-radius:8px}
+.qlk-mock .r:before{content:"";position:absolute;left:12%;right:12%;top:24%;height:11%;border-radius:99px}
+.qlk-mock .r:after{content:"";position:absolute;left:14%;right:34%;top:44%;height:4px;border-radius:99px}
+.qlk-mock .h{left:32%;top:17%;width:30%;height:6%;border-radius:99px}
+.qlk-mock .p{right:9%;top:14.5%;width:15%;height:11%;border-radius:99px}
+.qlk-mock .a,.qlk-mock .b,.qlk-mock .c{top:34%;height:24%;width:17.6%}
+.qlk-mock .a{left:32%}.qlk-mock .b{left:52.7%}.qlk-mock .c{left:73.4%}
+.qlk-mock .d{left:32%;right:9%;top:64%;bottom:16%}
+.qlk-mock-classic{background:#050a1f}
+.qlk-mock-classic .r{background:#0e1538;border:1px solid #272f6e}
+.qlk-mock-classic .r:before{background:linear-gradient(135deg,#7c3aed,#4f46e5)}
+.qlk-mock-classic .r:after{background:rgba(255,255,255,.24);box-shadow:0 11px 0 rgba(255,255,255,.24),0 22px 0 rgba(255,255,255,.24)}
+.qlk-mock-classic .h{background:#eef3fb}
+.qlk-mock-classic .p{background:linear-gradient(135deg,#7c3aed,#4f46e5)}
+.qlk-mock-classic :is(.a,.b,.c,.d){background:#0e1538;border:1px solid #272f6e}
+.qlk-mock-classic .a{border-top:3px solid #8b5cf6}.qlk-mock-classic .b{border-top:3px solid #22d3ee}.qlk-mock-classic .c{border-top:3px solid #34d399}
+.qlk-mock-glass{background:radial-gradient(60% 90% at 100% 20%,rgba(46,112,196,.95),rgba(46,112,196,0) 70%),radial-gradient(60% 80% at 86% 104%,rgba(34,170,160,.95),rgba(34,170,160,0) 64%),linear-gradient(115deg,#0b3150 0%,#3f8fb0 30%,#b4d6e6 56%,#5b9bcf 80%,#22868c 100%)}
+.qlk-mock-glass .s{background:rgba(255,255,255,.3);border:1px solid rgba(255,255,255,.55)}
+.qlk-mock-glass .r{background:rgba(9,40,62,.55);border:1px solid rgba(255,255,255,.28)}
+.qlk-mock-glass .r:before{background:linear-gradient(180deg,#27b6f2,#0f97dc)}
+.qlk-mock-glass .r:after{background:rgba(255,255,255,.55);box-shadow:0 11px 0 rgba(255,255,255,.55),0 22px 0 rgba(255,255,255,.55)}
+.qlk-mock-glass .h{background:#0c2440}
+.qlk-mock-glass .p{background:#0a1320}
+.qlk-mock-glass :is(.a,.b,.c,.d){background:rgba(255,255,255,.62);border:1px solid rgba(255,255,255,.9)}
+html[data-qlook="glass"]:root .qx .qlk-opt{background:rgba(255,255,255,.42);border-color:rgba(255,255,255,.8);color:#0c2440}
+html[data-qlook="glass"]:root .qx .qlk-opt:hover{border-color:#7cc8ee}
+html[data-qlook="glass"]:root .qx .qlk-opt.on{border-color:#12a5e6;box-shadow:0 0 0 3px rgba(18,165,230,.25)}
+html[data-qlook="glass"]:root .qx .qlk-opt:focus-visible{outline-color:#0c2440}
+html[data-qlook="glass"]:root .qx .qlk-row b{color:#0c2440}
+html[data-qlook="glass"]:root .qx .qlk-opt small{color:#3d5673}
+html[data-qlook="glass"]:root .qx .qlk-tick{background:#0a1320;color:#fff}
+@media (max-width:520px){.qlk-pop{padding:18px 14px}.qlk-grid{gap:10px}html:root .qx .qlk-opt{padding:8px 8px 10px}html:root .qx .qlk-opt small{font-size:12px}}
+@media (prefers-reduced-motion:reduce){html:root .qx .qlk-opt{transition:none}}
+</style>
+<script>try { if (window.QLook) window.QLook.start(); } catch (e) {}</script>
 </body>
 </html>
