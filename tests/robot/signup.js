@@ -85,7 +85,7 @@ async function report(ok, failedStep, message) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   await ctx.addInitScript(() => {
     const g = Storage.prototype.getItem;
-    Storage.prototype.getItem = function (k) { if (/^qfb:|^q_feedback_asked_at$|^q_pulse_at$|^q_assist_asked:/.test(k)) return String(Date.now()); return g.call(this, k); };
+    Storage.prototype.getItem = function (k) { if (/^qfb:|^q_feedback_asked_at$|^q_pulse_at$|^q_assist_asked:|^q_look_asked:/.test(k)) return String(Date.now()); return g.call(this, k); };
   });
   page = await ctx.newPage();
   page.on("dialog", d => d.accept().catch(() => {}));
