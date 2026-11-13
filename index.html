@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-11.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-13.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -34038,20 +34038,38 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
     draftsman:  [["33", "Systems"], ["3D", "Model with every package"]],
   };
 
+  const QS_IC = {
+    p: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>,
+    s: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>,
+    r: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>,
+    c: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>,
+  };
+  const [ruleCount, setRuleCount] = useState(549);
+  useEffect(() => {
+    let alive = true;
+    Promise.resolve(sb.from("compliance_rules").select("id", { count: "exact", head: true }))
+      .then(({ count }) => { if (alive && count) setRuleCount(count); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const QSTATS = [["p", loading ? "\u2014" : String(active.length), "Active projects"], ["s", "33", "MEP, fire & ELV systems"], ["r", String(ruleCount), "Rules & standards"], ["c", "21", "Countries' authority rules"]];
   return (
-    <div className="qwc max-w-[1500px] mx-auto px-4 sm:px-6 pb-10">
-      <div className="qwc-hero">
-        <img className="qwc-sky" src="ws-art/skyline.jpg" alt="" aria-hidden="true" />
-        <h1 className="qwc-h1">Where are you <span>working today?</span></h1>
-        <p className="qwc-sub">Four workspaces, kept apart. You can switch at any time from the rail on the left.</p>
+    <div className="qwc qws max-w-[1500px] mx-auto px-4 sm:px-6 pb-10">
+      <div className="qws-hero">
+        <img className="qws-hero-img" src="ws-art2/hero-building.jpg" alt="" aria-hidden="true" />
+        <div className="qws-hero-txt">
+          <div className="qws-eyebrow">Quantora Engineering · AI construction platform</div>
+          <h1 className="qwc-h1">Where are you <span>working today?</span></h1>
+          <p className="qwc-sub">Four workspaces, kept apart. You can switch at any time from the rail on the left.</p>
+        </div>
       </div>
+      <div className="qws-main">
       <div className="qwc-grid">
         {WORKSPACES.map(([key, label]) => {
           const look = QWC_LOOK[key] || QWC_LOOK.projects;
           const locked = access && access[key] && access[key].mode === "locked";
           return (
             <button key={key} type="button" onClick={() => onPick(key)} className={"qwc-card qwc-" + key}>
-              <img className="qwc-art" src={"ws-art/" + key + ".jpg"} alt="" aria-hidden="true" />
+              <img className="qwc-art" src={"ws-art2/card-" + key + ".jpg"} alt="" aria-hidden="true" />
               <span className="qwc-ic">{look.icon}</span>
               <span className="qwc-title">{label} <WorkspaceAccessChip a={access && access[key]} /></span>
               <span className="qwc-blurb">{look.blurb}</span>
@@ -34071,12 +34089,27 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
           );
         })}
       </div>
+      <aside className="qws-side">
+        <div className="qws-box">
+          <div className="qws-box-h">Quick stats</div>
+          {QSTATS.map(([k, v, l]) => (
+            <div key={l} className={"qws-qs qws-qs-" + k}><span className="qws-qs-ic">{QS_IC[k]}</span><span><b>{v}</b><small>{l}</small></span></div>
+          ))}
+        </div>
+        <div className="qws-box qws-help">
+          <span className="qws-help-ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/><path d="M19 20a3 3 0 0 1-3 2h-2"/></svg></span>
+          <div><b>Need help?</b><small>Our team is here to assist you.</small>
+            <button type="button" className="qws-help-btn" onClick={() => { try { window.dispatchEvent(new CustomEvent("q-open-live-chat")); } catch (_) {} }}>Contact support <span aria-hidden="true">{"\u2192"}</span></button></div>
+        </div>
+        <div className="qws-box qws-pow"><span className="qws-bolt">{"\u26A1"}</span><small>Powered by</small><b>Estima AI</b><small>Smarter estimates. Faster decisions.</small></div>
+      </aside>
+      </div>
 
       {recent.length > 0 && (
-        <div className="mt-10 qwc-jump">
-          <div className="flex items-center justify-between mb-3">
-            <div className="qwc-jump-h">Jump back in</div>
-            {onPick && <button type="button" className="text-xs font-semibold text-blue-600 hover:underline" onClick={() => onPick("projects")}>Open Projects →</button>}
+        <div className="qwc-jump qws-jump">
+          <div className="qws-jump-top">
+            <div className="qwc-jump-h"><span className="qws-jump-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>Jump back in</div>
+            {onPick && <button type="button" className="qws-viewall" onClick={() => onPick("projects")}>Open Projects →</button>}
           </div>
           <ProjectTable projects={recent} metrics={jm} onOpen={onOpenProject} compact limit={5} />
         </div>
@@ -42597,5 +42630,66 @@ html:root .qnl-slide-pv .qnl-btn{display:inline-flex;padding:8px 14px;border-rad
 }
 </style>
 <script src="/visit.js" defer></script>
+<style id="qws-look">
+/* "Where are you working today?" new look (2026-11-13), from the owner's design. Only the look changes. */
+html:root .qx .qws{position:relative;overflow-x:clip}
+html:root .qx aside.qws-side{background:none!important;border:0!important;box-shadow:none!important;padding:0!important;border-radius:0!important}
+html:root .qx .qws:before{content:"";position:absolute;inset:-40px -40px auto auto;width:900px;height:620px;background:url(ws-art2/hero-wave.jpg) right top/cover no-repeat;opacity:.22;pointer-events:none;
+  -webkit-mask-image:radial-gradient(closest-side,#000 40%,transparent);mask-image:radial-gradient(closest-side,#000 40%,transparent)}
+html:root .qx .qws-hero{position:relative;min-height:290px;margin:18px 0 22px;border-radius:24px;overflow:hidden;background:#0a1140;border:1px solid rgba(129,140,248,.35);box-shadow:0 30px 60px -30px rgba(99,102,241,.7)}
+html:root .qx .qws-hero-img{position:absolute;right:0;top:0;width:66%;height:100%;object-fit:cover;object-position:center 40%}
+html:root .qx .qws-hero:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,#0a1140 0%,#0a1140 34%,rgba(10,17,64,.75) 50%,rgba(10,17,64,.1) 75%,rgba(10,17,64,0) 100%);pointer-events:none}
+html:root .qx .qws-hero-txt{position:relative;z-index:1;padding:46px 44px;max-width:720px}
+html:root .qx .qws-eyebrow{font-size:12px;font-weight:700;letter-spacing:.28em;text-transform:uppercase;color:#7dd3fc!important}
+html:root .qx .qws .qwc-h1{margin-top:14px;text-align:left;font-size:clamp(32px,3.6vw,50px);line-height:1.08}
+html:root .qx .qws .qwc-h1 span{display:block;background:linear-gradient(90deg,#818cf8,#a78bfa 45%,#c084fc);-webkit-background-clip:text;background-clip:text}
+html:root .qx .qws .qwc-sub{text-align:left;margin-top:16px;font-size:16px;max-width:520px;color:#c9d3f2!important}
+html:root .qx .qws-main{display:grid;grid-template-columns:1fr;gap:22px}
+@media (min-width:1150px){html:root .qx .qws-main{grid-template-columns:minmax(0,1fr) 320px}}
+html:root .qx .qws .qwc-grid{gap:20px}
+html:root .qx .qws .qwc-card{min-height:300px;padding:24px 24px 20px;border-radius:18px;
+  background:linear-gradient(135deg,var(--c1) 0%,var(--c2) 55%,var(--c3) 100%)!important;border:1px solid var(--bd)!important;box-shadow:0 22px 44px -24px var(--glow),inset 0 1px 0 rgba(255,255,255,.14)!important}
+html:root .qx .qws .qwc-projects{--c1:#1d4ed8;--c2:#1736a6;--c3:#0c1a63;--bd:rgba(96,165,250,.6);--glow:rgba(37,99,235,.75);--ic:#2563eb}
+html:root .qx .qws .qwc-commercial{--c1:#0ea371;--c2:#08795a;--c3:#053d33;--bd:rgba(52,211,153,.6);--glow:rgba(16,185,129,.65);--ic:#10b981}
+html:root .qx .qws .qwc-operations{--c1:#ea7a0c;--c2:#b4540a;--c3:#5a2207;--bd:rgba(251,146,60,.65);--glow:rgba(249,115,22,.6);--ic:#f97316}
+html:root .qx .qws .qwc-draftsman{--c1:#6d28d9;--c2:#4c1d95;--c3:#1e1065;--bd:rgba(167,139,250,.6);--glow:rgba(139,92,246,.7);--ic:#8b5cf6}
+html:root .qx .qws .qwc-art{right:0;top:0;width:58%;height:78%;object-fit:cover;object-position:center;opacity:.85;
+  -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 55%),linear-gradient(0deg,transparent 0,#000 40%);-webkit-mask-composite:source-in;
+  mask-image:linear-gradient(90deg,transparent 0,#000 55%),linear-gradient(0deg,transparent 0,#000 40%);mask-composite:intersect}
+html:root .qx .qws .qwc-title,html:root .qx .qws .qwc-blurb{text-shadow:0 2px 12px rgba(0,0,0,.55)}
+html:root .qx .qws .qwc-blurb{max-width:340px}
+html:root .qx .qws .qwc-ic{width:56px;height:56px;border-radius:15px;background:linear-gradient(160deg,color-mix(in srgb,var(--ic) 65%,#fff),var(--ic))!important;border:1px solid rgba(255,255,255,.35);box-shadow:0 10px 24px -8px var(--glow)}
+html:root .qx .qws .qwc-title{margin-top:20px;font-size:25px}
+html:root .qx .qws .qwc-blurb{color:#e6ecff!important;max-width:380px}
+html:root .qx .qws .qwc-stats{border-top-color:rgba(255,255,255,.18)}
+html:root .qx .qws .qwc-stat b{color:#fff!important}
+html:root .qx .qws .qwc-go{justify-content:space-between;background:rgba(5,10,40,.38)!important;border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(6px);box-shadow:none}
+html:root .qx .qws .qwc-go svg:last-child{width:30px;height:30px;padding:7px;border-radius:50%;background:var(--ic);box-shadow:0 0 18px -2px var(--glow)}
+html:root .qx .qws-side{display:flex;flex-direction:column;gap:18px}
+html:root .qx .qws-box{border-radius:18px;padding:20px 20px;background:linear-gradient(165deg,rgba(23,31,92,.9),rgba(9,14,48,.95));border:1px solid rgba(129,140,248,.32);box-shadow:0 18px 36px -24px rgba(99,102,241,.7)}
+html:root .qx .qws-box-h{font-size:19px;font-weight:800;color:#fff!important;margin-bottom:6px}
+html:root .qx .qws-qs{display:flex;align-items:center;gap:14px;padding:11px 0;border-top:1px solid rgba(129,140,248,.14)}
+html:root .qx .qws-qs:first-of-type{border-top:0}
+html:root .qx .qws-qs-ic{flex:none;display:grid;place-items:center;width:46px;height:46px;border-radius:50%;color:#fff;background:var(--q);box-shadow:0 0 22px -6px var(--q)}
+html:root .qx .qws-qs-p{--q:#2563eb}html:root .qx .qws-qs-s{--q:#4f46e5}html:root .qx .qws-qs-r{--q:#7c3aed}html:root .qx .qws-qs-c{--q:#0d9488}
+html:root .qx .qws-qs b{display:block;font-size:22px;font-weight:800;line-height:1.1;color:#fff!important}
+html:root .qx .qws-qs small{display:block;font-size:12.5px;color:#b9c4ec!important}
+html:root .qx .qws-help{display:flex;gap:14px;align-items:flex-start}
+html:root .qx .qws-help-ic{flex:none;display:grid;place-items:center;width:58px;height:58px;border-radius:50%;color:#60a5fa;background:rgba(37,99,235,.18);border:1px solid rgba(96,165,250,.45)}
+html:root .qx .qws-help b{display:block;font-size:18px;color:#fff!important}
+html:root .qx .qws-help small{display:block;font-size:13px;color:#b9c4ec!important;margin-top:2px}
+html:root .qx .qws-help-btn{margin-top:12px;display:inline-flex;gap:8px;align-items:center;padding:8px 16px;border-radius:10px;font-weight:700;font-size:13.5px;color:#fff!important;border:1px solid rgba(96,165,250,.7);background:rgba(37,99,235,.12)!important;cursor:pointer}
+html:root .qx .qws-help-btn:hover{background:rgba(37,99,235,.3)!important}
+html:root .qx .qws-pow{position:relative;overflow:hidden;background:url(ws-art2/wave-tall.jpg) center/cover no-repeat,#0b1240!important;min-height:150px;display:flex;flex-direction:column;justify-content:flex-end}
+html:root .qx .qws-pow small{display:block;font-size:13px;color:#c9d3f2!important}
+html:root .qx .qws-pow b{display:block;font-size:20px;font-weight:800;color:#fff!important;margin:0 0 4px}
+html:root .qx .qws-bolt{font-size:26px;margin-bottom:8px;filter:drop-shadow(0 0 10px #60a5fa)}
+html:root .qx .qws-jump{margin-top:26px;padding:18px 18px 8px;border-radius:20px;background:linear-gradient(165deg,rgba(18,26,80,.92),rgba(8,12,42,.96));border:1px solid rgba(129,140,248,.3);box-shadow:0 22px 44px -26px rgba(99,102,241,.7)}
+html:root .qx .qws-jump-top{display:flex;align-items:center;justify-content:space-between;margin:0 4px 12px}
+html:root .qx .qws .qwc-jump-h{display:flex;align-items:center;gap:12px;font-size:19px;letter-spacing:0;text-transform:none;color:#fff!important}
+html:root .qx .qws-jump-ic{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;color:#60a5fa;background:rgba(37,99,235,.18);border:1px solid rgba(96,165,250,.4)}
+html:root .qx .qws-viewall{font-size:13.5px;font-weight:700;color:#93c5fd!important;background:none;border:0;cursor:pointer}
+@media (max-width:640px){html:root .qx .qws-hero-img{width:100%;opacity:.45}html:root .qx .qws-hero-txt{padding:30px 22px}html:root .qx .qws .qwc-art{width:80%;opacity:.55}}
+</style>
 </body>
 </html>
