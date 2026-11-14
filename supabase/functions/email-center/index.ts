@@ -124,13 +124,36 @@ async function viaResend(to: string, subject: string, html: string) {
       headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>` } }) });
   if (!r.ok) throw new Error(`Resend: ${r.status} ${(await r.text()).slice(0, 160)}`);
 }
-let zoho: any = null;
+// 2026-11-14: a Zoho connection that never answered made the Send button spin for minutes with no
+// message. Now every step has a time limit, port 587 is tried when 465 does not answer, and the
+// real reason is shown and kept in email_sends (ok = false).
+let zoho: any = null, zohoPort = 465;
+function zohoTransport(port: number, user: string, pass: string) {
+  return nodemailer.createTransport({ host: Deno.env.get("ZOHO_SMTP_HOST") || "smtp.zoho.com", port, secure: port === 465, requireTLS: port !== 465,
+    auth: { user, pass }, connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 30000 });
+}
+const isNetErr = (e: unknown) => /timeout|timed out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|socket|Greeting never received|Connection closed/i.test(String((e as Error)?.message || e));
+function zohoReason(e: unknown) {
+  const m = String((e as Error)?.message || e);
+  if (/535|Authentication|Invalid login|auth/i.test(m)) return "Zoho refused the sign-in for info@ (password or app password changed). Update ZOHO_SMTP_PASS in Supabase. " + m.slice(0, 120);
+  if (/550|554|blocked|Unusual|limit/i.test(m)) return "Zoho blocked sending from info@ (check the info@ inbox for a Zoho message about sending limits or unusual activity). " + m.slice(0, 120);
+  if (isNetErr(e)) return "Zoho mail server did not answer (ports 465 and 587). " + m.slice(0, 120);
+  return "Zoho: " + m.slice(0, 200);
+}
 async function viaZoho(to: string, subject: string, html: string) {
   const user = Deno.env.get("ZOHO_SMTP_USER") || CONTACT, pass = Deno.env.get("ZOHO_SMTP_PASS");
   if (!pass) throw new Error("Zoho is not connected yet (add the ZOHO_SMTP_PASS secret in Supabase).");
-  zoho ||= nodemailer.createTransport({ host: Deno.env.get("ZOHO_SMTP_HOST") || "smtp.zoho.com", port: 465, secure: true, auth: { user, pass } });
-  await zoho.sendMail({ from: `Quantora Engineering <${user}>`, to, replyTo: CONTACT, subject, html,
-    headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>` } });
+  const mail = { from: `Quantora Engineering <${user}>`, to, replyTo: CONTACT, subject, html, headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>` } };
+  zoho ||= zohoTransport(zohoPort, user, pass);
+  try { await zoho.sendMail(mail); }
+  catch (e) {
+    try { zoho.close(); } catch (_) { /* ignore */ }
+    zoho = null;
+    if (!isNetErr(e) || zohoPort !== 465) throw new Error(zohoReason(e));
+    zohoPort = 587; zoho = zohoTransport(587, user, pass);
+    try { await zoho.sendMail(mail); }
+    catch (e2) { try { zoho.close(); } catch (_) { /* ignore */ } zoho = null; zohoPort = 465; throw new Error(zohoReason(e2)); }
+  }
 }
 async function sentToday(provider: string) {
   const day0 = new Date(); day0.setUTCHours(0, 0, 0, 0);
@@ -224,17 +247,24 @@ Deno.serve(async (req) => {
       const un = await unsubscribed((leads || []).map((l: any) => l.email || "").filter(Boolean));
       let room = CAP_LEADS - await sentToday("zoho");
       const out = { sent: 0, failed: 0, skipped: 0, errors: [] as string[] };
+      const t0 = Date.now(); let late = 0;
       for (const l of (leads || [])) {
         if (!l.email || l.status === "dnc" || un.has(String(l.email).toLowerCase()) || l.stage >= LEAD_MAX) { out.skipped++; continue; }
         if (room <= 0) { out.skipped++; continue; }
+        if (Date.now() - t0 > 100000) { late++; out.skipped++; continue; }   // stay inside the server's time limit
         const m = await leadEmail(l.stage, l.company, l.email);
         try { await viaZoho(l.email, m.subject, m.html); room--; out.sent++;
           const next = new Date(Date.now() + LEAD_NEXT_DAYS[Math.min(l.stage, LEAD_NEXT_DAYS.length - 1)] * 864e5);
           await admin.from("email_leads").update({ stage: l.stage + 1, status: l.status === "new" ? "contacted" : l.status, last_sent_at: new Date().toISOString(),
             next_due_at: l.stage + 1 >= LEAD_MAX ? "2999-01-01T00:00:00Z" : next.toISOString(), updated_at: new Date().toISOString() }).eq("id", l.id);
           await admin.from("email_sends").insert({ list: "leads", template: `lead_${l.stage}`, lead_id: l.id, email: l.email, provider: "zoho", sent_by: user.id });
-        } catch (e) { out.failed++; out.errors.push(String((e as Error).message)); if (/not connected|auth|Invalid login/i.test(String((e as Error).message))) break; }
+        } catch (e) {
+          const msg = String((e as Error).message); out.failed++; out.errors.push(msg);
+          await admin.from("email_sends").insert({ list: "leads", template: `lead_${l.stage}`, lead_id: l.id, email: l.email, provider: "zoho", ok: false, error: msg.slice(0, 500), sent_by: user.id });
+          if (/not connected|sign-in|blocked|did not answer/i.test(msg)) break;
+        }
       }
+      if (late) out.errors.push(`${late} not sent yet, to stay inside the time limit. Press Send again for the rest.`);
       if (room <= 0 && out.skipped) out.errors.push(`Daily limit of ${CAP_LEADS} lead emails reached; the rest stay in the list for tomorrow.`);
       return json(out);
     }
