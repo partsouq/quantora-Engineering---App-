@@ -33,7 +33,7 @@ jobs:
         working-directory: tests/robot
         run: |
           npm install --no-audit --no-fund playwright@1.48.2
-          npx playwright install --with-deps chromium
+          bash ci/install-browser.sh
 
       - name: Run the sign-up robot
         working-directory: tests/robot

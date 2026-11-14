@@ -1,7 +1,7 @@
 -- Lead email pacing (approved by the owner 11 Nov 2026).
 -- "Send" in Admin -> Email Center -> Leads now puts leads in this queue. The scheduler calls the
--- email-center function every 2 minutes; it sends at most one email per call, 25 an hour, and stops
--- at the daily limit (50 in the first week of sending, 75 in the second, then 100).
+-- email-center function every 3 minutes; it sends at most one email per call, 15 an hour, and stops
+-- at the daily limit (from 14 Nov: 30 a day the first week, 50 the second, then 75).
 
 create table if not exists public.email_lead_queue (
   lead_id   uuid primary key references public.email_leads(id) on delete cascade,
@@ -35,4 +35,4 @@ end $$;
 revoke all on function public.q_email_queue_tick() from public, anon, authenticated;
 
 select cron.unschedule('email-lead-queue') where exists (select 1 from cron.job where jobname = 'email-lead-queue');
-select cron.schedule('email-lead-queue', '*/2 * * * *', 'select public.q_email_queue_tick()');
+select cron.schedule('email-lead-queue', '*/3 * * * *', 'select public.q_email_queue_tick()');

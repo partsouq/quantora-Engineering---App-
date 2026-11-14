@@ -2,9 +2,10 @@
 //   Customers (welcome series, customer updates) go through Resend (secret RESEND_API_KEY).
 //   Leads go through the info@ Zoho mailbox by SMTP (secrets ZOHO_SMTP_USER, ZOHO_SMTP_PASS,
 //   optional ZOHO_SMTP_HOST, default smtp.zoho.com, port 465).
-// Lead emails are paced (approved 11 Nov): "Send" puts the leads in a queue (email_lead_queue) and the
-// scheduler sends one every 2 minutes, at most 25 an hour. Daily lead limit steps up with the mailbox's
-// age: 50 a day in the first week of sending, 75 in the second, then 100.
+// Lead emails are paced (approved 11 Nov; slowed 14 Nov after Zoho blocked info@ for sending too fast):
+// "Send" puts the leads in a queue (email_lead_queue) and the scheduler sends one every 3 minutes, at
+// most 15 an hour. Daily lead limit counts from 14 Nov: 30 a day the first week, 50 the second, then 75.
+// If Zoho blocks or refuses the sign-in, the queue pauses for 6 hours and keeps the leads.
 // Every email has a banner, one button, contact info@quantoraengineering.com (reply-to) and an
 // unsubscribe link. Nothing is ever sent twice: each send is logged in email_sends, and people who
 // unsubscribed are skipped. Daily caps: 70 customer emails (Resend free plan is 100/day and also
@@ -127,13 +128,36 @@ async function viaResend(to: string, subject: string, html: string) {
       headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } }) });
   if (!r.ok) throw new Error(`Resend: ${r.status} ${(await r.text()).slice(0, 160)}`);
 }
-let zoho: any = null;
+// 2026-11-14: a Zoho connection that never answered made the Send button spin for minutes with no
+// message. Now every step has a time limit, port 587 is tried when 465 does not answer, and the
+// real reason is shown and kept in email_sends (ok = false).
+let zoho: any = null, zohoPort = 465;
+function zohoTransport(port: number, user: string, pass: string) {
+  return nodemailer.createTransport({ host: Deno.env.get("ZOHO_SMTP_HOST") || "smtp.zoho.com", port, secure: port === 465, requireTLS: port !== 465,
+    auth: { user, pass }, connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 30000 });
+}
+const isNetErr = (e: unknown) => /timeout|timed out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|socket|Greeting never received|Connection closed/i.test(String((e as Error)?.message || e));
+function zohoReason(e: unknown) {
+  const m = String((e as Error)?.message || e);
+  if (/535|Authentication|Invalid login|auth/i.test(m)) return "Zoho refused the sign-in for info@ (password or app password changed). Update ZOHO_SMTP_PASS in Supabase. " + m.slice(0, 120);
+  if (/550|554|blocked|Unusual|limit/i.test(m)) return "Zoho blocked sending from info@ (check the info@ inbox for a Zoho message about sending limits or unusual activity). " + m.slice(0, 120);
+  if (isNetErr(e)) return "Zoho mail server did not answer (ports 465 and 587). " + m.slice(0, 120);
+  return "Zoho: " + m.slice(0, 200);
+}
 async function viaZoho(to: string, subject: string, html: string) {
   const user = Deno.env.get("ZOHO_SMTP_USER") || CONTACT, pass = Deno.env.get("ZOHO_SMTP_PASS");
   if (!pass) throw new Error("Zoho is not connected yet (add the ZOHO_SMTP_PASS secret in Supabase).");
-  zoho ||= nodemailer.createTransport({ host: Deno.env.get("ZOHO_SMTP_HOST") || "smtp.zoho.com", port: 465, secure: true, auth: { user, pass } });
-  await zoho.sendMail({ from: `Quantora Engineering <${user}>`, to, replyTo: CONTACT, subject, html,
-    headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } });
+  const mail = { from: `Quantora Engineering <${user}>`, to, replyTo: CONTACT, subject, html, headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } };
+  zoho ||= zohoTransport(zohoPort, user, pass);
+  try { await zoho.sendMail(mail); }
+  catch (e) {
+    try { zoho.close(); } catch (_) { /* ignore */ }
+    zoho = null;
+    if (!isNetErr(e) || zohoPort !== 465) throw new Error(zohoReason(e));
+    zohoPort = 587; zoho = zohoTransport(587, user, pass);
+    try { await zoho.sendMail(mail); }
+    catch (e2) { try { zoho.close(); } catch (_) { /* ignore */ } zoho = null; zohoPort = 465; throw new Error(zohoReason(e2)); }
+  }
 }
 async function sentToday(provider: string) {
   const day0 = new Date(); day0.setUTCHours(0, 0, 0, 0);
@@ -147,13 +171,19 @@ async function unsubscribed(emails: string[]) {
 }
 
 // ----- lead pacing -----
-const LEADS_PER_HOUR = 25;
+const LEADS_PER_HOUR = 15;
+const PACE_START = Date.parse("2026-11-14T00:00:00Z");   // Zoho unblocked info@ on 14 Nov: start slow again
 async function leadCap() {
-  // daily limit by how long info@ has been sending: first week 50, second week 75, then 100
-  const { data } = await admin.from("email_sends").select("sent_at").eq("provider", "zoho").eq("ok", true).order("sent_at", { ascending: true }).limit(1);
-  const first = data && data[0] ? Date.parse(data[0].sent_at) : Date.now();
-  const days = (Date.now() - first) / 864e5;
-  return days < 7 ? 50 : days < 14 ? 75 : 100;
+  const days = (Date.now() - PACE_START) / 864e5;
+  return days < 7 ? 30 : days < 14 ? 50 : 75;
+}
+// a block or a refused sign-in pauses the queue for 6 hours, so we never keep knocking on Zoho
+async function pausedUntil() {
+  const { data } = await admin.from("email_sends").select("sent_at, error").eq("provider", "zoho").eq("ok", false).order("sent_at", { ascending: false }).limit(1);
+  const r = data && data[0];
+  if (!r || !/blocked|sign-in/i.test(String(r.error || ""))) return 0;
+  const until = Date.parse(r.sent_at) + 6 * 3600e3;
+  return until > Date.now() ? until : 0;
 }
 async function sentLastHour() {
   const { count } = await admin.from("email_sends").select("id", { count: "exact", head: true }).eq("provider", "zoho").eq("ok", true).gte("sent_at", new Date(Date.now() - 3600e3).toISOString());
@@ -175,9 +205,10 @@ async function sendOneLead(l: any, by: string | null) {
   await admin.from("email_sends").insert({ list: "leads", template: `lead_${l.stage}`, lead_id: l.id, email: l.email, provider: "zoho", sent_by: by });
   return "sent";
 }
-// Called by the scheduler every 2 minutes: sends at most one queued lead email.
+// Called by the scheduler every 3 minutes: sends at most one queued lead email.
 async function drainOne() {
   if (!(await queueCount())) return { sent: 0, reason: "queue empty" };
+  const pz = await pausedUntil(); if (pz) return { sent: 0, reason: "paused after a Zoho block until " + new Date(pz).toISOString() };
   if (await sentToday("zoho") >= await leadCap()) return { sent: 0, reason: "daily limit reached" };
   if (await sentLastHour() >= LEADS_PER_HOUR) return { sent: 0, reason: "hourly limit reached" };
   for (let i = 0; i < 5; i++) {
@@ -190,7 +221,10 @@ async function drainOne() {
       if (r === "sent") return { sent: 1 };
     } catch (e) {
       const msg = String((e as Error).message || e);
-      if (/not connected|auth|Invalid login|limit|too many|rate/i.test(msg)) return { sent: 0, reason: msg.slice(0, 160) };   // keep it queued, try again later
+      if (/not connected|sign-in|blocked|did not answer|auth|Invalid login|limit|too many|rate/i.test(msg)) {   // keep it queued, try again later
+        await admin.from("email_sends").insert({ list: "leads", template: `lead_${l?.stage ?? 0}`, lead_id: q[0].lead_id, email: l?.email || "", provider: "zoho", ok: false, error: msg.slice(0, 300), sent_by: q[0].queued_by });
+        return { sent: 0, reason: msg.slice(0, 160) };
+      }
       await admin.from("email_lead_queue").delete().eq("lead_id", q[0].lead_id);
       await admin.from("email_sends").insert({ list: "leads", template: `lead_${l?.stage ?? 0}`, lead_id: q[0].lead_id, email: l?.email || "", provider: "zoho", ok: false, error: msg.slice(0, 300), sent_by: q[0].queued_by });
       return { sent: 0, failed: 1, reason: msg.slice(0, 160) };
@@ -282,7 +316,7 @@ Deno.serve(async (req) => {
     }
 
     if (act === "send_leads") {
-      // Queue the leads; the scheduler sends one every 2 minutes (25 an hour, daily limit by mailbox age).
+      // Queue the leads; the scheduler sends one every 3 minutes (15 an hour, daily limit from PACE_START).
       mustAct();
       const ids: string[] = (b.lead_ids || []).slice(0, 500);
       const { data: leads } = await admin.from("email_leads").select("id, email, status, stage").in("id", ids);
