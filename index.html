@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-14.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-14.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29297,6 +29297,11 @@ function QEmailCenterView() {
   const loadStatus = () => callEmail("status").then(setSt).catch(e => setMsg({ ok: false, text: e.message }));
   useEffect(() => { loadStatus(); }, []);
   const report = r => {
+    if (r.queued !== undefined) {
+      const left = Math.max(0, (r.cap_leads || 50) - (r.zoho_today || 0));
+      setMsg({ ok: true, text: `${r.queued} leads queued${r.skipped ? ` (${r.skipped} skipped: no email or unsubscribed)` : ""}. They go out one every 3 minutes, ${r.leads_per_hour || 25} an hour. ${r.in_queue} in the queue; ${left} more can go today, the rest continue tomorrow.` });
+      loadStatus(); return;
+    }
     const parts = [`${r.sent} sent`]; if (r.failed) parts.push(`${r.failed} failed`); if (r.skipped) parts.push(`${r.skipped} skipped`);
     setMsg({ ok: !r.failed, text: parts.join(" · ") + (r.errors && r.errors.length ? ` — ${r.errors[0]}` : "") }); loadStatus();
   };
@@ -29305,7 +29310,7 @@ function QEmailCenterView() {
     <>
       <div className="card panel" style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 12.5, marginBottom: 12 }}>
         <span>Customers (Resend): {st ? (st.resend ? <b style={{ color: "#6ee7b7" }}>connected</b> : <b style={{ color: "#fcd34d" }}>not connected — add RESEND_API_KEY in Supabase</b>) : "…"} {st && `· ${st.resend_today}/${st.cap_customers} today`}</span>
-        <span>Leads (Zoho info@): {st ? (st.zoho ? <b style={{ color: "#6ee7b7" }}>connected</b> : <b style={{ color: "#fcd34d" }}>not connected — add ZOHO_SMTP_PASS in Supabase</b>) : "…"} {st && `· ${st.zoho_today}/${st.cap_leads} today`}</span>
+        <span>Leads (Zoho info@): {st ? (st.zoho ? <b style={{ color: "#6ee7b7" }}>connected</b> : <b style={{ color: "#fcd34d" }}>not connected — add ZOHO_SMTP_PASS in Supabase</b>) : "…"} {st && `· ${st.zoho_today}/${st.cap_leads} today · ${st.leads_last_hour ?? 0}/${st.leads_per_hour ?? 25} this hour${st.leads_queued ? ` · ${st.leads_queued} in the queue` : ""}`}</span>
         <span style={{ marginLeft: "auto", color: "var(--text-dim,#94a3b8)" }}>Replies go to info@quantoraengineering.com</span>
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>

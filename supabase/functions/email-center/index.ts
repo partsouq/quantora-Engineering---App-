@@ -2,6 +2,10 @@
 //   Customers (welcome series, customer updates) go through Resend (secret RESEND_API_KEY).
 //   Leads go through the info@ Zoho mailbox by SMTP (secrets ZOHO_SMTP_USER, ZOHO_SMTP_PASS,
 //   optional ZOHO_SMTP_HOST, default smtp.zoho.com, port 465).
+// Lead emails are paced (approved 11 Nov; slowed 14 Nov after Zoho blocked info@ for sending too fast):
+// "Send" puts the leads in a queue (email_lead_queue) and the scheduler sends one every 3 minutes, at
+// most 15 an hour. Daily lead limit counts from 14 Nov: 30 a day the first week, 50 the second, then 75.
+// If Zoho blocks or refuses the sign-in, the queue pauses for 6 hours and keeps the leads.
 // Every email has a banner, one button, contact info@quantoraengineering.com (reply-to) and an
 // unsubscribe link. Nothing is ever sent twice: each send is logged in email_sends, and people who
 // unsubscribed are skipped. Daily caps: 70 customer emails (Resend free plan is 100/day and also
@@ -121,7 +125,7 @@ async function viaResend(to: string, subject: string, html: string) {
   if (!key) throw new Error("Resend is not connected yet (add the RESEND_API_KEY secret in Supabase).");
   const r = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({ from: "Quantora Engineering <noreply@quantoraengineering.com>", to: [to], reply_to: CONTACT, subject, html,
-      headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>` } }) });
+      headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } }) });
   if (!r.ok) throw new Error(`Resend: ${r.status} ${(await r.text()).slice(0, 160)}`);
 }
 // 2026-11-14: a Zoho connection that never answered made the Send button spin for minutes with no
@@ -143,7 +147,7 @@ function zohoReason(e: unknown) {
 async function viaZoho(to: string, subject: string, html: string) {
   const user = Deno.env.get("ZOHO_SMTP_USER") || CONTACT, pass = Deno.env.get("ZOHO_SMTP_PASS");
   if (!pass) throw new Error("Zoho is not connected yet (add the ZOHO_SMTP_PASS secret in Supabase).");
-  const mail = { from: `Quantora Engineering <${user}>`, to, replyTo: CONTACT, subject, html, headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>` } };
+  const mail = { from: `Quantora Engineering <${user}>`, to, replyTo: CONTACT, subject, html, headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } };
   zoho ||= zohoTransport(zohoPort, user, pass);
   try { await zoho.sendMail(mail); }
   catch (e) {
@@ -166,9 +170,79 @@ async function unsubscribed(emails: string[]) {
   return new Set((data || []).map((x: any) => x.email));
 }
 
+// ----- lead pacing -----
+const LEADS_PER_HOUR = 15;
+const PACE_START = Date.parse("2026-11-14T00:00:00Z");   // Zoho unblocked info@ on 14 Nov: start slow again
+async function leadCap() {
+  const days = (Date.now() - PACE_START) / 864e5;
+  return days < 7 ? 30 : days < 14 ? 50 : 75;
+}
+// a block or a refused sign-in pauses the queue for 6 hours, so we never keep knocking on Zoho
+async function pausedUntil() {
+  const { data } = await admin.from("email_sends").select("sent_at, error").eq("provider", "zoho").eq("ok", false).order("sent_at", { ascending: false }).limit(1);
+  const r = data && data[0];
+  if (!r || !/blocked|sign-in/i.test(String(r.error || ""))) return 0;
+  const until = Date.parse(r.sent_at) + 6 * 3600e3;
+  return until > Date.now() ? until : 0;
+}
+async function sentLastHour() {
+  const { count } = await admin.from("email_sends").select("id", { count: "exact", head: true }).eq("provider", "zoho").eq("ok", true).gte("sent_at", new Date(Date.now() - 3600e3).toISOString());
+  return count || 0;
+}
+async function queueCount() {
+  const { count } = await admin.from("email_lead_queue").select("lead_id", { count: "exact", head: true });
+  return count || 0;
+}
+// Send the next email to one lead (intro, follow-up 1, follow-up 2, later news). Returns "sent", "skipped" or throws.
+async function sendOneLead(l: any, by: string | null) {
+  const un = await unsubscribed(l.email ? [l.email] : []);
+  if (!l.email || l.status === "dnc" || l.status === "customer" || un.has(String(l.email).toLowerCase()) || l.stage >= LEAD_MAX) return "skipped";
+  const m = await leadEmail(l.stage, l.company, l.email);
+  await viaZoho(l.email, m.subject, m.html);
+  const next = new Date(Date.now() + LEAD_NEXT_DAYS[Math.min(l.stage, LEAD_NEXT_DAYS.length - 1)] * 864e5);
+  await admin.from("email_leads").update({ stage: l.stage + 1, status: l.status === "new" ? "contacted" : l.status, last_sent_at: new Date().toISOString(),
+    next_due_at: l.stage + 1 >= LEAD_MAX ? "2999-01-01T00:00:00Z" : next.toISOString(), updated_at: new Date().toISOString() }).eq("id", l.id);
+  await admin.from("email_sends").insert({ list: "leads", template: `lead_${l.stage}`, lead_id: l.id, email: l.email, provider: "zoho", sent_by: by });
+  return "sent";
+}
+// Called by the scheduler every 3 minutes: sends at most one queued lead email.
+async function drainOne() {
+  if (!(await queueCount())) return { sent: 0, reason: "queue empty" };
+  const pz = await pausedUntil(); if (pz) return { sent: 0, reason: "paused after a Zoho block until " + new Date(pz).toISOString() };
+  if (await sentToday("zoho") >= await leadCap()) return { sent: 0, reason: "daily limit reached" };
+  if (await sentLastHour() >= LEADS_PER_HOUR) return { sent: 0, reason: "hourly limit reached" };
+  for (let i = 0; i < 5; i++) {
+    const { data: q } = await admin.from("email_lead_queue").select("lead_id, queued_by").order("queued_at", { ascending: true }).limit(1);
+    if (!q || !q.length) return { sent: 0, reason: "queue empty" };
+    const { data: l } = await admin.from("email_leads").select("*").eq("id", q[0].lead_id).maybeSingle();
+    try {
+      const r = l ? await sendOneLead(l, q[0].queued_by) : "skipped";
+      await admin.from("email_lead_queue").delete().eq("lead_id", q[0].lead_id);
+      if (r === "sent") return { sent: 1 };
+    } catch (e) {
+      const msg = String((e as Error).message || e);
+      if (/not connected|sign-in|blocked|did not answer|auth|Invalid login|limit|too many|rate/i.test(msg)) {   // keep it queued, try again later
+        await admin.from("email_sends").insert({ list: "leads", template: `lead_${l?.stage ?? 0}`, lead_id: q[0].lead_id, email: l?.email || "", provider: "zoho", ok: false, error: msg.slice(0, 300), sent_by: q[0].queued_by });
+        return { sent: 0, reason: msg.slice(0, 160) };
+      }
+      await admin.from("email_lead_queue").delete().eq("lead_id", q[0].lead_id);
+      await admin.from("email_sends").insert({ list: "leads", template: `lead_${l?.stage ?? 0}`, lead_id: q[0].lead_id, email: l?.email || "", provider: "zoho", ok: false, error: msg.slice(0, 300), sent_by: q[0].queued_by });
+      return { sent: 0, failed: 1, reason: msg.slice(0, 160) };
+    }
+  }
+  return { sent: 0, reason: "nothing to send" };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
+    // the scheduler (pg_cron) proves itself with app_secrets.EMAIL_QUEUE_SECRET
+    const cron = req.headers.get("x-cron-secret") || "";
+    if (cron) {
+      const { data: sec } = await admin.from("app_secrets").select("value").eq("key", "EMAIL_QUEUE_SECRET").maybeSingle();
+      if (!sec?.value || cron !== sec.value) return json({ error: "Not allowed." }, 401);
+      return json(await drainOne());
+    }
     const auth = req.headers.get("Authorization") || "";
     const { data: { user } } = await admin.auth.getUser(auth.replace(/^Bearer\s+/i, ""));
     if (!user) return json({ error: "Please sign in." }, 401);
@@ -181,7 +255,8 @@ Deno.serve(async (req) => {
 
     if (act === "status") {
       return json({ resend: !!Deno.env.get("RESEND_API_KEY"), zoho: !!Deno.env.get("ZOHO_SMTP_PASS"),
-        resend_today: await sentToday("resend"), zoho_today: await sentToday("zoho"), cap_customers: CAP_CUSTOMERS, cap_leads: CAP_LEADS });
+        resend_today: await sentToday("resend"), zoho_today: await sentToday("zoho"), cap_customers: CAP_CUSTOMERS, cap_leads: await leadCap(),
+        leads_per_hour: LEADS_PER_HOUR, leads_last_hour: await sentLastHour(), leads_queued: await queueCount() });
     }
 
     if (act === "preview") {
@@ -241,32 +316,15 @@ Deno.serve(async (req) => {
     }
 
     if (act === "send_leads") {
+      // Queue the leads; the scheduler sends one every 3 minutes (15 an hour, daily limit from PACE_START).
       mustAct();
-      const ids: string[] = (b.lead_ids || []).slice(0, 200);
-      const { data: leads } = await admin.from("email_leads").select("*").in("id", ids);
+      const ids: string[] = (b.lead_ids || []).slice(0, 500);
+      const { data: leads } = await admin.from("email_leads").select("id, email, status, stage").in("id", ids);
       const un = await unsubscribed((leads || []).map((l: any) => l.email || "").filter(Boolean));
-      let room = CAP_LEADS - await sentToday("zoho");
-      const out = { sent: 0, failed: 0, skipped: 0, errors: [] as string[] };
-      const t0 = Date.now(); let late = 0;
-      for (const l of (leads || [])) {
-        if (!l.email || l.status === "dnc" || un.has(String(l.email).toLowerCase()) || l.stage >= LEAD_MAX) { out.skipped++; continue; }
-        if (room <= 0) { out.skipped++; continue; }
-        if (Date.now() - t0 > 100000) { late++; out.skipped++; continue; }   // stay inside the server's time limit
-        const m = await leadEmail(l.stage, l.company, l.email);
-        try { await viaZoho(l.email, m.subject, m.html); room--; out.sent++;
-          const next = new Date(Date.now() + LEAD_NEXT_DAYS[Math.min(l.stage, LEAD_NEXT_DAYS.length - 1)] * 864e5);
-          await admin.from("email_leads").update({ stage: l.stage + 1, status: l.status === "new" ? "contacted" : l.status, last_sent_at: new Date().toISOString(),
-            next_due_at: l.stage + 1 >= LEAD_MAX ? "2999-01-01T00:00:00Z" : next.toISOString(), updated_at: new Date().toISOString() }).eq("id", l.id);
-          await admin.from("email_sends").insert({ list: "leads", template: `lead_${l.stage}`, lead_id: l.id, email: l.email, provider: "zoho", sent_by: user.id });
-        } catch (e) {
-          const msg = String((e as Error).message); out.failed++; out.errors.push(msg);
-          await admin.from("email_sends").insert({ list: "leads", template: `lead_${l.stage}`, lead_id: l.id, email: l.email, provider: "zoho", ok: false, error: msg.slice(0, 500), sent_by: user.id });
-          if (/not connected|sign-in|blocked|did not answer/i.test(msg)) break;
-        }
-      }
-      if (late) out.errors.push(`${late} not sent yet, to stay inside the time limit. Press Send again for the rest.`);
-      if (room <= 0 && out.skipped) out.errors.push(`Daily limit of ${CAP_LEADS} lead emails reached; the rest stay in the list for tomorrow.`);
-      return json(out);
+      const ok = (leads || []).filter((l: any) => l.email && l.status !== "dnc" && l.status !== "customer" && !un.has(String(l.email).toLowerCase()) && l.stage < LEAD_MAX);
+      if (ok.length) await admin.from("email_lead_queue").upsert(ok.map((l: any) => ({ lead_id: l.id, queued_by: user.id })), { onConflict: "lead_id", ignoreDuplicates: true });
+      const cap = await leadCap(), today = await sentToday("zoho"), queued = await queueCount();
+      return json({ sent: 0, failed: 0, skipped: (ids.length - ok.length), queued: ok.length, in_queue: queued, cap_leads: cap, zoho_today: today, leads_per_hour: LEADS_PER_HOUR, errors: [] });
     }
     return json({ error: "Unknown action." }, 400);
   } catch (e) {
