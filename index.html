@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-14.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-14.2"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -43248,6 +43248,13 @@ html:root:has(.qx) body [data-qflat]:not(#q_){backdrop-filter:none!important;-we
 /* ---- a page without the left rail (an open project): the same big sheet, so nothing sits on the dark edge ---- */
 html:root:has(.qx) body .qx>.max-w-\[1500px\]{max-width:1404px!important;margin:16px auto 28px!important;padding:22px 24px 28px!important;background:rgba(255,255,255,.3)!important;border:1px solid rgba(255,255,255,.5)!important;border-radius:34px!important;box-shadow:0 30px 60px -36px rgba(6,30,52,.8),inset 0 1px 0 rgba(255,255,255,.6)!important}
 @media (max-width:1023px){html:root:has(.qx) body .qx>.max-w-\[1500px\]{margin:10px 8px 20px!important;padding:14px 12px 20px!important;border-radius:24px!important}}
+
+/* Workspaces page: keep the building picture behind "Where are you working today?" (2026-11-14) */
+html:root:has(.qx) body .qx .qws-hero{position:relative!important;min-height:250px!important;margin:0 0 18px!important;border-radius:24px!important;overflow:hidden!important;background:rgba(255,255,255,.4)!important;border:1px solid rgba(255,255,255,.75)!important;box-shadow:0 18px 38px -26px rgba(20,30,40,.7)!important}
+html:root:has(.qx) body .qx .qws-hero-img{display:block!important;position:absolute!important;right:0;top:0;width:66%!important;height:100%!important;object-fit:cover;object-position:center 40%;opacity:1!important}
+html:root:has(.qx) body .qx .qws-hero:after{display:block!important;content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,rgba(236,245,250,.96) 0%,rgba(236,245,250,.96) 34%,rgba(236,245,250,.72) 52%,rgba(255,255,255,0) 80%)!important}
+html:root:has(.qx) body .qx .qws-hero-txt{position:relative!important;z-index:1;padding:36px 34px!important;max-width:640px!important}
+@media (max-width:640px){html:root:has(.qx) body .qx .qws-hero-img{width:100%!important;opacity:.35!important}html:root:has(.qx) body .qx .qws-hero-txt{padding:24px 18px!important}}
 </style>
 <style id="q-look-slate" media="not all">
 /* Quantora slate look (2026-11-13): dark slate panels, thin edges, teal and yellow highlights. */
@@ -43478,6 +43485,13 @@ html:root:has(.qx) body .qx .qe-launch *{color:var(--ink)!important;-webkit-text
 html:root:has(.qx) body .qx .qe-launch .qe-txt small,html:root:has(.qx) body .qx .qe-launch .qe-txt span span{color:#b8461f!important;-webkit-text-fill-color:#b8461f!important}
 html:root:has(.qx) body .qx .qnl-page .qapp-nav button.on{background:#1d1713!important}
 html:root:has(.qx) body .qx .qp-item.on,html:root:has(.qx) body .qx .qp-item.on:hover{background:linear-gradient(180deg,#3a2e26,#221a14)!important;color:#fff!important}
+
+/* Workspaces page: keep the building picture behind "Where are you working today?" (2026-11-14) */
+html:root:has(.qx) body .qx .qws-hero{position:relative!important;min-height:250px!important;margin:0 0 18px!important;border-radius:24px!important;overflow:hidden!important;background:rgba(255,255,255,.4)!important;border:1px solid rgba(255,255,255,.75)!important;box-shadow:0 18px 38px -26px rgba(20,30,40,.7)!important}
+html:root:has(.qx) body .qx .qws-hero-img{display:block!important;position:absolute!important;right:0;top:0;width:66%!important;height:100%!important;object-fit:cover;object-position:center 40%;opacity:1!important}
+html:root:has(.qx) body .qx .qws-hero:after{display:block!important;content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,rgba(248,242,235,.96) 0%,rgba(248,242,235,.96) 34%,rgba(248,242,235,.72) 52%,rgba(255,255,255,0) 80%)!important}
+html:root:has(.qx) body .qx .qws-hero-txt{position:relative!important;z-index:1;padding:36px 34px!important;max-width:640px!important}
+@media (max-width:640px){html:root:has(.qx) body .qx .qws-hero-img{width:100%!important;opacity:.35!important}html:root:has(.qx) body .qx .qws-hero-txt{padding:24px 18px!important}}
 </style>
 <style id="q-look-ui" data-ql="0">
 /* Look chooser + the Appearance setting (2026-11-13; four looks). This sheet is never recoloured: it carries both looks itself. */
