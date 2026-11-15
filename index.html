@@ -36,7 +36,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-14.3"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-15.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -40134,6 +40134,10 @@ const Q_LOOKS = [
   { id: "glass", name: "Glass", blurb: "Light, frosted panels over a blue backdrop." },
   { id: "slate", name: "Slate", blurb: "Dark slate panels with teal and yellow highlights." },
   { id: "warm", name: "Warm", blurb: "Frosted panels over a soft, warm room." },
+  { id: "emerald", name: "Emerald", blurb: "Charcoal panels with green highlights." },
+  { id: "ocean", name: "Ocean", blurb: "Deep navy with bright blue highlights." },
+  { id: "amber", name: "Amber", blurb: "Charcoal with warm orange highlights." },
+  { id: "gold", name: "Gold", blurb: "Black and gold, with gold edges." },
 ];
 function useQLook(session) {
   const [, bump] = useState(0);
@@ -40841,7 +40845,12 @@ try { const popEl = document.createElement("div"); popEl.id = "q-pop-root"; docu
   var LOOKS = QL.looks = {
     glass: { mode: "light", ink: 212, inkS: 0.5, acc: 199, accS: 0.88, inkRGB: "12,36,64", sheet: "q-glass" },
     warm: { mode: "light", ink: 26, inkS: 0.3, acc: 14, accS: 0.78, inkRGB: "43,33,26", sheet: "q-look-warm" },
-    slate: { mode: "dark", sheet: "q-look-slate" }
+    slate: { mode: "dark", base: 216, baseS: 0.24, acc: 172, accS: 0.62, sheet: "q-look-slate" },
+    // 2026-11-15: four more dark looks from the owner's references (charcoal base + one accent each)
+    emerald: { mode: "dark", base: 160, baseS: 0.12, acc: 152, accS: 0.62, sheet: "q-look-emerald" },
+    ocean: { mode: "dark", base: 220, baseS: 0.42, acc: 212, accS: 0.85, sheet: "q-look-ocean" },
+    amber: { mode: "dark", base: 30, baseS: 0.05, acc: 32, accS: 0.88, sheet: "q-look-amber" },
+    gold: { mode: "dark", base: 42, baseS: 0.05, acc: 44, accS: 0.72, sheet: "q-look-gold" }
   };
   var L = LOOKS.glass, LN = "glass", INK = 212, ACC = 199;
   function use(n) { if (n && LOOKS[n] && n !== LN) { LN = n; L = LOOKS[n]; INK = L.ink; ACC = L.acc; } }
@@ -40873,10 +40882,10 @@ try { const popEl = document.createElement("div"); popEl.id = "q-pop-root"; docu
     var x = hls(r / 255, g / 255, b / 255), hd = x[0] * 360, l = x[1], s = x[2];
     if (s < 0.22 || (hd >= 195 && hd <= 265 && (l < 0.34 || l > 0.72))) {
       if (l === 1 || l === 0) return null;
-      if (l < 0.34) return t(216, 0.10 + l * 0.75, Math.min(s, 0.24));
-      return t(216, l, Math.min(s, l > 0.72 ? 0.14 : 0.16));
+      if (l < 0.34) return t(L.base, 0.09 + l * 0.72, Math.min(s, L.baseS));
+      return t(L.base, l, Math.min(s, l > 0.72 ? Math.min(0.14, L.baseS) : Math.min(0.16, L.baseS)));
     }
-    if (hd >= 195 && hd <= 300) return t(172, Math.min(l, 0.62), Math.min(s, 0.62));
+    if (hd >= 195 && hd <= 300) return t(L.acc, Math.min(Math.max(l, 0.45), 0.62), Math.min(Math.max(s, 0.5), L.accS));
     return null;
   }
   function remap(r, g, b, bg, tx) {
@@ -43498,13 +43507,142 @@ html:root:has(.qx) body .qx .qws-hero:after{display:block!important;content:"";p
 html:root:has(.qx) body .qx .qws-hero-txt{position:relative!important;z-index:1;padding:36px 34px!important;max-width:640px!important}
 @media (max-width:640px){html:root:has(.qx) body .qx .qws-hero-img{width:100%!important;opacity:.35!important}html:root:has(.qx) body .qx .qws-hero-txt{padding:24px 18px!important}}
 </style>
+<style id="q-look-emerald" media="not all">
+/* Quantora Emerald look (2026-11-15): charcoal panels, thin edges, one accent colour. */
+:root{--dk-bg:#0d1311;--dk-panel:#141b19;--dk-panel2:#19221f;--dk-edge:rgba(255,255,255,.07);--dk-text:#e8ebef;--dk-acc:#34d399;--dk-btn:#3ecf8e;--dk-btnt:#06140e}
+html:root:has(.qx){background:#0d1311!important}
+html:root:has(.qx) body{font-family:Inter,system-ui,sans-serif;background:radial-gradient(1400px 420px at 50% 108%,rgba(52,211,153,.16),transparent 70%),linear-gradient(180deg,#111816,#0d1311)!important;background-attachment:fixed!important}
+html:root:has(.qx) body .qx{background:transparent!important;font-family:Inter,system-ui,sans-serif}
+html:root:has(.qx) body .qx *{text-shadow:none!important}
+html:root:has(.qx) body .qx :is(h1,h2,h3,h4,button,input,b,span,div,p,a,td,th,small){font-family:Inter,system-ui,sans-serif!important}
+html:root:has(.qx) body .qx:before{display:none!important}
+html:root:has(.qx) body .qx nav.qtr-topnav{background:rgba(13,19,17,.92)!important;border-bottom:1px solid var(--dk-edge)!important;box-shadow:none!important;backdrop-filter:blur(14px)}
+html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a){background:var(--dk-panel)!important;border:1px solid var(--dk-edge)!important;border-radius:10px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-side{background:var(--dk-panel)!important;border:1px solid var(--dk-edge)!important;border-radius:16px!important;box-shadow:0 18px 40px -28px rgba(0,0,0,.9)!important}
+html:root:has(.qx) body .qx .qp-ws button{background:var(--dk-panel2)!important;border:1px solid var(--dk-edge)!important;border-radius:10px!important;box-shadow:none!important;color:var(--dk-text)!important}
+html:root:has(.qx) body .qx .qp-ws button.on{background:rgba(52,211,153,.14)!important;border-color:var(--dk-acc)!important;color:#fff!important}
+html:root:has(.qx) body .qx .qp-item{border-radius:10px!important;box-shadow:none!important;color:#c9ced6!important}
+html:root:has(.qx) body .qx .qp-item:hover{background:rgba(255,255,255,.05)!important}
+html:root:has(.qx) body .qx .qp-item.on,html:root:has(.qx) body .qx .qp-item.on:hover{background:rgba(52,211,153,.14)!important;color:#fff!important;box-shadow:inset 0 0 0 1px rgba(52,211,153,.45)!important}
+html:root:has(.qx) body .qx .qp-item .ic{border-radius:8px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-side-foot{background:var(--dk-panel2)!important;border:1px solid var(--dk-edge)!important;border-radius:12px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip,.qws-box,.qws-jump,.qp-card,.qwc-card){background:var(--dk-panel)!important;background-image:none!important;border:1px solid var(--dk-edge)!important;border-radius:14px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip):is(:before,:after){display:none!important}
+html:root:has(.qx) body .qx .qh-act:hover,html:root:has(.qx) body .qx .qwc-card:hover{background:var(--dk-panel2)!important;border-color:rgba(52,211,153,.45)!important}
+html:root:has(.qx) body .qx :is(.qnl-hero,.qws-hero){border:1px solid var(--dk-edge)!important;box-shadow:none!important;border-radius:16px!important}
+html:root:has(.qx) body .qx .qnl-hero .qnl-h1,html:root:has(.qx) body .qx .qws .qwc-h1,html:root:has(.qx) body .qx .qws .qwc-h1 span{background:none!important;-webkit-background-clip:initial!important;background-clip:initial!important;color:#8ff0c4!important;-webkit-text-fill-color:#8ff0c4!important}
+html:root:has(.qx) body .qx .qh-sec,html:root:has(.qx) body .qx .qh-kpi .n{background:none!important;color:var(--dk-text)!important;-webkit-text-fill-color:var(--dk-text)!important}
+html:root:has(.qx) body .qx :is(.qp-btn.pri,.qnl-btn.pri,.qws .qwc-go,.qws-help-btn),html:root:has(.qx) body .qx .qp-side-foot :is(button,a){background:var(--dk-btn)!important;background-image:none!important;border:1px solid var(--dk-btn)!important;color:var(--dk-btnt)!important;-webkit-text-fill-color:var(--dk-btnt)!important;border-radius:10px!important;box-shadow:none!important;font-weight:600!important}
+html:root:has(.qx) body .qx :is(.qp-btn.pri,.qnl-btn.pri,.qws .qwc-go,.qws-help-btn) *,html:root:has(.qx) body .qx .qp-side-foot :is(button,a) *{color:var(--dk-btnt)!important;-webkit-text-fill-color:var(--dk-btnt)!important}
+html:root:has(.qx) body .qx .qp-strip button{border-radius:10px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-strip button.on{background:rgba(52,211,153,.14)!important;border-color:var(--dk-acc)!important;color:#fff!important}
+html:root:has(.qx) body .qx :is(input,select,textarea){background:#0f1513!important;border-color:var(--dk-edge)!important}
+html:root:has(.qx) body .qx .qe-launch{background:var(--dk-panel)!important;border:1px solid rgba(52,211,153,.45)!important;box-shadow:0 16px 30px -18px rgba(0,0,0,.9)!important}
+</style>
+<style id="q-look-ocean" media="not all">
+/* Quantora Ocean look (2026-11-15): charcoal panels, thin edges, one accent colour. */
+:root{--dk-bg:#0a1326;--dk-panel:#0f1b33;--dk-panel2:#13213d;--dk-edge:rgba(96,150,255,.14);--dk-text:#e8ebef;--dk-acc:#3b82f6;--dk-btn:#2f6bff;--dk-btnt:#ffffff}
+html:root:has(.qx){background:#0a1326!important}
+html:root:has(.qx) body{font-family:Inter,system-ui,sans-serif;background:radial-gradient(1400px 420px at 50% 108%,rgba(59,130,246,.22),transparent 70%),linear-gradient(180deg,#0d1830,#0a1326)!important;background-attachment:fixed!important}
+html:root:has(.qx) body .qx{background:transparent!important;font-family:Inter,system-ui,sans-serif}
+html:root:has(.qx) body .qx *{text-shadow:none!important}
+html:root:has(.qx) body .qx :is(h1,h2,h3,h4,button,input,b,span,div,p,a,td,th,small){font-family:Inter,system-ui,sans-serif!important}
+html:root:has(.qx) body .qx:before{display:none!important}
+html:root:has(.qx) body .qx nav.qtr-topnav{background:rgba(10,19,38,.92)!important;border-bottom:1px solid var(--dk-edge)!important;box-shadow:none!important;backdrop-filter:blur(14px)}
+html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a){background:var(--dk-panel)!important;border:1px solid var(--dk-edge)!important;border-radius:10px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-side{background:var(--dk-panel)!important;border:1px solid var(--dk-edge)!important;border-radius:16px!important;box-shadow:0 18px 40px -28px rgba(0,0,0,.9)!important}
+html:root:has(.qx) body .qx .qp-ws button{background:var(--dk-panel2)!important;border:1px solid var(--dk-edge)!important;border-radius:10px!important;box-shadow:none!important;color:var(--dk-text)!important}
+html:root:has(.qx) body .qx .qp-ws button.on{background:rgba(59,130,246,.2)!important;border-color:var(--dk-acc)!important;color:#fff!important}
+html:root:has(.qx) body .qx .qp-item{border-radius:10px!important;box-shadow:none!important;color:#c9ced6!important}
+html:root:has(.qx) body .qx .qp-item:hover{background:rgba(255,255,255,.05)!important}
+html:root:has(.qx) body .qx .qp-item.on,html:root:has(.qx) body .qx .qp-item.on:hover{background:rgba(59,130,246,.2)!important;color:#fff!important;box-shadow:inset 0 0 0 1px rgba(96,150,255,.5)!important}
+html:root:has(.qx) body .qx .qp-item .ic{border-radius:8px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-side-foot{background:var(--dk-panel2)!important;border:1px solid var(--dk-edge)!important;border-radius:12px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip,.qws-box,.qws-jump,.qp-card,.qwc-card){background:var(--dk-panel)!important;background-image:none!important;border:1px solid var(--dk-edge)!important;border-radius:14px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip):is(:before,:after){display:none!important}
+html:root:has(.qx) body .qx .qh-act:hover,html:root:has(.qx) body .qx .qwc-card:hover{background:var(--dk-panel2)!important;border-color:rgba(96,150,255,.5)!important}
+html:root:has(.qx) body .qx :is(.qnl-hero,.qws-hero){border:1px solid var(--dk-edge)!important;box-shadow:none!important;border-radius:16px!important}
+html:root:has(.qx) body .qx .qnl-hero .qnl-h1,html:root:has(.qx) body .qx .qws .qwc-h1,html:root:has(.qx) body .qx .qws .qwc-h1 span{background:none!important;-webkit-background-clip:initial!important;background-clip:initial!important;color:#e7eefc!important;-webkit-text-fill-color:#e7eefc!important}
+html:root:has(.qx) body .qx .qh-sec,html:root:has(.qx) body .qx .qh-kpi .n{background:none!important;color:var(--dk-text)!important;-webkit-text-fill-color:var(--dk-text)!important}
+html:root:has(.qx) body .qx :is(.qp-btn.pri,.qnl-btn.pri,.qws .qwc-go,.qws-help-btn),html:root:has(.qx) body .qx .qp-side-foot :is(button,a){background:var(--dk-btn)!important;background-image:none!important;border:1px solid var(--dk-btn)!important;color:var(--dk-btnt)!important;-webkit-text-fill-color:var(--dk-btnt)!important;border-radius:10px!important;box-shadow:none!important;font-weight:600!important}
+html:root:has(.qx) body .qx :is(.qp-btn.pri,.qnl-btn.pri,.qws .qwc-go,.qws-help-btn) *,html:root:has(.qx) body .qx .qp-side-foot :is(button,a) *{color:var(--dk-btnt)!important;-webkit-text-fill-color:var(--dk-btnt)!important}
+html:root:has(.qx) body .qx .qp-strip button{border-radius:10px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-strip button.on{background:rgba(59,130,246,.2)!important;border-color:var(--dk-acc)!important;color:#fff!important}
+html:root:has(.qx) body .qx :is(input,select,textarea){background:#0b1529!important;border-color:var(--dk-edge)!important}
+html:root:has(.qx) body .qx .qe-launch{background:var(--dk-panel)!important;border:1px solid rgba(96,150,255,.5)!important;box-shadow:0 16px 30px -18px rgba(0,0,0,.9)!important}
+</style>
+<style id="q-look-amber" media="not all">
+/* Quantora Amber look (2026-11-15): charcoal panels, thin edges, one accent colour. */
+:root{--dk-bg:#111214;--dk-panel:#18191c;--dk-panel2:#1e1f23;--dk-edge:rgba(255,255,255,.07);--dk-text:#e8ebef;--dk-acc:#f59e0b;--dk-btn:#f08a24;--dk-btnt:#1a0f02}
+html:root:has(.qx){background:#111214!important}
+html:root:has(.qx) body{font-family:Inter,system-ui,sans-serif;background:radial-gradient(1400px 420px at 50% 108%,rgba(245,158,11,.14),transparent 70%),linear-gradient(180deg,#141518,#111214)!important;background-attachment:fixed!important}
+html:root:has(.qx) body .qx{background:transparent!important;font-family:Inter,system-ui,sans-serif}
+html:root:has(.qx) body .qx *{text-shadow:none!important}
+html:root:has(.qx) body .qx :is(h1,h2,h3,h4,button,input,b,span,div,p,a,td,th,small){font-family:Inter,system-ui,sans-serif!important}
+html:root:has(.qx) body .qx:before{display:none!important}
+html:root:has(.qx) body .qx nav.qtr-topnav{background:rgba(17,18,20,.92)!important;border-bottom:1px solid var(--dk-edge)!important;box-shadow:none!important;backdrop-filter:blur(14px)}
+html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a){background:var(--dk-panel)!important;border:1px solid var(--dk-edge)!important;border-radius:10px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-side{background:var(--dk-panel)!important;border:1px solid var(--dk-edge)!important;border-radius:16px!important;box-shadow:0 18px 40px -28px rgba(0,0,0,.9)!important}
+html:root:has(.qx) body .qx .qp-ws button{background:var(--dk-panel2)!important;border:1px solid var(--dk-edge)!important;border-radius:10px!important;box-shadow:none!important;color:var(--dk-text)!important}
+html:root:has(.qx) body .qx .qp-ws button.on{background:rgba(255,255,255,.07)!important;border-color:var(--dk-acc)!important;color:#fff!important}
+html:root:has(.qx) body .qx .qp-item{border-radius:10px!important;box-shadow:none!important;color:#c9ced6!important}
+html:root:has(.qx) body .qx .qp-item:hover{background:rgba(255,255,255,.05)!important}
+html:root:has(.qx) body .qx .qp-item.on,html:root:has(.qx) body .qx .qp-item.on:hover{background:rgba(255,255,255,.07)!important;color:#fff!important;box-shadow:inset 0 0 0 1px rgba(245,158,11,.45)!important}
+html:root:has(.qx) body .qx .qp-item .ic{border-radius:8px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-side-foot{background:var(--dk-panel2)!important;border:1px solid var(--dk-edge)!important;border-radius:12px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip,.qws-box,.qws-jump,.qp-card,.qwc-card){background:var(--dk-panel)!important;background-image:none!important;border:1px solid var(--dk-edge)!important;border-radius:14px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip):is(:before,:after){display:none!important}
+html:root:has(.qx) body .qx .qh-act:hover,html:root:has(.qx) body .qx .qwc-card:hover{background:var(--dk-panel2)!important;border-color:rgba(245,158,11,.45)!important}
+html:root:has(.qx) body .qx :is(.qnl-hero,.qws-hero){border:1px solid var(--dk-edge)!important;box-shadow:none!important;border-radius:16px!important}
+html:root:has(.qx) body .qx .qnl-hero .qnl-h1,html:root:has(.qx) body .qx .qws .qwc-h1,html:root:has(.qx) body .qx .qws .qwc-h1 span{background:none!important;-webkit-background-clip:initial!important;background-clip:initial!important;color:#f3b56a!important;-webkit-text-fill-color:#f3b56a!important}
+html:root:has(.qx) body .qx .qh-sec,html:root:has(.qx) body .qx .qh-kpi .n{background:none!important;color:var(--dk-text)!important;-webkit-text-fill-color:var(--dk-text)!important}
+html:root:has(.qx) body .qx :is(.qp-btn.pri,.qnl-btn.pri,.qws .qwc-go,.qws-help-btn),html:root:has(.qx) body .qx .qp-side-foot :is(button,a){background:var(--dk-btn)!important;background-image:none!important;border:1px solid var(--dk-btn)!important;color:var(--dk-btnt)!important;-webkit-text-fill-color:var(--dk-btnt)!important;border-radius:10px!important;box-shadow:none!important;font-weight:600!important}
+html:root:has(.qx) body .qx :is(.qp-btn.pri,.qnl-btn.pri,.qws .qwc-go,.qws-help-btn) *,html:root:has(.qx) body .qx .qp-side-foot :is(button,a) *{color:var(--dk-btnt)!important;-webkit-text-fill-color:var(--dk-btnt)!important}
+html:root:has(.qx) body .qx .qp-strip button{border-radius:10px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-strip button.on{background:rgba(255,255,255,.07)!important;border-color:var(--dk-acc)!important;color:#fff!important}
+html:root:has(.qx) body .qx :is(input,select,textarea){background:#121316!important;border-color:var(--dk-edge)!important}
+html:root:has(.qx) body .qx .qe-launch{background:var(--dk-panel)!important;border:1px solid rgba(245,158,11,.45)!important;box-shadow:0 16px 30px -18px rgba(0,0,0,.9)!important}
+</style>
+<style id="q-look-gold" media="not all">
+/* Quantora Gold look (2026-11-15): charcoal panels, thin edges, one accent colour. */
+:root{--dk-bg:#0f0f10;--dk-panel:#17171a;--dk-panel2:#1d1d20;--dk-edge:rgba(212,167,44,.18);--dk-text:#e8ebef;--dk-acc:#d4a72c;--dk-btn:#e0b23a;--dk-btnt:#1a1403}
+html:root:has(.qx){background:#0f0f10!important}
+html:root:has(.qx) body{font-family:Inter,system-ui,sans-serif;background:radial-gradient(1400px 420px at 50% 108%,rgba(212,167,44,.14),transparent 70%),linear-gradient(180deg,#131314,#0f0f10)!important;background-attachment:fixed!important}
+html:root:has(.qx) body .qx{background:transparent!important;font-family:Inter,system-ui,sans-serif}
+html:root:has(.qx) body .qx *{text-shadow:none!important}
+html:root:has(.qx) body .qx :is(h1,h2,h3,h4,button,input,b,span,div,p,a,td,th,small){font-family:Inter,system-ui,sans-serif!important}
+html:root:has(.qx) body .qx:before{display:none!important}
+html:root:has(.qx) body .qx nav.qtr-topnav{background:rgba(15,15,16,.92)!important;border-bottom:1px solid var(--dk-edge)!important;box-shadow:none!important;backdrop-filter:blur(14px)}
+html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a){background:var(--dk-panel)!important;border:1px solid var(--dk-edge)!important;border-radius:10px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-side{background:var(--dk-panel)!important;border:1px solid var(--dk-edge)!important;border-radius:16px!important;box-shadow:0 18px 40px -28px rgba(0,0,0,.9)!important}
+html:root:has(.qx) body .qx .qp-ws button{background:var(--dk-panel2)!important;border:1px solid var(--dk-edge)!important;border-radius:10px!important;box-shadow:none!important;color:var(--dk-text)!important}
+html:root:has(.qx) body .qx .qp-ws button.on{background:rgba(212,167,44,.14)!important;border-color:var(--dk-acc)!important;color:#fff!important}
+html:root:has(.qx) body .qx .qp-item{border-radius:10px!important;box-shadow:none!important;color:#c9ced6!important}
+html:root:has(.qx) body .qx .qp-item:hover{background:rgba(255,255,255,.05)!important}
+html:root:has(.qx) body .qx .qp-item.on,html:root:has(.qx) body .qx .qp-item.on:hover{background:rgba(212,167,44,.14)!important;color:#fff!important;box-shadow:inset 0 0 0 1px rgba(212,167,44,.6)!important}
+html:root:has(.qx) body .qx .qp-item .ic{border-radius:8px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-side-foot{background:var(--dk-panel2)!important;border:1px solid var(--dk-edge)!important;border-radius:12px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip,.qws-box,.qws-jump,.qp-card,.qwc-card){background:var(--dk-panel)!important;background-image:none!important;border:1px solid var(--dk-edge)!important;border-radius:14px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi,.qh-card,.qh-strip):is(:before,:after){display:none!important}
+html:root:has(.qx) body .qx .qh-act:hover,html:root:has(.qx) body .qx .qwc-card:hover{background:var(--dk-panel2)!important;border-color:rgba(212,167,44,.6)!important}
+html:root:has(.qx) body .qx :is(.qnl-hero,.qws-hero){border:1px solid var(--dk-edge)!important;box-shadow:none!important;border-radius:16px!important}
+html:root:has(.qx) body .qx .qnl-hero .qnl-h1,html:root:has(.qx) body .qx .qws .qwc-h1,html:root:has(.qx) body .qx .qws .qwc-h1 span{background:none!important;-webkit-background-clip:initial!important;background-clip:initial!important;color:#e9c768!important;-webkit-text-fill-color:#e9c768!important}
+html:root:has(.qx) body .qx .qh-sec,html:root:has(.qx) body .qx .qh-kpi .n{background:none!important;color:var(--dk-text)!important;-webkit-text-fill-color:var(--dk-text)!important}
+html:root:has(.qx) body .qx :is(.qp-btn.pri,.qnl-btn.pri,.qws .qwc-go,.qws-help-btn),html:root:has(.qx) body .qx .qp-side-foot :is(button,a){background:var(--dk-btn)!important;background-image:none!important;border:1px solid var(--dk-btn)!important;color:var(--dk-btnt)!important;-webkit-text-fill-color:var(--dk-btnt)!important;border-radius:10px!important;box-shadow:none!important;font-weight:600!important}
+html:root:has(.qx) body .qx :is(.qp-btn.pri,.qnl-btn.pri,.qws .qwc-go,.qws-help-btn) *,html:root:has(.qx) body .qx .qp-side-foot :is(button,a) *{color:var(--dk-btnt)!important;-webkit-text-fill-color:var(--dk-btnt)!important}
+html:root:has(.qx) body .qx .qp-strip button{border-radius:10px!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qp-strip button.on{background:rgba(212,167,44,.14)!important;border-color:var(--dk-acc)!important;color:#fff!important}
+html:root:has(.qx) body .qx :is(input,select,textarea){background:#121214!important;border-color:var(--dk-edge)!important}
+html:root:has(.qx) body .qx .qe-launch{background:var(--dk-panel)!important;border:1px solid rgba(212,167,44,.6)!important;box-shadow:0 16px 30px -18px rgba(0,0,0,.9)!important}
+</style>
 <style id="q-look-ui" data-ql="0">
 /* Look chooser + the Appearance setting (2026-11-13; four looks). This sheet is never recoloured: it carries both looks itself. */
 .qlk-veil{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:16px;background:rgba(2,6,23,.64);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);overflow:auto}
-.qlk-pop{width:min(640px,100%);background:#0e1538;color:#eef3fb;border:1px solid #3a4290;border-radius:20px;padding:24px;box-shadow:0 30px 70px -12px rgba(0,0,0,.65)}
+.qlk-pop{width:min(980px,100%);background:#0e1538;color:#eef3fb;border:1px solid #3a4290;border-radius:20px;padding:24px;box-shadow:0 30px 70px -12px rgba(0,0,0,.65)}
 .qlk-h{display:block;font-size:21px;font-weight:700;letter-spacing:-.01em;color:#fff}
 html:root .qx .qlk-sub{margin:6px 0 18px;font-size:13.5px;line-height:1.5;color:#a9b8cc}
-.qlk-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:640px}
+.qlk-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;max-width:980px}
+@media (max-width:820px){.qlk-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 html:root .qx .qlk-opt{display:block;width:100%;height:auto;text-align:left;padding:10px 10px 12px;border-radius:16px;cursor:pointer;background:rgba(255,255,255,.04);border:1.5px solid #272f6e;color:#eef3fb;box-shadow:none;transition:border-color .15s,box-shadow .15s}
 html:root .qx .qlk-opt:hover{border-color:#5b64c9}
 html:root .qx .qlk-opt.on{border-color:#8b7bff;box-shadow:0 0 0 3px rgba(139,123,255,.28)}
@@ -43564,6 +43702,34 @@ html:is([data-qlook="glass"],[data-qlook="warm"]):root .qx .qlk-tick{background:
 .qlk-mock-warm .p{background:#1d1713}
 .qlk-mock-warm :is(.a,.b,.c,.d){background:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.9)}
 .qlk-mock-warm .c{border-top:3px solid #d9532b}
+.qlk-mock-emerald{background:#0d1311}
+.qlk-mock-emerald :is(.r,.a,.b,.c,.d){background:#141b19;border:1px solid rgba(255,255,255,.08)}
+.qlk-mock-emerald .r:before{background:#34d399;opacity:.85}
+.qlk-mock-emerald .r:after{background:rgba(255,255,255,.22);box-shadow:0 11px 0 rgba(255,255,255,.22),0 22px 0 rgba(255,255,255,.22)}
+.qlk-mock-emerald .h{background:#7ee2b4}
+.qlk-mock-emerald .p{background:#3ecf8e;border-radius:5px}
+.qlk-mock-emerald .d{background:linear-gradient(180deg,#141b19,#141b19) padding-box,#141b19;box-shadow:inset 0 -14px 18px -8px #34d399}
+.qlk-mock-ocean{background:#0a1326}
+.qlk-mock-ocean :is(.r,.a,.b,.c,.d){background:#0f1b33;border:1px solid rgba(96,150,255,.18)}
+.qlk-mock-ocean .r:before{background:#3b82f6;opacity:.85}
+.qlk-mock-ocean .r:after{background:rgba(255,255,255,.22);box-shadow:0 11px 0 rgba(255,255,255,.22),0 22px 0 rgba(255,255,255,.22)}
+.qlk-mock-ocean .h{background:#e7eefc}
+.qlk-mock-ocean .p{background:#2f6bff;border-radius:5px}
+.qlk-mock-ocean .d{background:linear-gradient(180deg,#0f1b33,#0f1b33) padding-box,#0f1b33;box-shadow:inset 0 -14px 18px -8px #3b82f6}
+.qlk-mock-amber{background:#111214}
+.qlk-mock-amber :is(.r,.a,.b,.c,.d){background:#18191c;border:1px solid rgba(255,255,255,.08)}
+.qlk-mock-amber .r:before{background:#f59e0b;opacity:.85}
+.qlk-mock-amber .r:after{background:rgba(255,255,255,.22);box-shadow:0 11px 0 rgba(255,255,255,.22),0 22px 0 rgba(255,255,255,.22)}
+.qlk-mock-amber .h{background:#f3b56a}
+.qlk-mock-amber .p{background:#f08a24;border-radius:5px}
+.qlk-mock-amber .d{background:linear-gradient(180deg,#18191c,#18191c) padding-box,#18191c;box-shadow:inset 0 -14px 18px -8px #f59e0b}
+.qlk-mock-gold{background:#0f0f10}
+.qlk-mock-gold :is(.r,.a,.b,.c,.d){background:#17171a;border:1px solid rgba(212,167,44,.35)}
+.qlk-mock-gold .r:before{background:#d4a72c;opacity:.85}
+.qlk-mock-gold .r:after{background:rgba(255,255,255,.22);box-shadow:0 11px 0 rgba(255,255,255,.22),0 22px 0 rgba(255,255,255,.22)}
+.qlk-mock-gold .h{background:#e9c768}
+.qlk-mock-gold .p{background:#e0b23a;border-radius:5px}
+.qlk-mock-gold .d{background:linear-gradient(180deg,#17171a,#17171a) padding-box,#17171a;box-shadow:inset 0 -14px 18px -8px #d4a72c}
 @media (max-width:520px){.qlk-pop{padding:18px 14px}.qlk-grid{gap:10px}html:root .qx .qlk-opt{padding:8px 8px 10px}html:root .qx .qlk-opt small{font-size:12px}}
 @media (prefers-reduced-motion:reduce){html:root .qx .qlk-opt{transition:none}}
 </style>
