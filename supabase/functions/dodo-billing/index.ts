@@ -124,6 +124,14 @@ Deno.serve(async (req) => {
     const companyId = prof.company_id as string;
     const { data: company } = await admin.from("companies").select("*").eq("id", companyId).maybeSingle();
 
+    // One payment action per company every 20 seconds (15 Nov 2026): a double click, a second tab or a
+    // script can never start two checkouts or change a plan twice. Works once the
+    // security_2026_11_15 migration is in; before that the check is skipped.
+    if (["subscribe_plan", "subscribe_storage", "buy_mt_pack", "test_payment", "cancel"].includes(action)) {
+      const { data: free, error: lockErr } = await admin.rpc("q_billing_lock", { p_company: companyId, p_action: action, p_seconds: 20 });
+      if (!lockErr && free === false) return json({ error: "A payment request is already being processed. Please wait a few seconds." }, 429);
+    }
+
     if (action === "config") {
       const { data: plans } = await admin.from("plans").select("id, name, price_usd, is_trial")
         .order("price_usd", { ascending: true, nullsFirst: true });

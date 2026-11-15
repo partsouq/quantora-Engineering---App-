@@ -9,6 +9,20 @@ set -u
 SHA="$1"; SITE="$2"; FUNCS="${3:-}"
 fail=0
 
+# Since 16 Nov 2026 the site may be published by the "Publish website" workflow (Pages source = GitHub Actions).
+if [ "$SITE" = 1 ] && [ "$(gh api "repos/$GH_REPO/pages" --jq '.build_type' 2>/dev/null)" = "workflow" ]; then
+  echo "Publishing the website for $SHA"
+  before=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  gh workflow run publish-site.yml --ref main || fail=1
+  id=""
+  for i in $(seq 1 30); do
+    id=$(gh run list --workflow publish-site.yml --limit 5 --json databaseId,createdAt --jq "[.[]|select(.createdAt >= \"$before\")][0].databaseId // empty")
+    [ -n "$id" ] && break; sleep 5
+  done
+  if [ -z "$id" ]; then echo "publish did not start"; fail=1
+  else gh run watch "$id" --exit-status >/dev/null && echo "website published" || { echo "publish failed"; fail=1; }; fi
+  SITE=0
+fi
 if [ "$SITE" = 1 ]; then
   echo "Waiting for the website build of $SHA"
   asked=0

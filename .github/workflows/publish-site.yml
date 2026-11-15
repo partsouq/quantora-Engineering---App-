@@ -1,0 +1,57 @@
+# Publish the website (16 Nov 2026, owner approved).
+# Visitors get a compiled, minified copy of the site (tools/build-site.js); the readable working files
+# stay in this private repository. Needs: Settings -> Pages -> Build and deployment -> Source:
+# "GitHub Actions". Until that switch is made this workflow only builds and checks, and the old
+# branch publishing keeps the site online.
+name: Publish website
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: publish-site
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install build tools
+        run: npm install --no-save --no-package-lock @babel/standalone@7.29.7 terser@5.36.0
+      - name: Build the published site
+        run: node tools/build-site.js _site
+      - name: Check the build
+        run: |
+          grep -q 'id="app-compiled"' _site/index.html
+          ! grep -q 'id="app-source"' _site/index.html
+          grep -q 'CNAME' <(ls _site)
+      - name: Is Pages set to GitHub Actions?
+        id: mode
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          t=$(gh api "repos/${{ github.repository }}/pages" --jq '.build_type' 2>/dev/null || echo unknown)
+          echo "Pages build type: $t"; echo "mode=$t" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.mode.outputs.mode == 'workflow'
+        with:
+          path: _site
+  deploy:
+    needs: build
+    if: needs.build.outputs.mode == 'workflow'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

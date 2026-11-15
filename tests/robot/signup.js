@@ -51,7 +51,7 @@ async function robotApi() {
   if (!cfg) {
     const html = await (await fetch(BASE + "?robot=" + Date.now(), { cache: "no-store" })).text();
     cfg = { url: (html.match(/SUPABASE_URL = "([^"]+)"/) || [])[1], key: (html.match(/SUPABASE_ANON_KEY = "([^"]+)"/) || [])[1] };
-    build = (html.match(/QUANTORA_BUILD = "([^"]+)"/) || [])[1] || null;
+    build = (html.match(/QUANTORA_BUILD\s*=\s*"([^"]+)"/) || [])[1] || null;
   }
   if (!cfg.token) {
     const tok = await (await fetch(cfg.url + "/auth/v1/token?grant_type=password", { method: "POST",

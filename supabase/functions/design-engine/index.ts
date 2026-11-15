@@ -101,6 +101,9 @@ Deno.serve(async (req) => {
     const { data: ud, error: uErr } = await admin.auth.getUser(jwt);
     if (uErr || !ud?.user) return json({ error: "Not signed in." }, 401);
     const userId = ud.user.id;
+    // Speed limit (15 Nov 2026): 20 design requests a minute per user. Skipped until the migration is in.
+    const { data: rateOk, error: rateErr } = await admin.rpc("q_rate_ok", { p_key: `design:${userId}`, p_limit: 20 });
+    if (!rateErr && rateOk === false) return json({ error: "Too many requests at once. Please wait a minute and try again." }, 429);
 
     const body = await req.json().catch(() => ({}));
     const action = String(body.action ?? "generate_design");

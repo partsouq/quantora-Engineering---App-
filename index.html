@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <script>
 /* Phones and small tablets open the site in its desktop layout (2026-10-29), the same as ticking
@@ -36,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-15.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-16.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -6591,7 +6592,21 @@ function fmtLimit(n) {
 // the subscription (webhook, or "sync" when the customer comes back).
 // ---------------------------------------------------------------------------
 const PAY_FN_URL = `${SUPABASE_URL}/functions/v1/dodo-billing`;
+// One payment step at a time (15 Nov 2026): a second click while a checkout, plan change or cancel is
+// still on its way is ignored, so a double click can never start two payments. The server has the
+// same rule (one payment action per company every 20 seconds).
+const Q_PAY_ONCE = ["subscribe_plan", "subscribe_storage", "buy_mt_pack", "test_payment", "cancel"];
+let qPayBusy = false;
 async function callPay(action, payload) {
+  if (Q_PAY_ONCE.includes(action)) {
+    if (qPayBusy) throw new Error("Your payment request is already being processed. Please wait a moment.");
+    qPayBusy = true;
+    try { return await callPayOnce(action, payload); }
+    finally { setTimeout(() => { qPayBusy = false; }, 4000); }
+  }
+  return callPayOnce(action, payload);
+}
+async function callPayOnce(action, payload) {
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(PAY_FN_URL, {
     method: "POST",
@@ -40668,7 +40683,7 @@ function App() {
         </div>
         <div className="flex items-center gap-4">
           {/* Sits beside the bell rather than hard against the logo, which is
-              where Irfan asked for it. Rendered only when there is somewhere to
+              where the owner asked for it. Rendered only when there is somewhere to
               go: a permanently dead control teaches people to ignore it. */}
           {canGoBack && (
             <button onClick={goBack} title={`Back to ${backLabel}`} aria-label={`Back to ${backLabel}`}
@@ -40832,6 +40847,10 @@ function App() {
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 try { const popEl = document.createElement("div"); popEl.id = "q-pop-root"; document.body.appendChild(popEl); ReactDOM.createRoot(popEl).render(<QPopHost />); } catch (_) {}
+</script>
+<script id="q-frame-guard">
+// The platform never runs inside another site's frame (stops click-tricking). 15 Nov 2026.
+try { if (window.top !== window.self) { window.top.location.replace(window.self.location.href); } } catch (e) { document.documentElement.style.display = "none"; }
 </script>
 <script id="q-look-runtime">
 /* Look switch (2026-11-13). The customer app has four looks: "classic" (the default, unchanged), "glass",
