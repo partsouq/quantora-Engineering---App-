@@ -40176,7 +40176,7 @@ function QLookChooser({ uid, hold }) {
     <div className="qlk-veil">
       <div className="qlk-pop" role="dialog" aria-modal="true" aria-label="Choose your look">
         <b className="qlk-h">Choose your look</b>
-        <p className="qlk-sub">Pick how Quantora looks for you. Your projects and data are the same in both, and you can change it any time in Settings.</p>
+        <p className="qlk-sub">Pick how Quantora looks for you. Your projects and data stay the same in every look, and you can change it any time in Settings.</p>
         <div className="qlk-grid">
           {Q_LOOKS.map(l => <QLookTile key={l.id} look={l} on={sel === l.id} onPick={setSel} />)}
         </div>
