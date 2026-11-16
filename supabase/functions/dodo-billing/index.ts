@@ -75,6 +75,19 @@ const safeReturn = (u: unknown) => {
   return APP_ORIGINS.some((o) => s.startsWith(o)) ? s : "https://www.quantoraengineering.com/?checkout=done";
 };
 
+// Admin sign-in code (16 Nov 2026): admin powers need this sign-in session confirmed with the
+// 6-digit code emailed to the admin (public.q_admin_session_ok). The session id is read from the
+// caller's token, which auth.getUser has already checked.
+async function qAdminVerified(db: any, authHeader: string, uid: string): Promise<boolean> {
+  try {
+    const part = String(authHeader || "").replace(/^Bearer\s+/i, "").split(".")[1] || "";
+    const claims = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/")));
+    const { data, error } = await db.rpc("q_admin_session_ok", { p_uid: uid, p_sid: claims.session_id || null });
+    return !error && data === true;
+  } catch (_) { return false; }
+}
+const ADMIN_OTP_NEEDED = { error: "Admin sign-in code needed. Open Admin to get your code by email.", otp_required: true };
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
@@ -90,6 +103,7 @@ Deno.serve(async (req) => {
     if (action === "readiness") {
       // owner, or an Admin Team member with Payments (2026-11-06); the $2 test payment stays owner-only
       const { data: isAdmin } = await admin.from("platform_admins").select("user_id").eq("user_id", user.id).maybeSingle();
+      if (!(await qAdminVerified(admin, jwt, user.id))) return json(ADMIN_OTP_NEEDED, 401);
       if (!isAdmin) {
         const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: user.id, p_section: "payments" });
         if (Number(lvl || 0) < 1) return json({ error: "Platform admin access only." }, 403);
@@ -166,6 +180,7 @@ Deno.serve(async (req) => {
     if (action === "test_payment") {
       const { data: isAdmin } = await admin.from("platform_admins").select("user_id").eq("user_id", user.id).maybeSingle();
       if (!isAdmin) return json({ error: "Platform admin access only." }, 403);
+      if (!(await qAdminVerified(admin, jwt, user.id))) return json(ADMIN_OTP_NEEDED, 401);
       const productId = await dodoProductFor(keys, "test:2", "Quantora payment test",
         "Admin test payment to check the payment flow. Refund it in Dodo after checking.", 2, true);
       const session = await dodo(keys, "/checkouts", {

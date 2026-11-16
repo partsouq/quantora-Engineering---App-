@@ -152,6 +152,19 @@ async function runReport(manual: boolean) {
   return { id: row?.id, period, summary: lines, down: down.map(d => d.fn) };
 }
 
+// Admin sign-in code (16 Nov 2026): admin powers need this sign-in session confirmed with the
+// 6-digit code emailed to the admin (public.q_admin_session_ok). The session id is read from the
+// caller's token, which auth.getUser has already checked.
+async function qAdminVerified(db: any, authHeader: string, uid: string): Promise<boolean> {
+  try {
+    const part = String(authHeader || "").replace(/^Bearer\s+/i, "").split(".")[1] || "";
+    const claims = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/")));
+    const { data, error } = await db.rpc("q_admin_session_ok", { p_uid: uid, p_sid: claims.session_id || null });
+    return !error && data === true;
+  } catch (_) { return false; }
+}
+const ADMIN_OTP_NEEDED = { error: "Admin sign-in code needed. Open Admin to get your code by email.", otp_required: true };
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
@@ -165,6 +178,7 @@ Deno.serve(async (req) => {
       if (!u?.user) return json({ error: "Unauthorized" }, 401);
       const { data: pa } = await admin.from("platform_admins").select("user_id").eq("user_id", u.user.id).maybeSingle();
       if (!pa) return json({ error: "Admins only" }, 403);
+      if (!(await qAdminVerified(admin, token, u.user.id))) return json(ADMIN_OTP_NEEDED, 401);
     }
     return json({ ok: true, ...(await runReport(!viaCron)) });
   } catch (e) {

@@ -125,9 +125,11 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden
       if (action === "reports_export" && !has("reports", "exec", "revenue", "ai")) ctx.trim = (o: any) => ({ payments: o.payments });
     }
 
+    const otpOk = await qAdminVerified(admin, authHeader, userId);
     if (action === "is_admin") {
-      return jsonResponse({ is_admin: true });
+      return jsonResponse({ is_admin: true, otp_ok: otpOk });
     }
+    if (!otpOk) return jsonResponse(ADMIN_OTP_NEEDED, 401);
 
     // Opens the locked admin screens (16 Nov 2026, owner approved). The page carries the admin code
     // locked with a fresh key each build; that key is itself locked with this server's public key
@@ -1121,6 +1123,19 @@ function scrubOwner(o: any, hidden: Set<string>): any {
   }
   return o;
 }
+
+// Admin sign-in code (16 Nov 2026): admin powers need this sign-in session confirmed with the
+// 6-digit code emailed to the admin (public.q_admin_session_ok). The session id is read from the
+// caller's token, which auth.getUser has already checked.
+async function qAdminVerified(db: any, authHeader: string, uid: string): Promise<boolean> {
+  try {
+    const part = String(authHeader || "").replace(/^Bearer\s+/i, "").split(".")[1] || "";
+    const claims = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/")));
+    const { data, error } = await db.rpc("q_admin_session_ok", { p_uid: uid, p_sid: claims.session_id || null });
+    return !error && data === true;
+  } catch (_) { return false; }
+}
+const ADMIN_OTP_NEEDED = { error: "Admin sign-in code needed. Open Admin to get your code by email.", otp_required: true };
 
 Deno.serve(async (req: Request) => {
   const ctx: { trim?: (o: any) => any; hidden?: Set<string> } = {};

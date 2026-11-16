@@ -64,6 +64,19 @@ const GRANT_REASONS: Record<string, { label: string; help: string }> = {
   billing_fix: { label: "Fixing a billing problem", help: "Payment succeeded through Razorpay but the webhook never arrived." },
 };
 
+// Admin sign-in code (16 Nov 2026): admin powers need this sign-in session confirmed with the
+// 6-digit code emailed to the admin (public.q_admin_session_ok). The session id is read from the
+// caller's token, which auth.getUser has already checked.
+async function qAdminVerified(db: any, authHeader: string, uid: string): Promise<boolean> {
+  try {
+    const part = String(authHeader || "").replace(/^Bearer\s+/i, "").split(".")[1] || "";
+    const claims = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/")));
+    const { data, error } = await db.rpc("q_admin_session_ok", { p_uid: uid, p_sid: claims.session_id || null });
+    return !error && data === true;
+  } catch (_) { return false; }
+}
+const ADMIN_OTP_NEEDED = { error: "Admin sign-in code needed. Open Admin to get your code by email.", otp_required: true };
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -86,6 +99,7 @@ Deno.serve(async (req: Request) => {
 
     // owner, or an Admin Team member with Customers (view to list, act to change a plan) -- 2026-11-06
     const { data: adminRow } = await admin.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
+    if (!(await qAdminVerified(admin, authHeader, userId))) return jsonResponse(ADMIN_OTP_NEEDED, 401);
     if (!adminRow) {
       const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: userId, p_section: "customers" });
       const need = action === "list_plans" ? 1 : 2;

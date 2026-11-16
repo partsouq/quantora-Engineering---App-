@@ -2810,6 +2810,19 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "content-type": "application/json" } });
 }
 
+// Admin sign-in code (16 Nov 2026): admin powers need this sign-in session confirmed with the
+// 6-digit code emailed to the admin (public.q_admin_session_ok). The session id is read from the
+// caller's token, which auth.getUser has already checked.
+async function qAdminVerified(db: any, authHeader: string, uid: string): Promise<boolean> {
+  try {
+    const part = String(authHeader || "").replace(/^Bearer\s+/i, "").split(".")[1] || "";
+    const claims = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/")));
+    const { data, error } = await db.rpc("q_admin_session_ok", { p_uid: uid, p_sid: claims.session_id || null });
+    return !error && data === true;
+  } catch (_) { return false; }
+}
+const ADMIN_OTP_NEEDED = { error: "Admin sign-in code needed. Open Admin to get your code by email.", otp_required: true };
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -2876,6 +2889,7 @@ Deno.serve(async (req: Request) => {
         const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: userId, p_section: "execdash" });
         if (Number(lvl || 0) >= 2) adminRow = { user_id: userId, staff: true } as any;
       }
+      if (adminRow && !isDoctor && !(await qAdminVerified(admin, authHeader, userId))) return jsonResponse(ADMIN_OTP_NEEDED, 401);
       if (!adminRow) {
         return jsonResponse({ error: "Forbidden: platform admin access only." }, 403);
       }

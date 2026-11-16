@@ -144,10 +144,11 @@ function zohoReason(e: unknown) {
   if (isNetErr(e)) return "Zoho mail server did not answer (ports 465 and 587). " + m.slice(0, 120);
   return "Zoho: " + m.slice(0, 200);
 }
-async function viaZoho(to: string, subject: string, html: string) {
+async function viaZoho(to: string, subject: string, html: string, opts: { noUnsub?: boolean } = {}) {
   const user = Deno.env.get("ZOHO_SMTP_USER") || CONTACT, pass = Deno.env.get("ZOHO_SMTP_PASS");
   if (!pass) throw new Error("Zoho is not connected yet (add the ZOHO_SMTP_PASS secret in Supabase).");
-  const mail = { from: `Quantora Engineering <${user}>`, to, replyTo: CONTACT, subject, html, headers: { "List-Unsubscribe": `<${await unsubUrl(to)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } };
+  const mail: any = { from: `Quantora Engineering <${user}>`, to, replyTo: CONTACT, subject, html };
+  if (!opts.noUnsub) mail.headers = { "List-Unsubscribe": `<${await unsubUrl(to)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" };
   zoho ||= zohoTransport(zohoPort, user, pass);
   try { await zoho.sendMail(mail); }
   catch (e) {
@@ -233,6 +234,77 @@ async function drainOne() {
   return { sent: 0, reason: "nothing to send" };
 }
 
+// ----- admin sign-in code (approved 16 Nov 2026) -----
+// The owner and Admin Team confirm each sign-in session with a 6-digit code sent to their own email
+// from info@. Codes are kept only as a hash, last 10 minutes, and 5 wrong tries lock for 15 minutes
+// (public.q_admin_otp_store / q_admin_otp_check). A confirmed session works for 12 hours.
+function qJwtSession(authHeader: string): string | null {
+  try {
+    const part = String(authHeader || "").replace(/^Bearer\s+/i, "").split(".")[1] || "";
+    return JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/"))).session_id || null;
+  } catch (_) { return null; }
+}
+async function qOtpHash(uid: string, code: string) {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${uid}:${code}`));
+  return Array.from(new Uint8Array(d)).map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+function qMaskEmail(e: string) {
+  const [u, d] = String(e || "").split("@");
+  return u && d ? `${u.slice(0, 2)}${"*".repeat(Math.max(1, u.length - 2))}@${d}` : "your email";
+}
+async function qIsAdminOrTeam(uid: string) {
+  const { data: a } = await admin.from("platform_admins").select("user_id").eq("user_id", uid).maybeSingle();
+  if (a) return true;
+  const { data: s } = await admin.from("platform_staff").select("perms, status").eq("user_id", uid).maybeSingle();
+  return !!(s && s.status === "active" && s.perms && Object.keys(s.perms).length);
+}
+async function adminOtp(act: string, user: any, auth: string, b: any, req: Request) {
+  if (!(await qIsAdminOrTeam(user.id))) return json({ error: "Admin access only." }, 403);
+  const sid = qJwtSession(auth);
+  if (act === "admin_otp_status") {
+    const { data } = await admin.rpc("q_admin_session_ok", { p_uid: user.id, p_sid: sid });
+    return json({ ok: data === true });
+  }
+  if (act === "admin_otp_send") {
+    const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, "0");
+    const { data: r, error } = await admin.rpc("q_admin_otp_store", { p_uid: user.id, p_hash: await qOtpHash(user.id, code) });
+    if (error) return json({ error: "Could not create a code. Please try again." }, 500);
+    if (r === "wait") return json({ error: "A code was just sent. Please wait a minute before asking for another." }, 429);
+    if (r === "too_many") return json({ error: "Too many codes this hour. Please try again later." }, 429);
+    if (r === "locked") return json({ error: "Too many wrong codes. Please wait 15 minutes and try again." }, 429);
+    const when = new Date().toLocaleString("en-GB", { timeZone: "Asia/Dubai", dateStyle: "medium", timeStyle: "short" });
+    const html = `<!doctype html><html><body style="margin:0;background:#eef1f7;font-family:Segoe UI,Arial,sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:28px 10px"><tr><td align="center">
+<table role="presentation" width="460" cellpadding="0" cellspacing="0" style="max-width:460px;width:100%;background:#fff;border-radius:14px">
+<tr><td style="padding:28px 30px">
+<div style="font-size:13px;color:#64748b;margin-bottom:10px">Quantora Engineering · Admin</div>
+<h1 style="margin:0 0 14px;font-size:22px;color:#0f172a">Your admin sign-in code</h1>
+<div style="font-size:34px;font-weight:800;letter-spacing:8px;color:#1e1b4b;background:#f1f3ff;border-radius:10px;padding:14px 0;text-align:center">${code}</div>
+<p style="margin:16px 0 6px;font-size:14px;line-height:1.6;color:#334155">Enter this code to open Admin. It works once and expires in 10 minutes.</p>
+<p style="margin:0;font-size:13px;line-height:1.6;color:#64748b">Requested ${esc(when)} (Dubai time). If this wasn't you, someone has your password: change it now and don't share this code.</p>
+</td></tr></table></td></tr></table></body></html>`;
+    try { await viaZoho(user.email, `${code} is your Quantora admin code`, html, { noUnsub: true }); }
+    catch (e) { return json({ error: "The code email could not be sent: " + String((e as Error)?.message || e).slice(0, 160) }, 502); }
+    return json({ sent: true, to: qMaskEmail(user.email) });
+  }
+  if (act === "admin_otp_verify") {
+    const code = String(b?.code || "").replace(/\D/g, "");
+    if (code.length !== 6) return json({ error: "Enter the 6-digit code from the email." }, 400);
+    const { data: r, error } = await admin.rpc("q_admin_otp_check", { p_uid: user.id, p_hash: await qOtpHash(user.id, code), p_sid: sid, p_ua: req.headers.get("user-agent") || "" });
+    if (error) return json({ error: "Could not check the code. Please try again." }, 500);
+    const msg: Record<string, string> = {
+      wrong: "That code is not right. Please check the email and try again.",
+      locked: "Too many wrong codes. Admin is locked for 15 minutes.",
+      expired: "This code has expired. Ask for a new one.",
+      none: "Ask for a code first.",
+      no_session: "Please sign out and sign in again, then ask for a code.",
+    };
+    if (r !== "ok") return json({ error: msg[r] || "The code could not be checked." }, 400);
+    return json({ ok: true });
+  }
+  return json({ error: "Unknown action." }, 400);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
@@ -246,11 +318,14 @@ Deno.serve(async (req) => {
     const auth = req.headers.get("Authorization") || "";
     const { data: { user } } = await admin.auth.getUser(auth.replace(/^Bearer\s+/i, ""));
     if (!user) return json({ error: "Please sign in." }, 401);
-    const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: user.id, p_section: "email" });
-    if ((lvl || 0) < 1) return json({ error: "No access to the Email Center." }, 403);
-    const asUser = createClient(URL_, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } }, auth: { persistSession: false } });
     const b = await req.json().catch(() => ({}));
     const act = String(b.action || "");
+    if (act.startsWith("admin_otp_")) return await adminOtp(act, user, auth, b, req);
+    const { data: lvl } = await admin.rpc("q_staff_level_for", { p_user: user.id, p_section: "email" });
+    if ((lvl || 0) < 1) return json({ error: "No access to the Email Center." }, 403);
+    { const { data: ok } = await admin.rpc("q_admin_session_ok", { p_uid: user.id, p_sid: qJwtSession(auth) });
+      if (ok !== true) return json({ error: "Admin sign-in code needed. Open Admin to get your code by email.", otp_required: true }, 401); }
+    const asUser = createClient(URL_, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } }, auth: { persistSession: false } });
     const mustAct = () => { if ((lvl || 0) < 2) throw new Error("You can view the Email Center but not send."); };
 
     if (act === "status") {
