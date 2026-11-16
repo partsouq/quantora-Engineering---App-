@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-16.1"; try { console.log("Quantora build " + window.QUANTORA_BUILD); } catch (e) {}</script>
+<script>window.QUANTORA_BUILD = "2026-11-16.2";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -40315,7 +40315,7 @@ function App() {
     if (!session) { setIsPlatformAdmin(false); return; }
     // the draftsman studio shows its in-browser Design / Drawings tabs to platform admins only (2026-10-26)
     const flag = (v) => { window.__qPlatformAdmin = v; try { window.dispatchEvent(new Event("q-admin")); } catch (_) {} };
-    callAdminAnalytics("is_admin", {}).then(() => { setIsPlatformAdmin(true); setStaffPerms(null); flag(true); }).catch(() => {
+    callAdminAnalytics("is_admin", {}).then((r) => { if (r && r.is_admin === false) throw new Error("not admin"); setIsPlatformAdmin(true); setStaffPerms(null); flag(true); }).catch(() => {
       setIsPlatformAdmin(false); flag(false);
       Promise.resolve(sb.rpc("q_staff_me")).then(({ data }) => {
         const p = data && data.perms && Object.keys(data.perms).length ? data.perms : null;

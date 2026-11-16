@@ -50,7 +50,7 @@ async function step(name, fn) {
 async function robotApi() {
   if (!cfg) {
     const html = await (await fetch(BASE + "?robot=" + Date.now(), { cache: "no-store" })).text();
-    cfg = { url: (html.match(/SUPABASE_URL = "([^"]+)"/) || [])[1], key: (html.match(/SUPABASE_ANON_KEY = "([^"]+)"/) || [])[1] };
+    cfg = { url: (html.match(/SUPABASE_URL\s*=\s*"([^"]+)"/) || [])[1], key: (html.match(/SUPABASE_ANON_KEY\s*=\s*"([^"]+)"/) || [])[1] };
     build = (html.match(/QUANTORA_BUILD\s*=\s*"([^"]+)"/) || [])[1] || null;
   }
   if (!cfg.token) {
