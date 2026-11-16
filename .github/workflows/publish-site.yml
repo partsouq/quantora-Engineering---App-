@@ -33,6 +33,9 @@ jobs:
         run: |
           grep -q 'id="app-compiled"' _site/index.html
           ! grep -q 'id="app-source"' _site/index.html
+          grep -q 'id="q-adm"' _site/index.html
+          ! grep -q 'Platform Admin — Cost' _site/index.html
+          ! grep -q 'id="workspaces"' _site/index.html
           grep -q 'CNAME' <(ls _site)
       - name: Is Pages set to GitHub Actions?
         id: mode

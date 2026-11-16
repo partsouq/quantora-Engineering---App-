@@ -26,13 +26,40 @@ async function tiny(js) {
   return r.code;
 }
 
+// The public home page keeps only the headline, the short video, Manual Take-off, disciplines, pricing
+// and the sign-up panel (16 Nov 2026, owner approved). The detailed product sections stay in the working
+// copy and are left out of what visitors receive; links to them go to sign-up instead.
+const PRIVATE_SECTIONS = ["model3d", "sample-boq", "draftsman", "compatibility", "workspaces", "capabilities", "coverage", "industries"];
+function trimLanding(s) {
+  for (const id of PRIVATE_SECTIONS) {
+    const re = new RegExp(`<section(?=[^>]*\\bid="${id}")[^>]*>[\\s\\S]*?</section>\\s*`);
+    if (!re.test(s)) throw new Error(`home section #${id} not found`);
+    s = s.replace(re, "");
+  }
+  const ids = PRIVATE_SECTIONS.join("|");
+  // menus (top bar and phone menu, up to the hero): the entries for left-out sections are removed
+  const a = s.indexOf('<nav class="topnav">'), b = s.indexOf('<header class="hero">');
+  if (a < 0 || b < a) throw new Error("home menus not found");
+  const menus = s.slice(a, b).replace(new RegExp(`<a href="#(?:${ids})">[\\s\\S]*?</a>\\s*`, "g"), "");
+  s = s.slice(0, a) + menus + s.slice(b);
+  // any other link to a left-out section opens sign-up
+  s = s.replace(new RegExp(`href="#(?:${ids})"`, "g"), 'href="?auth=signup"');
+  return s;
+}
+
 async function buildIndex(file) {
   let s = fs.readFileSync(file, "utf8");
+  s = trimLanding(s);
   const m = s.match(/<script type="text\/plain" id="app-source">([\s\S]*?)<\/script>/);
   if (!m) throw new Error("app-source not found");
   const compiled = Babel.transform(m[1], { presets: [["react", { runtime: "classic" }], "typescript"], filename: "app.tsx", comments: false, compact: false }).code;
-  const app = noScriptEnd(await tiny(compiled));
-  s = s.replace(m[0], () => `<script type="text/plain" id="app-compiled">${app}</script>`);
+  // admin screens: taken out of the public code and locked (tools/admin-split.js)
+  const { split, lock } = require("./admin-split");
+  const parts0 = split(compiled);
+  const app = noScriptEnd(await tiny(parts0.main));
+  const packed = lock(await tiny(parts0.pack), fs.readFileSync(path.join(__dirname, "admin-unlock-public-key.txt"), "utf8"));
+  console.log(`admin pack: ${parts0.names.length} parts locked`);
+  s = s.replace(m[0], () => `<script type="text/plain" id="app-compiled">${app}</script>\n<script type="application/json" id="q-adm">${JSON.stringify(packed)}</script>`);
   // the start-up reads the compiled app and never downloads Babel
   const boot = /var source = document\.getElementById\("app-source"\)\.textContent;\s*var output = Babel\.transform\(source, \{[\s\S]*?\}\)\.code;/;
   if (!boot.test(s)) throw new Error("boot block not found");

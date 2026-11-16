@@ -94,6 +94,7 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden
       const has = (...ks: string[]) => ks.some(k => lv(k) >= 1);
       const NEED: Record<string, () => boolean> = {
         list_companies: () => Object.keys(perms).length > 0,
+        admin_unlock: () => Object.keys(perms).length > 0,
         list_projects: () => lv("execdash") >= 1, list_drawings: () => lv("execdash") >= 1,
         grant_bonus_pages: () => lv("customers") >= 2, extend_trial: () => lv("customers") >= 2,
         list_quota_adjustments: () => has("customers"),
@@ -126,6 +127,26 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden
 
     if (action === "is_admin") {
       return jsonResponse({ is_admin: true });
+    }
+
+    // Opens the locked admin screens (16 Nov 2026, owner approved). The page carries the admin code
+    // locked with a fresh key each build; that key is itself locked with this server's public key
+    // (tools/admin-unlock-public-key.txt). Only the owner or an active Admin Team member gets here, and gets
+    // back the key that opens the admin screens. The private key is ADMIN_UNLOCK_KEY (function secret, or the
+    // service-only app_secrets table).
+    if (action === "admin_unlock") {
+      let raw = Deno.env.get("ADMIN_UNLOCK_KEY");
+      if (!raw) { const { data: sec } = await admin.from("app_secrets").select("value").eq("key", "ADMIN_UNLOCK_KEY").maybeSingle(); raw = sec?.value; }
+      if (!raw || typeof body?.wk !== "string") return jsonResponse({ error: "Admin unlock is not available." }, 400);
+      try {
+        const b64 = (t: string) => Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
+        const der = b64(raw.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""));
+        const key = await crypto.subtle.importKey("pkcs8", der, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["decrypt"]);
+        const k = new Uint8Array(await crypto.subtle.decrypt({ name: "RSA-OAEP" }, key, b64(body.wk)));
+        return jsonResponse({ k: btoa(String.fromCharCode(...k)) });
+      } catch (_) {
+        return jsonResponse({ error: "Admin unlock failed." }, 400);
+      }
     }
 
     // -----------------------------------------------------------------

@@ -60,7 +60,7 @@ end $$;
 
 -- 5. Fixed search path on the three functions that lacked one.
 alter function public.q_owner_email() set search_path = public;
-alter function public.q_is_robot_signup() set search_path = public;
+alter function public.q_is_robot_signup(text) set search_path = public;
 do $$ declare f regprocedure; begin
   for f in select oid::regprocedure from pg_proc where proname = 'q_email_welcome_stages' and pronamespace = 'public'::regnamespace
   loop execute format('alter function %s set search_path = public', f); end loop;
