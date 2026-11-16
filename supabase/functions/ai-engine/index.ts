@@ -2844,6 +2844,13 @@ Deno.serve(async (req: Request) => {
     const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
 
     const admin = createClient(supabaseUrl, serviceKey);
+    // Speed limit (15 Nov 2026): at most 30 engine requests a minute per user, so a bot or a stuck
+    // page cannot flood the server. The scheduler (run-doctor) is exempt. Skipped until the
+    // security_2026_11_15 migration is in.
+    if (!doctorBody) {
+      const { data: rateOk, error: rateErr } = await admin.rpc("q_rate_ok", { p_key: `ai:${userId}`, p_limit: 30 });
+      if (!rateErr && rateOk === false) return jsonResponse({ error: "Too many requests at once. Please wait a minute and try again." }, 429);
+    }
 
     const { data: secretRow, error: secretErr } = await admin
       .from("app_secrets")

@@ -4,7 +4,8 @@
 
 -- ---------- who the owner is ----------
 create or replace function public.q_owner_email() returns text
-language sql immutable as $$ select 'irfan.aidigital@gmail.com'::text $$;
+language sql immutable as $$ select '<owner email, set in the database>'::text $$;
+-- (15 Nov 2026) The real address lives only in the database; it is not kept in the code.
 
 create or replace function public.q_owner_uid() returns uuid
 language sql stable security definer set search_path = public as $$
