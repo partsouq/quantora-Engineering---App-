@@ -6,8 +6,8 @@ const BASE = process.env.ROBOT_URL || "https://quantoraengineering.com/";
   const [title, body] = process.argv.slice(2);
   try {
     const html = await (await fetch(BASE + "?notify=" + Date.now(), { cache: "no-store" })).text();
-    const url = (html.match(/SUPABASE_URL = "([^"]+)"/) || [])[1];
-    const key = (html.match(/SUPABASE_ANON_KEY = "([^"]+)"/) || [])[1];
+    const url = (html.match(/SUPABASE_URL\s*=\s*"([^"]+)"/) || [])[1];
+    const key = (html.match(/SUPABASE_ANON_KEY\s*=\s*"([^"]+)"/) || [])[1];
     const tok = await (await fetch(url + "/auth/v1/token?grant_type=password", {
       method: "POST", headers: { apikey: key, "content-type": "application/json" },
       body: JSON.stringify({ email: process.env.ROBOT_EMAIL, password: process.env.ROBOT_PASSWORD }),

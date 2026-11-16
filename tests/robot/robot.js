@@ -85,8 +85,8 @@ async function report(ok, failedStep, message) {
   if (process.env.ROBOT_NO_REPORT === "1") { log("REPORT (skipped)", ok, failedStep || "", message || ""); return; }
   try {
     const html = await (await fetch(BASE + "?robot=" + Date.now(), { cache: "no-store" })).text();
-    const url = (html.match(/SUPABASE_URL = "([^"]+)"/) || [])[1];
-    const key = (html.match(/SUPABASE_ANON_KEY = "([^"]+)"/) || [])[1];
+    const url = (html.match(/SUPABASE_URL\s*=\s*"([^"]+)"/) || [])[1];
+    const key = (html.match(/SUPABASE_ANON_KEY\s*=\s*"([^"]+)"/) || [])[1];
     if (!build) build = (html.match(/QUANTORA_BUILD\s*=\s*"([^"]+)"/) || [])[1] || null;
     const tok = await (await fetch(url + "/auth/v1/token?grant_type=password", {
       method: "POST", headers: { apikey: key, "content-type": "application/json" },
