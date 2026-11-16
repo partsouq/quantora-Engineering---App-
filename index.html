@@ -27262,7 +27262,7 @@ function PaymentResultModal({ state, onClose, onBilling }) {
           <div style={{ fontSize: 14, color: "var(--q-text-dim,#64748b)", marginTop: 6, lineHeight: 1.55 }}>
             {ok ? `Thank you. Your ${planName ? `${planName} plan` : what.replace(/, monthly$/, "")} is now active.`
               : bad ? "Your card was not charged and your plan has not changed. You can try again with another card."
-              : stage === "slow" ? "Dodo has your payment. Your plan switches on within a few minutes; we'll update this page by itself."
+              : stage === "slow" ? "Your payment has been received. Your plan switches on within a few minutes; we'll update this page by itself."
               : "This takes a few seconds. Please keep this page open."}
           </div>
         </div>
