@@ -285,7 +285,7 @@ async function adminOtp(act: string, user: any, auth: string, b: any, req: Reque
 </td></tr></table></td></tr></table></body></html>`;
     try { await viaZoho(user.email, `${code} is your Quantora admin code`, html, { noUnsub: true }); }
     catch (e) { return json({ error: "The code email could not be sent: " + String((e as Error)?.message || e).slice(0, 160) }, 502); }
-    return json({ sent: true, to: qMaskEmail(user.email) });
+    return json({ sent: true });   // the address is never shown on screen (owner's request, 16 Nov 2026)
   }
   if (act === "admin_otp_verify") {
     const code = String(b?.code || "").replace(/\D/g, "");
