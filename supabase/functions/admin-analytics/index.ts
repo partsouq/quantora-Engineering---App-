@@ -84,6 +84,9 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden
     // Owner (platform_admins) sees everything. An Admin Team member (platform_staff, 2026-11-06) gets
     // only the actions their sections need, and the parts of a shared response those sections show.
     const { data: adminRow } = await admin.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
+    // "Am I the owner?" gets a plain no for everyone else (16 Nov 2026): a 403 here showed a red
+    // "Failed to load resource" line in every customer's browser console.
+    if (!adminRow && action === "is_admin") return jsonResponse({ is_admin: false });
     if (!adminRow) {
       const { data: staff } = await admin.from("platform_staff").select("perms, status").eq("user_id", userId).maybeSingle();
       const perms: Record<string, string> = staff && staff.status === "active" ? (staff.perms || {}) : {};

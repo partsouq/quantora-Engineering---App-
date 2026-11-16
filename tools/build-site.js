@@ -50,6 +50,11 @@ async function buildIndex(file) {
   }
   s = s.replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/g, (_, a, b, c) => a + stripCssComments(b) + c);
   s = s.replace(/<!--(?!\[if)[\s\S]*?-->/g, "");
+  // Visitors see nothing in the browser console (16 Nov 2026, owner approved). Errors are still
+  // reported to the server by the app's own error reporter. Add ?debug=1 once to see the console
+  // again on that browser (stored as q_debug).
+  const quiet = '<script>(function(){try{var d=/[?&]debug=1/.test(location.search);if(d)localStorage.setItem("q_debug","1");if(d||localStorage.getItem("q_debug")==="1")return;}catch(e){}var n=function(){};["log","info","debug","warn","error","trace","table","dir","group","groupCollapsed","groupEnd","time","timeEnd","count","assert"].forEach(function(k){try{console[k]=n}catch(e){}});})();</script>';
+  s = s.replace(/<head>/i, (h) => h + quiet);
   fs.writeFileSync(file, s);
   return s.length;
 }
