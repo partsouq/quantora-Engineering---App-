@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-16.2";</script>
+<script>window.QUANTORA_BUILD = "2026-11-16.3";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -6661,6 +6661,102 @@ async function callAdminPlan(action, payload) {
 
 
 const ADMIN_FN_URL = `${SUPABASE_URL}/functions/v1/admin-analytics`;
+// Admin sign-in code (approved 16 Nov 2026). Admin (owner and Admin Team) opens only after this
+// sign-in session is confirmed with a 6-digit code emailed to the admin. The servers check the same
+// thing on every admin request, so this screen is only the way in, not the lock itself.
+async function callAdminOtp(action, payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error("Please sign in again.");
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/email-center`, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ action, ...(payload || {}) }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Please try again.");
+  return json;
+}
+function qAdmOtpMark() {
+  window.__qAdmOtpOk = true;
+  try { window.dispatchEvent(new Event("q-adm-otp-ok")); } catch (_) {}
+}
+function QAdminOtpGate({ children, onBack }) {
+  const [st, setSt] = useState(window.__qAdmOtpOk ? "ok" : "check");   // check | ask | sent | ok
+  const [to, setTo] = useState("");
+  const [code, setCode] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [wait, setWait] = useState(0);
+  useEffect(() => {
+    if (st !== "check") return;
+    let on = true;
+    callAdminOtp("admin_otp_status").then((r) => { if (!on) return; if (r && r.ok) { qAdmOtpMark(); setSt("ok"); } else setSt("ask"); })
+      .catch(() => { if (on) setSt("ask"); });
+    return () => { on = false; };
+  }, [st]);
+  useEffect(() => {
+    if (wait <= 0) return;
+    const t = setTimeout(() => setWait((w) => w - 1), 1000);
+    return () => clearTimeout(t);
+  }, [wait]);
+  if (st === "ok") return children;
+  const send = async () => {
+    setBusy(true); setErr("");
+    try { const r = await callAdminOtp("admin_otp_send"); setTo(r.to || "your email"); setSt("sent"); setCode(""); setWait(60); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+  const verify = async (e) => {
+    if (e) e.preventDefault();
+    const c = code.replace(/\D/g, "");
+    if (c.length !== 6) { setErr("Enter the 6-digit code from the email."); return; }
+    setBusy(true); setErr("");
+    try { await callAdminOtp("admin_otp_verify", { code: c }); qAdmOtpMark(); setSt("ok"); }
+    catch (e2) { setErr(e2.message); setBusy(false); }
+  };
+  const box = { maxWidth: 420, margin: "64px auto", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 16, padding: "28px 28px 24px", boxShadow: "0 10px 30px rgba(15,23,42,.08)" };
+  const btn = { width: "100%", padding: "12px 16px", borderRadius: 10, background: "#4f46e5", color: "#fff", fontWeight: 700, fontSize: 15, border: 0, cursor: busy ? "default" : "pointer", opacity: busy ? .7 : 1 };
+  return (
+    <div style={{ padding: "0 16px" }}>
+      <div style={box}>
+        <div style={{ fontSize: 13, color: "#64748b", marginBottom: 6 }}>Admin</div>
+        <h2 style={{ margin: "0 0 10px", fontSize: 22, fontWeight: 800, color: "#0f172a" }}>Confirm it's you</h2>
+        {st === "check" ? <p style={{ color: "#64748b", fontSize: 14 }}>Checking…</p> : st === "ask" ? (
+          <>
+            <p style={{ margin: "0 0 18px", fontSize: 14, lineHeight: 1.6, color: "#334155" }}>To open Admin, we'll email a 6-digit code to your admin email. You stay confirmed on this device for 12 hours.</p>
+            <button type="button" style={btn} disabled={busy} onClick={send}>{busy ? "Sending…" : "Email me a code"}</button>
+          </>
+        ) : (
+          <form onSubmit={verify}>
+            <p style={{ margin: "0 0 14px", fontSize: 14, lineHeight: 1.6, color: "#334155" }}>We sent a code to <b>{to}</b>. It expires in 10 minutes.</p>
+            <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" autoFocus
+              placeholder="6-digit code" aria-label="6-digit code"
+              style={{ width: "100%", boxSizing: "border-box", padding: "12px 14px", fontSize: 22, letterSpacing: 8, textAlign: "center", border: "1px solid #cbd5e1", borderRadius: 10, marginBottom: 12, color: "#0f172a", background: "#fff" }} />
+            <button type="submit" style={btn} disabled={busy}>{busy ? "Checking…" : "Confirm"}</button>
+            <div style={{ marginTop: 12, fontSize: 13, color: "#64748b", textAlign: "center" }}>
+              {wait > 0 ? `You can ask for a new code in ${wait} s` : <button type="button" onClick={send} disabled={busy} style={{ color: "#4f46e5", fontWeight: 600, background: "none", border: 0, cursor: "pointer" }}>Send a new code</button>}
+            </div>
+          </form>
+        )}
+        {err ? <p role="alert" style={{ margin: "14px 0 0", fontSize: 13, color: "#b91c1c" }}>{err}</p> : null}
+        {onBack ? <div style={{ marginTop: 18, textAlign: "center" }}><button type="button" onClick={onBack} style={{ fontSize: 13, color: "#64748b", background: "none", border: 0, cursor: "pointer" }}>Back to my dashboard</button></div> : null}
+      </div>
+    </div>
+  );
+}
+// Admin parts that run in the background (live chat watcher) wait quietly for the code too.
+function QAdminOtpOnly({ children }) {
+  const [ok, setOk] = useState(!!window.__qAdmOtpOk);
+  useEffect(() => {
+    if (ok) return;
+    const h = () => setOk(true);
+    window.addEventListener("q-adm-otp-ok", h);
+    callAdminOtp("admin_otp_status").then((r) => { if (r && r.ok) qAdmOtpMark(); }).catch(() => {});
+    return () => window.removeEventListener("q-adm-otp-ok", h);
+  }, [ok]);
+  return ok ? children : null;
+}
+
 async function callAdminAnalytics(action, payload) {
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(ADMIN_FN_URL, {
@@ -39795,7 +39891,7 @@ function PortalBody({ view, setView, session, isPlatformAdmin, staffPerms, onOpe
       onEdit={()=>setView({name:"edit", project:view.project})} onDeleted={()=>go("dashboard")} />;
   }
   if (view.name === "admin" && (isPlatformAdmin || staffPerms)) {
-    return <AdminPortal onBack={()=>go("home")} staffPerms={isPlatformAdmin ? null : staffPerms} />;
+    return <QAdminOtpGate onBack={()=>go("home")}><AdminPortal onBack={()=>go("home")} staffPerms={isPlatformAdmin ? null : staffPerms} /></QAdminOtpGate>;
   }
   // The chooser owns the whole width: it is the one page with no rail, because
   // its whole job is to decide which rail you want.
@@ -40756,7 +40852,7 @@ function App() {
           boxShadow: "0 6px 18px rgba(37,99,235,0.35)",
         }}>Help</button>
       <EstimaDock currentProject={view.name === "project" ? view.project : null} />
-      {(isPlatformAdmin || (staffPerms && staffPerms.livechat)) ? <AdminLiveChatWatcher /> : <LiveChatWidget session={session} pageName={view.name} />}
+      {(isPlatformAdmin || (staffPerms && staffPerms.livechat)) ? <QAdminOtpOnly><AdminLiveChatWatcher /></QAdminOtpOnly> : <LiveChatWidget session={session} pageName={view.name} />}
       <ActivityCenter onOpenProject={(p, tab) => setView({ name: "project", project: p, tab })} />
       <PulseBar />
       <SupportModal open={!!supportCtx} initial={supportCtx} onClose={()=>setSupportCtx(null)} />
