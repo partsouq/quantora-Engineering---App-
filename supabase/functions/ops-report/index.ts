@@ -91,6 +91,84 @@ async function raiseAlertOnce(fp: string, service: string, title: string, text: 
   if (!ex) await admin.from("admin_alerts").insert({ fingerprint: fp, service, title, error_text: text.slice(0, 4000), examples: [] });
 }
 
+// Daily connection check (2026-11-17, owner approved, free): once a day every outside service the
+// platform needs is tested without doing any paid work. A broken key or login raises an alert (pushed at
+// once by q_alert_push) before a customer runs into it, and a working one clears its old alert.
+//   GitHub  - the DWG converter key can still start the converter (repo read with that key; warns 14 days
+//             before the key expires)
+//   AI      - the AI key is accepted (list models: no AI credits used)
+//   Zoho    - info@ can still sign in to send mail (sign-in only, nothing is sent)
+//   Payments- the Dodo key is accepted (read one product)
+//   Storage - the drawings store answers
+async function connChecks() {
+  const out: Record<string, string> = {};
+  const fail = async (key: string, title: string, why: string) => {
+    out[key] = "FAIL: " + why;
+    await raiseAlert(`conn:${key}`, "connections", title, why);
+  };
+  const pass = async (key: string, note = "ok") => {
+    out[key] = note;
+    await admin.from("admin_alerts").update({ status: "fixed", updated_at: new Date().toISOString() })
+      .eq("fingerprint", `conn:${key}`).in("status", ["open", "investigating"]);
+  };
+  const timed = (u: string, init: RequestInit = {}) => {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 20000);
+    return fetch(u, { ...init, signal: ctl.signal }).finally(() => clearTimeout(t));
+  };
+  // GitHub (DWG converter)
+  try {
+    const tok = await secret("GITHUB_ROBOT_TOKEN");
+    if (!/^(github_pat_|ghp_)/.test(tok)) await fail("github", "DWG converter key missing", "GITHUB_ROBOT_TOKEN is not set, so DWG uploads cannot start converting. Add a GitHub token (Actions: read and write on the app repo).");
+    else {
+      const r = await timed("https://api.github.com/repos/partsouq/quantora-Engineering---App-/actions/workflows/dwg-convert.yml",
+        { headers: { Authorization: `Bearer ${tok}`, Accept: "application/vnd.github+json", "User-Agent": "quantora-health" } });
+      await r.text().catch(() => "");
+      const exp = r.headers.get("github-authentication-token-expiration");
+      const days = exp ? (new Date(exp.replace(" UTC", "Z").replace(" ", "T")).getTime() - Date.now()) / 86400e3 : 999;
+      if (r.status !== 200) await fail("github", "DWG converter key not working", `GitHub answered ${r.status} for the DWG converter key. DWG uploads will wait. Make a new token and update GITHUB_ROBOT_TOKEN.`);
+      else if (days < 14) await fail("github", "DWG converter key expires soon", `The GitHub key for DWG conversion expires in ${Math.max(0, Math.floor(days))} day(s). Make a new one and update GITHUB_ROBOT_TOKEN.`);
+      else await pass("github", `ok (key valid ${Math.floor(days)} more days)`);
+    }
+  } catch (e) { await fail("github", "DWG converter check failed", String((e as Error)?.message || e).slice(0, 200)); }
+  // AI service (free: list models)
+  try {
+    const key = await secret("ANTHROPIC_API_KEY");
+    if (!key) await fail("ai", "AI key missing", "ANTHROPIC_API_KEY is not set, so take-offs cannot run.");
+    else {
+      const r = await timed("https://api.anthropic.com/v1/models?limit=1", { headers: { "x-api-key": key, "anthropic-version": "2023-06-01" } });
+      const t = await r.text().catch(() => "");
+      if (r.status === 200) await pass("ai"); else await fail("ai", "AI key not accepted", `The AI service answered ${r.status}: ${t.slice(0, 160)}. Take-offs will fail until the key is fixed (or the account is topped up).`);
+    }
+  } catch (e) { await fail("ai", "AI check failed", String((e as Error)?.message || e).slice(0, 200)); }
+  // Zoho (sign-in only, through email-center)
+  try {
+    const sec = await secret("EMAIL_QUEUE_SECRET");
+    const r = await timed(`${URL_BASE}/functions/v1/email-center`, { method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${ANON}`, apikey: ANON, "x-cron-secret": sec }, body: JSON.stringify({ action: "zoho_check" }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) await pass("zoho"); else await fail("zoho", "info@ email cannot send", String(j.error || `email-center answered ${r.status}`).slice(0, 300));
+  } catch (e) { await fail("zoho", "Email check failed", String((e as Error)?.message || e).slice(0, 200)); }
+  // Payments (read one product)
+  try {
+    const { data } = await admin.from("app_secrets").select("key, value").in("key", ["DODO_API_KEY", "DODO_MODE"]);
+    const m = new Map((data || []).map((x: any) => [x.key, String(x.value || "").trim()]));
+    const k = m.get("DODO_API_KEY") || "";
+    if (!k) await fail("payments", "Payment key missing", "DODO_API_KEY is not set, so nobody can subscribe.");
+    else {
+      const base = (m.get("DODO_MODE") || "").toLowerCase() === "test" || k.startsWith("dodo_test") ? "https://test.dodopayments.com" : "https://live.dodopayments.com";
+      const r = await timed(`${base}/products?page_size=1`, { headers: { Authorization: `Bearer ${k}` } });
+      await r.text().catch(() => "");
+      if (r.status === 200) await pass("payments"); else await fail("payments", "Payment key not accepted", `Dodo answered ${r.status}. Customers cannot pay until the key is fixed.`);
+    }
+  } catch (e) { await fail("payments", "Payment check failed", String((e as Error)?.message || e).slice(0, 200)); }
+  // Storage
+  try {
+    const { error } = await admin.storage.from("drawings").list("", { limit: 1 });
+    if (error) await fail("storage", "Drawing storage not answering", error.message); else await pass("storage");
+  } catch (e) { await fail("storage", "Storage check failed", String((e as Error)?.message || e).slice(0, 200)); }
+  return out;
+}
+
 const hhmm = (d: Date) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" });
 
 async function runReport(manual: boolean) {
@@ -117,6 +195,8 @@ async function runReport(manual: boolean) {
   const srcTxt = ((vd?.sources || []) as any[]).map((x) => `${x.s} ${x.n}`).join(", ");
   const visitLine = `Website: ${vh?.visitors ?? 0} visitor${vh?.visitors === 1 ? "" : "s"} this hour · ${vd?.visitors ?? 0} today${srcTxt ? ` (${srcTxt})` : ""}`;
 
+  // once a day, at the 05:00 UTC run (09:00 Dubai), or when an admin runs the report by hand
+  const conn = (manual || to.getUTCHours() === 5) ? await connChecks().catch((e) => ({ error: String(e) })) : null;
   const signupWatch = await watchSignups().catch((e) => { console.error("signup watch", e); return { stuck: 0, reminded: 0 }; });
 
   const r = s.runs || {}, j = s.drawings || {}, c = s.chats || {}, rt = s.ratings || {}, u = s.users || {};
@@ -133,10 +213,11 @@ async function runReport(manual: boolean) {
     `Drawing uploads not saved: ${s.uploads_not_saved || 0}${s.uploads_not_saved ? " ❌" : ""}`,
     `Alerts this hour: ${s.alerts_new || 0} (open: ${s.alerts_open || 0})`,
   ];
+  if (conn) lines.push(`Connections: ${Object.entries(conn).map(([k, v]) => `${k} ${String(v).startsWith("FAIL") ? "❌" : "✅"}`).join(" · ")}`);
   const period = `${hhmm(from)}–${hhmm(to)}`;
   const { data: row, error: insErr } = await admin.from("admin_reports").insert({
     period_start: from.toISOString(), period_end: to.toISOString(), manual,
-    data: { ...s, health }, summary: lines.join("\n"), alerts_count: s.alerts_new || 0,
+    data: { ...s, health, conn }, summary: lines.join("\n"), alerts_count: s.alerts_new || 0,
   }).select("id").single();
   if (insErr) throw new Error("save: " + insErr.message);
 

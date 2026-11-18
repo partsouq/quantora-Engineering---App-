@@ -18,6 +18,9 @@ const PASSWORD = process.env.ROBOT_PASSWORD || "";
 const SHOTS = process.env.ROBOT_SHOTS || path.join(__dirname, "shots");
 const DRAWING = path.join(__dirname, "ROBOT-TEST-GF-CCTV.pdf");
 const SPEC = path.join(__dirname, "ROBOT-TEST-SPEC.pdf");
+// 2026-11-17: a DWG goes through a different path (the GitHub converter), so the robot uploads one too and
+// waits until it is ready, exactly like a customer. Skipped (with a log line) until the test file is added.
+const DWG = path.join(__dirname, "ROBOT-TEST.dwg");
 const STAMP = new Date().toISOString().slice(0, 16).replace("T", " ");
 const PROJECT = "ROBOT TEST " + STAMP;
 
@@ -180,6 +183,27 @@ async function report(ok, failedStep, message) {
       await page.getByText("Uploaded ✓").first().waitFor({ timeout: 120000 });
       await page.locator('[role="alertdialog"] button', { hasText: /^OK$/ }).first().click().catch(() => {});
       await page.getByText(path.basename(DRAWING), { exact: true }).first().waitFor({ timeout: 30000 });   // the row in the list, not the banner
+    });
+
+    if (!fs.existsSync(DWG)) log("no ROBOT-TEST.dwg yet: DWG test skipped");
+    else if (process.env.ROBOT_SKIP !== "dwg") await step("Upload a DWG and wait until it is ready", async () => {
+      await page.locator('input[type="file"]').first().setInputFiles(DWG);
+      await page.locator("button", { hasText: /^Upload \d/ }).first().click();
+      await page.getByText("Uploaded ✓").first().waitFor({ timeout: 120000 });
+      await page.locator('[role="alertdialog"] button', { hasText: /^OK$/ }).first().click().catch(() => {});
+      const name = page.getByText(path.basename(DWG), { exact: true }).first();
+      await name.waitFor({ timeout: 30000 });
+      const row = page.locator("div", { has: page.getByText(path.basename(DWG), { exact: true }) })
+        .filter({ hasText: /Preparing your DWG|Not analysed yet|DWG needs a PDF copy|Analys/ }).last();
+      const t0 = Date.now();
+      while (Date.now() - t0 < 12 * 60000) {
+        const txt = await row.innerText().catch(() => "");
+        if (/DWG needs a PDF copy/.test(txt)) throw new Error("the DWG could not be converted");
+        if (txt && !/Preparing your DWG/.test(txt)) { log("DWG ready after", Math.round((Date.now() - t0) / 1000) + "s"); return; }
+        await closePops(); if (popupError) throw new Error("Error shown to the user: " + popupError);
+        await page.waitForTimeout(10000);
+      }
+      throw new Error("the DWG was still not ready after 12 minutes (converter not started?)");
     });
 
     if (FULL) {

@@ -313,6 +313,16 @@ Deno.serve(async (req) => {
     if (cron) {
       const { data: sec } = await admin.from("app_secrets").select("value").eq("key", "EMAIL_QUEUE_SECRET").maybeSingle();
       if (!sec?.value || cron !== sec.value) return json({ error: "Not allowed." }, 401);
+      const cb = await req.clone().json().catch(() => ({}));
+      if (cb?.action === "zoho_check") {
+        // daily connection check (2026-11-17): sign in to Zoho only, nothing is sent
+        const user = Deno.env.get("ZOHO_SMTP_USER") || CONTACT, pass = Deno.env.get("ZOHO_SMTP_PASS");
+        if (!pass) return json({ ok: false, error: "ZOHO_SMTP_PASS is not set in Supabase." });
+        for (const port of [465, 587]) {
+          try { await zohoTransport(port, user, pass).verify(); return json({ ok: true, port }); }
+          catch (e) { if (port === 587 || !isNetErr(e)) return json({ ok: false, error: zohoReason(e) }); }
+        }
+      }
       return json(await drainOne());
     }
     const auth = req.headers.get("Authorization") || "";
