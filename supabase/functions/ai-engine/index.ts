@@ -5,7 +5,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { PDFDocument } from "npm:pdf-lib@1.17.1";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
 import { localNormsLine, civilMethodLine } from "./authorities.ts";
-import { SCHEDULE_TOOL, SCHEDULE_PROMPT, scheduleTablesToItems, applyScheduleItems, mergeSameKindRows } from "./schedules.ts";
+import { SCHEDULE_TOOL, SCHEDULE_PROMPT, scheduleTablesToItems, applyScheduleItems, mergeSameKindRows, flagAgainstLegend } from "./schedules.ts";
 import { evalQuantityFormula, measureLine, standardForProject, civilStandardPrompt, VALIDATION, type Rule, type StandardChoice } from "./civil_rules.ts";
 
 const corsHeaders = {
@@ -3283,7 +3283,7 @@ Deno.serve(async (req: Request) => {
           project_id: project.id, drawing_id, analysis_run_id: run.id, revision_number: nextRevision,
           floor_label: drawing.floor_label ?? null, source: "ai_drawing_analysis", optimization_status: "drawing_requirement",
         });
-        const promotedRows = wsApplied.rows;
+        const promotedRows = flagAgainstLegend(wsApplied.rows, wholeSheetTables).rows;
         if (wsApplied.added) result.analysis_notes = `${result.analysis_notes ?? ""} ${wsApplied.added} line(s) were taken from the sheet's own schedules and replace the AI's plan count for those items (${wsApplied.notes.join("; ")}).`;
         const safeRows = lumpSumsAreNotCounted(fixCountedCableRows(promotedRows.map(sanitizeBoqRow).filter((r: any) => Number(r.quantity) > 0)));   // no "0 found" lines
         const inserted = await insertBoqRowsWithSupportingData(admin, safeRows, result, project.id);
@@ -3732,7 +3732,7 @@ Deno.serve(async (req: Request) => {
           project_id: project.id, drawing_id, analysis_run_id: run.id, revision_number: nextRevision,
           floor_label: drawing.floor_label ?? null, source: "ai_drawing_analysis", optimization_status: "drawing_requirement",
         });
-        promotedRows = sa.rows;
+        promotedRows = flagAgainstLegend(sa.rows, sheetTables).rows;
         if (sched.items.length) console.log(`tiled run ${run.id}: schedules ${sa.notes.join("; ")}`);
         // a line that says "0 found in this tile" is not a BOQ line
         const keptRows = promotedRows.map(({ __zone, ...r }: any) => r);

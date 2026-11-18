@@ -76,6 +76,10 @@ const DESC_HEAD = /\b(DESCRIPTION|TYPE|ITEM|EQUIPMENT|FIXTURE|FITTING|MODEL|NAME
 const SIZE_HEAD = /\b(SIZE|NECK|DIMENSIONS?|DIA(METER)?|W\s*X\s*H)\b/i;
 const SPEC_HEAD = /\b(LOAD|KW|CAPACITY|AIR\s*FLOW|SUPPLY\s*AIR|L\/S|CFM|RATING|WATTS?|POWER|HP|TR|BTU|FLOW|VOLTAGE|PHASE|AMPS?|LUMENS?|ESP|PRESSURE)\b/i;
 const LOC_HEAD = /\b(LOCATION|ROOM|AREA|ZONE|SERV(ING|ES))\b/i;
+// 2026-11-19: a terminal schedule row often lists its plenum box and flexible duct with their own
+// size and QTY columns. Those are separate items, never extra diffusers.
+const ACC_HEAD = /\b(PLENUM(\s*BOX)?|FLEX(IBLE)?(\s*DUCT)?|SPIGOT|COLLAR)\b/i;
+const ACC_NAME = (h: string) => /PLENUM/i.test(h) ? "Plenum box" : /FLEX/i.test(h) ? "Flexible duct" : /SPIGOT/i.test(h) ? "Spigot" : "Collar";
 
 export type ScheduleItem = {
   system_category: string; description: string; quantity: number; unit: string;
@@ -98,13 +102,21 @@ function parseQty(cell: string): { q: number; unit: string } | null {
 export function countRefs(cell: string): number {
   const s = String(cell ?? "").toUpperCase().trim();
   if (!s) return 0;
-  const range = s.match(/([A-Z]*)[-\s]*(\d+)\s*(?:TO|~|–|—|-|THRU|THROUGH)\s*(?:[A-Z]+[-\s]*)?(\d+)\s*$/);
-  if (range && /[A-Z]/.test(s.replace(/\b(TO|THRU|THROUGH)\b/g, "")) ) {
-    const a = Number(range[2]), b = Number(range[3]);
+  const range = s.match(/([A-Z]*)([-\s]*)(\d+)\s*(TO|~|–|—|-|THRU|THROUGH)\s*(?:[A-Z]+[-\s]*)?(\d+)\s*$/);
+  // 2026-11-19: "IDU-VI-4A&B.L0-01" is level L0, unit 01 -- one unit, not the range 0 to 1. A dash
+  // straight after a letter+digit code (L0-01, B1-02, GF2-03), or a dash range starting at 0, is a tag.
+  const dashed = range && /^[-–—]$/.test(range[4]);
+  const levelCode = dashed && ((range![1] !== "" && range![2] === "") || Number(range![3]) === 0);
+  if (range && !levelCode && /[A-Z]/.test(s.replace(/\b(TO|THRU|THROUGH)\b/g, "")) ) {
+    const a = Number(range[3]), b = Number(range[5]);
     if (b >= a && b - a < 500) return b - a + 1;
   }
+  // A list is tags of the same kind ("FCU-1, FCU-3" or "1, 3, 7"); "IDU-VI-4A&B.L0-01" (villa types 4A
+  // and B) is one tag with an "&" inside it.
   const parts = s.split(/[,&;\/]|\bAND\b/).map((p) => p.trim()).filter(Boolean);
-  if (parts.length > 1 && parts.every((p) => /\d/.test(p))) return parts.length;
+  const prefix = (p: string) => (p.match(/^[A-Z]+/) || [""])[0];
+  if (parts.length > 1 && parts.every((p) => /\d/.test(p)) &&
+      (parts.every((p) => /^\d+$/.test(p)) || parts.slice(1).every((p) => /^\d+$/.test(p) || prefix(p) === prefix(parts[0])))) return parts.length;
   return /[A-Z0-9]/.test(s) ? 1 : 0;
 }
 
@@ -174,10 +186,17 @@ export function scheduleTablesToItems(tables: any[]): { items: ScheduleItem[]; s
     const unitShare = (i: number) => { const f = filled(i); return f.length ? f.filter((v) => QTY_CELL.test(v)).length / f.length : 0; };
     const byHead = idx(QTY_HEAD, serial).filter((i) => (!SPEC_HEAD.test(cols[i]) || /QUANT|QTY/i.test(cols[i])) && numericShare(i) >= 0.5);
     const byContent = Array.from({ length: width }, (_, i) => i).filter((i) => !serial.includes(i) && unitShare(i) >= 0.6);
-    const qtyCols = [...new Set([...byHead, ...byContent])].sort((a, b) => a - b);
-    const refCols = idx(REF_HEAD, [...serial, ...qtyCols]);
-    const descCols = idx(DESC_HEAD, [...serial, ...qtyCols, ...refCols]);
-    const sizeCols = idx(SIZE_HEAD, [...serial, ...qtyCols, ...refCols]);
+    const allQty = [...new Set([...byHead, ...byContent])].sort((a, b) => a - b);
+    // the accessory a column belongs to: named in its own heading, or in the size heading just before it
+    const accOf = (i: number) => ACC_HEAD.test(cols[i] ?? "") ? ACC_NAME(cols[i]) : (i > 0 && !allQty.includes(i - 1) && ACC_HEAD.test(cols[i - 1] ?? "") ? ACC_NAME(cols[i - 1]) : "");
+    const accQty = allQty.filter((i) => accOf(i));
+    const qtyCols = accQty.length < allQty.length ? allQty.filter((i) => !accOf(i)) : allQty;
+    const accLines = qtyCols === allQty ? [] : accQty;
+    const accSize = (name: string) => cols.map((c, i) => (ACC_HEAD.test(c) && SIZE_HEAD.test(c) && ACC_NAME(c) === name ? i : -1)).filter((i) => i >= 0);
+    const accCols = cols.map((c, i) => (ACC_HEAD.test(c) ? i : -1)).filter((i) => i >= 0);
+    const refCols = idx(REF_HEAD, [...serial, ...allQty]);
+    const descCols = idx(DESC_HEAD, [...serial, ...allQty, ...refCols, ...accCols]);
+    const sizeCols = idx(SIZE_HEAD, [...serial, ...allQty, ...refCols, ...accCols]);
     const specCols = idx(SPEC_HEAD, [...serial, ...qtyCols, ...refCols, ...sizeCols, ...descCols]);
     const locCols = idx(LOC_HEAD, [...serial, ...qtyCols, ...refCols, ...descCols]);
     const equipment = kind === "equipment_schedule" || (refCols.length > 0 && !qtyCols.length);
@@ -213,7 +232,13 @@ export function scheduleTablesToItems(tables: any[]): { items: ScheduleItem[]; s
         const u = /[a-z]/i.test(v) ? "" : unitOf(cols[i]);
         return `${head} ${v}${u ? " " + u.replace(/^KW$/i, "kW").replace(/^L\/S$/i, "L/s") : ""}`.trim();
       }).filter(Boolean).slice(0, 4) : [];
-      const lines: { q: number; unit: string; side: string }[] = [];
+      const lines: { q: number; unit: string; side: string; acc?: string; accSz?: string }[] = [];
+      for (const ai of accLines) {
+        const p = parseQty(r[ai]);
+        if (!p) continue;
+        const nm = accOf(ai);
+        lines.push({ q: p.q, unit: "nr", side: "", acc: nm, accSz: accSize(nm).map((i) => r[i] ?? "").filter((v) => v && !/^[-–—/]+$/.test(v)).join(" x ") });
+      }
       if (byRef) {
         const n = countRefs(ref);
         if (n > 0) lines.push({ q: n, unit: "nr", side: "" });
@@ -230,14 +255,15 @@ export function scheduleTablesToItems(tables: any[]): { items: ScheduleItem[]; s
         if (n > 0) lines.push({ q: n, unit: "nr", side: "" });
       }
       for (const ln of lines) {
-        const label = [ln.side, name].filter(Boolean).join(" ");
-        const key = [fam?.name ?? label, label.toLowerCase(), size.toLowerCase(), ln.unit, equipment ? specBits.join("|").toLowerCase() : ""].join("§");
-        const descr = [label, size, ...specBits].filter(Boolean).join(", ");
+        const label = ln.acc ? `${ln.acc} for ${name.toLowerCase()}` : [ln.side, name].filter(Boolean).join(" ");
+        const sz = ln.acc ? (ln.accSz ?? "") : size;
+        const key = [ln.acc ? ln.acc.toLowerCase() : fam?.name ?? label, label.toLowerCase(), sz.toLowerCase(), ln.unit, equipment && !ln.acc ? specBits.join("|").toLowerCase() : ""].join("§");
+        const descr = [label, sz, ...(ln.acc ? [] : specBits)].filter(Boolean).join(", ");
         let it = out.get(key);
         if (!it) {
-          it = { system_category: fam?.system ?? "other", description: descr, quantity: 0, unit: ln.unit,
-                 family: fam?.re ?? new RegExp(`\\b${label.split(" ").pop()!.replace(/[^a-z]/gi, "")}`, "i"),
-                 familyName: fam?.name ?? label.toLowerCase(), table: title, rowsUsed: 0, detail: [] };
+          it = { system_category: ln.acc ? "ducting" : fam?.system ?? "other", description: descr, quantity: 0, unit: ln.unit,
+                 family: ln.acc ? new RegExp(`\\b${ln.acc.split(" ")[0]}`, "i") : fam?.re ?? new RegExp(`\\b${label.split(" ").pop()!.replace(/[^a-z]/gi, "")}`, "i"),
+                 familyName: ln.acc ? ln.acc.toLowerCase() : fam?.name ?? label.toLowerCase(), table: title, rowsUsed: 0, detail: [] };
           out.set(key, it);
         }
         it.quantity = Math.round((it.quantity + ln.q) * 100) / 100;
@@ -261,8 +287,18 @@ export function applyScheduleItems(rows: any[], items: ScheduleItem[], base: any
   const byFamily = new Map<string, ScheduleItem[]>();
   for (const it of items) { if (!byFamily.has(it.familyName)) byFamily.set(it.familyName, []); byFamily.get(it.familyName)!.push(it); }
   const added: any[] = [];
+  // 2026-11-19: the AI often names a scheduled item by a neighbouring kind -- "supply air diffuser" and
+  // "return air grille" for the slot diffusers in a terminal schedule, "cassette FCU" for the split
+  // units in a DX schedule. When the sheet schedules that group, the AI's guesses of the group go too.
+  const famRe = (n: string) => FAMILIES.find((f) => f.name === n)!.re;
+  const TERMINALS = ["flow bar / linear slot diffuser", "diffuser", "grille / register"];
+  const related = (fname: string): RegExp[] => {
+    if (TERMINALS.includes(fname)) return TERMINALS.filter((n) => n !== fname && !byFamily.has(n)).map(famRe);
+    if (fname === "split / VRF unit" && !byFamily.has("fan coil unit")) return [famRe("fan coil unit")];
+    return [];
+  };
   for (const [fname, its] of byFamily) {
-    const re = its[0].family;
+    const res = [its[0].family, ...related(fname)];
     const aiGone: any[] = [];
     out = out.filter((r: any) => {
       if (!["physical_count", null, undefined].includes(r.quantity_source_type)) return true;
@@ -272,7 +308,7 @@ export function applyScheduleItems(rows: any[], items: ScheduleItem[], base: any
       if (!sameKind) return true;
       const subj = String(r.description || "").split(/,| with | for | including | per /i)[0];
       // a damper is not a diffuser, a duct is not a grille: match the item, not a word in passing
-      if (!re.test(subj) || /\b(duct(work)?|pipe|cable|tray|conduit)\b/i.test(subj)) return true;
+      if (!res.some((re) => re.test(subj)) || /\b(duct(work)?|pipe|cable|tray|conduit)\b/i.test(subj)) return true;
       aiGone.push(r);
       return false;
     });
@@ -291,20 +327,50 @@ export function applyScheduleItems(rows: any[], items: ScheduleItem[], base: any
     notes.push(`${fname}: schedule ${schedTotal || its.map((i) => `${i.quantity} ${i.unit}`).join(" + ")} replaces ${aiGone.length} AI line(s) (${aiTotal})`);
   }
   // One controller / thermostat per fan coil unit: flag a count that does not match the FCU schedule.
-  const fcuTotal = items.filter((i) => i.system_category === "fcu" && i.unit === "nr").reduce((s, i) => s + i.quantity, 0);
+  // 2026-11-19: split / VRF indoor units count too (one thermostat each), outdoor units do not.
+  const indoor = items.filter((i) => i.unit === "nr" && (i.system_category === "fcu" ||
+    (i.familyName === "split / VRF unit" && !/\b(outdoor|odu|condensing)\b/i.test(i.description))));
+  const fcuTotal = indoor.reduce((s, i) => s + i.quantity, 0);
+  const splitOnly = !items.some((i) => i.system_category === "fcu");
   if (fcuTotal) {
-    const ctl = out.filter((r: any) => /\b(ddc|thermostat|controller)\b/i.test(String(r.description || "")) && /\b(fcu|fan\s*coil)\b/i.test(`${r.description} ${r.quantity_basis_notes || ""}`)
+    const ctl = out.filter((r: any) => /\b(ddc|thermostat|controller)\b/i.test(String(r.description || "")) &&
+      (splitOnly || /\b(fcu|fan\s*coil)\b/i.test(`${r.description} ${r.quantity_basis_notes || ""}`))
       && ["physical_count", null, undefined].includes(r.quantity_source_type));
     const ctlTotal = ctl.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0);
     if (ctl.length && ctlTotal !== fcuTotal) {
       for (const r of ctl) {
         r.schedule_quantity_crosscheck = Math.round(fcuTotal);
-        r.quantity_basis_notes = [r.quantity_basis_notes, `The FCU schedule lists ${fcuTotal} units, normally one controller each; ${ctlTotal} were counted on the plan. Check before pricing.`].filter(Boolean).join(" ");
+        r.quantity_basis_notes = [r.quantity_basis_notes, `The schedule lists ${fcuTotal} indoor unit(s), normally one controller each; ${ctlTotal} were counted on the plan. Check before pricing.`].filter(Boolean).join(" ");
       }
-      notes.push(`FCU controllers: ${ctlTotal} counted vs ${fcuTotal} FCUs scheduled (flagged)`);
+      notes.push(`Controllers: ${ctlTotal} counted vs ${fcuTotal} indoor units scheduled (flagged)`);
     }
   }
   return { rows: out.concat(added), replaced, added: added.length, notes };
+}
+
+// 2026-11-19: the sheet's own legend says which services exist. A DX / split sheet whose legend shows
+// refrigerant pipe and no chilled water has no chilled water pipe: an AI line for it is a misreading of
+// the refrigerant or condensate lines. Such lines stay in the BOQ but are flagged for review.
+export function flagAgainstLegend(rows: any[], tables: any[]): { rows: any[]; flagged: number; notes: string[] } {
+  const legendText = (Array.isArray(tables) ? tables : []).filter((t: any) => t?.kind === "legend")
+    .map((t: any) => JSON.stringify(t?.rows ?? [])).join(" ").toUpperCase();
+  if (!legendText) return { rows, flagged: 0, notes: [] };
+  const checks: { re: RegExp; absent: RegExp; present: RegExp; why: string }[] = [
+    { re: /\b(chilled\s*water|chw)\b/i, absent: /\b(CHILLED|CHW|CHWS|CHWR)\b/, present: /\b(REFRIGERANT|DX|SPLIT|INDOOR\s*UNIT|VRF)\b/,
+      why: "The drawing's legend shows refrigerant pipe (a DX / split system) and no chilled water, so this line is probably the refrigerant or condensate pipe read as chilled water." },
+  ];
+  let flagged = 0;
+  const notes: string[] = [];
+  for (const c of checks) {
+    if (c.absent.test(legendText) || !c.present.test(legendText)) continue;
+    const hit = rows.filter((r: any) => c.re.test(String(r.description || "")) && ["physical_count", null, undefined].includes(r.quantity_source_type));
+    for (const r of hit) {
+      r.confidence_score = Math.min(Number(r.confidence_score) || 0, 25);
+      r.quantity_basis_notes = [r.quantity_basis_notes, `Check before pricing: ${c.why}`].filter(Boolean).join(" ");
+    }
+    if (hit.length) { flagged += hit.length; notes.push(`${hit.length} line(s) contradict the legend and are flagged`); }
+  }
+  return { rows, flagged, notes };
 }
 
 // Tiles describe the same item in different words ("Fire Damper (FD), 3-hour..." on one tile,
