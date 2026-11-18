@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-18.2";</script>
+<script>window.QUANTORA_BUILD = "2026-11-19.1";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -7063,7 +7063,6 @@ function QPromoPopup({ onClaim }) {
   function close() { setOpen(false); try { localStorage.setItem("q_promo_seen", "1"); } catch (e) { /* blocked */ } }
   function claim() { qPromoSet(code); close(); onClaim(); }
   if (!st) return null;
-  const taken = st.cap - st.left;
   if (!open) return (
     <button type="button" className="qpromo-chip" onClick={() => setOpen(true)}
       style={{ position: "fixed", left: 16, bottom: 16, zIndex: 60, border: 0, cursor: "pointer", background: "#16a34a", color: "#fff",
@@ -7095,7 +7094,7 @@ function QPromoPopup({ onClaim }) {
       `}</style>
       <div className="qpromo" role="dialog" aria-modal="true" aria-labelledby="qpromo-h">
         <button type="button" className="qpromo-x" aria-label="Close" onClick={close}>×</button>
-        <span className="qpromo-tag">ONLY {st.cap} WELCOME PACKS</span>
+        <span className="qpromo-tag">LIMITED-TIME OFFER</span>
         <h2 id="qpromo-h">Your engineering drawings. Our treat! 🎁</h2>
         <div className="qpromo-sub">{st.mt + st.draftsman + st.ai} free drawings</div>
         <div className="qpromo-it"><b>{st.mt}</b>Manual Take-off drawings</div>
@@ -7105,8 +7104,7 @@ function QPromoPopup({ onClaim }) {
         <div className="qpromo-perk">💬 Live chat support</div>
         <div className="qpromo-code"><span>Your promo code</span><b>{code}</b></div>
         <button type="button" className="qpromo-go" onClick={claim} autoFocus>Claim your free pack</button>
-        <div className="qpromo-small">{st.left} of {st.cap} packs left · use within {st.days} days</div>
-        <div className="qpromo-bar"><i style={{ width: `${Math.max(4, Math.round(100 * taken / st.cap))}%` }}></i></div>
+        <div className="qpromo-small">⏳ Limited-time launch offer · claim yours today</div>
       </div>
     </div>
   );
