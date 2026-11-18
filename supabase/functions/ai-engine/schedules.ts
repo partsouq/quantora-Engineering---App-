@@ -129,6 +129,11 @@ const FAMILIES: Family[] = [
   { name: "flow bar / linear slot diffuser", re: /\b(flow\s*bars?|linear\s*(slot\s*)?(bar\s*)?diffusers?|slot\s*diffusers?)\b/i, system: "hvac" },
   { name: "diffuser", re: /\bdiffusers?\b/i, system: "hvac" },
   { name: "grille / register", re: /\b(grilles?|registers?|louvres?|louvers?)\b/i, system: "hvac" },
+  // 2026-11-19: VCD / NRD / disc valve schedules list their items by abbreviation; each is its own kind,
+  // so a VCD schedule never replaces the AI's fire dampers.
+  { name: "volume control damper", re: /\b(vcds?|volume\s*control\s*dampers?|balancing\s*dampers?)\b/i, system: "ducting" },
+  { name: "non-return damper", re: /\b(nrds?|non[\s-]*return\s*dampers?|back[\s-]*draft\s*dampers?)\b/i, system: "ducting" },
+  { name: "disc valve", re: /\b(disc|disk)\s*valves?\b/i, system: "ventilation" },
   { name: "damper", re: /\bdampers?\b/i, system: "ducting" },
   { name: "VAV box", re: /\b(vav|variable\s*air\s*volume)\b/i, system: "hvac" },
   { name: "fan", re: /\b(exhaust|extract|supply|transfer|jet|kitchen|toilet)?\s*fans?\b(?!\s*coil)/i, system: "ventilation" },
@@ -186,14 +191,21 @@ export function scheduleTablesToItems(tables: any[]): { items: ScheduleItem[]; s
     const unitShare = (i: number) => { const f = filled(i); return f.length ? f.filter((v) => QTY_CELL.test(v)).length / f.length : 0; };
     const byHead = idx(QTY_HEAD, serial).filter((i) => (!SPEC_HEAD.test(cols[i]) || /QUANT|QTY/i.test(cols[i])) && numericShare(i) >= 0.5);
     const byContent = Array.from({ length: width }, (_, i) => i).filter((i) => !serial.includes(i) && unitShare(i) >= 0.6);
-    const allQty = [...new Set([...byHead, ...byContent])].sort((a, b) => a - b);
+    let allQty = [...new Set([...byHead, ...byContent])].sort((a, b) => a - b);
+    // 2026-11-19: "No. of Fan 2 ... QTY 01" -- a column headed QTY / QUANTITY is the count; a "No. of ..."
+    // column beside it is something else (fans per unit, speeds) and is not added on top.
+    if (allQty.some((i) => /\b(QTY|QUANT)/i.test(cols[i]))) allQty = allQty.filter((i) => /\b(QTY|QUANT)/i.test(cols[i]) || unitShare(i) >= 0.6);
     // the accessory a column belongs to: named in its own heading, or in the size heading just before it
     const accOf = (i: number) => ACC_HEAD.test(cols[i] ?? "") ? ACC_NAME(cols[i]) : (i > 0 && !allQty.includes(i - 1) && ACC_HEAD.test(cols[i - 1] ?? "") ? ACC_NAME(cols[i - 1]) : "");
     const accQty = allQty.filter((i) => accOf(i));
     const qtyCols = accQty.length < allQty.length ? allQty.filter((i) => !accOf(i)) : allQty;
     const accLines = qtyCols === allQty ? [] : accQty;
-    const accSize = (name: string) => cols.map((c, i) => (ACC_HEAD.test(c) && SIZE_HEAD.test(c) && ACC_NAME(c) === name ? i : -1)).filter((i) => i >= 0);
-    const accCols = cols.map((c, i) => (ACC_HEAD.test(c) ? i : -1)).filter((i) => i >= 0);
+    // a size column straight before an accessory's QTY column ("SIZE Ø", "QTY FLEXDUCT") is that accessory's size
+    const sizeBefore = (i: number) => (i > 0 && SIZE_HEAD.test(cols[i - 1] ?? "") && !allQty.includes(i - 1) ? [i - 1] : []);
+    const accSize = (name: string) => [...new Set([
+      ...cols.map((c, i) => (ACC_HEAD.test(c) && SIZE_HEAD.test(c) && ACC_NAME(c) === name ? i : -1)).filter((i) => i >= 0),
+      ...accQty.filter((i) => accOf(i) === name).flatMap(sizeBefore)])];
+    const accCols = [...new Set([...cols.map((c, i) => (ACC_HEAD.test(c) ? i : -1)).filter((i) => i >= 0), ...accQty.flatMap(sizeBefore)])];
     const refCols = idx(REF_HEAD, [...serial, ...allQty]);
     const descCols = idx(DESC_HEAD, [...serial, ...allQty, ...refCols, ...accCols]);
     const sizeCols = idx(SIZE_HEAD, [...serial, ...allQty, ...refCols, ...accCols]);
@@ -223,7 +235,8 @@ export function scheduleTablesToItems(tables: any[]): { items: ScheduleItem[]; s
       const descOk = desc && /[a-z]{3}/i.test(desc) && !/^\d/.test(desc);
       const name = equipment && fam
         ? [cap(fam.name), typeWord ? typeWord.replace(/^[A-Z]{2,5}[-\s]+/i, "").toLowerCase() : "", descOk && !fam.re.test(desc) ? desc.toLowerCase() : ""].filter(Boolean).join(", ")
-        : descOk ? cap(desc) : (singularTitle(title) || cap(ref.replace(/[-\s]*\d.*$/, "")) || "Scheduled item");
+        : descOk ? (fam && !fam.re.test(`${desc} ${ref}`) ? `${cap(fam.name)}, ${desc.toLowerCase()}` : cap(desc))
+        : (singularTitle(title) || cap(ref.replace(/[-\s]*\d.*$/, "")) || "Scheduled item");
       const unitOf = (h: string) => (h.match(/\b(KW|L\/S|CFM|W|HP|TR|BTU\/?H?|A|V|M3\/H)\b/i) || [])[1] || "";
       const specBits = equipment ? specCols.map((i) => {
         const v = String(r[i] ?? "").trim();
@@ -306,7 +319,7 @@ export function applyScheduleItems(rows: any[], items: ScheduleItem[], base: any
       // a count or a length of the same item: a flow bar the AI counted in "nr" is still the flow bar
       const sameKind = COUNT_UNIT.test(u) || LENGTH_UNIT.test(u);
       if (!sameKind) return true;
-      const subj = String(r.description || "").split(/,| with | for | including | per /i)[0];
+      const subj = String(r.description || "").split(/,| with | for | including | per | in /i)[0];
       // a damper is not a diffuser, a duct is not a grille: match the item, not a word in passing
       if (!res.some((re) => re.test(subj)) || /\b(duct(work)?|pipe|cable|tray|conduit)\b/i.test(subj)) return true;
       aiGone.push(r);
