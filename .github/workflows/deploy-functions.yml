@@ -46,6 +46,19 @@ jobs:
           fi
           echo "list=$LIST" >> "$GITHUB_OUTPUT"
           echo "Functions: $LIST"
+      # 2026-11-19: the take-off rules have offline tests built from real drawings (no AI calls, no cost).
+      # A failing test stops the deploy, so a broken count never reaches customers.
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Test before deploy
+        run: |
+          for f in ${{ steps.which.outputs.list }}; do
+            for t in supabase/functions/$f/*_test.ts; do
+              [ -f "$t" ] || continue
+              echo "Testing $t"; deno test --no-check "$t"
+            done
+          done
       - name: Deploy
         run: |
           if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then echo "SUPABASE_ACCESS_TOKEN secret is missing"; exit 1; fi

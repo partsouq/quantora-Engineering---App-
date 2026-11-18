@@ -2,7 +2,7 @@
 function assertEquals(a: unknown, b: unknown) {
   if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
 }
-import { applyScheduleItems, countRefs, mergeSameKindRows, scheduleTablesToItems } from "./schedules.ts";
+import { applyScheduleItems, countRefs, flagAgainstLegend, mergeSameKindRows, scheduleTablesToItems } from "./schedules.ts";
 
 // The two tables on a real customer HVAC sheet (AC-01), copied as printed.
 const DIFFUSERS = {
@@ -200,4 +200,68 @@ Deno.test("types inside one family stay apart; same spots under two names count 
   assertEquals(q(/downlight/), [30]);
   assertEquals(q(/Exit sign/), [4]);
   assertEquals(r.rows.filter((x: any) => x.system_category === "access_control").map((x: any) => x.quantity), [4]);
+});
+
+// 2026-11-19: a villa DX sheet. Unit tags carry a level code (L0-01), the slot diffuser schedule lists
+// the plenum box and flexible duct with their own QTY columns, and the legend shows refrigerant pipe.
+const DX_SPLIT = { kind: "equipment_schedule", title: "DX SPLIT UNITS -SCHEDULE",
+  columns: ["Reference", "Model No.", "Type", "Location", "Total Kw", "Air Flow L/s"],
+  rows: [["IDU-VI-4A&B.L0-01", "AB-Q18", "Inverter ceiling concealed ducted", "Guest Room", "4.08", "275"],
+         ["IDU-VI-4A&B.L0-02", "I14TCP", "Inverter wall mounted", "Maid Room", "2.50", "155"],
+         ["IDU-VI-4A&B.L0-03", "AB-Q60", "Inverter ceiling concealed ducted", "Living", "13.14", "715"]] };
+const FANS = { kind: "equipment_schedule", title: "SCHEDULE OF TOILET EXHAUST FAN",
+  columns: ["MODEL NO.", "REF.", "Fan Type", "QTY"],
+  rows: [["TMF 75 P", "TOILET EXHAUST EF=VI-4B.L0-01", "Duct Inline", "01"], ["TMF 100 F", "TOILET EXHAUST EF=VI-4B.L0-02", "Duct Inline", "01"],
+         ["TMF 75 P", "TOILET EXHAUST EF=VI-4B.L0-03", "Duct Inline", "01"]] };
+const SLOTS = { kind: "terminal_schedule", title: "SUPPLY-RETURN SLOT LINEAR DIFFUSER SCHEDULES",
+  columns: ["NO", "LOCATION", "REF NUMBER", "FLOW (L/S)", "SLD/RLD SIZE(MM)", "SLD LENGTH(MM)", "QTY", "PLENUM BOX DETAILS SIZE ( L x W x H )", "QTY NOS.", "FLEXIBLE DUCT DETAILS SIZE Ø", "FLEXIBLE DUCT DETAILS QTY FLEXDUCT"],
+  rows: [["1", "KITCHEN", "ELD-01", "50", "2 SLOT 25 MM", "1000", "1", "1100x250x200", "1", "200Ø", "1"],
+         ["2", "CORRIDOR", "SLD-01", "100", "2 SLOT 25 MM", "1500", "1", "1600x200x200", "1", "150Ø", "3"],
+         ["3", "CORRIDOR", "RLD-01", "100", "2 SLOT 25 MM", "1500", "1", "------", "------", "------", "------"],
+         ["4", "BOH", "SLD-02", "55", "2 SLOT 25 MM", "800", "1", "900x200x250", "1", "200Ø", "1"],
+         ["5", "BOH", "RLD-02", "55", "2 SLOT 25 MM", "800", "1", "------", "------", "------", "------"]] };
+const LEGEND = { kind: "legend", title: "HVAC LEGEND", columns: ["Symbol", "Description"],
+  rows: [["[indoor unit symbol]", "INDOOR UNIT"], ["[supply duct symbol]", "SUPPLY AIR DUCT"], ["[refrigerant pipe]", "REFRIGERANT PIPE"]] };
+const total = (items: any[], re: RegExp) => items.filter((i) => re.test(i.description)).reduce((s, i) => s + i.quantity, 0);
+
+Deno.test("level codes are tags, not ranges; same-kind lists still count", () => {
+  assertEquals(countRefs("IDU-VI-4A&B.L0-01"), 1);
+  assertEquals(countRefs("TOILET EXHAUST EF=VI-4B.L0-03"), 1);
+  assertEquals(countRefs("B1-02"), 1);
+  assertEquals(countRefs("FCU-02 TO 44"), 43);
+  assertEquals(countRefs("EF-1~3"), 3);
+  assertEquals(countRefs("AHU 1-4"), 4);
+  assertEquals(countRefs("FCU-1, FCU-3, FCU-7"), 3);
+  assertEquals(countRefs("FCU-1 & 3"), 2);
+});
+
+Deno.test("DX villa sheet: 3 split units, 3 fans, 5 diffusers; plenum boxes and flex ducts on their own", () => {
+  const { items } = scheduleTablesToItems([DX_SPLIT, FANS, SLOTS]);
+  assertEquals(total(items.filter((i) => i.familyName === "split / VRF unit"), /./), 3);
+  assertEquals(total(items.filter((i) => i.familyName === "fan"), /./), 3);
+  assertEquals(total(items.filter((i) => i.familyName === "flow bar / linear slot diffuser"), /./), 5);
+  assertEquals(total(items, /^Plenum box/), 3);
+  assertEquals(total(items, /^Flexible duct/), 5);
+});
+
+Deno.test("DX villa sheet: AI FCU / diffuser / grille guesses go, thermostats checked, chilled water flagged", () => {
+  const { items } = scheduleTablesToItems([DX_SPLIT, FANS, SLOTS]);
+  const ai = [
+    { description: "Fan Coil Unit (FCU), cassette type", quantity: 2, unit: "nr", quantity_source_type: "physical_count" },
+    { description: "Supply air diffuser, ceiling mounted, type and size per schedule", quantity: 8, unit: "nr", quantity_source_type: "physical_count" },
+    { description: "Return air grille, ceiling/wall mounted, size per schedule", quantity: 4, unit: "nr", quantity_source_type: "physical_count" },
+    { description: "Room Thermostat/Controller", quantity: 2, unit: "nos", quantity_source_type: null },
+    { description: "Chilled water supply pipe to FCU, insulated", quantity: 12, unit: "m", quantity_source_type: "physical_count", confidence_score: 45 },
+    { description: "GI rectangular duct 150x100 mm", quantity: 36, unit: "m2", quantity_source_type: "calculated_quantity" },
+  ];
+  const a = applyScheduleItems(ai, items, {});
+  const left = (re: RegExp) => a.rows.filter((r: any) => re.test(r.description) && !/schedule/i.test(r.quantity_basis_notes ?? "x")).length;
+  assertEquals(left(/^Fan Coil/), 0);
+  assertEquals(left(/^Supply air diffuser/), 0);
+  assertEquals(left(/^Return air grille/), 0);
+  assertEquals(a.rows.find((r: any) => /Thermostat/.test(r.description)).schedule_quantity_crosscheck, 3);
+  const f = flagAgainstLegend(a.rows, [LEGEND]);
+  assertEquals(f.flagged, 1);
+  assertEquals(f.rows.find((r: any) => /Chilled water/.test(r.description)).confidence_score, 25);
+  assertEquals(a.rows.some((r: any) => /GI rectangular duct/.test(r.description)), true);
 });
