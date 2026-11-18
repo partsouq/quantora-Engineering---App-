@@ -265,3 +265,36 @@ Deno.test("DX villa sheet: AI FCU / diffuser / grille guesses go, thermostats ch
   assertEquals(f.rows.find((r: any) => /Chilled water/.test(r.description)).confidence_score, 25);
   assertEquals(a.rows.some((r: any) => /GI rectangular duct/.test(r.description)), true);
 });
+
+// The same sheet copied a second time: headings now aligned, "No.of Fan" beside QTY, and the flexible
+// duct size headed just "SIZE Ø". Plus the VCD, NRD and disc valve tables.
+const FANS2 = { kind: "equipment_schedule", title: "SCHEDULE OF TOILET EXHAUST FAN",
+  columns: ["MODEL NO", "REF", "Fan Type", "Fan(SFP) W/(L/s)", "No.of Fan", "QTY", "FAN TYPE"],
+  rows: [["TMF 75 P", "TOILET EXHAUST EF-VI-4B L0-01", "Duct Inline", "1.84", "2", "01", "Centrifugal in-line"],
+         ["TMF 100 P", "TOILET EXHAUST EF-VI-4B L0-02", "Duct Inline", "1.13", "2", "01", "Centrifugal in-line"],
+         ["TMF 75 P", "TOILET EXHAUST EF-VI-4B L0-03", "Duct Inline", "1.72", "2", "01", "Centrifugal in-line"]] };
+const SLOTS2 = { ...SLOTS, rows: SLOTS.rows.map((r) => [...r.slice(0, 6), r[0] === "1" ? "<15" : "17", ...r.slice(6)]), columns: ["NO", "LOCATION", "REF NUMBER", "FLOW (L/S)", "SLD/RLD SIZE(MM)", "SLD LENGTH(MM)", "NOISE CRITERIA (NC)", "QTY", "PLENUM BOX DETAILS SIZE (L x W x H )", "QTY NOS.", "SIZE Ø", "QTY FLEXDUCT"] };
+const VCD = { kind: "terminal_schedule", title: "SCHEDULE OF V", columns: ["TAG NO", "SIZE (MM)"], rows: [["VCD-1", "500x200"], ["VCD-2", "200x150"]] };
+const NRD = { kind: "terminal_schedule", title: "SCHEDULE OF NRD", columns: ["TYPE", "SIZE (MM)", "QTY."], rows: [["TOILET EXHAUST", "100X100", "04"], ["KITCHEN EXHAUST", "200x100", "01"]] };
+
+Deno.test("second copy of the DX sheet: 3 fans, diffuser sizes not mixed with flex duct sizes", () => {
+  const { items } = scheduleTablesToItems([FANS2, SLOTS2]);
+  assertEquals(total(items.filter((i) => i.familyName === "fan"), /./), 3);
+  const slots = items.filter((i) => i.familyName === "flow bar / linear slot diffuser");
+  assertEquals(total(slots, /./), 5);
+  assertEquals(slots.some((i) => /Ø/.test(i.description)), false);
+  assertEquals(total(items, /^Flexible duct.*200Ø/), 2);
+});
+
+Deno.test("VCD / NRD schedules: named for what they are, and a VCD schedule leaves fire dampers alone", () => {
+  const { items } = scheduleTablesToItems([VCD, NRD]);
+  assertEquals(total(items, /^Volume control damper/), 2);
+  assertEquals(total(items, /^Non-return damper, toilet exhaust/), 4);
+  const ai = [
+    { description: "Volume control damper (VCD) or balancing damper in ductwork", quantity: 3, unit: "nr", quantity_source_type: "physical_count" },
+    { description: "Fire Damper (at fire-rated wall/floor crossing)", quantity: 5, unit: "nos", quantity_source_type: null },
+  ];
+  const a = applyScheduleItems(ai, items, {});
+  assertEquals(a.rows.some((r: any) => /^Volume control damper \(VCD\)/.test(r.description)), false);
+  assertEquals(a.rows.some((r: any) => /^Fire Damper/.test(r.description)), true);
+});
