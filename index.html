@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-18.1";</script>
+<script>window.QUANTORA_BUILD = "2026-11-18.2";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -13190,7 +13190,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
           {tab === "drawings"      && <DrawingsTab project={project} />}
           {tab === "design" && (locked("design") || <DesignTab project={project} />)}
           {tab === "boq"           && <BoqTab project={project} onGoToEstimation={() => setTab("estimation")} />}
-          {tab === "manual"        && <ManualTakeoffTab project={project} onGoToBoq={() => setTab("boq")} />}
+          {tab === "manual"        && <ManualTakeoffTab project={project} onGoToBoq={() => setTab("boq")} onGoToUpload={() => setTab("drawings")} />}
           {tab === "estimation" && (locked("estimation") || <EstimationTab project={project} />)}
           {tab === "cost" && (locked("cost") || <CostBudgetTab project={project} />)}
           {tab === "specification" && (locked("specification") || <SpecificationTab project={project} />)}
@@ -18124,7 +18124,7 @@ async function mtExportMarkup(doc, project, onlySheetIds) {
   return sheets.length;
 }
 
-function ManualTakeoffTab({ project, onGoToBoq }) {
+function ManualTakeoffTab({ project, onGoToBoq, onGoToUpload }) {
   const path = `${project.id}/manual-takeoff/takeoff.json`;
   const [doc, setDoc] = useState(null);            // { floors, sheets, items, marks }
   const [drawings, setDrawings] = useState([]);
@@ -18655,7 +18655,11 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
               <div style={{ fontSize: 34 }}>📐</div>
               <div style={{ fontWeight: 800, fontSize: 16, marginTop: 6 }}>Choose the drawing for {floorName(floorId)}</div>
               <div style={{ fontSize: 13, marginTop: 6 }}>Use the box above. Drawings come from <b>Drawings & Upload</b> — PDF or image.</div>
-              {!drawings.length && <div style={{ fontSize: 13, marginTop: 10, color: "#b45309" }}>No drawings in this project yet. Upload one under Drawings & Upload first.</div>}
+              {!drawings.length && <div style={{ fontSize: 13, marginTop: 10, color: "#b45309" }}>No drawings in this project yet. Upload a PDF or image first.</div>}
+              {onGoToUpload && <button type="button" onClick={onGoToUpload}
+                style={{ marginTop: 14, padding: "11px 22px", borderRadius: 10, border: 0, cursor: "pointer", fontWeight: 800, fontSize: 14,
+                         background: drawings.length ? "#e2e8f0" : "#4f46e5", color: drawings.length ? "#0f172a" : "#fff" }}>
+                ⬆ Upload {drawings.length ? "another" : "a"} drawing</button>}
             </div>
           ) : loadingSheet || !page ? <div style={{ padding: 40, color: "#475569" }}>Opening the drawing…</div> : (
             <div style={{ position: "relative", width: page.w * zoom, height: page.h * zoom, margin: 12, background: "#fff", boxShadow: "0 2px 12px rgba(0,0,0,.25)", cursor: tool === "select" ? "inherit" : "crosshair" }}>
