@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-18.1";</script>
+<script>window.QUANTORA_BUILD = "2026-11-18.2";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -13190,7 +13190,7 @@ function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialT
           {tab === "drawings"      && <DrawingsTab project={project} />}
           {tab === "design" && (locked("design") || <DesignTab project={project} />)}
           {tab === "boq"           && <BoqTab project={project} onGoToEstimation={() => setTab("estimation")} />}
-          {tab === "manual"        && <ManualTakeoffTab project={project} onGoToBoq={() => setTab("boq")} />}
+          {tab === "manual"        && <ManualTakeoffTab project={project} onGoToBoq={() => setTab("boq")} onGoToUpload={() => setTab("drawings")} />}
           {tab === "estimation" && (locked("estimation") || <EstimationTab project={project} />)}
           {tab === "cost" && (locked("cost") || <CostBudgetTab project={project} />)}
           {tab === "specification" && (locked("specification") || <SpecificationTab project={project} />)}
@@ -18124,7 +18124,7 @@ async function mtExportMarkup(doc, project, onlySheetIds) {
   return sheets.length;
 }
 
-function ManualTakeoffTab({ project, onGoToBoq }) {
+function ManualTakeoffTab({ project, onGoToBoq, onGoToUpload }) {
   const path = `${project.id}/manual-takeoff/takeoff.json`;
   const [doc, setDoc] = useState(null);            // { floors, sheets, items, marks }
   const [drawings, setDrawings] = useState([]);
@@ -18599,6 +18599,8 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
             <option value="">{attaching ? "Checking the sheets in this file…" : floorSheets.length ? "＋ Add another sheet to this floor" : "Choose the drawing for this floor"}</option>
             {drawings.map(d => <option key={d.id} value={d.id}>{d.file_name}</option>)}
           </select>
+          {onGoToUpload && <button type="button" onClick={onGoToUpload} title="Add a new drawing to this project"
+            style={{ ...btn(false), color: "#fff", background: "#4f46e5", borderColor: "#4f46e5" }}>⬆ Upload drawing</button>}
           {sheet && page && page.isPdf && page.pages > 1 && (
             <select value={sheet.page || 1} onChange={e => { const pg = Number(e.target.value); const go = () => update(d => { d.sheets.find(x => x.id === sheet.id).page = pg; return d; });
               if (!doc.marks.some(m => m.sheetId === sheet.id)) go(); else sheetAllowed(sheet.id, pg).then(ok => { if (ok) go(); }); }} className="border rounded-lg px-2 py-1" style={{ fontSize: 12.5 }}>
@@ -18655,7 +18657,11 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
               <div style={{ fontSize: 34 }}>📐</div>
               <div style={{ fontWeight: 800, fontSize: 16, marginTop: 6 }}>Choose the drawing for {floorName(floorId)}</div>
               <div style={{ fontSize: 13, marginTop: 6 }}>Use the box above. Drawings come from <b>Drawings & Upload</b> — PDF or image.</div>
-              {!drawings.length && <div style={{ fontSize: 13, marginTop: 10, color: "#b45309" }}>No drawings in this project yet. Upload one under Drawings & Upload first.</div>}
+              {!drawings.length && <div style={{ fontSize: 13, marginTop: 10, color: "#b45309" }}>No drawings in this project yet. Upload a PDF or image first.</div>}
+              {onGoToUpload && <button type="button" onClick={onGoToUpload}
+                style={{ marginTop: 14, padding: "11px 22px", borderRadius: 10, border: 0, cursor: "pointer", fontWeight: 800, fontSize: 14,
+                         background: drawings.length ? "#e2e8f0" : "#4f46e5", color: drawings.length ? "#0f172a" : "#fff" }}>
+                ⬆ Upload {drawings.length ? "another" : "a"} drawing</button>}
             </div>
           ) : loadingSheet || !page ? <div style={{ padding: 40, color: "#475569" }}>Opening the drawing…</div> : (
             <div style={{ position: "relative", width: page.w * zoom, height: page.h * zoom, margin: 12, background: "#fff", boxShadow: "0 2px 12px rgba(0,0,0,.25)", cursor: tool === "select" ? "inherit" : "crosshair" }}>
@@ -18689,6 +18695,33 @@ function ManualTakeoffTab({ project, onGoToBoq }) {
                  tool === "scale" ? "Set the scale above" : "Click a mark to select it · Delete removes it"}</span>
             </div>
           )}
+        </div>
+        {/* every drawing in the project, and where it is used */}
+        <div style={{ border: "1px solid rgba(148,163,184,.3)", borderRadius: 12, padding: "10px 12px" }}>
+          <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: drawings.length ? 8 : 0 }}>
+            <b style={{ fontSize: 13 }}>Drawings in this project ({drawings.length})</b>
+            <div style={{ flex: 1 }} />
+            {onGoToUpload && <button type="button" onClick={onGoToUpload} style={{ ...btn(false), color: "#fff", background: "#4f46e5", borderColor: "#4f46e5" }}>⬆ Upload drawing</button>}
+          </div>
+          {!drawings.length ? <div style={{ fontSize: 12.5, opacity: .75 }}>No drawings yet. Upload a PDF or image to start.</div> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 240, overflowY: "auto" }}>
+              {drawings.map(d => {
+                const used = doc.sheets.filter(x => x.drawingId === d.id);
+                const open = sheet && sheet.drawingId === d.id;
+                const where = [...new Set(used.map(x => floorName(x.floorId)))];
+                return (
+                  <div key={d.id} className="flex flex-wrap items-center gap-2" style={{ fontSize: 12.5, padding: "6px 8px", borderRadius: 8,
+                    background: open ? "rgba(79,70,229,.15)" : "transparent", border: "1px solid " + (open ? "#6366f1" : "transparent") }}>
+                    <span aria-hidden="true">📄</span>
+                    <span style={{ fontWeight: 700, overflowWrap: "anywhere", flex: "1 1 200px" }}>{d.file_name}</span>
+                    <span style={{ opacity: .75 }}>{open ? "Open now" : where.length ? `On ${where.join(", ")}` : "Not on a floor yet"}</span>
+                    {!open && <button type="button" disabled={attaching} style={btn(false)} onClick={() => {
+                      const s0 = used.find(x => x.floorId === floorId) || used[0];
+                      if (s0) { setFloorId(s0.floorId); setSheetId(s0.id); } else addSheet(d.id, 1);
+                    }}>{used.length ? "Open" : `Add to ${floorName(floorId)}`}</button>}
+                  </div>);
+              })}
+            </div>)}
         </div>
         {selected && (() => { const m = doc.marks.find(x => x.id === selected); if (!m) return null; return (
           <div className="flex flex-wrap items-center gap-2 text-xs">
