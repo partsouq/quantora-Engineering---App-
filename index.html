@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-16.4";</script>
+<script>window.QUANTORA_BUILD = "2026-11-18.1";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -7017,6 +7017,146 @@ function LandingMarkupItemsList() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Launch promotion, first 50 users (2026-11-18). A code can arrive in the link
+// (?promo=LINKEDIN50), from the pop-up or from the sign-up form. It is kept on
+// this browser and in the account's sign-up details, and claimed once the
+// email is confirmed (q_promo_claim checks every rule on the server).
+// ---------------------------------------------------------------------------
+const Q_PROMO_KEY = "q_promo_code";
+function qPromoClean(c) { c = String(c || "").trim().toUpperCase(); return /^[A-Z0-9]{3,24}$/.test(c) ? c : ""; }
+function qPromoGet() { try { return qPromoClean(localStorage.getItem(Q_PROMO_KEY)); } catch (e) { return ""; } }
+function qPromoSet(c) { c = qPromoClean(c); if (!c) return; try { localStorage.setItem(Q_PROMO_KEY, c); } catch (e) { /* blocked */ } }
+function qPromoClear() { try { localStorage.removeItem(Q_PROMO_KEY); } catch (e) { /* blocked */ } }
+try { const p = new URLSearchParams(window.location.search).get("promo"); if (p) qPromoSet(p); } catch (e) { /* no URL */ }
+// The code for this visitor: the one they came with, else where they came from.
+function qPromoGuess() {
+  const c = qPromoGet(); if (c) return c;
+  let src = (document.referrer || "").toLowerCase();
+  try { src += " " + (new URLSearchParams(window.location.search).get("utm_source") || "").toLowerCase(); } catch (e) { /* no URL */ }
+  if (/linkedin|lnkd\.in/.test(src)) return "LINKEDIN50";
+  if (/tiktok/.test(src)) return "TIKTOK50";
+  return "WEB50";
+}
+
+function QPromoPopup({ onClaim }) {
+  const [st, setSt] = useState(null);
+  const [open, setOpen] = useState(false);
+  const code = useMemo(() => qPromoGuess(), []);
+  useEffect(() => {
+    let alive = true, t = null;
+    sb.rpc("q_promo_status").then(({ data }) => {
+      if (!alive || !data || !data.active) return;
+      setSt(data);
+      let seen = false;
+      try { seen = !!localStorage.getItem("q_promo_seen"); } catch (e) { /* blocked */ }
+      if (!seen) t = setTimeout(() => { if (alive) setOpen(true); }, 3000);
+    }).catch(() => {});
+    return () => { alive = false; if (t) clearTimeout(t); };
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+  function close() { setOpen(false); try { localStorage.setItem("q_promo_seen", "1"); } catch (e) { /* blocked */ } }
+  function claim() { qPromoSet(code); close(); onClaim(); }
+  if (!st) return null;
+  const taken = st.cap - st.left;
+  if (!open) return (
+    <button type="button" className="qpromo-chip" onClick={() => setOpen(true)}
+      style={{ position: "fixed", left: 16, bottom: 16, zIndex: 60, border: 0, cursor: "pointer", background: "#16a34a", color: "#fff",
+               fontWeight: 700, fontSize: 13.5, padding: "12px 18px", borderRadius: 999, boxShadow: "0 14px 32px -8px rgba(22,163,74,.7)" }}>
+      🎁 Claim free pack</button>
+  );
+  return (
+    <div className="qpromo-back" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
+      <style>{`
+        .qpromo-back{position:fixed;inset:0;z-index:1000;background:rgba(3,6,20,.72);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto}
+        .qpromo{position:relative;width:100%;max-width:420px;margin:auto;border-radius:20px;background:#0f1433;border:1.5px solid #6d5ae6;padding:24px 22px 20px;color:#fff;box-shadow:0 30px 80px rgba(0,0,0,.6);font-family:inherit;animation:qpIn .35s ease-out}
+        @keyframes qpIn{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
+        @media (prefers-reduced-motion:reduce){.qpromo{animation:none}}
+        .qpromo-x{position:absolute;right:12px;top:12px;width:34px;height:34px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:#c7d2fe;font-size:20px;cursor:pointer}
+        .qpromo-tag{display:inline-block;padding:4px 11px;border-radius:999px;background:rgba(34,197,94,.15);color:#4ade80;font-weight:700;font-size:12px}
+        .qpromo h2{font-size:26px;line-height:1.15;margin:12px 0 4px;font-weight:800;color:#fff}
+        .qpromo-sub{color:#a78bfa;font-weight:700;font-size:18px;margin-bottom:12px}
+        .qpromo-it{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(167,139,250,.3);margin-bottom:8px;font-size:15px;font-weight:700}
+        .qpromo-it b{font-size:24px;min-width:52px;text-align:center;background:linear-gradient(135deg,#a78bfa,#60a5fa);-webkit-background-clip:text;background-clip:text;color:transparent}
+        .qpromo-perk{font-size:14px;color:#e0e7ff;margin:6px 0}
+        .qpromo-code{margin:14px 0 12px;display:flex;align-items:center;justify-content:space-between;border:1.5px dashed #a78bfa;border-radius:12px;padding:10px 14px;font-size:14px;color:#c7d2fe}
+        .qpromo-code b{font-size:18px;letter-spacing:.08em;color:#fff}
+        .qpromo-go{display:block;width:100%;text-align:center;padding:14px;border-radius:12px;border:0;background:#6d28d9;color:#fff;font-weight:800;font-size:16px;cursor:pointer}
+        .qpromo-go:hover{background:#7c3aed}
+        .qpromo-go:focus-visible,.qpromo-x:focus-visible,.qpromo-chip:focus-visible{outline:3px solid #a5b4fc;outline-offset:2px}
+        .qpromo-small{text-align:center;color:#c4b5fd;font-size:12.5px;margin-top:10px}
+        .qpromo-bar{height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden;margin-top:6px}
+        .qpromo-bar i{display:block;height:100%;background:linear-gradient(90deg,#22c55e,#4ade80)}
+      `}</style>
+      <div className="qpromo" role="dialog" aria-modal="true" aria-labelledby="qpromo-h">
+        <button type="button" className="qpromo-x" aria-label="Close" onClick={close}>×</button>
+        <span className="qpromo-tag">ONLY {st.cap} WELCOME PACKS</span>
+        <h2 id="qpromo-h">Your engineering drawings. Our treat! 🎁</h2>
+        <div className="qpromo-sub">{st.mt + st.draftsman + st.ai} free drawings</div>
+        <div className="qpromo-it"><b>{st.mt}</b>Manual Take-off drawings</div>
+        <div className="qpromo-it"><b>{st.draftsman}</b>AI Draftsman design pages</div>
+        <div className="qpromo-it"><b>{st.ai}</b>AI take-off (BOQ) drawings</div>
+        <div className="qpromo-perk">🤖 Your own Estima AI assistant</div>
+        <div className="qpromo-perk">💬 Live chat support</div>
+        <div className="qpromo-code"><span>Your promo code</span><b>{code}</b></div>
+        <button type="button" className="qpromo-go" onClick={claim} autoFocus>Claim your free pack</button>
+        <div className="qpromo-small">{st.left} of {st.cap} packs left · use within {st.days} days</div>
+        <div className="qpromo-bar"><i style={{ width: `${Math.max(4, Math.round(100 * taken / st.cap))}%` }}></i></div>
+      </div>
+    </div>
+  );
+}
+
+// Signed in: claims a waiting code once the account is set up (after the
+// Welcome Pack check), and says what was added.
+function QPromoClaimer({ session }) {
+  const [done, setDone] = useState(null);
+  useEffect(() => {
+    if (!session) return;
+    const code = qPromoClean(session.user?.user_metadata?.promo_code) || qPromoGet();
+    if (!code) return;
+    try { if (localStorage.getItem(`q_promo_done_${session.user.id}`)) return; } catch (e) { /* blocked */ }
+    let alive = true, tries = 0, t = null;
+    async function run() {
+      if (!alive) return;
+      const { data, error } = await sb.rpc("q_promo_claim", { p_code: code });
+      if (!alive || error || !data) return;
+      if (data.status === "no_company" && ++tries < 5) { t = setTimeout(run, 4000); return; }
+      if (data.status === "confirm_email" || data.status === "no_company") return;   // try again next time
+      qPromoClear();
+      try { localStorage.setItem(`q_promo_done_${session.user.id}`, data.status); } catch (e) { /* blocked */ }
+      if (data.status === "claimed" || data.status === "sold_out") setDone(data);
+    }
+    const go = () => { if (t) clearTimeout(t); t = setTimeout(run, 500); };
+    window.addEventListener("q-welcome-checked", go);
+    t = setTimeout(run, 8000);   // in case the Welcome Pack check was already done on this browser
+    return () => { alive = false; if (t) clearTimeout(t); window.removeEventListener("q-welcome-checked", go); };
+  }, [session && session.user && session.user.id]);
+  if (!done) return null;
+  const ok = done.status === "claimed";
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onClick={(e) => { if (e.target === e.currentTarget) setDone(null); }}>
+      <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6 text-slate-800" role="dialog" aria-modal="true">
+        <div className="text-lg font-bold">{ok ? "🎁 Your free pack is ready" : "The free packs have all been claimed"}</div>
+        {ok ? <>
+          <ul className="text-sm mt-3 space-y-1">
+            <li><b>{done.mt}</b> Manual Take-off drawings</li>
+            <li><b>{done.draftsman}</b> AI Draftsman design pages</li>
+            <li><b>{done.ai}</b> AI take-off (BOQ) drawings</li>
+          </ul>
+          <div className="text-xs text-slate-500 mt-3">Use them by {new Date(done.expires_at).toLocaleDateString()}.</div>
+        </> : <div className="text-sm mt-3">Thank you for joining. Your Welcome Pack is ready to use.</div>}
+        <button className="w-full mt-4 bg-slate-900 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-slate-800" onClick={() => setDone(null)} autoFocus>Start</button>
+      </div>
+    </div>
+  );
+}
+
 function LandingPage({ onGetStarted }) {
   // Final approved design (2026-07-30): ported verbatim from the user-supplied
   // "quantora_dark_preview_2" reference file. The markup/CSS below are rendered
@@ -7344,6 +7484,7 @@ function LandingPage({ onGetStarted }) {
     <div ref={containerRef} className="quantora-landing-root">
       <style dangerouslySetInnerHTML={{ __html: QUANTORA_LANDING_CSS }} />
       <div dangerouslySetInnerHTML={{ __html: QUANTORA_LANDING_HTML }} />
+      <QPromoPopup onClaim={() => onGetStarted("signup")} />
     </div>
   );
 }
@@ -7442,6 +7583,7 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
   // It decides which authority rules and which price list apply to them.
   const [country, setCountry] = useState("");
   const [countryList, setCountryList] = useState([]);
+  const [promo, setPromo] = useState(() => qPromoGet());
   const [err, setErr] = useQErr("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -7583,6 +7725,7 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
         const emailRedirectTo = `${window.location.origin}${window.location.pathname}`;
         const fn = firstName.trim(), ln = lastName.trim();
         const whole = (fn + " " + ln).trim();
+        if (qPromoClean(promo)) qPromoSet(promo);
         // These ride along on the auth user itself. That matters: when email
         // confirmation is on there is no session at this point, so anything
         // written straight to `profiles` from here is rejected by RLS and lost
@@ -7591,7 +7734,7 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
         // creates the profile row server-side, confirmed or not.
         const { data, error } = await sb.auth.signUp({
           email, password,
-          options: { emailRedirectTo, data: { first_name: fn, last_name: ln, full_name: whole, country } },
+          options: { emailRedirectTo, data: { first_name: fn, last_name: ln, full_name: whole, country, ...(qPromoClean(promo) ? { promo_code: qPromoClean(promo) } : {}) } },
         });
         if (error) throw error;
         if (!data.session) {
@@ -7734,6 +7877,8 @@ function AuthScreen({ onAuthed, onBack, initialMode, inviteToken, onInviteResolv
               {countryList.map(c => <option key={c} value={c}>{c}</option>)}
               <option value="Other">Other</option>
             </select>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Promo code (optional)" aria-label="Promo code (optional)"
+              value={promo} onChange={e=>setPromo(e.target.value.toUpperCase())} maxLength={24} autoCapitalize="characters" />
           </>}
           <input type="email" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Email" value={email}
             onChange={e=>{ setEmail(e.target.value); if (confirmAddress) setConfirmAddress(false); }} required />
@@ -25773,7 +25918,45 @@ function QHealthView({ systemStatus }) {
       </div>
       <div style={{ color: "var(--text-dimmer)", fontSize: 11.5 }}>Checked at {s.checked_at || "—"}. Configuration booleans only confirm a secret's presence — values are never read or displayed.</div>
       <QWelcomeCleanupPanel />
+      <QPromoAdminPanel />
       <QWelcomeGuardPanel />
+    </>
+  );
+}
+
+// Launch promotion (first 50 users): packs claimed per code and the AI money
+// the promo accounts have used since they claimed.
+function QPromoAdminPanel() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    sb.rpc("q_promo_admin").then(({ data, error }) => { if (error) setErr(error.message); else setD(data); });
+  }, []);
+  const when = (t) => t ? new Date(t).toLocaleDateString() : "—";
+  const total = (d?.codes || []).reduce((a, c) => a + Number(c.ai_cost_usd || 0), 0);
+  return (
+    <>
+      <div className="section-label">Launch promotion: first {d?.status?.cap ?? 50} users</div>
+      <div className="card panel">
+        {err && <div style={{ color: "var(--red,#f87171)", fontSize: 12, marginBottom: 8 }}>{err}</div>}
+        {!d ? (!err && <div style={{ color: "var(--text-dimmer)", fontSize: 12 }}>Loading…</div>) : <>
+          <div style={{ fontSize: 13, marginBottom: 10 }}>
+            <b>{d.status.cap - d.status.left}</b> of {d.status.cap} packs claimed · <b>{d.status.left}</b> left ·
+            AI cost so far <b>${total.toFixed(2)}</b> · {d.status.active ? "Running" : "Ended"}
+          </div>
+          <div className="table-wrap"><table>
+            <thead><tr><th>Code</th><th>Source</th><th>Claimed</th><th>AI cost (USD)</th></tr></thead>
+            <tbody>{(d.codes || []).map(c => (
+              <tr key={c.code}><td className="name">{c.code}</td><td>{c.source}</td><td>{c.claims}</td><td>${Number(c.ai_cost_usd || 0).toFixed(2)}</td></tr>))}</tbody>
+          </table></div>
+          {(d.claims || []).length > 0 && <div className="table-wrap" style={{ marginTop: 12 }}><table>
+            <thead><tr><th>Claimed</th><th>Company</th><th>E-mail</th><th>Code</th><th>Plan</th><th>Ends</th><th>AI cost</th></tr></thead>
+            <tbody>{d.claims.map((c, i) => (
+              <tr key={i}><td>{when(c.claimed_at)}</td><td className="name">{c.company || "—"}</td><td>{c.email}</td><td>{c.code}</td>
+                <td>{c.plan}</td><td>{c.expired ? "Ended" : when(c.expires_at)}</td><td>${Number(c.ai_cost_usd || 0).toFixed(2)}</td></tr>))}</tbody>
+          </table></div>}
+        </>}
+      </div>
     </>
   );
 }
@@ -40540,7 +40723,7 @@ function App() {
       .then(async () => {
         // Welcome Pack check, once per account on this browser (welcome-guard).
         const key = `qwg_${session.user.id}`;
-        try { if (localStorage.getItem(key)) return; } catch (e) { /* blocked */ }
+        try { if (localStorage.getItem(key)) { window.dispatchEvent(new Event("q-welcome-checked")); return; } } catch (e) { /* blocked */ }
         try {
           const r = await callWelcomeGuard("register", { device_id: qDeviceId() });
           if (r.status && r.status !== "pending_email" && r.status !== "no_company") { try { localStorage.setItem(key, r.status); } catch (e) { /* blocked */ } }
@@ -40549,6 +40732,7 @@ function App() {
               "A Welcome Pack has already been used from this e-mail or device, so this account starts on the Free plan. You can still look around; choose a plan to analyse drawings." } }));
           }
         } catch (e) { console.error("welcome check failed (non-fatal):", e); }
+        finally { window.dispatchEvent(new Event("q-welcome-checked")); }
       });
   }, [session, inviteToken]);
 
@@ -40767,6 +40951,7 @@ function App() {
       {qLook === null && !(view && view.name === "admin") && <QLookChooser uid={session.user.id} hold={!!countryGate} />}
       <DuctSizesHost />
       <QAppPrompt />
+      <QPromoClaimer session={session} />
       <nav className="qtr-topnav bg-white border-b px-6 py-3 flex items-center justify-between sticky top-0 z-10">
         {/* The real brand mark. This was previously the building-construction
             emoji -- a base character plus a variation selector -- and where the
