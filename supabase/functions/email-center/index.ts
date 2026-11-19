@@ -389,7 +389,7 @@ Deno.serve(async (req) => {
       const m = customEmail(b);
       if (!m.subject) return json({ error: "Enter a subject." }, 400);
       if ((await unsubscribed([to])).has(to)) return json({ error: "This address has unsubscribed, so it is not emailed." }, 400);
-      if (await sentToday("zoho") >= await leadCap()) return json({ error: "Today's info@ sending limit is reached. Try again tomorrow." }, 400);
+      // 19 Nov (owner): one-off emails are not held back by the daily lead limit.
       try { await viaZoho(to, m.subject, m.html, { noUnsub: true }); }
       catch (e) { await admin.from("email_sends").insert({ list: "custom", template: "custom", email: to, provider: "zoho", ok: false, error: String((e as Error).message).slice(0, 300), sent_by: user.id }); throw e; }
       await admin.from("email_sends").insert({ list: "custom", template: "custom", email: to, provider: "zoho", sent_by: user.id });
