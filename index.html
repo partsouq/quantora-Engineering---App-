@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.3";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.4";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -34493,7 +34493,7 @@ function WorkspaceChooser({ onPick, onOpenProject, email }) {
           const locked = access && access[key] && access[key].mode === "locked";
           return (
             <button key={key} type="button" onClick={() => onPick(key)} className={"qwc-card qwc-" + key}>
-              <img className="qwc-art" src={"ws-art2/card-" + key + ".jpg"} alt="" aria-hidden="true" />
+              <img className="qwc-art" src={"ws-art2/card-" + key + ".jpg?v=20261120"} alt="" aria-hidden="true" />
               <span className="qwc-ic">{look.icon}</span>
               <span className="qwc-title">{label} <WorkspaceAccessChip a={access && access[key]} /></span>
               <span className="qwc-blurb">{look.blurb}</span>
