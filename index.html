@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.1";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.2";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -558,6 +558,11 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   @media (max-width:1100px){.qsc-row::before{display:none;}.qsc{min-height:0;}}
   @media (max-width:1100px){.qsc-row{grid-template-columns:repeat(3,1fr);}.qsd-row{grid-template-columns:repeat(2,1fr);}}
   @media (max-width:600px){.qsc-row,.qsd-row{grid-template-columns:1fr;}}
+  /* 2026-11-20: services heading in the standard section style */
+  .qsc-head h3{color:#ffffff !important;font-size:clamp(28px,3vw,38px) !important;font-weight:800 !important;}
+  .qsc-hl{background:none !important;-webkit-background-clip:border-box !important;background-clip:border-box !important;color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;}
+  .qsc-kick{color:#a5b4fc !important;font-size:12.5px !important;font-weight:700 !important;letter-spacing:.14em !important;background:none !important;border:none !important;padding:0 !important;}
+  .qsc-head p{color:#c3c9e4 !important;font-size:16px !important;}
   /* 2026-11-20: service, dashboard and stat cards match the "Why teams choose" cards */
   .qsc,.qsd,.hero-strip-bottom .stat-item{--c:#a78bfa !important;background:linear-gradient(180deg,rgba(255,255,255,0.07),rgba(255,255,255,0.025)) !important;border:1px solid rgba(255,255,255,0.12) !important;border-radius:12px !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.06) !important;}
   .qsc::before,.qsc::after{display:none !important;}
@@ -1487,7 +1492,7 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
   <div class="wrap m3d-wrap works-wrap">
     <div class="works-stage">
       <div class="works-frame">
-        <video id="qtour" muted loop playsinline preload="none" poster="platformtourposter.jpg" style="display:block;width:100%;height:auto;">
+        <video id="qtour" muted loop playsinline preload="none" poster="platformtourposter-2026-11.jpg" style="display:block;width:100%;height:auto;">
           <!-- Single H.264 source, 1600x1000 native (2026-08-24). Encoded at the master
                resolution instead of downscaled to 1280: the player box is 1000 CSS px
                wide, so on a retina screen a 1280-wide file was being upscaled and every
@@ -1503,17 +1508,17 @@ html,body{background:var(--q-bg) !important;color:var(--q-text);}
           </span>
         </button>
       </div>
-      <p class="works-cap">Quantora Mall · recorded on the live platform: dashboard, drawings to BOQ, BOQ export, system-wise drawings and the 3D model · 1 min 29 s · no sound</p>
+      <p class="works-cap">Quantora Mall · real platform screens: project dashboard, AI take-off, manual take-off and AI Draftsman · 15 s · no sound</p>
     </div>
     <div class="m3d-copy">
     <div class="kicker"><svg class="icon" width="13" height="13" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v2.5M12 12l4.5-2.5M12 12l-2 6.5"/><circle class="fill-solid" cx="12" cy="12" r="1.4"/></svg>The Process</div>
     <h2 class="sectitle">How Quantora Engineering Works</h2>
-    <p class="secsub">From a raw drawing package to an approved, procurement-ready BOQ &mdash; four steps, one intelligent platform. Watch it on a real project.</p>
+    <p class="secsub">From the drawing package to a priced BOQ and issued shop drawings &mdash; four steps, one project. Watch it on a real project.</p>
     <ul class="m3d-list">
-      <li><b>Upload your drawings</b> &mdash; PDF sets, CAD exports, specifications</li>
-      <li><b>AI understands the project</b> &mdash; building, floors, zones and every system</li>
-      <li><b>Generate the engineering BOQ</b> &mdash; take-off, system-wise and floor-wise, marked on the drawing</li>
-      <li><b>Review and deliver</b> &mdash; comments, rework, approval and export to Excel or PDF</li>
+      <li><b>Create the project</b> &mdash; drawings, BOQ, tenders and approvals in one place, across four dashboards</li>
+      <li><b>AI Take-off &amp; BOQ</b> &mdash; AI counts every item and marks it on the drawing, system-wise and floor-wise</li>
+      <li><b>Manual Take-off</b> &mdash; you mark the drawing, Quantora designs the complete BOQ for every system</li>
+      <li><b>AI Draftsman</b> &mdash; shop drawings, schematics and a 3D model to your authority rules, export to Excel, PDF or DWG</li>
     </ul>
     <div class="hero-ctas"><a class="btn btn-lg btn-grad" href="?auth=signup">Try It Free &rarr;</a></div>
     </div>
@@ -7334,7 +7339,7 @@ function LandingPage({ onGetStarted }) {
       if (attached) return;
       attached = true;
       const src = document.createElement("source");
-      src.src = "platformtour.mp4";
+      src.src = "platformtour-2026-11.mp4";
       src.type = "video/mp4";
       v.appendChild(src);
       v.load();
