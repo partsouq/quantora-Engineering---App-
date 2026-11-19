@@ -191,6 +191,13 @@ async function sentToday(provider: string) {
   const { count } = await admin.from("email_sends").select("id", { count: "exact", head: true }).eq("provider", provider).eq("ok", true).gte("sent_at", day0.toISOString());
   return count || 0;
 }
+// 19 Nov (owner: no Resend): customer emails also go from info@ through Zoho. Limits count per list.
+async function sentTodayList(lists: string[]) {
+  const day0 = new Date(); day0.setUTCHours(0, 0, 0, 0);
+  const { count } = await admin.from("email_sends").select("id", { count: "exact", head: true }).in("list", lists).eq("ok", true).gte("sent_at", day0.toISOString());
+  return count || 0;
+}
+const pause = (ms: number) => new Promise(r => setTimeout(r, ms));
 async function unsubscribed(emails: string[]) {
   if (!emails.length) return new Set<string>();
   const { data } = await admin.from("email_unsubscribes").select("email").in("email", emails.map(e => e.toLowerCase()));
@@ -236,7 +243,7 @@ async function sendOneLead(l: any, by: string | null) {
 async function drainOne() {
   if (!(await queueCount())) return { sent: 0, reason: "queue empty" };
   const pz = await pausedUntil(); if (pz) return { sent: 0, reason: "paused after a Zoho block until " + new Date(pz).toISOString() };
-  if (await sentToday("zoho") >= await leadCap()) return { sent: 0, reason: "daily limit reached" };
+  if (await sentTodayList(["leads"]) >= await leadCap()) return { sent: 0, reason: "daily limit reached" };
   if (await sentLastHour() >= LEADS_PER_HOUR) return { sent: 0, reason: "hourly limit reached" };
   for (let i = 0; i < 5; i++) {
     const { data: q } = await admin.from("email_lead_queue").select("lead_id, queued_by").order("queued_at", { ascending: true }).limit(1);
@@ -366,7 +373,7 @@ Deno.serve(async (req) => {
 
     if (act === "status") {
       return json({ resend: !!Deno.env.get("RESEND_API_KEY"), zoho: !!Deno.env.get("ZOHO_SMTP_PASS"),
-        resend_today: await sentToday("resend"), zoho_today: await sentToday("zoho"), cap_customers: CAP_CUSTOMERS, cap_leads: await leadCap(),
+        resend_today: await sentTodayList(["welcome", "updates"]), zoho_today: await sentTodayList(["leads"]), cap_customers: CAP_CUSTOMERS, cap_leads: await leadCap(),
         leads_per_hour: LEADS_PER_HOUR, leads_last_hour: await sentLastHour(), leads_queued: await queueCount() });
     }
 
@@ -402,16 +409,16 @@ Deno.serve(async (req) => {
       const ids: string[] = (b.user_ids || []).slice(0, 200);
       const { data: due, error } = await asUser.rpc("q_email_welcome_due"); if (error) throw error;
       const rows = (due || []).filter((x: any) => ids.includes(x.user_id));
-      let room = CAP_CUSTOMERS - await sentToday("resend");
+      let room = Math.min(20, CAP_CUSTOMERS - await sentTodayList(["welcome", "updates"]));   // 20 per click, paced
       const out = { sent: 0, failed: 0, skipped: 0, errors: [] as string[] };
       for (const r of rows) {
         if (room <= 0) { out.skipped++; continue; }
         const m = await welcomeEmail(r.stage, r.progress, String(r.name || "").split(" ")[0], r.email);
-        try { await viaResend(r.email, m.subject, m.html); room--; out.sent++;
-          await admin.from("email_sends").insert({ list: "welcome", template: `welcome_${WELCOME_DAYS[r.stage]}d`, user_id: r.user_id, email: r.email, provider: "resend", sent_by: user.id });
+        try { if (out.sent) await pause(3000); await viaZoho(r.email, m.subject, m.html); room--; out.sent++;
+          await admin.from("email_sends").insert({ list: "welcome", template: `welcome_${WELCOME_DAYS[r.stage]}d`, user_id: r.user_id, email: r.email, provider: "zoho", sent_by: user.id });
         } catch (e) { out.failed++; out.errors.push(String((e as Error).message)); if (/not connected/.test(String((e as Error).message))) break; }
       }
-      if (room <= 0 && out.skipped) out.errors.push(`Daily limit of ${CAP_CUSTOMERS} customer emails reached; the rest stay in the list for tomorrow.`);
+      if (room <= 0 && out.skipped) out.errors.push(`Sent up to 20 per click (daily limit ${CAP_CUSTOMERS}); click again for the rest.`);
       return json(out);
     }
 
@@ -428,17 +435,17 @@ Deno.serve(async (req) => {
       if (act === "updates_list") return json({ recipients: list.map((u: any) => ({ user_id: u.id, email: u.email, name: u.user_metadata?.full_name || "", signed_up: u.created_at })) });
       mustAct();
       const ids: string[] = b.user_ids || [];
-      let room = CAP_CUSTOMERS - await sentToday("resend");
+      let room = Math.min(20, CAP_CUSTOMERS - await sentTodayList(["welcome", "updates"]));   // 20 per click, paced
       const out = { sent: 0, failed: 0, skipped: 0, errors: [] as string[] };
       for (const u of list.filter((u: any) => ids.includes(u.id))) {
         if (room <= 0) { out.skipped++; continue; }
         const name = String(u.user_metadata?.first_name || u.user_metadata?.full_name || "there").split(" ")[0];
         const html = layout({ banner: c.banner || undefined, kicker: "QUANTORA UPDATE", headline: c.headline || c.subject, hello: `Hello ${name},`, paras: String(c.body || "").split(/\n\s*\n/).map(esc), button: c.button_text || undefined, url: c.button_url || SITE, unsub: await unsubUrl(u.email) });
-        try { await viaResend(u.email, c.subject, html); room--; out.sent++;
-          await admin.from("email_sends").insert({ list: "updates", template: `update_${c.id}`, user_id: u.id, email: u.email, provider: "resend", sent_by: user.id });
+        try { if (out.sent) await pause(3000); await viaZoho(u.email, c.subject, html); room--; out.sent++;
+          await admin.from("email_sends").insert({ list: "updates", template: `update_${c.id}`, user_id: u.id, email: u.email, provider: "zoho", sent_by: user.id });
         } catch (e) { out.failed++; out.errors.push(String((e as Error).message)); if (/not connected/.test(String((e as Error).message))) break; }
       }
-      if (out.skipped) out.errors.push(`Daily limit of ${CAP_CUSTOMERS} customer emails reached; the rest stay in the list for tomorrow.`);
+      if (out.skipped) out.errors.push(`Sent up to 20 per click (daily limit ${CAP_CUSTOMERS}); click again for the rest.`);
       return json(out);
     }
 
@@ -450,7 +457,7 @@ Deno.serve(async (req) => {
       const un = await unsubscribed((leads || []).map((l: any) => l.email || "").filter(Boolean));
       const ok = (leads || []).filter((l: any) => l.email && l.status !== "dnc" && l.status !== "customer" && !un.has(String(l.email).toLowerCase()) && l.stage < LEAD_MAX);
       if (ok.length) await admin.from("email_lead_queue").upsert(ok.map((l: any) => ({ lead_id: l.id, queued_by: user.id })), { onConflict: "lead_id", ignoreDuplicates: true });
-      const cap = await leadCap(), today = await sentToday("zoho"), queued = await queueCount();
+      const cap = await leadCap(), today = await sentTodayList(["leads"]), queued = await queueCount();
       return json({ sent: 0, failed: 0, skipped: (ids.length - ok.length), queued: ok.length, in_queue: queued, cap_leads: cap, zoho_today: today, leads_per_hour: LEADS_PER_HOUR, errors: [] });
     }
     return json({ error: "Unknown action." }, 400);
