@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-19.1";</script>
+<script>window.QUANTORA_BUILD = "2026-11-19.2";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29630,7 +29630,7 @@ function QEmailCenterView() {
     const parts = [`${r.sent} sent`]; if (r.failed) parts.push(`${r.failed} failed`); if (r.skipped) parts.push(`${r.skipped} skipped`);
     setMsg({ ok: !r.failed, text: parts.join(" · ") + (r.errors && r.errors.length ? ` — ${r.errors[0]}` : "") }); loadStatus();
   };
-  const tabs = [["welcome", "Welcome Pack"], ["updates", "Customer Updates"], ["leads", "Leads"], ["log", "Sent log"]];
+  const tabs = [["welcome", "Welcome Pack"], ["updates", "Customer Updates"], ["leads", "Leads"], ["one", "Send one email"], ["log", "Sent log"]];
   return (
     <>
       <div className="card panel" style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 12.5, marginBottom: 12 }}>
@@ -29645,8 +29645,68 @@ function QEmailCenterView() {
       {tab === "welcome" && <QEmailWelcome onDone={report} setMsg={setMsg} />}
       {tab === "updates" && <QEmailUpdates onDone={report} setMsg={setMsg} />}
       {tab === "leads" && <QEmailLeads onDone={report} setMsg={setMsg} />}
+      {tab === "one" && <QEmailOne onDone={report} setMsg={setMsg} />}
       {tab === "log" && <QEmailLog />}
     </>
+  );
+}
+// One email (a proposal, a reply to a lead) in the same layout as the lead emails, with the platform
+// tour GIF under the signature. Sent from info@ through Zoho. Preview first, then confirm.
+const Q_ONE_DEFAULT = {
+  to: "", subject: "Quantora Engineering – Platform introduction and proposal", kicker: "PLATFORM INTRODUCTION & PROPOSAL",
+  headline: "From drawings to BOQ and shop drawings, on one platform", hello: "Hello team,",
+  intro: "Thank you for your interest. As requested, here is a short introduction to Quantora Engineering and our proposal. A quick tour of the platform is shown at the end of this email.\n\nQuantora Engineering is an AI estimation and drafting platform for MEP, ELV, Fire and Civil works, used by contractors and consultants in the UAE, GCC and worldwide:",
+  services: true, box_title: "Our proposal",
+  proposal: "1. A 30-minute online demo with your estimation team.\n2. A free pilot account for one live or recent tender, so your team can compare the results with their own take-off.\n3. Pricing for your team size, based on the pilot outcome.",
+  closing: "Please let us know a suitable date and time for the demo.", button: "See the platform", signature: "Wiqar Ali\nQuantora Engineering", tour: true };
+function QOneLabel({ t, children }) { return <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, letterSpacing: ".04em", color: "var(--text-dimmer,#8391c6)", marginBottom: 10 }}>{t}<div style={{ marginTop: 4 }}>{children}</div></label>; }
+function QEmailOne({ onDone, setMsg }) {
+  const [f, setF] = useState(() => { try { return { ...Q_ONE_DEFAULT, ...JSON.parse(localStorage.getItem("q_email_one") || "{}") }; } catch (e) { return { ...Q_ONE_DEFAULT }; } });
+  const [pv, setPv] = useState(null);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const set = (k, v) => { setF(o => { const n = { ...o, [k]: v }; try { localStorage.setItem("q_email_one", JSON.stringify({ ...n, to: "" })); } catch (e) { /* blocked */ } return n; }); setConfirm(false); };
+  const preview = async () => { try { setPv(await callEmail("custom_preview", f)); } catch (e) { setMsg({ ok: false, text: e.message }); } };
+  useEffect(() => { const t = setTimeout(preview, 400); return () => clearTimeout(t); }, [JSON.stringify(f)]);
+  const okTo = /^[^\s@,;]+@[^\s@,;]+\.[a-z]{2,}$/i.test(f.to.trim());
+  async function send() {
+    setBusy(true);
+    try { const r = await callEmail("send_custom", f); onDone(r); setMsg({ ok: true, text: `Sent to ${r.to} from info@quantoraengineering.com. It is in the Sent log.` }); setConfirm(false); set("to", ""); }
+    catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(false); }
+  }
+  const inp = { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border,#334155)", background: "var(--bg-input,#0b1226)", color: "inherit", fontSize: 13, fontFamily: "inherit" };
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.1fr)", gap: 14 }} className="q-one-grid">
+      <style>{`@media (max-width: 900px){.q-one-grid{grid-template-columns:minmax(0,1fr)!important}}`}</style>
+      <div className="card panel">
+        <div style={{ fontSize: 13, marginBottom: 12, color: "var(--text-dim,#94a3b8)" }}>Same layout as the lead emails, with the platform tour under the signature. Sent from info@quantoraengineering.com; replies come back to info@.</div>
+        <QOneLabel t="TO (one email address)"><input id="one-to" style={inp} value={f.to} onChange={e => set("to", e.target.value)} placeholder="name@company.com" inputMode="email" autoComplete="off" /></QOneLabel>
+        <QOneLabel t="SUBJECT"><input id="one-subject" style={inp} value={f.subject} onChange={e => set("subject", e.target.value)} /></QOneLabel>
+        <QOneLabel t="GREETING"><input id="one-hello" style={inp} value={f.hello} onChange={e => set("hello", e.target.value)} placeholder="Hello Company team," /></QOneLabel>
+        <QOneLabel t="SMALL HEADING"><input id="one-kicker" style={inp} value={f.kicker} onChange={e => set("kicker", e.target.value)} /></QOneLabel>
+        <QOneLabel t="TITLE"><input id="one-headline" style={inp} value={f.headline} onChange={e => set("headline", e.target.value)} /></QOneLabel>
+        <QOneLabel t="INTRODUCTION (empty line = new paragraph)"><textarea id="one-intro" rows={5} style={inp} value={f.intro} onChange={e => set("intro", e.target.value)} /></QOneLabel>
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, marginBottom: 10 }}><input id="one-services" type="checkbox" checked={f.services} onChange={e => set("services", e.target.checked)} /> Show the 4 service boxes (Project dashboard, AI Take-off, Manual Take-off, AI Draftsman)</label>
+        <QOneLabel t="HIGHLIGHTED BOX TITLE"><input id="one-box" style={inp} value={f.box_title} onChange={e => set("box_title", e.target.value)} /></QOneLabel>
+        <QOneLabel t="HIGHLIGHTED BOX (one line each, empty = no box)"><textarea id="one-proposal" rows={4} style={inp} value={f.proposal} onChange={e => set("proposal", e.target.value)} /></QOneLabel>
+        <QOneLabel t="CLOSING LINE"><input id="one-closing" style={inp} value={f.closing} onChange={e => set("closing", e.target.value)} /></QOneLabel>
+        <QOneLabel t="BUTTON TEXT (empty = no button)"><input id="one-button" style={inp} value={f.button} onChange={e => set("button", e.target.value)} /></QOneLabel>
+        <QOneLabel t="SIGNATURE (name, then one line each)"><textarea id="one-sign" rows={2} style={inp} value={f.signature} onChange={e => set("signature", e.target.value)} /></QOneLabel>
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, marginBottom: 14 }}><input id="one-tour" type="checkbox" checked={f.tour} onChange={e => set("tour", e.target.checked)} /> Add the platform tour GIF under the signature</label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {!confirm ? <button type="button" className="qp-btn pri" disabled={!okTo || !f.subject.trim() || busy} onClick={() => setConfirm(true)}>Send email</button>
+            : <><span style={{ fontSize: 13 }}>Send to <b>{f.to.trim()}</b> now?</span>
+                <button type="button" className="qp-btn pri" disabled={busy} onClick={send}>{busy ? "Sending…" : "Yes, send"}</button>
+                <button type="button" className="qp-btn" disabled={busy} onClick={() => setConfirm(false)}>Cancel</button></>}
+          <button type="button" className="qp-btn" onClick={() => { setF({ ...Q_ONE_DEFAULT }); setConfirm(false); }}>Reset text</button>
+          {!okTo && f.to && <span style={{ fontSize: 12, color: "#fca5a5" }}>Check the email address.</span>}
+        </div>
+      </div>
+      <div className="card panel" style={{ padding: 0, overflow: "hidden", minHeight: 400 }}>
+        <div style={{ padding: "10px 14px", fontSize: 12.5, borderBottom: "1px solid var(--border-soft,#1e293b)" }}>Preview · <b>{pv?.subject || f.subject}</b></div>
+        {pv ? <iframe title="Email preview" srcDoc={pv.html} style={{ width: "100%", height: 1500, border: 0, background: "#eef1f7" }} /> : <div style={{ padding: 20, fontSize: 13 }}>Loading preview…</div>}
+      </div>
+    </div>
   );
 }
 function useChecks() {

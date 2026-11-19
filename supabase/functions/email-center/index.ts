@@ -18,6 +18,10 @@
 //   send_update   {campaign_id, user_ids}
 //   send_leads    {lead_ids}    -> the next lead email (intro, follow-up 1, follow-up 2, later news)
 //   preview       {kind, ...}   -> the HTML of an email, for the Preview button
+//   custom_preview / send_custom {to, subject, ...} -> one email (a proposal, a reply) in the same layout,
+//                                  sent from info@ through Zoho (added 19 Nov, approved by the owner)
+// Since 19 Nov every lead email and every custom email ends with a signature and the platform tour
+// GIF (ws-art/platform-tour.gif): project dashboard, AI take-off, manual take-off, AI draftsman.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import nodemailer from "npm:nodemailer@6.9.14";
@@ -48,8 +52,9 @@ async function unsubUrl(email: string) {
 }
 
 // One email layout: banner picture, headline, paragraphs, optional highlighted box, one button, footer.
+const TOUR = `${SITE}/ws-art/platform-tour.gif`;
 function layout(o: { banner?: string; kicker?: string; headline: string; hello: string; paras: string[]; box?: { title: string; text: string };
-  button?: string; url?: string; unsub: string; manual?: boolean }) {
+  button?: string; url?: string; unsub: string; manual?: boolean; after?: string; sign?: string[]; tour?: boolean }) {
   const banner = o.banner || `${SITE}/ws-art/email-banner.jpg`;
   const p = (t: string) => `<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#1e293b">${t}</p>`;
   return `<!doctype html><html><body style="margin:0;background:#eef1f7;font-family:Segoe UI,Arial,sans-serif">
@@ -62,13 +67,16 @@ ${o.kicker ? `<div style="font-size:12px;font-weight:800;letter-spacing:.08em;co
 ${p(esc(o.hello))}
 ${o.paras.map(x => p(x)).join("")}
 ${o.box ? `<table role="presentation" width="100%" style="background:#f1f3ff;border-radius:10px;margin:4px 0 18px"><tr><td style="padding:14px 16px"><b style="color:#312e81">${esc(o.box.title)}</b><div style="font-size:14px;color:#334155;margin-top:4px;line-height:1.55">${o.box.text}</div></td></tr></table>` : ""}
-${o.button ? `<table role="presentation" style="margin:6px 0 22px"><tr><td style="background:#4f46e5;border-radius:10px"><a href="${o.url || SITE}" style="display:inline-block;padding:13px 24px;color:#ffffff;font-weight:700;font-size:15px;text-decoration:none">${esc(o.button)} &rarr;</a></td></tr></table>` : ""}
 ${o.manual === false ? "" : `<table role="presentation" width="100%" style="border-top:1px solid #e2e8f0;margin-top:4px"><tr><td style="padding:16px 0 4px"><b style="color:#0f172a">New: Manual Take-off</b><div style="font-size:14px;color:#334155;margin-top:4px;line-height:1.55">Mark the items on the drawing yourself and get a Designed BOQ. 10 drawings free every month, then 30 drawings for $10.</div></td></tr></table>`}
+${o.after ? p(o.after) : ""}
+${o.button ? `<table role="presentation" style="margin:6px 0 22px"><tr><td style="background:#4f46e5;border-radius:10px"><a href="${o.url || SITE}" style="display:inline-block;padding:13px 24px;color:#ffffff;font-weight:700;font-size:15px;text-decoration:none">${esc(o.button)} &rarr;</a></td></tr></table>` : ""}
+${o.sign && o.sign.length ? `<p style="margin:0 0 4px;font-size:15px;line-height:1.6;color:#1e293b">Best regards,<br><b>${esc(o.sign[0])}</b>${o.sign.slice(1).map(x => "<br>" + esc(x)).join("")}<br><a href="mailto:${CONTACT}" style="color:#4f46e5">${CONTACT}</a></p>` : ""}
+${o.tour ? `<div style="margin:18px 0 6px;font-size:12px;font-weight:800;letter-spacing:.08em;color:#6366f1">PLATFORM TOUR · PROJECT QUANTORA MALL</div><a href="${o.url || SITE}"><img src="${TOUR}" width="540" alt="Quantora platform tour: project dashboard, AI take-off, manual take-off, AI draftsman" style="display:block;width:100%;height:auto;border:0;border-radius:10px"></a>` : ""}
 <p style="margin:14px 0 22px;font-size:14px;color:#334155">Questions or need more details? Write to our team at <a href="mailto:${CONTACT}" style="color:#4f46e5">${CONTACT}</a> — just reply to this email.</p>
 </td></tr>
 <tr><td style="padding:16px 30px 22px;background:#f8fafc;font-size:12px;color:#64748b;line-height:1.6">
 Quantora Engineering · AI take-off, BOQ and shop drawings for MEP, ELV and electrical · UAE, GCC and worldwide<br>
-<a href="${SITE}" style="color:#64748b">quantoraengineering.com</a> · <a href="${o.unsub}" style="color:#64748b">Unsubscribe</a>
+<a href="${SITE}" style="color:#64748b">quantoraengineering.com</a>${o.unsub ? ` · <a href="${o.unsub}" style="color:#64748b">Unsubscribe</a>` : ""}
 </td></tr></table></td></tr></table></body></html>`;
 }
 
@@ -100,11 +108,16 @@ async function welcomeEmail(stage: number, progress: string, name: string, email
 // ----- leads -----
 // One numbered service box inside an email (used by the first lead email).
 const svc = (n: number, t: string, d: string) => `<table role="presentation" width="100%" style="margin:0 0 12px;border-left:4px solid #4f46e5;background:#f6f7ff;border-radius:8px"><tr><td style="padding:12px 14px"><b style="color:#0f172a;font-size:15px">${n}. ${t}</b><div style="font-size:14px;color:#334155;margin-top:4px;line-height:1.55">${d}</div></td></tr></table>`;
+// The four services, as numbered boxes (lead intro and the custom proposal email).
+const SERVICES = svc(1, "Project dashboard", "Create the project once. Drawings, BOQ, RFQs and approvals stay in one place, from tender to procurement.") +
+  svc(2, "AI Take-off &amp; BOQ", "Upload MEP, ELV or Fire drawings (PDF or DWG). AI counts devices and measures cable, duct and pipe; every BOQ line is traced to its drawing and revision. Export to Excel or PDF.") +
+  svc(3, "Manual Take-off", "For estimators who prefer to count themselves: click to count, measure lengths and set the scale. Quantities go straight into the BOQ, with a marked-up PDF.") +
+  svc(4, "AI Draftsman: shop drawings and 3D", "Upload the architecture plan and choose the systems. AI Draftsman prepares MEP, ELV and Fire layouts, schematics and a numbered drawing register in PDF + DXF, plus a 3D MEP model, with rework from consultant comments.");
+const LEAD_SIGN = ["Estima AI", "Quantora Engineering"];
 const LEADS: { subject: string; headline: string; paras: string[]; button: string; manual?: boolean }[] = [
-  { subject: "AI take-off, BOQ and shop drawings for {company}", headline: "From drawings to BOQ and shop drawings, on one platform", manual: false, paras: ["Quantora Engineering gives your team three services on one platform:",
-      svc(1, "AI Take-off &amp; BOQ", "Upload MEP, ELV or electrical drawings (PDF or DWG). AI counts and measures every device, cable, duct and pipe, and every BOQ line is marked on the drawing. Export to Excel or PDF.") +
-      svc(2, "AI Draftsman: shop drawings and 3D", "Upload the architectural plans and choose the systems. AI Draftsman prepares the shop drawings and schematics to your country&#39;s authority rules, plus a full 3D model you can download as IFC for Revit and Navisworks.") +
-      svc(3, "Manual Take-off (new)", "Your team marks the items on the drawing, and Quantora gives you a complete Designed BOQ. 10 drawings free every month, then 30 drawings for $10."),
+  { subject: "AI take-off, BOQ and shop drawings for {company}", headline: "From drawings to BOQ and shop drawings, on one platform", manual: false, paras: [
+      "Quantora Engineering is an AI estimation and drafting platform for MEP, ELV, Fire and Civil works, used by contractors and consultants in the UAE, GCC and worldwide. A quick tour of the platform is shown at the end of this email.",
+      SERVICES,
       "Every BOQ is also checked against your project specification and the local authority rules in the UAE and the GCC."], button: "Try it free" },
   { subject: "Quick follow-up: take-off and BOQ for your tenders", headline: "Spend less time on take-off", paras: ["A quick follow-up on my last email. Teams use Quantora to price tenders faster: upload the drawings, check the quantities, export the BOQ to Excel."], button: "Start free" },
   { subject: "Free to try: 10 drawings every month", headline: "10 drawings free every month", paras: ["One last note: you can try Quantora on your own drawings at no cost. If it is not useful for your team, just reply STOP and we will not write again."], button: "Try it free" },
@@ -113,8 +126,21 @@ const LEADS: { subject: string; headline: string; paras: string[]; button: strin
 async function leadEmail(stage: number, company: string, email: string) {
   const l = LEADS[Math.min(stage, LEADS.length - 1)];
   const html = layout({ kicker: "QUANTORA ENGINEERING", headline: l.headline, hello: `Hello ${company} team,`, paras: l.paras,
-    button: l.button, url: `${SITE}/?ref=lead`, unsub: await unsubUrl(email), manual: l.manual });
+    button: l.button, url: `${SITE}/?ref=lead`, unsub: await unsubUrl(email), manual: l.manual, sign: LEAD_SIGN, tour: true });
   return { subject: l.subject.replace("{company}", company), html };
+}
+// One email written in the Email Center (a proposal, a reply to a lead), in the same layout.
+const lines = (t: unknown) => String(t ?? "").split(/\n/).map(x => x.trim()).filter(Boolean);
+function customEmail(b: any) {
+  const paras = String(b.intro || "").split(/\n\s*\n/).map(x => x.trim()).filter(Boolean).map(esc);
+  if (b.services !== false) paras.push(SERVICES);
+  const prop = lines(b.proposal);
+  const html = layout({ kicker: String(b.kicker || "QUANTORA ENGINEERING"), headline: String(b.headline || "From drawings to BOQ and shop drawings, on one platform"),
+    hello: String(b.hello || "Hello,"), paras,
+    box: prop.length ? { title: String(b.box_title || "Our proposal"), text: prop.map(esc).join("<br>") } : undefined,
+    after: b.closing ? esc(b.closing) : undefined, button: b.button === "" ? undefined : String(b.button || "See the platform"),
+    url: `${SITE}/?ref=proposal`, unsub: "", manual: false, sign: lines(b.signature).length ? lines(b.signature) : LEAD_SIGN, tour: b.tour !== false });
+  return { subject: String(b.subject || "").trim(), html };
 }
 const LEAD_NEXT_DAYS = [7, 7, 21, 30];   // after 1st, 2nd, 3rd, later emails
 const LEAD_MAX = 6;
@@ -353,6 +379,21 @@ Deno.serve(async (req) => {
         return json({ subject: c.subject, html: layout({ banner: c.banner || undefined, kicker: "QUANTORA UPDATE", headline: c.headline || c.subject, hello: "Hello there,", paras: String(c.body || "").split(/\n\s*\n/).map(esc), button: c.button_text || undefined, url: c.button_url || SITE, unsub: await unsubUrl(to) }) });
       }
       return json(await welcomeEmail(Number(b.stage) || 0, b.progress || "no_project", b.name || "there", to));
+    }
+
+    if (act === "custom_preview") return json(customEmail(b));
+    if (act === "send_custom") {
+      mustAct();
+      const to = String(b.to || "").trim().toLowerCase();
+      if (!/^[^\s@,;]+@[^\s@,;]+\.[a-z]{2,}$/i.test(to)) return json({ error: "Enter one valid email address in To." }, 400);
+      const m = customEmail(b);
+      if (!m.subject) return json({ error: "Enter a subject." }, 400);
+      if ((await unsubscribed([to])).has(to)) return json({ error: "This address has unsubscribed, so it is not emailed." }, 400);
+      if (await sentToday("zoho") >= await leadCap()) return json({ error: "Today's info@ sending limit is reached. Try again tomorrow." }, 400);
+      try { await viaZoho(to, m.subject, m.html, { noUnsub: true }); }
+      catch (e) { await admin.from("email_sends").insert({ list: "custom", template: "custom", email: to, provider: "zoho", ok: false, error: String((e as Error).message).slice(0, 300), sent_by: user.id }); throw e; }
+      await admin.from("email_sends").insert({ list: "custom", template: "custom", email: to, provider: "zoho", sent_by: user.id });
+      return json({ sent: 1, failed: 0, skipped: 0, errors: [], to });
     }
 
     if (act === "send_welcome") {
