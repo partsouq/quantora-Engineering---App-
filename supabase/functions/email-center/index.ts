@@ -392,8 +392,9 @@ Deno.serve(async (req) => {
       // 19 Nov (owner): one-off emails are not held back by the daily lead limit.
       try { await viaZoho(to, m.subject, m.html, { noUnsub: true }); }
       catch (e) { await admin.from("email_sends").insert({ list: "custom", template: "custom", email: to, provider: "zoho", ok: false, error: String((e as Error).message).slice(0, 300), sent_by: user.id }); throw e; }
-      await admin.from("email_sends").insert({ list: "custom", template: "custom", email: to, provider: "zoho", sent_by: user.id });
-      return json({ sent: 1, failed: 0, skipped: 0, errors: [], to });
+      const { error: logErr } = await admin.from("email_sends").insert({ list: "custom", template: "custom", email: to, provider: "zoho", sent_by: user.id });
+      // the email has gone either way; say so plainly if the Sent log could not record it
+      return json({ sent: 1, failed: 0, skipped: 0, errors: logErr ? [`Sent, but the Sent log could not record it: ${logErr.message}`] : [], to, logged: !logErr });
     }
 
     if (act === "send_welcome") {
