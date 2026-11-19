@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-19.3";</script>
+<script>window.QUANTORA_BUILD = "2026-11-19.4";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -13009,7 +13009,9 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
 }
 
 function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialTab }) {
-  const [tab, setTab] = useState(initialTab || "overview");
+  // 2026-11-19: the open tab survives a page reload (another browser tab, an update), per browser tab.
+  const [tab, setTab] = useState(() => { if (initialTab) return initialTab; try { return sessionStorage.getItem("q_ptab:" + project.id) || "overview"; } catch (e) { return "overview"; } });
+  useEffect(() => { try { sessionStorage.setItem("q_ptab:" + project.id, tab); } catch (e) { /* blocked */ } }, [tab, project.id]);
   const [welcome, setWelcome] = useState(false);
   useEffect(() => { let a = true; qIsWelcomePack().then(v => { if (a) setWelcome(!!v); }).catch(() => {}); return () => { a = false; }; }, []);
   const locked = (k) => (welcome && Q_WELCOME_LOCKED[k] ? <QUpgradeCard k={k} /> : null);
@@ -40605,8 +40607,22 @@ function App() {
   // Held as a stack rather than a single value so the top bar can offer a real
   // "back". Everything downstream still receives a plain `view` object and a
   // plain `setView`, so no other component had to learn about the stack.
-  const [viewStack, setViewStack] = useState([{ name: "chooser" }]);
+  // 2026-11-19: after a reload (switching back from another page, an update) the user lands where they
+  // were, not on the 4-workspace chooser. Kept per browser tab in sessionStorage; a project page is
+  // reopened once its record is loaded again.
+  const restoredRef = useRef(false);
+  const [savedView] = useState(() => { try { return JSON.parse(sessionStorage.getItem("q_view") || "null"); } catch (e) { return null; } });
+  const [viewStack, setViewStack] = useState(() => {
+    try { const v = savedView;
+      if (v && v.name && v.name !== "project" && v.name !== "edit" && v.name !== "chooser") return [{ name: "chooser" }, { name: v.name }];
+    } catch (e) { /* blocked */ }
+    return [{ name: "chooser" }];
+  });
   const view = viewStack[viewStack.length - 1];
+  useEffect(() => {
+    if (view.name === "chooser" && viewStack.length === 1 && savedView && savedView.name === "project" && !restoredRef.current) return;
+    try { sessionStorage.setItem("q_view", JSON.stringify({ name: view.name, pid: view.project && view.project.id || null, tab: view.tab || null })); } catch (e) { /* blocked */ }
+  }, [view]);
   // Two views are the same place if they name the same page and, for a project
   // page, the same project. Without this, clicking the page you are already on
   // would pile up entries that Back then has to walk through one by one.
@@ -40661,6 +40677,15 @@ function App() {
   const [countryGate, setCountryGate] = useState(false);
   const [fbTrial, setFbTrial] = useState(null);       // null = not known yet
 
+  useEffect(() => {
+    if (!session || restoredRef.current) return;
+    restoredRef.current = true;
+    const v = savedView;
+    if (!v || v.name !== "project" || !v.pid) return;
+    sb.from("projects").select("*").eq("id", v.pid).maybeSingle().then(({ data }) => {
+      if (data) setViewStack(st => (st.length === 1 && st[0].name === "chooser" ? [st[0], { name: "project", project: data }] : st));
+    });
+  }, [session]);
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = sb.auth.onAuthStateChange((event, sess) => {
