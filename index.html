@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-19.6";</script>
+<script>window.QUANTORA_BUILD = "2026-11-19.7";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29632,6 +29632,10 @@ function QEmailCenterView() {
     if (r.queued !== undefined) {
       const left = Math.max(0, (r.cap_leads || 50) - (r.zoho_today || 0));
       setMsg({ ok: true, text: `${r.queued} leads queued${r.skipped ? ` (${r.skipped} skipped: no email or unsubscribed)` : ""}. They go out one every 3 minutes, ${r.leads_per_hour || 25} an hour. ${r.in_queue} in the queue; ${left} more can go today, the rest continue tomorrow.` });
+      loadStatus(); return;
+    }
+    if (r.sending !== undefined) {
+      setMsg({ ok: true, text: `${r.sending} email${r.sending === 1 ? "" : "s"} going out from info@ in the background, about 6 seconds apart. Check the Sent log in a minute.` + (r.errors && r.errors.length ? ` ${r.errors[0]}` : "") });
       loadStatus(); return;
     }
     const parts = [`${r.sent} sent`]; if (r.failed) parts.push(`${r.failed} failed`); if (r.skipped) parts.push(`${r.skipped} skipped`);
