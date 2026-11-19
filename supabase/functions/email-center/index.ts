@@ -198,6 +198,18 @@ async function sentTodayList(lists: string[]) {
   return count || 0;
 }
 const pause = (ms: number) => new Promise(r => setTimeout(r, ms));
+// 19 Nov: a batch of customer emails takes minutes (Zoho, paced), longer than the browser waits
+// ("Failed to fetch"). The reply comes back at once and the sending carries on in the background.
+function inBackground(job: Promise<unknown>) {
+  const rt = (globalThis as any).EdgeRuntime;
+  const safe = job.catch(e => console.error("background email batch failed:", e));
+  if (rt && typeof rt.waitUntil === "function") rt.waitUntil(safe);
+}
+// a second click while a batch is still going out must not email anyone twice
+async function alreadySent(list: string, template: string, userId: string) {
+  const { count } = await admin.from("email_sends").select("id", { count: "exact", head: true }).eq("list", list).eq("template", template).eq("user_id", userId).eq("ok", true);
+  return (count || 0) > 0;
+}
 async function unsubscribed(emails: string[]) {
   if (!emails.length) return new Set<string>();
   const { data } = await admin.from("email_unsubscribes").select("email").in("email", emails.map(e => e.toLowerCase()));
@@ -409,17 +421,21 @@ Deno.serve(async (req) => {
       const ids: string[] = (b.user_ids || []).slice(0, 200);
       const { data: due, error } = await asUser.rpc("q_email_welcome_due"); if (error) throw error;
       const rows = (due || []).filter((x: any) => ids.includes(x.user_id));
-      let room = Math.min(20, CAP_CUSTOMERS - await sentTodayList(["welcome", "updates"]));   // 20 per click, paced
-      const out = { sent: 0, failed: 0, skipped: 0, errors: [] as string[] };
-      for (const r of rows) {
-        if (room <= 0) { out.skipped++; continue; }
-        const m = await welcomeEmail(r.stage, r.progress, String(r.name || "").split(" ")[0], r.email);
-        try { if (out.sent) await pause(3000); await viaZoho(r.email, m.subject, m.html); room--; out.sent++;
-          await admin.from("email_sends").insert({ list: "welcome", template: `welcome_${WELCOME_DAYS[r.stage]}d`, user_id: r.user_id, email: r.email, provider: "zoho", sent_by: user.id });
-        } catch (e) { out.failed++; out.errors.push(String((e as Error).message)); if (/not connected/.test(String((e as Error).message))) break; }
-      }
-      if (room <= 0 && out.skipped) out.errors.push(`Sent up to 20 per click (daily limit ${CAP_CUSTOMERS}); click again for the rest.`);
-      return json(out);
+      const room = Math.max(0, Math.min(20, CAP_CUSTOMERS - await sentTodayList(["welcome", "updates"])));   // 20 per click, paced
+      const batch = rows.slice(0, room);
+      inBackground((async () => {
+        for (const [i, r] of batch.entries()) {
+          if (await alreadySent("welcome", `welcome_${WELCOME_DAYS[r.stage]}d`, r.user_id)) continue;
+          const m = await welcomeEmail(r.stage, r.progress, String(r.name || "").split(" ")[0], r.email);
+          try { if (i) await pause(3000); await viaZoho(r.email, m.subject, m.html);
+            await admin.from("email_sends").insert({ list: "welcome", template: `welcome_${WELCOME_DAYS[r.stage]}d`, user_id: r.user_id, email: r.email, provider: "zoho", sent_by: user.id });
+          } catch (e) { await admin.from("email_sends").insert({ list: "welcome", template: `welcome_${WELCOME_DAYS[r.stage]}d`, user_id: r.user_id, email: r.email, provider: "zoho", ok: false, error: String((e as Error).message).slice(0, 300), sent_by: user.id });
+            if (/not connected|blocked|sign-in/.test(String((e as Error).message))) break; }
+        }
+      })());
+      const skipped = rows.length - batch.length;
+      return json({ sent: 0, failed: 0, skipped, sending: batch.length,
+        errors: skipped ? [room ? `Up to 20 per click (daily limit ${CAP_CUSTOMERS}); click again for the rest.` : `Today's limit of ${CAP_CUSTOMERS} customer emails is reached; the rest stay for tomorrow.`] : [] });
     }
 
     if (act === "updates_list" || act === "send_update") {
@@ -435,18 +451,22 @@ Deno.serve(async (req) => {
       if (act === "updates_list") return json({ recipients: list.map((u: any) => ({ user_id: u.id, email: u.email, name: u.user_metadata?.full_name || "", signed_up: u.created_at })) });
       mustAct();
       const ids: string[] = b.user_ids || [];
-      let room = Math.min(20, CAP_CUSTOMERS - await sentTodayList(["welcome", "updates"]));   // 20 per click, paced
-      const out = { sent: 0, failed: 0, skipped: 0, errors: [] as string[] };
-      for (const u of list.filter((u: any) => ids.includes(u.id))) {
-        if (room <= 0) { out.skipped++; continue; }
-        const name = String(u.user_metadata?.first_name || u.user_metadata?.full_name || "there").split(" ")[0];
-        const html = layout({ banner: c.banner || undefined, kicker: "QUANTORA UPDATE", headline: c.headline || c.subject, hello: `Hello ${name},`, paras: String(c.body || "").split(/\n\s*\n/).map(esc), button: c.button_text || undefined, url: c.button_url || SITE, unsub: await unsubUrl(u.email) });
-        try { if (out.sent) await pause(3000); await viaZoho(u.email, c.subject, html); room--; out.sent++;
-          await admin.from("email_sends").insert({ list: "updates", template: `update_${c.id}`, user_id: u.id, email: u.email, provider: "zoho", sent_by: user.id });
-        } catch (e) { out.failed++; out.errors.push(String((e as Error).message)); if (/not connected/.test(String((e as Error).message))) break; }
-      }
-      if (out.skipped) out.errors.push(`Sent up to 20 per click (daily limit ${CAP_CUSTOMERS}); click again for the rest.`);
-      return json(out);
+      const room = Math.max(0, Math.min(20, CAP_CUSTOMERS - await sentTodayList(["welcome", "updates"])));
+      const picked = list.filter((u: any) => ids.includes(u.id)), batch = picked.slice(0, room);
+      inBackground((async () => {
+        for (const [i, u] of batch.entries()) {
+          if (await alreadySent("updates", `update_${c.id}`, u.id)) continue;
+          const name = String(u.user_metadata?.first_name || u.user_metadata?.full_name || "there").split(" ")[0];
+          const html = layout({ banner: c.banner || undefined, kicker: "QUANTORA UPDATE", headline: c.headline || c.subject, hello: `Hello ${name},`, paras: String(c.body || "").split(/\n\s*\n/).map(esc), button: c.button_text || undefined, url: c.button_url || SITE, unsub: await unsubUrl(u.email) });
+          try { if (i) await pause(3000); await viaZoho(u.email, c.subject, html);
+            await admin.from("email_sends").insert({ list: "updates", template: `update_${c.id}`, user_id: u.id, email: u.email, provider: "zoho", sent_by: user.id });
+          } catch (e) { await admin.from("email_sends").insert({ list: "updates", template: `update_${c.id}`, user_id: u.id, email: u.email, provider: "zoho", ok: false, error: String((e as Error).message).slice(0, 300), sent_by: user.id });
+            if (/not connected|blocked|sign-in/.test(String((e as Error).message))) break; }
+        }
+      })());
+      const skipped = picked.length - batch.length;
+      return json({ sent: 0, failed: 0, skipped, sending: batch.length,
+        errors: skipped ? [room ? `Up to 20 per click (daily limit ${CAP_CUSTOMERS}); click again for the rest.` : `Today's limit of ${CAP_CUSTOMERS} customer emails is reached; the rest stay for tomorrow.`] : [] });
     }
 
     if (act === "send_leads") {
