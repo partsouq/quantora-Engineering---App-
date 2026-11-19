@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-19.5";</script>
+<script>window.QUANTORA_BUILD = "2026-11-19.6";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -24011,7 +24011,8 @@ function AdminPortal({ onBack, staffPerms }) {
   // owner gave them; "view" ones open read-only. The database and edge functions enforce the same.
   const isOwner = !staffPerms;
   const lvl = (k) => isOwner ? 2 : k === "settings" ? 2 : staffPerms[k] === "act" ? 2 : staffPerms[k] === "view" ? 1 : 0;
-  const [activeView, setActiveView] = useState(() => { try { const w = window.__qAdminWant; window.__qAdminWant = null; return w || "exec"; } catch (_) { return "exec"; } });
+  const [activeView, setActiveView] = useState(() => { try { const w = window.__qAdminWant; window.__qAdminWant = null; return w || sessionStorage.getItem("q_admin_view") || "exec"; } catch (_) { return "exec"; } });
+  useEffect(() => { try { sessionStorage.setItem("q_admin_view", activeView); } catch (_) {} }, [activeView]);
   useEffect(() => {
     const h = (e) => { if (e.detail) { setActiveView(e.detail); try { window.__qAdminWant = null; } catch (_) {} } };
     window.addEventListener("q-open-admin-view", h);
@@ -29335,7 +29336,10 @@ function AdminLiveChatWatcher({ onOpen }) {
   const [perm, setPerm] = useState(() => { try { return "Notification" in window ? Notification.permission : "unsupported"; } catch (_) { return "unsupported"; } });
   const [soundOn, setSoundOn] = useState(false);
   const [banner, setBanner] = useState(null);          // { text, at }
-  const [hideAsk, setHideAsk] = useState(false);
+  // 2026-11-19: "Not now" is remembered on this device (1 day; 7 days when alerts are blocked), so the
+  // card does not come back every time the page is opened again.
+  const [hideAsk, setHideAsk0] = useState(() => { try { return Number(localStorage.getItem("q_chat_ask_until") || 0) > Date.now(); } catch (_) { return false; } });
+  const setHideAsk = (v) => { setHideAsk0(v); if (v) { try { localStorage.setItem("q_chat_ask_until", String(Date.now() + ((typeof Notification !== "undefined" && Notification.permission === "denied") ? 7 : 1) * 864e5)); } catch (_) {} } };
   const [pushOk, setPushOk] = useState(false);
   useEffect(() => { qLiveTrack({ admin: true, at: Date.now() }); }, []);
   useEffect(() => {
@@ -29618,7 +29622,8 @@ function QSendBar({ title, note, selected, total, busy, onPreview, onSelected, o
   );
 }
 function QEmailCenterView() {
-  const [tab, setTab] = useState("welcome");
+  const [tab, setTab] = useState(() => { try { return sessionStorage.getItem("q_email_tab") || "welcome"; } catch (_) { return "welcome"; } });
+  useEffect(() => { try { sessionStorage.setItem("q_email_tab", tab); } catch (_) {} }, [tab]);
   const [st, setSt] = useState(null);
   const [msg, setMsg] = useState(null);
   const loadStatus = () => callEmail("status").then(setSt).catch(e => setMsg({ ok: false, text: e.message }));
@@ -29636,7 +29641,7 @@ function QEmailCenterView() {
   return (
     <>
       <div className="card panel" style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 12.5, marginBottom: 12 }}>
-        <span>Customers (Resend): {st ? (st.resend ? <b style={{ color: "#6ee7b7" }}>connected</b> : <b style={{ color: "#fcd34d" }}>not connected — add RESEND_API_KEY in Supabase</b>) : "…"} {st && `· ${st.resend_today}/${st.cap_customers} today`}</span>
+        <span>Customers (Zoho info@): {st ? (st.zoho ? <b style={{ color: "#6ee7b7" }}>connected</b> : <b style={{ color: "#fcd34d" }}>not connected — add ZOHO_SMTP_PASS in Supabase</b>) : "…"} {st && `· ${st.resend_today}/${st.cap_customers} today`}</span>
         <span>Leads (Zoho info@): {st ? (st.zoho ? <b style={{ color: "#6ee7b7" }}>connected</b> : <b style={{ color: "#fcd34d" }}>not connected — add ZOHO_SMTP_PASS in Supabase</b>) : "…"} {st && `· ${st.zoho_today}/${st.cap_leads} today · ${st.leads_last_hour ?? 0}/${st.leads_per_hour ?? 25} this hour${st.leads_queued ? ` · ${st.leads_queued} in the queue` : ""}`}</span>
         <span style={{ marginLeft: "auto", color: "var(--text-dim,#94a3b8)" }}>Replies go to info@quantoraengineering.com</span>
       </div>
