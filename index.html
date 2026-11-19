@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-19.4";</script>
+<script>window.QUANTORA_BUILD = "2026-11-19.5";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29673,7 +29673,7 @@ function QEmailOne({ onDone, setMsg }) {
   const okTo = /^[^\s@,;]+@[^\s@,;]+\.[a-z]{2,}$/i.test(f.to.trim());
   async function send() {
     setBusy(true);
-    try { const r = await callEmail("send_custom", f); onDone(r); setMsg({ ok: true, text: `Sent to ${r.to} from info@quantoraengineering.com. It is in the Sent log.` }); setConfirm(false); set("to", ""); }
+    try { const r = await callEmail("send_custom", f); onDone(r); setMsg(r.logged === false ? { ok: false, text: `Sent to ${r.to} from info@quantoraengineering.com, but it is NOT in the Sent log: ${(r.errors || [])[0] || ""}` } : { ok: true, text: `Sent to ${r.to} from info@quantoraengineering.com. It is in the Sent log.` }); setConfirm(false); set("to", ""); }
     catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(false); }
   }
   const inp = { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border,#334155)", background: "var(--bg-input,#0b1226)", color: "inherit", fontSize: 13, fontFamily: "inherit" };
