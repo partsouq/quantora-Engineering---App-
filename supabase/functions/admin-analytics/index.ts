@@ -99,6 +99,7 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden
         grant_bonus_pages: () => lv("customers") >= 2, extend_trial: () => lv("customers") >= 2,
         list_quota_adjustments: () => has("customers"),
         pending_signups: () => has("customers"),
+        confirm_signup: () => lv("customers") >= 2,
         trial_overview: () => has("customers", "exec", "revenue", "execdash"),
         overview: () => has("customers", "projects", "exec", "revenue", "ai", "execdash"),
         system_status: () => has("health", "exec"),
@@ -179,6 +180,20 @@ async function handleRequest(req: Request, ctx: { trim?: (o: any) => any; hidden
       }
       users.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
       return jsonResponse({ users });
+    }
+
+    // 2026-11-20: confirm a sign-up by hand when the confirmation email never reaches the person. Same
+    // result as clicking the link: they can sign in, and their company is set up on that first sign-in.
+    if (action === "confirm_signup") {
+      const uid = String(body?.user_id || "");
+      if (!/^[0-9a-f-]{36}$/i.test(uid)) return jsonResponse({ error: "user_id is required" }, 400);
+      const { data: got, error: gErr } = await admin.auth.admin.getUserById(uid);
+      if (gErr || !got?.user) return jsonResponse({ error: "No such sign-up." }, 404);
+      if (got.user.email_confirmed_at) return jsonResponse({ ok: true, already: true });
+      const { error: uErr } = await admin.auth.admin.updateUserById(uid, { email_confirm: true });
+      if (uErr) throw uErr;
+      try { await admin.from("admin_alerts").update({ status: "fixed", updated_at: new Date().toISOString() }).eq("fingerprint", "signup:unconfirmed:" + uid); } catch (_) { /* best effort */ }
+      return jsonResponse({ ok: true });
     }
 
     if (action === "list_companies") {

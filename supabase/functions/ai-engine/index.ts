@@ -8,6 +8,7 @@ import { localNormsLine, civilMethodLine } from "./authorities.ts";
 import { SCHEDULE_TOOL, SCHEDULE_PROMPT, scheduleTablesToItems, applyScheduleItems, mergeSameKindRows, flagAgainstLegend } from "./schedules.ts";
 import { evalQuantityFormula, measureLine, standardForProject, civilStandardPrompt, VALIDATION, type Rule, type StandardChoice } from "./civil_rules.ts";
 import { validatePlumbing, plumbingPromptText, applyPlumbingTags } from "./plumbing.ts";
+import { isModelRefusal } from "./models.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -72,13 +73,43 @@ function applyTakeoffScope(result: any, drawing: any): string {
   return `\n\nOutside the systems you selected, so not added to the BOQ: ${list}. To include them, open Systems on this drawing, tick them and run the take-off again.`;
 }
 
-const ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";
+// 2026-11-20: the take-off runs on Claude Sonnet 5.5 (sharper symbol, tag and legend reading, faster, and
+// cheaper per token than Sonnet 4.5). Quick sorting jobs use Claude Haiku 5.5. Either can be changed with the
+// AI_MODEL / AI_FAST_MODEL function secrets without a code change. If the API ever refuses a model name, the
+// call is repeated once on Sonnet 4.5, so a take-off never fails because of the model switch.
+const ANTHROPIC_MODEL = Deno.env.get("AI_MODEL") || "claude-sonnet-5-5";
+const ANTHROPIC_FAST_MODEL = Deno.env.get("AI_FAST_MODEL") || "claude-haiku-5-5";
+const ANTHROPIC_FALLBACK_MODEL = "claude-sonnet-4-5-20250929";
+const MODEL_PRICES: Record<string, [number, number]> = {      // USD per million tokens [input, output]
+  "claude-sonnet-5-5": [2.0, 10.0], "claude-haiku-5-5": [0.1, 0.5], "claude-sonnet-4-5-20250929": [3.0, 15.0],
+};
+const refusedModels = new Set<string>();
+// One place every Claude call goes through: if the API answers that a model does not exist (or is not
+// available to this key), the same request is sent again on the fallback model and that model is not tried again
+// in this instance.
+async function anthropicPost(apiKey: string, body: any, signal?: AbortSignal): Promise<Response> {
+  const send = (b: any) => fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify(b), signal,
+  });
+  let b = refusedModels.has(body.model) ? { ...body, model: ANTHROPIC_FALLBACK_MODEL } : body;
+  const res = await send(b);
+  if (res.ok || b.model === ANTHROPIC_FALLBACK_MODEL) return res;
+  const text = await res.clone().text();
+  if (!isModelRefusal(res.status, text)) return res;
+  console.warn(`Model ${b.model} refused (${res.status}); using ${ANTHROPIC_FALLBACK_MODEL}.`);
+  refusedModels.add(b.model);
+  b = { ...body, model: ANTHROPIC_FALLBACK_MODEL };
+  return await send(b);
+}
 
-const ACTUAL_INPUT_PER_MTOK_USD = 3.0;
-const ACTUAL_OUTPUT_PER_MTOK_USD = 15.0;
+// Our own cost follows the model in use; what a customer is charged per token is unchanged by the switch.
+const ACTUAL_INPUT_PER_MTOK_USD = (MODEL_PRICES[ANTHROPIC_MODEL] || [3.0, 15.0])[0];
+const ACTUAL_OUTPUT_PER_MTOK_USD = (MODEL_PRICES[ANTHROPIC_MODEL] || [3.0, 15.0])[1];
 const MARKUP_MULTIPLIER = 3;
-const CUSTOMER_INPUT_PER_MTOK_USD = ACTUAL_INPUT_PER_MTOK_USD * MARKUP_MULTIPLIER;
-const CUSTOMER_OUTPUT_PER_MTOK_USD = ACTUAL_OUTPUT_PER_MTOK_USD * MARKUP_MULTIPLIER;
+const CUSTOMER_INPUT_PER_MTOK_USD = 3.0 * MARKUP_MULTIPLIER;
+const CUSTOMER_OUTPUT_PER_MTOK_USD = 15.0 * MARKUP_MULTIPLIER;
 
 const MAX_CLASSIFY_PAGES = 300;
 
@@ -124,7 +155,7 @@ const MAX_TILES_PER_RUN = 24;
 // How many tile calls are in flight at once. Sequential would blow the
 // background-task wall clock on a 12-tile sheet; unbounded would trip
 // Anthropic's rate limit and fail the whole run on a 429.
-const TILE_CONCURRENCY = 5;
+const TILE_CONCURRENCY = 8;   // 2026-11-20: was 5; most sheets are 6-9 tiles, so a sheet is now read in one wave
 const TILE_MAX_OUTPUT_TOKENS = 12000;
 
 function validateTiles(raw: any): TileSpec[] {
@@ -1502,17 +1533,12 @@ const SHEET_KIND_TOOL = {
 async function detectSheetKind(apiKey: string, fileBlock: any): Promise<{ kind: string; reason: string } | null> {
   try {
     // Direct call, not callClaude: callClaude insists on an items list.
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL, max_tokens: 400,
+    const res = await anthropicPost(apiKey, {
+        model: ANTHROPIC_FAST_MODEL, max_tokens: 400,
         system: "You sort construction drawings by trade before take-off. Look at the whole sheet, its title block and its legend.",
         tools: [SHEET_KIND_TOOL], tool_choice: { type: "tool", name: SHEET_KIND_TOOL.name },
         messages: [{ role: "user", content: [fileBlock, { type: "text", text: "What kind of sheet is this? Answer with record_sheet_kind." }] }],
-      }),
-      signal: AbortSignal.timeout(90_000),
-    });
+      }, AbortSignal.timeout(90_000));
     if (!res.ok) throw new Error(`Anthropic ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const data = await res.json();
     const r = data.content?.find((c: any) => c.type === "tool_use")?.input as any;
@@ -2661,14 +2687,14 @@ const QUOTE_COMPLIANCE_TOOL = {
 
 async function callClaude(apiKey: string, systemPrompt: string, userContent: any[], tool: any = BOQ_ITEM_TOOL, maxTokens = MAX_OUTPUT_TOKENS, purpose: "drawing" | "design" = "drawing") {
   const overallDeadline = Date.now() + CALL_TIMEOUT_MS;
-  const requestBody = JSON.stringify({
+  const requestBody = {
     model: ANTHROPIC_MODEL,
     max_tokens: maxTokens,
     system: systemPrompt,
     tools: [tool],
     tool_choice: { type: "tool", name: tool.name },
     messages: [{ role: "user", content: userContent }],
-  });
+  };
 
   const attemptOnce = async (): Promise<Response> => {
     const remainingMs = overallDeadline - Date.now();
@@ -2678,16 +2704,7 @@ async function callClaude(apiKey: string, systemPrompt: string, userContent: any
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), remainingMs);
     try {
-      return await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: requestBody,
-        signal: controller.signal,
-      });
+      return await anthropicPost(apiKey, requestBody, controller.signal);
     } catch (fetchErr: any) {
       if (fetchErr?.name === "AbortError") {
         throw new Error(`Anthropic API call timed out after ${CALL_TIMEOUT_MS / 1000}s. This usually means the request was too large (e.g. too many drawings combined at once, or a very large file) -- try analyzing fewer/smaller drawings at a time.`);
@@ -4500,13 +4517,9 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
       const systemPrompt = `You are the AI Construction Assistant for this specific project. Answer ONLY using the data snapshot and project context provided — never invent quantities or facts not derivable from it. Be concise and precise, like a senior estimator/QS would be. If asked to "reduce cost", suggest concrete, generic levers (value-engineered alternates, quantity optimization, spec tiering) without claiming specific priced savings you cannot compute. ${projectContext}\n\n${dataSnapshot}`;
 
       const startTime = Date.now();
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({
+      const res = await anthropicPost(anthropicKey, {
           model: ANTHROPIC_MODEL, max_tokens: 1024, system: systemPrompt,
           messages: [{ role: "user", content: message }],
-        }),
       });
       if (!res.ok) throw new Error(`Anthropic API error (${res.status}): ${await res.text()}`);
       const data = await res.json();
@@ -4610,10 +4623,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         `given, using the same line_key you were given.`;
 
       const startTime = Date.now();
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({
+      const res = await anthropicPost(anthropicKey, {
           model: ANTHROPIC_MODEL,
           max_tokens: 8000,
           system: systemPrompt,
@@ -4625,7 +4635,6 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
           // exists to avoid.
           tool_choice: { type: "auto" },
           messages: [{ role: "user", content: `Price these BOQ lines:\n\n${lineList}` }],
-        }),
       });
       if (!res.ok) throw new Error(`Anthropic API error (${res.status}): ${await res.text()}`);
       const data = await res.json();
