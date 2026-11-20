@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.18";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.19";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -2338,7 +2338,7 @@ function ProjectRef({ value, size = "md" }) {
     } catch (err) { console.error("copy failed (non-fatal):", err); }
   }
   return (
-    <button type="button" onClick={copy} title={`Project reference ${value} — click to copy`}
+    <button type="button" className="qs-ref" onClick={copy} title={`Project reference ${value} — click to copy`}
       style={{
         display: "inline-flex", alignItems: "center", gap: 6,
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -8920,7 +8920,7 @@ function ProjectCover({ project, url, tall, children }) {
   return (
     <div className={"qnl-cover" + (tall ? " tall" : "")} style={{ backgroundImage: `url("${url || qDefaultCover(project)}")` }}>
       <div className="qnl-cover-btns">
-        <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : "📷 Change picture"}</button>
+        <button type="button" onClick={change} disabled={busy}>{busy ? "Saving…" : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: "inline", verticalAlign: "-2px", marginRight: 5 }}><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>Change picture</>}</button>
         {tall && url && <button type="button" onClick={remove} disabled={busy} title="Back to the standard glass towers">✕ Remove</button>}
       </div>
       {children}
@@ -29519,19 +29519,20 @@ function LiveChatWidget({ session, pageName }) {
     <>
       {popMsgs.length > 0 && <QTeamMessagePopup messages={popMsgs} onClose={() => closePopup(false)} onReply={() => closePopup(true)} />}
       <button type="button" onClick={() => { setOpen(o => !o); if (!open && ticket) sb.rpc("mark_support_thread_read", { p_ticket_id: ticket.id }).then(load).catch(() => {}); }}
-        title="Chat with the Quantora team — real people"
+        title="Chat with the Quantora team — real people" className={"qtc-btn" + (open ? " on" : "")}
         style={{ position: "fixed", right: "clamp(16px, 2.2vw, 44px)", bottom: 86, zIndex: 41, display: "flex", alignItems: "center", gap: 8,
           padding: "9px 14px", borderRadius: 999, border: "1px solid rgba(16,185,129,.55)", cursor: "pointer", color: "#fff", fontWeight: 800, fontSize: 13,
           background: "linear-gradient(135deg,#059669,#0d9488)", boxShadow: "0 10px 28px -6px rgba(16,185,129,.55)" }}>
-        <span style={{ width: 9, height: 9, borderRadius: 999, background: online ? "#86efac" : "#cbd5e1", boxShadow: online ? "0 0 0 3px rgba(134,239,172,.35)" : "none" }} />
+        <svg className="qtc-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" /></svg>
         {open ? "Close chat" : "Chat with our team"}
+        <span className="qtc-dot" style={{ width: 9, height: 9, borderRadius: 999, background: online ? "#22c55e" : "#cbd5e1", boxShadow: online ? "0 0 0 3px rgba(34,197,94,.25)" : "none" }} title={online ? "Online now" : "Offline"} />
         {unread > 0 && !open && <span style={{ marginLeft: 2, minWidth: 18, height: 18, borderRadius: 999, background: "#ef4444", fontSize: 11, display: "grid", placeItems: "center", padding: "0 5px" }}>{unread}</span>}
       </button>
       {open && (
-        <div style={{ position: "fixed", right: "clamp(16px, 2.2vw, 44px)", bottom: 136, zIndex: 42, width: "min(380px, calc(100vw - 32px))", height: "min(520px, calc(100vh - 170px))",
+        <div className="qtc-panel" style={{ position: "fixed", right: "clamp(16px, 2.2vw, 44px)", bottom: 136, zIndex: 42, width: "min(380px, calc(100vw - 32px))", height: "min(520px, calc(100vh - 170px))",
           display: "grid", gridTemplateRows: "auto 1fr auto", borderRadius: 16, overflow: "hidden", background: "var(--q-surface, #0d1736)", color: "var(--q-text, #e2e8f0)",
           border: "1px solid rgba(16,185,129,.45)", boxShadow: "0 24px 60px rgba(0,0,0,.45)" }}>
-          <div style={{ padding: "12px 14px", background: "linear-gradient(135deg,rgba(5,150,105,.35),rgba(13,148,136,.2))", borderBottom: "1px solid rgba(148,163,184,.2)" }}>
+          <div className="qtc-head" style={{ padding: "12px 14px", background: "linear-gradient(135deg,rgba(5,150,105,.35),rgba(13,148,136,.2))", borderBottom: "1px solid rgba(148,163,184,.2)" }}>
             <div style={{ fontWeight: 800, fontSize: 15 }}>Quantora Team</div>
             <div style={{ fontSize: 12, opacity: .85, marginTop: 2 }}>
               {online ? "● Online now — a real person will answer you here" : (ticket ? "Our team has been notified and will reply here shortly. You'll get a notification when we answer." : "Real people, not the AI. Write to us and our team is notified straight away.")}
@@ -44641,6 +44642,52 @@ html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body
 html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qsearch input{color:#0f1b3d!important}
 html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx :is(.qnl-btn,.qnl-btn.pri){box-shadow:0 1px 2px rgba(15,27,61,.12)!important;border-radius:10px!important}
 html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .pt-view{background:#fff!important;border-color:#d9e1ee!important}
+/* 2026-11-20 polish: floating dock (Ask Estima + team chat), tags, project list and project cards */
+html:root:has(.qx) body .qx.qx .qe-launch{height:56px!important;padding:6px 20px 6px 6px!important;gap:10px!important;border-radius:999px!important;bottom:18px!important}
+html:root:has(.qx) body .qx.qx .qe-launch .qe-ring{width:44px!important;height:44px!important}
+html:root:has(.qx) body .qx.qx .qe-launch .qe-ring svg,html:root:has(.qx) body .qx.qx .qe-launch .qe-ring img{width:44px!important;height:44px!important}
+html:root:has(.qx) body .qx.qx .qe-launch :is(.qe-sep,.qe-spark){display:none!important}
+html:root:has(.qx) body .qx.qx .qe-launch .qe-txt b{font-size:15px!important;font-weight:800!important}
+html:root:has(.qx) body .qx.qx .qe-launch .qe-txt small{font-size:11.5px!important}
+html:root:has(.qx) body .qx.qx .qtc-btn{height:42px!important;padding:0 16px!important;gap:8px!important;bottom:86px!important;font-size:13px!important;font-weight:700!important;border-radius:999px!important;align-items:center!important}
+html:root:has(.qx) body .qx.qx .qtc-panel{bottom:140px!important;border-radius:16px!important}
+html:root:has(.qx) body .qx.qx .qp-main .qpill,html:root:has(.qx) body .qx.qx .qpill{font-size:10.5px!important;letter-spacing:.02em!important;text-transform:none!important;font-weight:700!important;padding:3px 10px!important;border-radius:999px!important;white-space:nowrap}
+html:root:has(.qx) body .qx.qx .qpt .pt-ref{font-size:11px!important;font-weight:700!important;padding:2px 8px!important;border-radius:6px!important}
+html:root:has(.qx) body .qx.qx .qpt :is(img,.pt-cover){border-radius:8px!important}
+html:root:has(.qx) body .qx.qx .qpt{border-radius:14px!important;overflow:hidden}
+html:root:has(.qx) body .qx.qx .qpt tbody tr{transition:background .12s}
+html:root:has(.qx) body .qx.qx .qdash-proj{padding:0 0 14px!important;overflow:hidden}
+html:root:has(.qx) body .qx.qx .qdash-proj > :not(:first-child){margin-left:16px!important;margin-right:16px!important}
+html:root:has(.qx) body .qx.qx .qdash-proj .pn{font-size:15.5px!important;font-weight:800!important;margin-top:12px}
+html:root:has(.qx) body .qx.qx .qproj-stats div{font-size:11px!important;white-space:normal!important;line-height:1.3}
+html:root:has(.qx) body .qx.qx .qproj-stats b{font-size:15px!important}
+html:root:has(.qx) body .qx.qx .qdash-proj .go{font-weight:700}
+html:root:has(.qx) body .qx.qx .qdash-projs{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))!important;gap:16px!important}
+html:root:has(.qx) body .qx.qx .qdash-proj .pn{flex:1 1 auto;min-width:0}
+html:root:has(.qx) body .qx.qx .qs-ref{font-family:inherit!important;font-size:11px!important;padding:2px 8px!important;border-radius:6px!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qs-ref{background:#eef2ff!important;color:#3b5bdb!important;-webkit-text-fill-color:#3b5bdb!important;border:0!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qe-launch{background:#3b5bdb!important;background-image:none!important;border:0!important;backdrop-filter:none!important;box-shadow:0 10px 24px -10px rgba(59,91,219,.6)!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qe-launch .qe-ring{background:#ffffff!important;border-radius:999px!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qe-launch .qe-dot{border-color:#3b5bdb!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qtc-btn{background:#ffffff!important;color:#0f1b3d!important;border:1px solid #d9e1ee!important;box-shadow:0 6px 16px -10px rgba(15,27,61,.35)!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qtc-btn .qtc-ic{color:#3b5bdb}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qtc-btn.on{background:#f1f4fa!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qtc-panel{background:#ffffff!important;color:#0f1b3d!important;border:1px solid #e3e8f2!important;box-shadow:0 24px 50px -18px rgba(15,27,61,.35)!important;backdrop-filter:none!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qtc-panel *{-webkit-text-fill-color:currentColor}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qtc-head{background:#3b5bdb!important;color:#ffffff!important;border-bottom:0!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qtc-head *{color:#ffffff!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qpt{background:#ffffff!important;border:1px solid #e3e8f2!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qpt thead th{background:#f7f9fc!important;color:#5b6478!important;border-bottom:1px solid #e3e8f2!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qpt tbody tr,html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qpt tbody td{background:#ffffff!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qpt tbody tr + tr td{border-top:1px solid #eef1f7!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qpt tbody tr:hover td{background:#f7f9fd!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qpt .pt-t{color:#0f1b3d!important;-webkit-text-fill-color:#0f1b3d!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qpt .pt-s{color:#5b6478!important;-webkit-text-fill-color:#5b6478!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qpt .pt-ref{background:#eef2ff!important;color:#3b5bdb!important;-webkit-text-fill-color:#3b5bdb!important;border:0!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qproj-stats div{color:#5b6478!important;-webkit-text-fill-color:#5b6478!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qproj-stats b{color:#0f1b3d!important;-webkit-text-fill-color:#0f1b3d!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qdash-proj .pl{color:#5b6478!important}
+html:root:has(.qx):has(:is(#q-look-light,#q-glass,#q-look-warm)[media=all]) body .qx.qx .qdash-proj .go{color:#3b5bdb!important;-webkit-text-fill-color:#3b5bdb!important}
 </style>
 <style id="q-look-ui" data-ql="0">
 /* Look chooser + the Appearance setting (2026-11-13; four looks). This sheet is never recoloured: it carries both looks itself. */
