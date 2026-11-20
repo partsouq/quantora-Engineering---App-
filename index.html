@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.14";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.15";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -41269,10 +41269,10 @@ function App() {
   }, []);
 
   // Look switch (2026-11-13): Classic unless this user picked Glass. The admin
-  // portal, the public site and the sign-in screens are always Classic.
+  // public site and the sign-in screens are always Classic. The admin portal follows the user's look (2026-11-20).
   const qLook = useQLook(session);
   const qLookOn = session === undefined ? ((window.QLook && window.QLook.want) || "")
-    : (session && !recovering && qLook && qLook !== "classic" && !(view && view.name === "admin") ? qLook : "");
+    : (session && !recovering && qLook && qLook !== "classic" ? qLook : "");
   if (window.QLook) window.QLook.flag(qLookOn);
   React.useLayoutEffect(() => {
     if (!window.QLook) return;
@@ -41291,7 +41291,7 @@ function App() {
   }
 
   return (
-    <div key={"look-" + (qLookOn || "classic")} className={`min-h-screen ${view && view.name === "admin" ? "" : "qx"}`}>
+    <div key={"look-" + (qLookOn || "classic")} className="min-h-screen qx">
       <LocationGate isPlatformAdmin={isPlatformAdmin} userId={session.user.id} onNeed={setCountryGate} />
       {qLook === null && !(view && view.name === "admin") && <QLookChooser uid={session.user.id} hold={!!countryGate} />}
       <DuctSizesHost />
@@ -44124,6 +44124,20 @@ html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-btn>span:first-child{backgr
 html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-btn>span:first-child *{color:#fff!important}
 html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-name{color:#0f1b3d!important}
 html:root:has(.qx) body .qx nav.qtr-topnav .qtr-sep{width:1px;height:24px;background:#e3e8f2;margin:0 6px}
+/* 2026-11-20: admin portal in the same light look as the workspace */
+html:root:has(.qadmin),html:root:has(.qx) body .qx .qadmin,html:root:has(.qx) body .qx .qadmin .shell,html:root:has(.qx) body .qx .qadmin .main{background:#f5f8fc!important}
+html:root:has(.qx) body .qx .qadmin .sidebar{background:#ffffff!important;border-right:1px solid #e3e8f2!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qadmin .sidebar-foot{border-top:1px solid #e3e8f2!important}
+html:root:has(.qx) body .qx .qadmin .navitem:hover{background:#f1f4fa!important}
+html:root:has(.qx) body .qx .qadmin .navitem.active{background:#eef2ff!important;color:#3b5bdb!important}
+html:root:has(.qx) body .qx .qadmin .navitem.active svg{color:#3b5bdb!important}
+html:root:has(.qx) body .qx .qadmin .back-to-app{background:#ffffff!important;border:1px solid #e3e8f2!important;border-radius:10px!important}
+html:root:has(.qx) body .qx .qadmin .topbar{background:transparent!important;border-bottom:1px solid #e3e8f2!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+html:root:has(.qx) body .qx .qadmin .badge-admin{background:#eef2ff!important;border:1px solid #c9d4ee!important;color:#3b5bdb!important}
+html:root:has(.qx) body .qx .qadmin :is(.card,.kpi,.advisor,.export-card,.service-card,.plan-card){background:#ffffff!important;border:1px solid #e3e8f2!important;border-radius:14px!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+html:root:has(.qx) body .qx .qadmin :is(.kpi,.export-card,.service-card,.plan-card):hover{border-color:#c9d4ee!important;box-shadow:0 8px 20px -10px rgba(15,27,61,.22)!important}
+html:root:has(.qx) body .qx .qadmin .kpi .big{color:#0f1b3d!important}
+html:root:has(.qx) body .qx .qadmin .section-label:after{background:#e3e8f2!important}
 /* 2026-11-20: one calm card style -- 14 px corners, hairline border, soft shadow, gentle hover */
 html:root:has(.qx) body .qx .qh.qnl{background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;border-radius:0!important}
 html:root:has(.qx) body .qx .qp-side{border-radius:16px!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important}
