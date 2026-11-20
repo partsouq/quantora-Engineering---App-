@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.8";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.9";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4976,6 +4976,33 @@ async function standardizeDrawingFile(file, onStatus) {
   const bytes = await out.save();
   report.converted = true;
   return { file: new File([bytes], file.name, { type: "application/pdf" }), report };
+}
+
+// 2026-11-20: a PDF over 20 MB cannot be sent to the AI whole. When sheets are chosen,
+// cut just those sheets out here in the browser and upload them as a small file.
+const Q_AI_MAX_BYTES = 20 * 1024 * 1024;
+async function qCutChosenSheets(pdf, pages, projectId, drawingId, onStatus) {
+  try {
+    const data = await pdf.getData();
+    if (!data || data.length <= Q_AI_MAX_BYTES) return null;          // small enough: the server reads it as before
+    onStatus && onStatus(`Taking the ${pages.length} chosen sheet${pages.length === 1 ? "" : "s"} out of this large file…`);
+    if (!(await loadPdfLib())) return null;
+    const { PDFDocument } = window.PDFLib;
+    const src = await PDFDocument.load(data, { ignoreEncryption: true });
+    const out = await PDFDocument.create();
+    const idx = [...new Set(pages)].map(n => n - 1).filter(i => i >= 0 && i < src.getPageCount()).sort((a, b) => a - b);
+    (await out.copyPages(src, idx)).forEach(p => out.addPage(p));
+    const bytes = await out.save();
+    if (bytes.length > Q_AI_MAX_BYTES) throw new Error(`The ${pages.length} chosen sheets come to ${(bytes.length / 1048576).toFixed(1)} MB, over the 20 MB the AI can read at once. Choose fewer sheets.`);
+    const path = `${projectId}/selection/${drawingId}-${Date.now()}.pdf`;
+    onStatus && onStatus("Uploading the chosen sheets…");
+    const { error } = await sb.storage.from("drawings").upload(path, new Blob([bytes], { type: "application/pdf" }), { contentType: "application/pdf", upsert: true });
+    if (error) throw new Error("The chosen sheets could not be uploaded: " + error.message);
+    return path;
+  } catch (e) {
+    if (/chosen sheets/.test(e.message || "")) throw e;
+    console.warn("qCutChosenSheets", e); return null;                  // fall back: the server tries to cut them
+  }
 }
 
 // One line for the user about what the standard check did to a batch of files.
@@ -13932,8 +13959,14 @@ function DrawingsTab({ project }) {
         if (!pick || !pick.pages.length) return;
         chosenSmall = pick.pages;
       }
+      let selPath = null;
+      if (chosenSmall && chosenSmall.length < (pdf.numPages || 1)) {
+        try { selPath = await qCutChosenSheets(pdf, chosenSmall, project.id, d.id, (m) => setTiling(t => ({ ...t, [d.id]: m }))); }
+        catch (e) { setTiling(t => ({ ...t, [d.id]: null })); setErr(e.message); return; }
+        setTiling(t => ({ ...t, [d.id]: null }));
+      }
       await analyze(d.id, {
-        ...(chosenSmall && chosenSmall.length < (pdf.numPages || 1) ? { extra: { page_selection: chosenSmall } } : {}),
+        ...(chosenSmall && chosenSmall.length < (pdf.numPages || 1) ? { extra: { page_selection: chosenSmall, ...(selPath ? { selection_path: selPath } : {}) } } : {}),
         onTruncated: async (msg) => {
           // A 1x1 grid is one request with the same output ceiling. Offering it
           // would spend the customer's money to fail identically.
