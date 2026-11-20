@@ -2,11 +2,13 @@ name: Convert DWG
 
 # Turns uploaded DWG files into vector PDFs so the take-off can read them (tools/dwg).
 # Started by the database the moment a DWG is uploaded; the schedule is only a backup.
-# This repository is public: the log shows job ids only, never file names or links.
+# The log shows job ids only, never file names or links.
 on:
   workflow_dispatch:
+  # 2026-11-20: the database starts this the moment a DWG is uploaded and retries every few minutes
+  # (q_dwg_watch), so the GitHub schedule is only a rare backup now (minutes count on a private repository).
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "17 */6 * * *"
 
 concurrency:
   group: dwg-convert

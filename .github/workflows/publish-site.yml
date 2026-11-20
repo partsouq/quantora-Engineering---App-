@@ -17,6 +17,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
+    # 2026-11-20: once the repository is private, Cloudflare Pages publishes the site (tools/cloudflare-build.sh)
+    # and this job is skipped, so it uses no GitHub minutes.
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.mode.outputs.mode }}

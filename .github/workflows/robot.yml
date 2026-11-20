@@ -9,12 +9,11 @@ name: Test robot
 # "robot has not reported" alerts. So each run now starts the next one itself, about 25 minutes after it
 # finishes, with the workflow's own GITHUB_TOKEN (no personal token needed). The schedule stays as a backup
 # that restarts the chain if it ever stops. Only one run is active at a time (concurrency group below).
+# 2026-11-20 (owner approved): 3 runs a day -- 08:07, 14:07 and 20:07 Dubai -- started by the database
+# (cron job robot-dispatch). The 30-minute chain, the backup schedule and the run after every release are
+# gone: on a private repository every GitHub minute counts against the free 2,000 a month. The website itself
+# is still checked every 30 minutes by the database (robot-watchdog), which costs no GitHub minutes.
 on:
-  schedule:
-    - cron: "13,43 * * * *"
-  push:
-    branches: [main]
-    paths: [index.html]
   workflow_dispatch:
     inputs:
       full:
@@ -28,7 +27,6 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write      # lets "next" start the following run
 
 jobs:
   robot:
@@ -48,10 +46,6 @@ jobs:
         run: |
           npm install --no-audit --no-fund playwright@1.48.2
           bash ci/install-browser.sh
-
-      - name: Wait for the release to go live
-        if: github.event_name == 'push'
-        run: sleep 150
 
       - name: Run the robot
         working-directory: tests/robot
@@ -75,21 +69,3 @@ jobs:
           path: robot-shots
           retention-days: 3
           if-no-files-found: ignore
-
-  # wait about 25 minutes, then start the next run (keeps the 30-minute rhythm whatever GitHub's schedule does)
-  next:
-    needs: robot
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    steps:
-      - name: Start the next robot run in about 25 minutes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          sleep 1500
-          waiting=$(gh run list --workflow robot.yml --status queued --json databaseId --jq 'length')
-          if [ "$waiting" != "0" ]; then echo "A robot run is already waiting; not starting another."; exit 0; fi
-          gh workflow run robot.yml --ref main
-          echo "Next robot run started."
