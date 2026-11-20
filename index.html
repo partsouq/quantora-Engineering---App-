@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.19";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.20";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -22225,6 +22225,23 @@ function EstimaDock({ currentProject }) {
   }, [open]);
   const proj = (projects || []).find(x => x.id === pid) || (currentProject?.id === pid ? currentProject : null);
   const msgs = chats[pid] || [];
+  // Proactive (2026-11-20): when the panel opens, Estima says what in this project needs a look first --
+  // BOQ lines waiting for review and low-confidence lines -- and offers it as the first question.
+  const [heads, setHeads] = useState({});            // project id -> { review, low, total }
+  useEffect(() => {
+    if (!open || !pid || heads[pid]) return;
+    let alive = true;
+    sb.from("boq_items").select("review_status, confidence_score").eq("project_id", pid).limit(5000)
+      .then(({ data, error }) => {
+        if (!alive || error) return;
+        const rows = data || [];
+        setHeads(h => ({ ...h, [pid]: { total: rows.length,
+          review: rows.filter(r => r.review_status === "pending").length,
+          low: rows.filter(r => Number(r.confidence_score) > 0 && Number(r.confidence_score) < 60).length } }));
+      }, () => {});
+    return () => { alive = false; };
+  }, [open, pid]);
+  const head = heads[pid];
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length, open, busy]);
   async function ask(q) {
     q = (q || "").trim(); if (!q || !pid || busy) return;
@@ -22270,8 +22287,18 @@ function EstimaDock({ currentProject }) {
                 <div className="qe-hello-av">{ESTIMA_ROBOT(68)}</div>
                 <b>Hi, I'm {aName}.</b>
                 <span>Ask me anything about <em>{proj.project_name}</em>: quantities, specification, compliance or cost.</span>
+                {msgs.length === 0 && head && head.total > 0 && (head.review > 0 || head.low > 0) && (
+                  <div className="qe-heads">
+                    <b>Worth a look first</b>
+                    {head.review > 0 && <span>{head.review} BOQ line{head.review === 1 ? "" : "s"} waiting for your review</span>}
+                    {head.low > 0 && <span>{head.low} line{head.low === 1 ? "" : "s"} the AI was less sure about</span>}
+                  </div>
+                )}
+                {msgs.length === 0 && head && head.total === 0 && (
+                  <div className="qe-heads"><b>No BOQ yet</b><span>Upload a drawing and run the AI take-off — I can then answer from its quantities.</span></div>
+                )}
                 {msgs.length === 0 && (
-                  <div className="qe-chips">{ESTIMA_SUGGEST.map(t => <button key={t} onClick={() => ask(t)} disabled={busy}>{t}</button>)}</div>
+                  <div className="qe-chips">{(head && (head.review > 0 || head.low > 0) ? ["Which BOQ lines should I check first, and why?"] : []).concat(ESTIMA_SUGGEST).map(t => <button key={t} onClick={() => ask(t)} disabled={busy}>{t}</button>)}</div>
                 )}
               </div>
             )}
@@ -25192,6 +25219,18 @@ function QPendingSignupsView({ users, onReload }) {
     } catch (e) { setMsg(m => ({ ...m, [email]: "Could not send: " + (e.message || e) })); }
     setBusy(b => ({ ...b, [email]: false }));
   };
+  // 2026-11-20: when the email never arrives (spam, typo'd inbox rule), the admin confirms the account by hand.
+  // Same result as the person clicking the link: they can sign in, and their company is set up then.
+  const confirmNow = async (u) => {
+    if (!window.confirm(`Confirm ${u.email} without the email link?\n\nOnly do this if you know this email address belongs to ${u.full_name || "this person"}.`)) return;
+    setBusy(b => ({ ...b, [u.email]: true }));
+    try {
+      await callAdminAnalytics("confirm_signup", { user_id: u.id });
+      setMsg(m => ({ ...m, [u.email]: "Confirmed ✓ — they can sign in now" }));
+      setTimeout(() => onReload && onReload(), 1200);
+    } catch (e) { setMsg(m => ({ ...m, [u.email]: "Could not confirm: " + (e.message || e) })); }
+    setBusy(b => ({ ...b, [u.email]: false }));
+  };
   const list = users || [];
   return (
     <div className="card panel">
@@ -25212,6 +25251,8 @@ function QPendingSignupsView({ users, onReload }) {
                 <td style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>{u.confirmation_sent_at ? qAgo(u.confirmation_sent_at) : "—"}</td>
                 <td style={{ whiteSpace: "nowrap" }}>
                   <button className="btn" disabled={!!busy[u.email]} onClick={() => resend(u.email)}>{busy[u.email] ? "Sending…" : "Resend confirmation"}</button>
+                  <button className="btn" style={{ marginLeft: 6 }} disabled={!!busy[u.email]} title="Use only when you know this email belongs to this person"
+                    onClick={() => confirmNow(u)}>Confirm now</button>
                   {msg[u.email] && <div style={{ fontSize: 11, marginTop: 4, color: /✓/.test(msg[u.email]) ? "#34d399" : "#f87171" }}>{msg[u.email]}</div>}
                 </td>
               </tr>))}
@@ -44584,6 +44625,9 @@ html:root:has(.qx):not(:has(#q-glass[media=all])):not(:has(#q-look-warm[media=al
 html:root:has(.qx):not(:has(#q-glass[media=all])):not(:has(#q-look-warm[media=all])):not(:has(#q-look-light[media=all])) body .qx .qws .qwc-card:hover .qwc-go svg:last-child{background:rgba(255,255,255,.18)!important}
 </style>
 <style id="q-std-shape" data-ql="0">
+.qe-heads{display:flex;flex-direction:column;gap:3px;margin:12px auto 2px;max-width:330px;text-align:left;padding:10px 12px;border-radius:12px;background:rgba(59,91,219,.08);border:1px solid rgba(59,91,219,.22);font-size:12.5px;line-height:1.4}
+.qe-heads b{font-size:12px;font-weight:800;color:#3b5bdb}
+
 /* 2026-11-20: one shape standard for EVERY appearance. Colours stay with each look; shapes, headings, tabs, buttons and icon tiles are the same everywhere. */
 html:root:has(.qx) body .qx.qx .qh.qnl{background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;border-radius:0!important}
 html:root:has(.qx) body .qx.qx .qp-hero{background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;padding:4px 0 6px!important;margin-bottom:14px!important;border-radius:0!important}
