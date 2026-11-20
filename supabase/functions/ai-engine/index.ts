@@ -3040,7 +3040,7 @@ Deno.serve(async (req: Request) => {
       if (!concurrencyCheck.ok) {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
-      const { drawing_id, page_selection, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, after_empty_tiled } = body as { drawing_id: string; page_selection?: number[]; confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean; after_empty_tiled?: boolean };
+      const { drawing_id, page_selection, selection_path, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, after_empty_tiled } = body as { drawing_id: string; selection_path?: string; page_selection?: number[]; confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean; after_empty_tiled?: boolean };
       const { data: drawing, error: dErr } = await admin.from("drawings").select("*").eq("id", drawing_id).eq("project_id", project.id).maybeSingle();
       if (dErr || !drawing) throw new Error("Drawing not found.");
       // 2026-10-30: a sheet read in tiles for MEP / ELV that found nothing is checked once more, free of
@@ -3070,16 +3070,31 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: scopeCheck.error, requires_confirmation: true, confirm_field: "confirm_out_of_scope", discipline: scopeCheck.discipline }, 429);
       }
 
-      const { data: fileBlob, error: dlErr } = await admin.storage.from("drawings").download(drawingSource(drawing).path);
+      // 2026-11-20: for a large PDF the browser cuts out the chosen sheets and uploads them; read that small file.
+      const useSubset = typeof selection_path === "string" && selection_path.startsWith(project.id + "/selection/") && /\.pdf$/i.test(selection_path)
+        && Array.isArray(page_selection) && page_selection.length > 0;
+      const { data: fileBlob, error: dlErr } = await admin.storage.from("drawings").download(useSubset ? selection_path! : drawingSource(drawing).path);
       if (dlErr || !fileBlob) throw new Error("Could not read drawing file from storage.");
       const arrayBuf = await fileBlob.arrayBuffer();
       const fileBytes = new Uint8Array(arrayBuf);
-      if (fileBytes.length > MAX_FILE_BYTES) {
-        throw new Error(`This file is ${(fileBytes.length / 1024 / 1024).toFixed(1)}MB, which is over the ${MAX_FILE_BYTES / 1024 / 1024}MB per-file limit for AI processing. Please split it into smaller files before uploading.`);
-      }
       const isPdf = drawingSource(drawing).name.toLowerCase().endsWith(".pdf");
-
       const hasSelection = isPdf && Array.isArray(page_selection) && page_selection.length > 0;
+      // 2026-11-20: a large PDF is fine when sheets are chosen -- only the chosen sheets are read,
+      // so the size limit applies to them, not to the whole file. Split before anything is charged.
+      let selectedBytes: Uint8Array | null = useSubset ? fileBytes : null;
+      if (!useSubset && hasSelection && fileBytes.length > MAX_FILE_BYTES) {
+        try { selectedBytes = await extractSelectedPages(fileBytes, page_selection!); }
+        catch (splitErr) {
+          console.error("pdf-lib page split failed (large file):", splitErr);
+          return jsonResponse({ error: "The chosen sheets could not be separated from this large PDF. Nothing was charged. Please upload the sheets you need as a smaller PDF." }, 400);
+        }
+      }
+      const sizeToCheck = selectedBytes ? selectedBytes.length : fileBytes.length;
+      if (sizeToCheck > MAX_FILE_BYTES) {
+        return jsonResponse({ error: hasSelection
+          ? `The chosen sheets come to ${(sizeToCheck / 1024 / 1024).toFixed(1)}MB, over the ${MAX_FILE_BYTES / 1024 / 1024}MB the AI can read at once. Choose fewer sheets. Nothing was charged.`
+          : `This file is ${(fileBytes.length / 1024 / 1024).toFixed(1)}MB, over the ${MAX_FILE_BYTES / 1024 / 1024}MB the AI can read at once. Choose the sheets to read, or upload a smaller PDF. Nothing was charged.` }, 400);
+      }
       const requestedPages = hasSelection ? page_selection!.length : await countPdfPages(fileBytes, isPdf);
 
       const pageCheck = (isAdminOverride || freeCivilCheck) ? { ok: true, current: 0, limit: null, remaining: Infinity } : await checkPlanLimit(admin, companyId, plan, company, "drawing_page", requestedPages);
@@ -3113,7 +3128,7 @@ Deno.serve(async (req: Request) => {
         let usingSelection = false;
         if (hasSelection) {
           try {
-            processingBytes = await extractSelectedPages(fileBytes, page_selection!);
+            processingBytes = selectedBytes ?? await extractSelectedPages(fileBytes, page_selection!);
             usingSelection = true;
           } catch (splitErr) {
             // Reading the whole file here would read more sheets than were counted, so stop instead.
@@ -4045,12 +4060,24 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
       if (dlErr || !fileBlob) throw new Error("Could not read drawing file from storage.");
       const arrayBuf = await fileBlob.arrayBuffer();
       const fileBytes = new Uint8Array(arrayBuf);
-      if (fileBytes.length > MAX_FILE_BYTES) {
-        throw new Error(`This file is ${(fileBytes.length / 1024 / 1024).toFixed(1)}MB, which is over the ${MAX_FILE_BYTES / 1024 / 1024}MB per-file limit for AI processing. Please split it into smaller files before uploading.`);
-      }
       const isPdf = drawingSource(drawing).name.toLowerCase().endsWith(".pdf");
-
       const hasSelection = isPdf && Array.isArray(page_selection) && page_selection.length > 0;
+      // 2026-11-20: a large PDF is fine when sheets are chosen -- only the chosen sheets are read,
+      // so the size limit applies to them, not to the whole file. Split before anything is charged.
+      let selectedBytes: Uint8Array | null = null;
+      if (hasSelection && fileBytes.length > MAX_FILE_BYTES) {
+        try { selectedBytes = await extractSelectedPages(fileBytes, page_selection!); }
+        catch (splitErr) {
+          console.error("pdf-lib page split failed (large file):", splitErr);
+          return jsonResponse({ error: "The chosen sheets could not be separated from this large PDF. Nothing was charged. Please upload the sheets you need as a smaller PDF." }, 400);
+        }
+      }
+      const sizeToCheck = selectedBytes ? selectedBytes.length : fileBytes.length;
+      if (sizeToCheck > MAX_FILE_BYTES) {
+        return jsonResponse({ error: hasSelection
+          ? `The chosen sheets come to ${(sizeToCheck / 1024 / 1024).toFixed(1)}MB, over the ${MAX_FILE_BYTES / 1024 / 1024}MB the AI can read at once. Choose fewer sheets. Nothing was charged.`
+          : `This file is ${(fileBytes.length / 1024 / 1024).toFixed(1)}MB, over the ${MAX_FILE_BYTES / 1024 / 1024}MB the AI can read at once. Choose the sheets to read, or upload a smaller PDF. Nothing was charged.` }, 400);
+      }
       const requestedPages = hasSelection ? page_selection!.length : await countPdfPages(fileBytes, isPdf);
 
       const pageCheck = isAdminOverride ? { ok: true, current: 0, limit: null, remaining: Infinity } : await checkPlanLimit(admin, companyId, plan, company, "drawing_page", requestedPages);
@@ -4077,7 +4104,7 @@ Perform the engineering calculations the brief leaves to you (coverage, capacity
         let usingSelection = false;
         if (hasSelection) {
           try {
-            processingBytes = await extractSelectedPages(fileBytes, page_selection!);
+            processingBytes = selectedBytes ?? await extractSelectedPages(fileBytes, page_selection!);
             usingSelection = true;
           } catch (splitErr) {
             // Reading the whole file here would read more sheets than were counted, so stop instead.
