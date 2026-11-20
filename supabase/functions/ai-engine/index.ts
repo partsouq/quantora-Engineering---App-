@@ -7,6 +7,7 @@ import { encodeBase64 } from "jsr:@std/encoding/base64";
 import { localNormsLine, civilMethodLine } from "./authorities.ts";
 import { SCHEDULE_TOOL, SCHEDULE_PROMPT, scheduleTablesToItems, applyScheduleItems, mergeSameKindRows, flagAgainstLegend } from "./schedules.ts";
 import { evalQuantityFormula, measureLine, standardForProject, civilStandardPrompt, VALIDATION, type Rule, type StandardChoice } from "./civil_rules.ts";
+import { validatePlumbing, plumbingPromptText, applyPlumbingTags } from "./plumbing.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -3351,8 +3352,8 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: concurrencyCheck.error }, 429);
       }
 
-      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes, tagged_devices: rawDevices, schedule_images: rawSchedImgs, batch_revision, page_label, page_floor } = body as {
-        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any; measured_routes?: any; tagged_devices?: any; schedule_images?: any;
+      const { drawing_id, page_number, tiles: rawTiles, grid, confirm_retry_after_failures, confirm_rerun, confirm_out_of_scope, reference_zones: rawZones, tagged_cameras: rawTagged, measured_routes: rawRoutes, tagged_devices: rawDevices, plumbing: rawPlumbing, schedule_images: rawSchedImgs, batch_revision, page_label, page_floor } = body as {
+        drawing_id: string; page_number?: number; tiles: any[]; grid?: { rows: number; cols: number }; reference_zones?: any[]; tagged_cameras?: any; measured_routes?: any; tagged_devices?: any; plumbing?: any; schedule_images?: any;
         batch_revision?: number; page_label?: string; page_floor?: string;
         confirm_retry_after_failures?: boolean; confirm_rerun?: boolean; confirm_out_of_scope?: boolean;
       };
@@ -3371,6 +3372,7 @@ Deno.serve(async (req: Request) => {
       const taggedCams = validateTaggedCameras(rawTagged);
       const measuredRoutes = validateMeasuredRoutes(rawRoutes);
       const taggedDevices = validateTaggedDevices(rawDevices);
+      const plumbingInfo = validatePlumbing(rawPlumbing);
       let tiles: TileSpec[];
       try {
         tiles = validateTiles(rawTiles);
@@ -3482,7 +3484,7 @@ Deno.serve(async (req: Request) => {
           return;
         }
 
-        const systemPrompt = `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}`;
+        const systemPrompt = `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}${plumbingPromptText(plumbingInfo)}`;
 
         // ---- pass 1: read the symbol legend at full resolution ------------
         // The legend is usually in the title block on the right or along the
@@ -3724,6 +3726,13 @@ Deno.serve(async (req: Request) => {
         }, pageNo);
         promotedRows = td.rows;
         if (taggedDevices.length) console.log(`tiled run ${run.id}: tagged devices ${JSON.stringify(td.counted)} replace ${td.replaced} AI line(s).`);
+        // plumbing: fixture / cleanout tags replace the AI's lines; a waste sheet carries no water supply
+        const pt = applyPlumbingTags(promotedRows, plumbingInfo, {
+          project_id: project.id, drawing_id, analysis_run_id: run.id, revision_number: nextRevision,
+          floor_label: drawing.floor_label ?? null, source: "ai_drawing_analysis", optimization_status: "drawing_requirement",
+        }, pageNo);
+        promotedRows = pt.rows;
+        if (plumbingInfo) console.log(`tiled run ${run.id}: plumbing tags ${JSON.stringify(pt.counted)} replace ${pt.replaced} AI line(s); water-supply lines moved ${pt.moved}, dropped ${pt.dropped}.`);
         // tray and conduit measured from the drawing replace the AI's estimated lengths on this sheet
         let aiContainmentRowsReplaced = 0;
         if (measuredRoutes.length) {
@@ -3790,6 +3799,7 @@ Deno.serve(async (req: Request) => {
             reference_zones: refZones.map((z) => z.label || z.kind),
             tagged_cameras: taggedCams ? { counted: taggedCams.cams.length, schedule: taggedCams.schedule, ai_camera_lines_replaced: aiCameraRowsReplaced } : null,
             tagged_devices: taggedDevices.length ? { counted: td.counted, ai_lines_replaced: td.replaced } : null,
+            plumbing_tags: plumbingInfo ? { counted: pt.counted, ai_lines_replaced: pt.replaced, water_supply_moved: pt.moved, water_supply_dropped: pt.dropped } : null,
             measured_routes: measuredRoutes.length ? { routes: measuredRoutes, ai_containment_lines_replaced: aiContainmentRowsReplaced } : null,
             sheet_schedules: { tables: sheetTables.map((t: any) => ({ title: String(t?.title ?? "").slice(0, 120), kind: t?.kind, rows: Array.isArray(t?.rows) ? t.rows.length : 0 })),
                                lines_from_schedules: sa.added, ai_lines_replaced: sa.replaced, detail: sa.notes, tables_without_quantities: sched.skipped,

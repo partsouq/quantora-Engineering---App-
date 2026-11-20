@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.10";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.11";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -5533,6 +5533,76 @@ async function readCameraTags(page, OPS, zones) {
   devices.forEach(d => { nBy[d.system] = (nBy[d.system] || 0) + 1; d.n = nBy[d.system]; });
   if (cams.length < 3) cams.length = 0;
   return { cams, devices, schedule: scheduleTotal };
+}
+// Plumbing sheets (2026-11-20): fixture tags (WC-1, L-1, FD-3, SHD-1, EW-2 ...) and cleanouts (WCO, FCO,
+// COTG) are real text on the plan, so they are counted exactly here; the set's own legend (often the
+// first sheet of the file) says what each abbreviation means. Both go to the engine with the sheet.
+const Q_PLB_TAG = /^(WC|UR|L|S|MS|SH|BT|EW|EWC|DF|FD|FS|SHD|AD|RD|HB|WH)-(\d{1,3}[A-Z]?)$/;
+const Q_PLB_BARE = /^(WCO|FCO|COTG)$/;
+const Q_PLB_LEGEND_CODES = /^(SS|V|VTR|SD|SAN|W|CW|HW|HWR|DCW|DHW|DHWR|NPW|EW|EWC|WCO|FCO|COTG|CO|FD|FS|SHD|L|S|WC|UR|MS|SH|BT|DF|HB|WH|AD|RD|IW|GW|AAV|DN|UP|IE|DFU)$/;
+async function qPageWords(page) {
+  const vp = page.getViewport({ scale: 1 }), tc = await page.getTextContent(), out = [];
+  for (const it of tc.items || []) {
+    const str = String(it.str || ""); if (!str.trim()) continue;
+    const [x, y] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+    const h = Math.hypot(it.transform[2], it.transform[3]) || 8, w = it.width || str.length * h * 0.5;
+    out.push({ str: str.trim(), x: x / vp.width, y: y / vp.height, w: w / vp.width, h: h / vp.height });
+  }
+  return out;
+}
+const __qPlbLegend = new WeakMap();
+async function qPlumbingLegend(pdf) {
+  if (__qPlbLegend.has(pdf)) return __qPlbLegend.get(pdf);
+  const legend = {};
+  try {
+    for (let i = 1; i <= Math.min(pdf.numPages || 1, 40); i++) {
+      const words = await qPageWords(await pdf.getPage(i));
+      const all = words.map(w => w.str).join(" ").toUpperCase();
+      if (!/ABBREVIATION|LEGEND/.test(all)) continue;
+      for (const w of words) {
+        if (!Q_PLB_LEGEND_CODES.test(w.str) || legend[w.str]) continue;
+        // the meaning is the nearest text to the right on the same line
+        let best = null;
+        for (const o of words) {
+          if (o === w) continue;
+          const dx = o.x - (w.x + w.w), dy = Math.abs(o.y - w.y);
+          if (dx < -0.002 || dx > 0.12 || dy > Math.max(w.h, o.h) * 0.6) continue;
+          if (!/^[A-Z][A-Z ,;\/()'&.-]{2,79}$/.test(o.str) || /\d/.test(o.str) || o.str === w.str) continue;
+          if (!best || dx < best.dx) best = { dx, s: o.str };
+        }
+        if (best) legend[w.str] = best.s.replace(/\s+/g, " ").trim();
+      }
+    }
+  } catch (e) { console.warn("plumbing legend not read:", e); }
+  __qPlbLegend.set(pdf, legend);
+  return legend;
+}
+async function qReadPlumbing(pdf, pageNumber, zones, drawing) {
+  const isPlb = /plumb|sanitar|drain|water/i.test(String(drawing && drawing.discipline || "")) ||
+    (drawing && (drawing.takeoff_systems || []).some(k => /^(water_supply|drainage|fixtures|hot_water|pumps)\|/.test(String(k))));
+  if (!isPlb) return null;
+  const words = await qPageWords(await pdf.getPage(pageNumber));
+  const inZone = (w) => (zones || []).some(z => w.x >= z.x0 && w.x <= z.x1 && w.y >= z.y0 && w.y <= z.y1);
+  const counts = {}, positions = {};
+  for (const w of words) {
+    for (const tok of w.str.split(/\s+/)) {
+      const t = tok.replace(/[.,;:()]+$/g, "").toUpperCase();
+      if (!(Q_PLB_TAG.test(t) || Q_PLB_BARE.test(t)) || inZone(w)) continue;
+      counts[t] = (counts[t] || 0) + 1;
+      (positions[t] = positions[t] || []).length < 300 && positions[t].push([+w.x.toFixed(5), +w.y.toFixed(5)]);
+    }
+  }
+  const text = words.map(w => w.str).join(" ").toUpperCase().replace(/\s+/g, " ");
+  const tm = text.match(/\b((?:DOMESTIC\s+)?(?:WASTE|SANITARY|SOIL|VENT|DRAINAGE|DOMESTIC WATER|WATER|PLUMBING|STORM)[A-Z0-9 &\/-]{0,30}?\b(?:PLAN|LAYOUT|RISER|DIAGRAM)\b[A-Z0-9 \/-]{0,40})/);
+  const legend = await qPlumbingLegend(pdf);
+  if (!Object.keys(counts).length && !Object.keys(legend).length) return null;
+  return { counts, positions, legend, title: tm ? tm[1].trim().slice(0, 140) : "" };
+}
+function qReadPlumbingSafe(pdf, pageNumber, zones, drawing) {
+  return Promise.race([
+    qReadPlumbing(pdf, pageNumber, zones, drawing).catch(e => { console.warn("plumbing tags not read:", e); return null; }),
+    new Promise(res => setTimeout(() => res(null), 20000)),
+  ]);
 }
 function readCameraTagsSafe(page, zones) {
   if (!window.pdfjsLib || !window.pdfjsLib.OPS) return Promise.resolve({ cams: [], devices: [], schedule: null });
@@ -13837,6 +13907,8 @@ function DrawingsTab({ project }) {
             : null;
           if (taggedCameras) console.log(`Sheet ${pageNumber}: ${taggedCameras.cams.length} camera tags on the plan (schedule ${camRead.schedule ?? "not read"})`);
           const taggedDevices = (camRead.devices || []).map(dv => ({ kind: dv.kind, tag: dv.tag, n: dv.n, x: +dv.x.toFixed(5), y: +dv.y.toFixed(5) }));
+          const plumbing = await qReadPlumbingSafe(pdf, pageNumber, refZones, d);
+          if (plumbing) console.log(`Sheet ${pageNumber}: plumbing tags`, plumbing.counts, plumbing.title);
           if (taggedDevices.length) console.log(`Sheet ${pageNumber}: ${taggedDevices.length} other device tags on the plan`);
           // tray and conduit measured from the drawing's own lines, named by its legend / notes
           setTiling(t => ({ ...t, [d.id]: `Measuring tray and conduit${label}…` }));
@@ -13856,7 +13928,7 @@ function DrawingsTab({ project }) {
           for (;;) {
             try {
               started = await callEngine("analyze_drawing_tiled", {
-                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: zonesOut, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages, ...tileConfirms,
+                project_id: project.id, drawing_id: d.id, page_number: pageNumber, tiles, grid, reference_zones: zonesOut, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages, ...(plumbing ? { plumbing } : {}), ...tileConfirms,
                 ...(batchRev ? { batch_revision: batchRev } : {}), ...(pageLabels && pageLabels[pageNumber] ? { page_label: pageLabels[pageNumber] } : {}),
                 ...(pageFloors && pageFloors[pageNumber] ? { page_floor: pageFloors[pageNumber] } : {}),
               });
@@ -22333,6 +22405,7 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
       ? { schedule: camRead.schedule, cams: camRead.cams.map(c => ({ n: c.n, tag: c.tag, type: c.type, x: +c.x.toFixed(5), y: +c.y.toFixed(5) })) }
       : null;
     const taggedDevices = (camRead.devices || []).map(dv => ({ kind: dv.kind, tag: dv.tag, n: dv.n, x: +dv.x.toFixed(5), y: +dv.y.toFixed(5) }));
+    const plumbing = await qReadPlumbingSafe(pdf, pn, refZones, drawing);
     const measuredRoutes = await measureRoutesSafe(await pdf.getPage(pn), refZones);
     const zonesOut = refZones.map(z => ({ x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, kind: z.kind, label: z.label }));
     say(`Reading the sheet's schedules${label}…`);
@@ -22344,7 +22417,7 @@ async function adminAnalyzeDrawing({ drawing, projectId, payload, onStatus, askS
       try {
     started = await callEngine("analyze_drawing_tiled", {
       ...payload, drawing_id: drawing.id, page_number: pn, tiles, grid,
-      reference_zones: zonesOut, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages,
+      reference_zones: zonesOut, tagged_cameras: taggedCameras, tagged_devices: taggedDevices, measured_routes: measuredRoutes, schedule_images: scheduleImages, ...(plumbing ? { plumbing } : {}),
       ...(batchRev ? { batch_revision: batchRev } : {}), ...(labels[pn] ? { page_label: labels[pn] } : {}), ...(floors[pn] ? { page_floor: floors[pn] } : {}),
     });
         break;
