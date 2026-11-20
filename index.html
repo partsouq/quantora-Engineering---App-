@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.12";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.14";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -31132,8 +31132,9 @@ function AccountMenu({ session, isPlatformAdmin, adminLink, onNavigate, onOpenBi
   }, [open]);
 
   const display = (prof && (prof.full_name || [prof.first_name, prof.last_name].filter(Boolean).join(" ")).trim())
-    || (email ? email.split("@")[0] : "Account");
-  const initials = qInitials(prof && prof.first_name, prof && prof.last_name, email, display);
+    || "My account";   // 2026-11-20: never print the e-mail address's name part
+  const named = !!(prof && (prof.full_name || prof.first_name || prof.last_name));
+  const initials = named ? qInitials(prof && prof.first_name, prof && prof.last_name, email, display) : "\u263A";
 
   const go = fn => () => { setOpen(false); fn(); };
 
@@ -41331,8 +41332,13 @@ function App() {
               </span>
             </button>
           )}
+          {canGoBack && <span className="qtr-sep" aria-hidden="true" />}
           {hasAdminPortal && (
-            <button onClick={()=>setView({name:"admin"})} className="text-xs font-semibold text-violet-700 hover:text-violet-900">Admin</button>
+            <button onClick={()=>setView({name:"admin"})} title="Admin portal" className="text-xs font-semibold text-violet-700 hover:text-violet-900"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/></svg>
+              Admin
+            </button>
           )}
           {/* Keyed on the user id so signing in as someone else rebuilds the
               poller rather than showing the previous account's count. */}
@@ -44104,6 +44110,33 @@ html:root:has(.qx) body .qx nav.qtr-topnav{background:#ffffff!important;border:1
 html:root:has(.qx) body .qx nav.qtr-topnav>div:first-child,html:root:has(.qx) body .qx nav.qtr-topnav .text-blue-700{color:#0f1b3d!important}
 html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a){background:#f5f7fb!important;border:1px solid #e3e8f2!important;color:#0f1b3d!important}
 html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a) *{color:#0f1b3d!important}
+/* 2026-11-20: header is one clean full-width bar (no floating pill, nothing showing above it) */
+html:root:has(.qx) body .qx nav.qtr-topnav{position:sticky!important;top:0!important;margin:0!important;border-radius:0!important;border:0!important;border-bottom:1px solid #e3e8f2!important;box-shadow:0 1px 0 rgba(15,27,61,.03)!important;height:60px!important;padding:0 24px!important;z-index:30!important}
+html:root:has(.qx) body .qx nav.qtr-topnav>div:first-child{font-size:17px!important;font-weight:700!important;letter-spacing:-.01em}
+html:root:has(.qx) body .qx nav.qtr-topnav .text-blue-700{color:#3b5bdb!important}
+html:root:has(.qx) body .qx nav.qtr-topnav>div:last-child{gap:6px!important}
+html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a){background:transparent!important;border:1px solid transparent!important;border-radius:10px!important;height:38px!important;padding:0 12px!important;font-size:13.5px!important;font-weight:600!important;color:#33415f!important;box-shadow:none!important;display:inline-flex!important;align-items:center!important;gap:8px!important;transition:background .15s,border-color .15s}
+html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a) *{color:#33415f!important}
+html:root:has(.qx) body .qx nav.qtr-topnav :is(button,a):hover{background:#f1f4fa!important;border-color:#e3e8f2!important}
+html:root:has(.qx) body .qx nav.qtr-topnav .qtr-back-btn{color:#4a5878!important}
+html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-btn{padding:0 10px 0 5px!important;border-color:#e3e8f2!important;background:#fff!important}
+html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-btn>span:first-child{background:#3b5bdb!important;color:#fff!important;width:28px!important;height:28px!important}
+html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-btn>span:first-child *{color:#fff!important}
+html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-name{color:#0f1b3d!important}
+html:root:has(.qx) body .qx nav.qtr-topnav .qtr-sep{width:1px;height:24px;background:#e3e8f2;margin:0 6px}
+/* 2026-11-20: one calm card style -- 14 px corners, hairline border, soft shadow, gentle hover */
+html:root:has(.qx) body .qx .qh.qnl{background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;border-radius:0!important}
+html:root:has(.qx) body .qx .qp-side{border-radius:16px!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important}
+html:root:has(.qx) body .qx .qp-side-foot{border-radius:12px!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-strip,.qh-kpi,.qh-card,.qp-card){border-radius:14px!important;background:#ffffff!important;border:1px solid #e3e8f2!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;transition:border-color .15s,box-shadow .15s,transform .15s}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-card,.qp-card):hover{border-color:#c9d4ee!important;box-shadow:0 8px 20px -10px rgba(15,27,61,.22)!important;transform:translateY(-1px)}
+html:root:has(.qx) body .qx .qh-act :is(.qh-ic,[class*="ic"]):first-child{border-radius:12px!important}
+html:root:has(.qx) body .qx :is(.qnl-btn,.qh-upg){border-radius:10px!important;box-shadow:0 1px 2px rgba(15,27,61,.08)!important}
+html:root:has(.qx) body .qx .qh-find{border-radius:10px!important;background:#ffffff!important;border:1px solid #d9e1ee!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qh-find:focus-within{border-color:#3b5bdb!important;box-shadow:0 0 0 3px rgba(59,91,219,.15)!important}
+html:root:has(.qx) body .qx .qh-ins{border-radius:10px!important;border-color:#e3e8f2!important}
+html:root:has(.qx) body .qx :is(.bg-white.rounded-xl,.bg-white.rounded-2xl,.bg-white.rounded-3xl){border-radius:14px!important;border:1px solid #e3e8f2!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important}
+html:root:has(.qx) body .qx .qe-launch{box-shadow:0 8px 20px -10px rgba(15,27,61,.35)!important}
 html:root:has(.qx) body .qx .qp-side{background:#ffffff!important;border:1px solid #e3e8f2!important;box-shadow:0 10px 28px -20px rgba(15,27,61,.25)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
 html:root:has(.qx) body .qx .qp-brand b{color:#0f1b3d!important}
 html:root:has(.qx) body .qx .qp-brand span span{color:#6b7896!important}
