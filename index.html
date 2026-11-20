@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.15";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.16";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -26497,7 +26497,13 @@ const QX_NAV_ICON = {
   billing: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M3 10h18M7 15h4" /></svg>,
   settings: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" /></svg>,
   help: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8M12 17.2h.01" /></svg>,
+  new: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>,
+  upload: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" /></svg>,
+  pages: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /><path d="M14 3v5h5M9 13h6M9 17h4" /></svg>,
 };
+// One icon set for the whole platform (2026-11-20): workspaces and home tiles use the same line icons as the menu.
+const QX_WS_ICON = { projects: "dashboard", commercial: "revenue", operations: "operations", draftsman: "draftsman" };
+const qxIcon = (k) => QX_NAV_ICON[QX_WS_ICON[k] || k] || null;
 
 function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, isPlatformAdmin,
                       workspace, onWorkspace, onChooser, children }) {
@@ -26524,7 +26530,7 @@ function PortalShell({ view, onNavigate, onUpgrade, onRefresh, refreshing, isPla
         <div className="qp-ws">
           {WORKSPACES.map(([key, label, icon]) => (
             <button key={key} className={ws === key ? "on" : ""} onClick={() => onWorkspace(key)} title={label}>
-              <span className="ic" aria-hidden="true">{icon}</span>
+              <span className="ic" aria-hidden="true">{qxIcon(key) || icon}</span>
               <span className="lb">{label}</span>
             </button>
           ))}
@@ -26882,7 +26888,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
          .map(([key, title, sub, glyph, colour, adminOnly]) => (
           <button key={key} className="qh-act qh-tone" onClick={() => onNavigate(key)}
             style={{ "--c": colour }}>
-            <span className="ic" style={{ background: colour + "22", color: colour }} aria-hidden="true">{glyph}</span>
+            <span className="ic" style={{ background: colour + "22", color: colour }} aria-hidden="true">{qxIcon(key) || glyph}</span>
             <span className="tx">
               <b>{title}</b>
               <span>{sub}</span>
@@ -26901,7 +26907,7 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
       <div className="qh-grid3">
         {HOME_TILES.map(([key, title, sub, glyph, colour, tint]) => (
           <button key={key} className="qh-act qh-tone" style={{ "--c": colour }} onClick={() => (key === "new" ? onNewProject() : onNavigate(key))}>
-            <span className="ic" style={{ background: tint, color: colour }} aria-hidden="true">{glyph}</span>
+            <span className="ic" style={{ background: tint, color: colour }} aria-hidden="true">{qxIcon(key === "drawings" ? "upload" : key) || glyph}</span>
             <span className="tx"><b>{title}</b><span>{sub}</span></span>
             <span className="arw" aria-hidden="true">&rsaquo;</span>
           </button>
@@ -26927,22 +26933,22 @@ function HomePage({ onNavigate, onOpenProject, onNewProject, onUpgrade, email, i
 
       <div className="qh-grid4">
         <div className="qh-kpi">
-          <div className="hd"><span className="ic" style={{ background: "rgba(139,92,246,.16)", color: "#7c3aed" }}>▣</span><b>Projects</b></div>
+          <div className="hd"><span className="ic" style={{ background: "rgba(139,92,246,.16)", color: "#7c3aed" }}>{qxIcon("dashboard")}</span><b>Projects</b></div>
           <div className="bd"><div><div className="n">{totals.projects}</div><div className="lb">Active projects</div></div>
             <QSpark series={qSeries7(projects, "created_at")} colour="#7c3aed" /></div>
         </div>
         <div className="qh-kpi">
-          <div className="hd"><span className="ic" style={{ background: "rgba(59,130,246,.16)", color: "#1c6ce6" }}>▤</span><b>Drawings</b></div>
+          <div className="hd"><span className="ic" style={{ background: "rgba(59,130,246,.16)", color: "#1c6ce6" }}>{qxIcon("drawings")}</span><b>Drawings</b></div>
           <div className="bd"><div><div className="n">{totals.drawings}</div><div className="lb">Uploaded, all projects</div></div>
             <QSpark series={qSeries7(extra.drawingRows, "created_at")} colour="#0284c7" /></div>
         </div>
         <div className="qh-kpi">
-          <div className="hd"><span className="ic" style={{ background: "rgba(16,185,129,.16)", color: "#059669" }}>≡</span><b>BOQ items</b></div>
+          <div className="hd"><span className="ic" style={{ background: "rgba(16,185,129,.16)", color: "#059669" }}>{qxIcon("boq")}</span><b>BOQ items</b></div>
           <div className="bd"><div><div className="n">{totals.boq.toLocaleString()}</div><div className="lb">Lines measured</div></div>
             <QSpark series={qSeries7(extra.boqRows, "created_at")} colour="#059669" /></div>
         </div>
         <div className="qh-kpi">
-          <div className="hd"><span className="ic" style={{ background: "rgba(245,158,11,.16)", color: "#d97706" }}>◔</span><b>AI pages</b></div>
+          <div className="hd"><span className="ic" style={{ background: "rgba(245,158,11,.16)", color: "#d97706" }}>{qxIcon("pages")}</span><b>AI pages</b></div>
           <div className="bd">
             <div><div className="n">{pagesUsed == null ? "—" : pagesUsed}{pagesLimit ? <span className="of"> / {pagesLimit}</span> : null}</div>
               <div className="lb">{pagesLimit ? "Used this period" : "Loading your plan…"}</div></div>
@@ -32521,10 +32527,10 @@ function SalesPage({ onNavigate }) {
       {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
       {bids.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 14px" }}>
         {[["dash", "Sales dashboard"], ["board", "Bid board"], ["systems", "By system"], ["team", "Team leaderboard"], ["loss", "Loss analysis"], ["bids", "Bids & pipeline"]].map(([k, l]) => (
-          <button key={k} type="button" onClick={() => pickTab(k)}
+          <button key={k} type="button" onClick={() => pickTab(k)} className={`qs-tab ${tab === k ? "on" : ""}`}
             style={{ fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer",
-              border: "1px solid " + (tab === k ? "transparent" : "rgba(148,163,184,.35)"),
-              background: tab === k ? "linear-gradient(90deg,#2563eb,#7c3aed)" : "transparent", color: tab === k ? "#fff" : "inherit" }}>{l}</button>))}
+              border: "1px solid " + (tab === k ? "#3b5bdb" : "rgba(148,163,184,.35)"),
+              background: tab === k ? "#3b5bdb" : "transparent", color: tab === k ? "#fff" : "inherit" }}>{l}</button>))}
       </div>}
       {tab !== "bids" && bids.length > 0 ? <SalesInsights tab={tab} /> : null}
 
@@ -33945,10 +33951,10 @@ function OperationsPage({ onNavigate }) {
       {err && <div className="qp-card" style={{ color: "#e11d48", fontSize: 13 }}>{err}</div>}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 14px" }}>
         {[["myday", "My day"], ["health", "Portfolio health"], ["cash", "Cash position"], ["materials", "Material tracker"], ["report", "Progress report"], ["overview", "Projects & issues"]].map(([k, l]) => (
-          <button key={k} type="button" onClick={() => pickTab(k)}
+          <button key={k} type="button" onClick={() => pickTab(k)} className={`qs-tab ${tab === k ? "on" : ""}`}
             style={{ fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer",
-              border: "1px solid " + (tab === k ? "transparent" : "rgba(148,163,184,.35)"),
-              background: tab === k ? "linear-gradient(90deg,#2563eb,#7c3aed)" : "transparent", color: tab === k ? "#fff" : "inherit" }}>{l}</button>))}
+              border: "1px solid " + (tab === k ? "#3b5bdb" : "rgba(148,163,184,.35)"),
+              background: tab === k ? "#3b5bdb" : "transparent", color: tab === k ? "#fff" : "inherit" }}>{l}</button>))}
       </div>
       {tab !== "overview" && projects.length > 0 ? <OpsInsights tab={tab} onOpen={setOpen} /> : null}
 
@@ -36618,13 +36624,8 @@ function DraftsmanDashboard({ initialProjects, onNewJob, onOpenStudio, onEditBri
 
   return (
     <div className="space-y-4" style={{ maxWidth: 1280 }}>
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold">Drafting office</h1>
-          <p className="text-slate-500 text-sm mt-1">Every project that needs shop drawings. Upload plans, pick the systems, generate the drafts.</p>
-        </div>
-        <button onClick={onNewJob} className="text-sm font-semibold text-white px-4 py-2.5 rounded-lg" style={{ background: "#3987e5" }}>+ New drafting job</button>
-      </div>
+      <PageHead title="Drafting office" sub="Every project that needs shop drawings. Upload plans, pick the systems, generate the drafts."
+        right={<button onClick={onNewJob} className="qp-btn pri">+ New drafting job</button>} />
 
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {[[count("req"), "Drafts required — not started", "#b45309"], [count("run"), "Being drawn now", "#1d4ed8"],
@@ -36640,8 +36641,10 @@ function DraftsmanDashboard({ initialProjects, onNewJob, onOpenStudio, onEditBri
       <div className="flex items-center gap-2 flex-wrap">
         {tabs.map(([k, l, n]) => (
           <button key={k} onClick={() => setFilter(k)}
-            className={`text-xs font-semibold rounded-full px-3 py-1.5 border ${filter === k ? "" : "bg-white text-slate-600"}`}
-            style={filter === k ? { background: "#3987e5", color: "#fff", borderColor: "#3987e5" } : undefined}>
+            className={`qs-tab ${filter === k ? "on" : ""}`}
+            style={{ fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer",
+              border: "1px solid " + (filter === k ? "#3b5bdb" : "rgba(148,163,184,.35)"),
+              background: filter === k ? "#3b5bdb" : "transparent", color: filter === k ? "#fff" : "inherit" }}>
             {l} {n}
           </button>
         ))}
@@ -44124,6 +44127,23 @@ html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-btn>span:first-child{backgr
 html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-btn>span:first-child *{color:#fff!important}
 html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-name{color:#0f1b3d!important}
 html:root:has(.qx) body .qx nav.qtr-topnav .qtr-sep{width:1px;height:24px;background:#e3e8f2;margin:0 6px}
+/* 2026-11-20: one standard across every dashboard -- page heading, icon tiles, tabs, buttons, boxes */
+html:root:has(.qx) body .qx .qp-hero{background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;padding:4px 0 6px!important;margin-bottom:14px!important}
+html:root:has(.qx) body .qx .qp-hero h1{font-size:26px!important;font-weight:800!important;letter-spacing:-.02em!important;color:#0f1b3d!important;-webkit-text-fill-color:#0f1b3d!important}
+html:root:has(.qx) body .qx .qp-hero p{font-size:14px!important;color:#5b6478!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-kpi) .ic svg{width:20px;height:20px}
+html:root:has(.qx) body .qx .qh-kpi .hd .ic svg{width:17px;height:17px}
+html:root:has(.qx) body .qx .qh-kpi .hd .ic{border-radius:10px!important}
+html:root:has(.qx) body .qx .qp-ws button .ic svg{width:16px;height:16px;display:block}
+html:root:has(.qx) body .qx .qs-tab:not(.on){background:#ffffff!important;border-color:#d9e1ee!important;color:#334155!important}
+html:root:has(.qx) body .qx .qs-tab:not(.on):hover{background:#f1f4fa!important}
+html:root:has(.qx) body .qx .qs-tab.on{background:#3b5bdb!important;border-color:#3b5bdb!important;color:#fff!important;box-shadow:0 1px 2px rgba(15,27,61,.12)!important}
+html:root:has(.qx) body .qx .qp-btn{border-radius:10px!important;background:#ffffff!important;border:1px solid #d9e1ee!important;color:#1f2a44!important;box-shadow:0 1px 2px rgba(15,27,61,.06)!important}
+html:root:has(.qx) body .qx .qp-btn.pri{background:#3b5bdb!important;border-color:#3b5bdb!important;color:#fff!important;border-radius:10px!important;box-shadow:0 1px 2px rgba(15,27,61,.12)!important}
+html:root:has(.qx) body .qx .qp-card{border-radius:14px!important;background:#ffffff!important;border:1px solid #e3e8f2!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important}
+html:root:has(.qx) body .qx .qp-empty{border-color:#d9e1ee!important;border-radius:14px!important}
+html:root:has(.qx) body .qx .qp-main :is(.bg-white.border.rounded-xl,.bg-white.border.rounded-2xl){background:#ffffff!important}
+html:root:has(.qx) body .qx .qp-main input.border:not([type=checkbox]):not([type=radio]){background:#ffffff!important;border-color:#d9e1ee!important;border-radius:10px!important}
 /* 2026-11-20: admin portal in the same light look as the workspace */
 html:root:has(.qadmin),html:root:has(.qx) body .qx .qadmin,html:root:has(.qx) body .qx .qadmin .shell,html:root:has(.qx) body .qx .qadmin .main{background:#f5f8fc!important}
 html:root:has(.qx) body .qx .qadmin .sidebar{background:#ffffff!important;border-right:1px solid #e3e8f2!important;box-shadow:none!important}
