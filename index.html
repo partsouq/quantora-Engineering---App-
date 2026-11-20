@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.11";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.12";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4493,6 +4493,7 @@ async function qCurrentUser() {
 // for 10 minutes. Never during an upload, while typing, with a pop-up open, in Manual Take-off or the drawing viewer.
 const qUpdate = { pending: null, busy: 0 };
 try { window.qUpdate = qUpdate; } catch (_) {}
+try { if (/[?&]r=\d+/.test(location.search)) history.replaceState(history.state, "", location.pathname + location.search.replace(/([?&])r=\d+&?/, "$1").replace(/[?&]$/, "") + location.hash); } catch (_) {}
 (function qWatchVersion() {
   const check = async () => {
     try {
@@ -4501,13 +4502,29 @@ try { window.qUpdate = qUpdate; } catch (_) {}
       if (m && window.QUANTORA_BUILD && m[1] !== window.QUANTORA_BUILD) qUpdate.pending = m[1];
     } catch (_) {}
   };
-  const safe = () => !qUpdate.busy && !qUserIsTyping() && !document.querySelector("[data-q-noreload]") && !document.querySelector('[role="alertdialog"]');
-  const maybe = () => {
-    if (!qUpdate.pending || !safe()) return;
-    if (document.hidden || Date.now() - qLastInput > 600000) location.reload();
+  // 2026-11-20: the page used to reload as soon as the tab went to the background, and the site's cache
+  // could hand the old version back -- so it reloaded again and again, and the user lost their place.
+  // Now: only after 15 minutes with nobody using the page, at most once per new version, and with a
+  // cache-busting address so the new version really arrives. An active user gets a small notice instead.
+  const safe = () => !qUpdate.busy && !qUserIsTyping() && !document.querySelector("[data-q-noreload]") && ![...document.querySelectorAll('[role="alertdialog"]')].some(d => !/A new version of Quantora/.test(d.textContent || "")) && !document.querySelector('#q-team-pop');
+  const tried = () => { try { return JSON.parse(sessionStorage.getItem("q_upd_try") || "null"); } catch (_) { return null; } };
+  const go = () => {
+    try { sessionStorage.setItem("q_upd_try", JSON.stringify({ to: qUpdate.pending, at: Date.now() })); } catch (_) {}
+    location.replace(location.pathname + "?r=" + Date.now() + (location.hash || ""));
   };
-  setTimeout(check, 30000); setInterval(check, 120000); setInterval(maybe, 10000);
-  document.addEventListener("visibilitychange", maybe);
+  let told = "";
+  const maybe = () => {
+    if (!qUpdate.pending) return;
+    const t = tried();
+    if (t && t.to === qUpdate.pending && Date.now() - t.at < 30 * 60e3) return;   // already tried: never loop
+    if (Date.now() - qLastInput > 15 * 60e3 && safe()) { go(); return; }
+    if (!document.hidden && told !== qUpdate.pending) {
+      told = qUpdate.pending;
+      qPop({ kind: "info", title: "A new version of Quantora is ready", message: "Save what you are doing, then reload to get it. Nothing changes until you do.",
+        action: { label: "Reload now", onClick: go } });
+    }
+  };
+  setTimeout(check, 30000); setInterval(check, 300000); setInterval(maybe, 30000);
 })();
 // ---- Pop-ups: every error and notice appears as a centred card, not a line of red text ----
 // qPop({ kind: "error" | "warn" | "info" | "success", title, message, action: { label, onClick } })
@@ -4534,7 +4551,9 @@ function qPop(o) {
 function useQErr(init) {
   const [v, setV] = useState(init);
   const set = useCallback((x) => {
-    if (qQuiet.depth > 0) { setV(x); return; }   // a background refresh: no pop-up
+    // 2026-11-20: only a background refresh with nobody acting stays quiet, and only for a dropped
+    // connection; anything the user did, and any real error, pops up.
+    if (qQuiet.depth > 0 && Date.now() - qLastInput > 8000 && /failed to fetch|network|timeout|load failed|aborted/i.test(qPopText(typeof x === "function" ? "" : x))) { setV(x); return; }
     if (typeof x === "function") { setV(prev => { const n = x(prev); const t = qPopText(n); if (t) qPop({ kind: "error", message: t }); return n; }); return; }
     const t = qPopText(x);
     if (t) qPop({ kind: "error", message: t });
@@ -29256,10 +29275,34 @@ function qLiveChannel() {
         qLiveSubs.forEach(fn => { try { fn({ presence: true }); } catch (_) {} });
       } catch (_) {}
     });
-    qLiveCh.subscribe((status) => { if (status === "SUBSCRIBED" && qLiveTracked) { try { qLiveCh.track(qLiveTracked); } catch (_) {} } });
+    const ch = qLiveCh;
+    ch.subscribe((status) => {
+      if (status === "SUBSCRIBED") { qLiveFails = 0; if (qLiveTracked) { try { ch.track(qLiveTracked); } catch (_) {} } return; }
+      // 2026-11-20: a dropped connection (laptop asleep, Wi-Fi change) used to leave the chat offline for good
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") qLiveReconnect(ch);
+    });
   } catch (e) { console.warn("Live chat channel not available, polling only:", e); qLiveCh = null; }
   return qLiveCh;
 }
+let qLiveFails = 0, qLiveRetry = null;
+function qLiveReconnect(ch) {
+  if (qLiveCh !== ch || qLiveRetry) return;
+  qLiveFails++;
+  qLiveRetry = setTimeout(() => {
+    qLiveRetry = null;
+    if (qLiveCh !== ch) return;
+    try { sb.removeChannel(ch); } catch (_) {}
+    qLiveCh = null; qLiveChannel();
+  }, Math.min(60000, 2000 * Math.pow(2, Math.min(qLiveFails, 5))));
+}
+try {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden || !qLiveCh) return;
+    const st = qLiveCh.state;
+    if (st && st !== "joined" && st !== "joining") qLiveReconnect(qLiveCh);
+    else if (qLiveTracked) { try { qLiveCh.track(qLiveTracked); } catch (_) {} }
+  });
+} catch (_) {}
 function qLiveTrack(meta) { qLiveTracked = meta; const ch = qLiveChannel(); try { ch && ch.track(meta); } catch (_) {} }
 function qLiveSignal(payload) { const ch = qLiveChannel(); try { ch && ch.send({ type: "broadcast", event: "chat", payload }); } catch (_) {} }
 function qLiveListen(fn) { qLiveChannel(); qLiveSubs.add(fn); return () => qLiveSubs.delete(fn); }
@@ -40874,7 +40917,9 @@ function App() {
       // Arriving from a recovery email. Supabase signs the user in to let them
       // change the password, so the workspace has to be withheld until they do.
       if (event === "PASSWORD_RECOVERY") setRecovering(true);
-      setSession(sess);
+      // 2026-11-20: TOKEN_REFRESHED fires every hour and on waking the laptop; replacing the session
+      // re-ran every page's checks (admin, billing) and could drop the user back to the dashboard.
+      setSession(prev => (event !== "SIGNED_OUT" && event !== "USER_UPDATED" && event !== "SIGNED_IN" && prev && sess && prev.user && sess.user && prev.user.id === sess.user.id) ? prev : sess);
     });
     // Covers the case where the recovery link is opened before the listener is
     // attached -- the token is still in the URL fragment at that point.
@@ -40892,7 +40937,8 @@ function App() {
     if (!session) { setIsPlatformAdmin(false); return; }
     // the draftsman studio shows its in-browser Design / Drawings tabs to platform admins only (2026-10-26)
     const flag = (v) => { window.__qPlatformAdmin = v; try { window.dispatchEvent(new Event("q-admin")); } catch (_) {} };
-    callAdminAnalytics("is_admin", {}).then((r) => { if (r && r.is_admin === false) throw new Error("not admin"); setIsPlatformAdmin(true); setStaffPerms(null); flag(true); }).catch(() => {
+    callAdminAnalytics("is_admin", {}).then((r) => { if (r && r.is_admin === false) throw new Error("not admin"); setIsPlatformAdmin(true); setStaffPerms(null); flag(true); }).catch((e) => {
+      if (!/not admin|403|forbidden|not allowed/i.test(String(e && e.message || e))) { console.warn("admin check failed (kept as is):", e); return; }
       setIsPlatformAdmin(false); flag(false);
       Promise.resolve(sb.rpc("q_staff_me")).then(({ data }) => {
         const p = data && data.perms && Object.keys(data.perms).length ? data.perms : null;
