@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.13";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.14";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -44124,6 +44124,19 @@ html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-btn>span:first-child{backgr
 html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-btn>span:first-child *{color:#fff!important}
 html:root:has(.qx) body .qx nav.qtr-topnav .qtr-acct-name{color:#0f1b3d!important}
 html:root:has(.qx) body .qx nav.qtr-topnav .qtr-sep{width:1px;height:24px;background:#e3e8f2;margin:0 6px}
+/* 2026-11-20: one calm card style -- 14 px corners, hairline border, soft shadow, gentle hover */
+html:root:has(.qx) body .qx .qh.qnl{background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;border-radius:0!important}
+html:root:has(.qx) body .qx .qp-side{border-radius:16px!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important}
+html:root:has(.qx) body .qx .qp-side-foot{border-radius:12px!important}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-strip,.qh-kpi,.qh-card,.qp-card){border-radius:14px!important;background:#ffffff!important;border:1px solid #e3e8f2!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;transition:border-color .15s,box-shadow .15s,transform .15s}
+html:root:has(.qx) body .qx :is(.qh-act,.qh-card,.qp-card):hover{border-color:#c9d4ee!important;box-shadow:0 8px 20px -10px rgba(15,27,61,.22)!important;transform:translateY(-1px)}
+html:root:has(.qx) body .qx .qh-act :is(.qh-ic,[class*="ic"]):first-child{border-radius:12px!important}
+html:root:has(.qx) body .qx :is(.qnl-btn,.qh-upg){border-radius:10px!important;box-shadow:0 1px 2px rgba(15,27,61,.08)!important}
+html:root:has(.qx) body .qx .qh-find{border-radius:10px!important;background:#ffffff!important;border:1px solid #d9e1ee!important;box-shadow:none!important}
+html:root:has(.qx) body .qx .qh-find:focus-within{border-color:#3b5bdb!important;box-shadow:0 0 0 3px rgba(59,91,219,.15)!important}
+html:root:has(.qx) body .qx .qh-ins{border-radius:10px!important;border-color:#e3e8f2!important}
+html:root:has(.qx) body .qx :is(.bg-white.rounded-xl,.bg-white.rounded-2xl,.bg-white.rounded-3xl){border-radius:14px!important;border:1px solid #e3e8f2!important;box-shadow:0 1px 2px rgba(15,27,61,.04)!important}
+html:root:has(.qx) body .qx .qe-launch{box-shadow:0 8px 20px -10px rgba(15,27,61,.35)!important}
 html:root:has(.qx) body .qx .qp-side{background:#ffffff!important;border:1px solid #e3e8f2!important;box-shadow:0 10px 28px -20px rgba(15,27,61,.25)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
 html:root:has(.qx) body .qx .qp-brand b{color:#0f1b3d!important}
 html:root:has(.qx) body .qx .qp-brand span span{color:#6b7896!important}
