@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.5";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.6";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -40547,8 +40547,8 @@ function QAppPrompt() {
 // while glass is on, so Classic is byte-for-byte what it was. The admin portal,
 // the public site and every exported file stay Classic.
 const Q_LOOKS = [
-  { id: "classic", name: "Classic", blurb: "Dark and high-contrast. The look you have now." },
-  { id: "light", name: "Light", blurb: "Very light: white panels and navy text, easy on the eyes." },
+  { id: "light", name: "Light", blurb: "Very light: white panels and navy text, easy on the eyes. The default." },
+  { id: "classic", name: "Classic", blurb: "Dark and high-contrast." },
   { id: "glass", name: "Glass", blurb: "Light, frosted panels over a blue backdrop." },
   { id: "slate", name: "Slate", blurb: "Dark slate panels with teal and yellow highlights." },
   { id: "warm", name: "Warm", blurb: "Frosted panels over a soft, warm room." },
@@ -40565,7 +40565,8 @@ function useQLook(session) {
     return () => window.removeEventListener("q-look", f);
   }, []);
   const u = session && session.user;
-  return u && window.QLook ? window.QLook.read(u.id, u.user_metadata) : null;
+  // 2026-11-20: Light is the default for anyone who has not picked a look.
+  return u && window.QLook ? (window.QLook.read(u.id, u.user_metadata) || "light") : null;
 }
 // Saved on this device at once, and on the account so a new device starts with the same look.
 function qLookSave(uid, look) {
@@ -40584,9 +40585,9 @@ function QLookTile({ look, on, onPick }) {
     </button>
   );
 }
-// One-time pop-up after sign-in. Classic is pre-selected, so one tap keeps things as they are.
+// One-time pop-up after sign-in. Light (the default) is pre-selected, so one tap keeps things as they are.
 function QLookChooser({ uid, hold }) {
-  const [sel, setSel] = useState("classic");
+  const [sel, setSel] = useState("light");
   const [show, setShow] = useState(() => { try { return !localStorage.getItem("q_look_asked:" + uid); } catch (_) { return false; } });
   if (!show || hold) return null;
   const cur = Q_LOOKS.find(l => l.id === sel) || Q_LOOKS[0];
@@ -40616,7 +40617,7 @@ function LookSettingsCard() {
     return () => { alive = false; window.removeEventListener("q-look", f); };
   }, []);
   if (!user || !window.QLook) return null;
-  const cur = window.QLook.read(user.id, user.user_metadata) || "classic";
+  const cur = window.QLook.read(user.id, user.user_metadata) || "light";
   return (
     <div className="qp-card">
       <h4>Appearance</h4>
