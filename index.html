@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.9";</script>
+<script>window.QUANTORA_BUILD = "2026-11-20.10";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -29279,6 +29279,50 @@ function QLiveComposer({ onSend, placeholder, busy }) {
   );
 }
 
+// 2026-11-20: a message from the Quantora team, shown in the middle of the screen until the user closes it.
+function QTeamMessagePopup({ messages, onClose, onReply }) {
+  const chimed = useRef("");
+  const last = messages[messages.length - 1];
+  useEffect(() => { if (last && chimed.current !== last.id) { chimed.current = last.id; try { qChime(); } catch (_) {} } }, [last && last.id]);
+  useEffect(() => { const k = (e) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  return (
+    <div data-ql="0" role="dialog" aria-modal="true" aria-labelledby="q-team-msg-title" id="q-team-pop"
+      style={{ position: "fixed", inset: 0, zIndex: 9000, display: "grid", placeItems: "center", padding: 16, background: "rgba(15,23,42,.55)", backdropFilter: "blur(2px)" }}>
+      <style data-ql="0">{`#q-team-pop .qtm-card{background:#ffffff!important;color:#0f1b3d!important;border:1px solid #e3e8f2!important}
+#q-team-pop .qtm-head{background:linear-gradient(135deg,#059669,#0d9488)!important;color:#fff!important}
+#q-team-pop .qtm-head *{color:#fff!important}
+#q-team-pop .qtm-body,#q-team-pop .qtm-foot{background:#ffffff!important}
+#q-team-pop .qtm-msg{background:#f5f7fb!important;color:#0f1b3d!important;border:1px solid #e3e8f2!important;box-shadow:none!important}
+#q-team-pop .qtm-msg .qtm-meta{color:#6b7896!important}
+#q-team-pop .qtm-reply{background:#ffffff!important;color:#0f1b3d!important;border:1px solid #cbd5e1!important}
+#q-team-pop .qtm-ok{background:#059669!important;color:#ffffff!important;border:0!important}`}</style>
+      <div data-ql="0" className="qtm-card" style={{ width: "min(520px, 100%)", maxHeight: "min(640px, calc(100vh - 32px))", display: "grid", gridTemplateRows: "auto 1fr auto", borderRadius: 18, overflow: "hidden",
+        background: "#ffffff", color: "#0f1b3d", boxShadow: "0 30px 80px rgba(2,6,23,.45)", border: "1px solid #e3e8f2" }}>
+        <div data-ql="0" className="qtm-head" style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 20px", background: "linear-gradient(135deg,#059669,#0d9488)", color: "#fff" }}>
+          <span data-ql="0" style={{ width: 38, height: 38, borderRadius: 12, background: "rgba(255,255,255,.18)", display: "grid", placeItems: "center", fontSize: 19 }}>💬</span>
+          <div>
+            <div data-ql="0" id="q-team-msg-title" style={{ fontWeight: 800, fontSize: 17 }}>Message from the Quantora team</div>
+            <div data-ql="0" style={{ fontSize: 12.5, opacity: .9 }}>{messages.length > 1 ? `${messages.length} new messages` : "New message"} · {new Date(last.created_at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
+          </div>
+        </div>
+        <div data-ql="0" className="qtm-body" style={{ overflowY: "auto", padding: "18px 20px", display: "grid", gap: 12 }}>
+          {messages.map(m => (
+            <div data-ql="0" key={m.id} className="qtm-msg" style={{ background: "#f5f7fb", border: "1px solid #e3e8f2", borderRadius: 12, padding: "12px 14px", fontSize: 15, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {m.body}
+              {(m.attachments || []).map(p => <QLiveAttachment key={p} path={p} />)}
+              <div data-ql="0" className="qtm-meta" style={{ fontSize: 11.5, color: "#6b7896", marginTop: 6 }}>Quantora Team · {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+            </div>
+          ))}
+        </div>
+        <div data-ql="0" className="qtm-foot" style={{ display: "flex", gap: 10, justifyContent: "flex-end", padding: "14px 20px", borderTop: "1px solid #e3e8f2", background: "#fff" }}>
+          <button data-ql="0" type="button" className="qtm-reply" onClick={onReply} style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #cbd5e1", background: "#fff", color: "#0f1b3d", fontWeight: 700, cursor: "pointer" }}>Reply</button>
+          <button data-ql="0" type="button" className="qtm-ok" autoFocus onClick={onClose} style={{ padding: "10px 18px", borderRadius: 10, border: 0, background: "#059669", color: "#fff", fontWeight: 800, cursor: "pointer" }}>Got it, close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // The customer's side: a button and a chat panel, on every page.
 function LiveChatWidget({ session, pageName }) {
   const [open, setOpen] = useState(false);
@@ -29300,17 +29344,10 @@ function LiveChatWidget({ session, pageName }) {
       if (tk) {
         const { data: m } = await sb.from("support_messages").select("*").eq("ticket_id", tk.id).order("created_at", { ascending: true }).limit(500);
         setMsgs(m || []);
-        // 2026-11-11: a new message from the team (or an automatic "our team is on it" note) opens the
-        // chat on its own, once per message, so the user sees it straight away.
-        try {
-          const fresh = (m || []).filter(x => x.from_admin && !x.read_by_customer_at && Date.now() - new Date(x.created_at).getTime() < 30 * 60e3).pop();
-          let seen = ""; try { seen = localStorage.getItem("q-chat-autoopen") || ""; } catch (_) {}
-          if (fresh && fresh.id !== seen && !openRef.current) {
-            try { localStorage.setItem("q-chat-autoopen", fresh.id); } catch (_) {}
-            setOpen(true); openRef.current = true; qChime();
-          }
-        } catch (_) {}
-        if (openRef.current) { try { await sb.rpc("mark_support_thread_read", { p_ticket_id: tk.id }); } catch (_) {} }
+        // 2026-11-20: every message from the team pops up in the middle of the screen and stays until the
+        // user closes it (see QTeamMessagePopup). It is marked read only then -- or when the user has the
+        // chat open in front of them -- so "read" means read.
+        if (openRef.current && !document.hidden) { try { await sb.rpc("mark_support_thread_read", { p_ticket_id: tk.id }); } catch (_) {} }
       } else setMsgs([]);
     } catch (e) { console.warn("live chat load failed:", e); }
   }
@@ -29322,7 +29359,7 @@ function LiveChatWidget({ session, pageName }) {
     if (forMe) {
       load();
       if (!openRef.current || document.hidden) { qChime(); if (!qPushOn) qNotify("Quantora Team replied", "Open the chat to read the reply."); }
-      if (!openRef.current && p.user_id === userId && (!ticket || p.ticket_id !== ticket.id)) setOpen(true);   // the team started this chat
+      // 2026-11-20: a new chat started by the team shows as the pop-up (QTeamMessagePopup), not by opening the panel.
     }
   }), [ticket && ticket.id, userId]);
   useEffect(() => { qLiveChannel(); }, []);
@@ -29350,8 +29387,15 @@ function LiveChatWidget({ session, pageName }) {
     } catch (e) { setErr(e.message || "Could not send that."); return false; } finally { setBusy(false); }
   }
   if (!userId) return null;
+  const popMsgs = open ? [] : msgs.filter(m => m.from_admin && !m.read_by_customer_at && Date.now() - new Date(m.created_at).getTime() < 14 * 864e5);
+  const closePopup = async (reply) => {
+    if (ticket) { try { await sb.rpc("mark_support_thread_read", { p_ticket_id: ticket.id }); } catch (_) {} }
+    if (reply) { setOpen(true); openRef.current = true; }
+    load();
+  };
   return (
     <>
+      {popMsgs.length > 0 && <QTeamMessagePopup messages={popMsgs} onClose={() => closePopup(false)} onReply={() => closePopup(true)} />}
       <button type="button" onClick={() => { setOpen(o => !o); if (!open && ticket) sb.rpc("mark_support_thread_read", { p_ticket_id: ticket.id }).then(load).catch(() => {}); }}
         title="Chat with the Quantora team — real people"
         style={{ position: "fixed", right: "clamp(16px, 2.2vw, 44px)", bottom: 86, zIndex: 41, display: "flex", alignItems: "center", gap: 8,
@@ -41430,6 +41474,7 @@ try { if (window.top !== window.self) { window.top.location.replace(window.self.
   function hasCol(v) { return typeof v === "string" && v.length > 3 && (v.indexOf("#") >= 0 || v.indexOf("rgb") >= 0); }
   var ATTR = ["fill", "stroke", "stopColor", "floodColor", "color"];
   function fixProps(type, props) {
+    if (props["data-ql"] === "0") return props;          // 2026-11-20: element keeps its own colours (e.g. the team-message pop-up)
     var out = null, st = props.style, k, v, nv;
     if (st && typeof st === "object") {
       // a see-through dark layer over the whole screen is a scrim, not a surface: mark it and keep it dark
@@ -41454,7 +41499,7 @@ try { if (window.top !== window.self) { window.top.location.replace(window.self.
     R.createElement = function (type, props) {
       if (!QL.on) return orig.apply(R, arguments);
       try {
-        var a = arguments, p = props ? fixProps(type, props) : props, css = type === "style" && a.length > 2;
+        var a = arguments, p = props ? fixProps(type, props) : props, css = type === "style" && a.length > 2 && !(props && props["data-ql"] === "0");
         if (p !== props || css) {
           a = Array.prototype.slice.call(arguments); a[1] = p;
           if (css) for (var i = 2; i < a.length; i++) if (typeof a[i] === "string") a[i] = trCss(a[i]);
