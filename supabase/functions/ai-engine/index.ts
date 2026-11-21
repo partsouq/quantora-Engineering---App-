@@ -9,6 +9,7 @@ import { SCHEDULE_TOOL, SCHEDULE_PROMPT, scheduleTablesToItems, applyScheduleIte
 import { evalQuantityFormula, measureLine, standardForProject, civilStandardPrompt, VALIDATION, type Rule, type StandardChoice } from "./civil_rules.ts";
 import { validatePlumbing, plumbingPromptText, applyPlumbingTags } from "./plumbing.ts";
 import { isModelRefusal } from "./models.ts";
+import { cleanHvacRows, hvacSheetKind, HVAC_PROMPT } from "./hvac.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -3549,7 +3550,7 @@ Deno.serve(async (req: Request) => {
           return;
         }
 
-        const systemPrompt = `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}${plumbingPromptText(plumbingInfo)}`;
+        const systemPrompt = `You are an expert AI Quantity Surveyor and MEP/ELV design engineer analyzing construction drawings to produce accurate Bills of Quantities. ${projectContext}${QUANTITY_RECONCILIATION_RULES}${MASTER_BOQ_ENGINE_RULES}${plumbingPromptText(plumbingInfo)}${hvacSheetKind(`${drawing.file_name || ""} ${page_label || ""}`) ? HVAC_PROMPT : ""}`;
 
         // ---- pass 1: read the symbol legend at full resolution ------------
         // The legend is usually in the title block on the right or along the
@@ -3797,6 +3798,12 @@ Deno.serve(async (req: Request) => {
           floor_label: drawing.floor_label ?? null, source: "ai_drawing_analysis", optimization_status: "drawing_requirement",
         }, pageNo);
         promotedRows = pt.rows;
+        // HVAC / chilled water: no "points" for pipes and ducts, no double-counted FCUs or valve packages (2026-11-21)
+        {
+          const hv = cleanHvacRows(promotedRows, `${drawing.file_name || ""} ${page_label || ""}`);
+          promotedRows = hv.rows;
+          if (hv.removed || hv.merged || hv.flagged || hv.moved) console.log(`tiled run ${run.id}: HVAC clean-up removed ${hv.removed}, merged ${hv.merged}, flagged ${hv.flagged}, moved ${hv.moved}.`);
+        }
         if (plumbingInfo) console.log(`tiled run ${run.id}: plumbing tags ${JSON.stringify(pt.counted)} replace ${pt.replaced} AI line(s); water-supply lines moved ${pt.moved}, dropped ${pt.dropped}.`);
         // tray and conduit measured from the drawing replace the AI's estimated lengths on this sheet
         let aiContainmentRowsReplaced = 0;
