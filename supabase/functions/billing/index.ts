@@ -196,7 +196,10 @@ Deno.serve(async (req: Request) => {
         .eq("company_id", companyId).gte("created_at", windowStart.toISOString())
         .in("action", PAGE_ACTIONS).eq("is_admin_assisted", false);
       const pagesUsed = Math.max(0, (pageRows ?? []).reduce((s: number, r: any) => s + (r.page_count ?? 0), 0));
-      const pagesLimit = plan?.max_drawing_pages == null ? null : plan.max_drawing_pages + Number(company.bonus_drawing_pages || 0);
+      // free users: 2 AI take-off pages in total, whatever bonus they carry (2026-11-21, same rule as ai-engine)
+      const pagesLimit = plan?.max_drawing_pages == null ? null
+        : plan.quota_period === "trial_window" ? Math.min(2, plan.max_drawing_pages + Number(company.bonus_drawing_pages || 0))
+        : plan.max_drawing_pages + Number(company.bonus_drawing_pages || 0);
 
       const { count: chatCount } = await admin.from("ai_usage").select("id", { count: "exact", head: true })
         .eq("company_id", companyId).gte("created_at", windowStart.toISOString()).eq("action", "chat");

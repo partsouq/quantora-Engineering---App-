@@ -2137,6 +2137,16 @@ function manualGrantExpired(company: any): boolean {
   return Number.isFinite(ends) && ends <= Date.now();
 }
 
+// 2026-11-21 (owner): every free user (the welcome pack, with or without a promo code or a company email) gets
+// 2 AI take-off pages in total, never more. Bonus pages do not raise it; to give someone more, move them to a
+// paid plan, or run their sheets from Admin Assist (free to them, never counted).
+const FREE_AI_PAGES = 2;
+function pageAllowance(plan: any, company: any): number | null {
+  if (plan?.max_drawing_pages == null) return null;
+  const total = Number(plan.max_drawing_pages) + Number(company?.bonus_drawing_pages || 0);
+  return plan?.quota_period === "trial_window" ? Math.min(total, FREE_AI_PAGES) : total;
+}
+
 // Credit held in the wallet for each sheet read beyond the plan (a large sheet costs about $1.80 at
 // pay-as-you-go rates; the wallet is charged the real cost when the sheet finishes).
 const WALLET_SHEET_CENTS = 200;
@@ -2166,8 +2176,7 @@ async function checkPlanLimit(
 
   const planMaxValue = dimension === "drawing_page" ? plan?.max_drawing_pages : plan?.max_chat_requests;
   if (planMaxValue == null) return { ok: true, current: 0, limit: null, remaining: Infinity };
-  const bonusPages = dimension === "drawing_page" ? Number(company?.bonus_drawing_pages || 0) : 0;
-  const maxValue = planMaxValue + bonusPages;
+  const maxValue = dimension === "drawing_page" ? pageAllowance(plan, company)! : planMaxValue;
 
   const windowStart = computeWindowStart(plan, company);
   let current = 0;
@@ -2185,6 +2194,10 @@ async function checkPlanLimit(
       .in("action", ["analyze_drawing", "analyze_drawing_tiled", "analyze_drawings_combined", "rework", "page_refund"])
       .eq("is_admin_assisted", false);
     current = (rows ?? []).reduce((s: number, r: any) => s + (r.page_count ?? 0), 0);
+    // 2026-11-21: sheets still being read are not in the usage yet (it is written when a sheet finishes),
+    // so four drawings sent at once all passed a 2-page trial. Every run of this company still being
+    // read now counts as a page already used.
+    current += (await inFlightRunsOfCompany(admin, companyId)).length;
   } else {
     const { count } = await admin.from("ai_usage").select("id", { count: "exact", head: true })
       .eq("company_id", companyId).gte("created_at", windowStart.toISOString()).eq("action", "chat").eq("is_admin_assisted", false);
@@ -2213,6 +2226,36 @@ async function checkPlanLimit(
     return { ok: true, current, limit: maxValue, remaining: trueRemaining, billing: "wallet", creditBalanceCents };
   }
   return { ok: false, current, limit: maxValue, remaining: trueRemaining, creditBalanceCents };
+}
+
+// The company's take-offs still being read (not admin runs, not 3D/IFC exports), oldest first.
+async function inFlightRunsOfCompany(admin: any, companyId: string): Promise<{ id: string; created_at: string }[]> {
+  const { data: projs } = await admin.from("projects").select("id").eq("company_id", companyId);
+  const ids = (projs ?? []).map((p: any) => p.id);
+  if (!ids.length) return [];
+  const { data } = await admin.from("analysis_runs").select("id, created_at, run_kind")
+    .in("project_id", ids).eq("status", "processing").eq("is_admin_assisted", false)
+    .gte("created_at", new Date(Date.now() - INFLIGHT_WINDOW_MS).toISOString())
+    .order("created_at", { ascending: true }).order("id", { ascending: true });
+  return (data ?? []).filter((r: any) => r.run_kind !== "design_ifc").map((r: any) => ({ id: r.id, created_at: r.created_at }));
+}
+
+// Second check, made just after the run row is written (2026-11-21). Two sheets sent in the same instant
+// can both pass checkPlanLimit before either row exists; here every run still being read is ranked by
+// the time it started, and a run whose place is beyond a trial's allowance is taken back before any AI
+// is used. Returns false when this run must not go ahead.
+async function runFitsTrialAllowance(admin: any, companyId: string, plan: any, company: any, runId: string): Promise<boolean> {
+  if (plan?.quota_period !== "trial_window" || plan?.max_drawing_pages == null) return true;
+  const maxValue = pageAllowance(plan, company)!;
+  const { data: rows } = await admin.from("ai_usage").select("page_count")
+    .eq("company_id", companyId).gte("created_at", computeWindowStart(plan, company).toISOString())
+    .in("action", ["analyze_drawing", "analyze_drawing_tiled", "analyze_drawings_combined", "rework", "page_refund"])
+    .eq("is_admin_assisted", false);
+  const used = (rows ?? []).reduce((s: number, r: any) => s + (r.page_count ?? 0), 0);
+  const inflight = await inFlightRunsOfCompany(admin, companyId);
+  const place = inflight.findIndex((r) => r.id === runId) + 1;
+  if (place <= 0) return true;
+  return used + place <= maxValue;
 }
 
 async function recordUsageAndBill(
@@ -2799,10 +2842,12 @@ function pageLimitMessage(check: { current: number; limit: number | null; remain
   const isTrial = plan?.quota_period === "trial_window";
   if (isTrial) {
     const days = plan?.trial_duration_days ?? 2;
+    // the welcome pack has no end date (36,500 days): never print that number
+    const pack = days > 3650 ? "free welcome pack" : `${days}-day free trial`;
     if (check.current >= check.limit) {
-      return `You've used all ${check.limit} AI-processed pages included in your ${days}-day free trial (${check.current}/${check.limit} used). Upgrade to a paid plan to keep processing pages.`;
+      return `You've used all ${check.limit} AI take-off pages included in your ${pack} (sheets still being read count too). Upgrade to a paid plan to keep processing pages. Nothing was charged.`;
     }
-    return `Your ${days}-day free trial includes ${check.limit} AI-processed pages total (${check.current}/${check.limit} used, ${check.remaining} remaining). This request needs ${requestedPages} pages — please select fewer pages, or upgrade to a paid plan to continue.`;
+    return `Your ${pack} includes ${check.limit} AI take-off pages in total (${check.current} used or being read, ${check.remaining} left). This request needs ${requestedPages} — choose fewer sheets, or upgrade to a paid plan to continue. Nothing was charged.`;
   }
   const walletSheets = Math.floor((check.creditBalanceCents ?? 0) / WALLET_SHEET_CENTS);
   const canRead = check.remaining + walletSheets;
@@ -3140,6 +3185,10 @@ Deno.serve(async (req: Request) => {
         is_admin_assisted: isAdminOverride, prompt_version: PROMPT_VERSION,
       }).select().single();
       if (runErr) throw runErr;
+      if (!isAdminOverride && !freeCivilCheck && requestedPages === 1 && !(await runFitsTrialAllowance(admin, companyId, plan, company, run.id))) {
+        await admin.from("analysis_runs").delete().eq("id", run.id);
+        return jsonResponse({ error: pageLimitMessage((() => { const lim = pageAllowance(plan, company) ?? 0; return { current: lim, limit: lim, remaining: 0 }; })(), 1, plan) }, 429);
+      }
 
       runInBackground(async () => {
         let processingBytes = fileBytes;
@@ -3429,12 +3478,7 @@ Deno.serve(async (req: Request) => {
       // several sheets of one drawing are read at the same time. Sheets still being read are not in
       // the usage yet, so they are counted here -- a plan limit cannot be passed by sending fast.
       const isSetSheet = Number.isInteger(batch_revision) && batch_revision! > 0;
-      let inFlightSheets = 0;
-      if (isSetSheet && !isAdminOverride) {
-        const { count } = await admin.from("analysis_runs").select("id", { count: "exact", head: true })
-          .eq("drawing_id", drawing_id).eq("status", "processing").gte("created_at", new Date(Date.now() - INFLIGHT_WINDOW_MS).toISOString());
-        inFlightSheets = count ?? 0;
-      }
+      const inFlightSheets = 0;   // counted inside checkPlanLimit for the whole company (2026-11-21)
       const pageCheck = isAdminOverride ? { ok: true, current: 0, limit: null, remaining: Infinity } : await checkPlanLimit(admin, companyId, plan, company, "drawing_page", requestedPages + inFlightSheets);
       if (!pageCheck.ok) {
         return jsonResponse({ error: pageLimitMessage(pageCheck, requestedPages + inFlightSheets, plan) }, 429);
@@ -3472,6 +3516,10 @@ Deno.serve(async (req: Request) => {
         change_reason: joinBatch ? `Sheet ${Math.max(1, Number(page_number) || 1)} of the same set` : null,
       }).select().single();
       if (runErr) throw runErr;
+      if (!isAdminOverride && !(await runFitsTrialAllowance(admin, companyId, plan, company, run.id))) {
+        await admin.from("analysis_runs").delete().eq("id", run.id);
+        return jsonResponse({ error: pageLimitMessage((() => { const lim = pageAllowance(plan, company) ?? 0; return { current: lim, limit: lim, remaining: 0 }; })(), 1, plan) }, 429);
+      }
 
       const pageNo = Math.max(1, Number(page_number) || 1);
 

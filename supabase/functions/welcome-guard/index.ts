@@ -175,9 +175,7 @@ Deno.serve(async (req) => {
         outcome = "free_repeat";
         await admin.from("companies").update({ plan: "free" }).eq("id", companyId);
       } else if (domain && !PUBLIC_MAIL.has(domain)) {
-        outcome = "welcome_work_email";
-        const { data: c } = await admin.from("companies").select("bonus_drawing_pages").eq("id", companyId).maybeSingle();
-        await admin.from("companies").update({ bonus_drawing_pages: Number(c?.bonus_drawing_pages || 0) + 1 }).eq("id", companyId);
+        outcome = "welcome_work_email";   // 2026-11-21: no extra page any more; every free user gets 2 in total
       }
       await admin.from("signup_checks").upsert({ ...base, flags, outcome }, { onConflict: "company_id" });
       return json({ status: outcome, flags });
