@@ -2137,6 +2137,16 @@ function manualGrantExpired(company: any): boolean {
   return Number.isFinite(ends) && ends <= Date.now();
 }
 
+// 2026-11-21 (owner): every free user (the welcome pack, with or without a promo code or a company email) gets
+// 2 AI take-off pages in total, never more. Bonus pages do not raise it; to give someone more, move them to a
+// paid plan, or run their sheets from Admin Assist (free to them, never counted).
+const FREE_AI_PAGES = 2;
+function pageAllowance(plan: any, company: any): number | null {
+  if (plan?.max_drawing_pages == null) return null;
+  const total = Number(plan.max_drawing_pages) + Number(company?.bonus_drawing_pages || 0);
+  return plan?.quota_period === "trial_window" ? Math.min(total, FREE_AI_PAGES) : total;
+}
+
 // Credit held in the wallet for each sheet read beyond the plan (a large sheet costs about $1.80 at
 // pay-as-you-go rates; the wallet is charged the real cost when the sheet finishes).
 const WALLET_SHEET_CENTS = 200;
@@ -2166,8 +2176,7 @@ async function checkPlanLimit(
 
   const planMaxValue = dimension === "drawing_page" ? plan?.max_drawing_pages : plan?.max_chat_requests;
   if (planMaxValue == null) return { ok: true, current: 0, limit: null, remaining: Infinity };
-  const bonusPages = dimension === "drawing_page" ? Number(company?.bonus_drawing_pages || 0) : 0;
-  const maxValue = planMaxValue + bonusPages;
+  const maxValue = dimension === "drawing_page" ? pageAllowance(plan, company)! : planMaxValue;
 
   const windowStart = computeWindowStart(plan, company);
   let current = 0;
@@ -2237,7 +2246,7 @@ async function inFlightRunsOfCompany(admin: any, companyId: string): Promise<{ i
 // is used. Returns false when this run must not go ahead.
 async function runFitsTrialAllowance(admin: any, companyId: string, plan: any, company: any, runId: string): Promise<boolean> {
   if (plan?.quota_period !== "trial_window" || plan?.max_drawing_pages == null) return true;
-  const maxValue = Number(plan.max_drawing_pages) + Number(company?.bonus_drawing_pages || 0);
+  const maxValue = pageAllowance(plan, company)!;
   const { data: rows } = await admin.from("ai_usage").select("page_count")
     .eq("company_id", companyId).gte("created_at", computeWindowStart(plan, company).toISOString())
     .in("action", ["analyze_drawing", "analyze_drawing_tiled", "analyze_drawings_combined", "rework", "page_refund"])
@@ -3178,7 +3187,7 @@ Deno.serve(async (req: Request) => {
       if (runErr) throw runErr;
       if (!isAdminOverride && !freeCivilCheck && requestedPages === 1 && !(await runFitsTrialAllowance(admin, companyId, plan, company, run.id))) {
         await admin.from("analysis_runs").delete().eq("id", run.id);
-        return jsonResponse({ error: pageLimitMessage((() => { const lim = Number(plan?.max_drawing_pages || 0) + Number(company?.bonus_drawing_pages || 0); return { current: lim, limit: lim, remaining: 0 }; })(), 1, plan) }, 429);
+        return jsonResponse({ error: pageLimitMessage((() => { const lim = pageAllowance(plan, company) ?? 0; return { current: lim, limit: lim, remaining: 0 }; })(), 1, plan) }, 429);
       }
 
       runInBackground(async () => {
@@ -3509,7 +3518,7 @@ Deno.serve(async (req: Request) => {
       if (runErr) throw runErr;
       if (!isAdminOverride && !(await runFitsTrialAllowance(admin, companyId, plan, company, run.id))) {
         await admin.from("analysis_runs").delete().eq("id", run.id);
-        return jsonResponse({ error: pageLimitMessage((() => { const lim = Number(plan?.max_drawing_pages || 0) + Number(company?.bonus_drawing_pages || 0); return { current: lim, limit: lim, remaining: 0 }; })(), 1, plan) }, 429);
+        return jsonResponse({ error: pageLimitMessage((() => { const lim = pageAllowance(plan, company) ?? 0; return { current: lim, limit: lim, remaining: 0 }; })(), 1, plan) }, 429);
       }
 
       const pageNo = Math.max(1, Number(page_number) || 1);
