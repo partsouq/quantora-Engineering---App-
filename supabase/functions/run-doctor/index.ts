@@ -12,6 +12,7 @@
 // It never changes code, drawings or BOQs. Two separate outputs: user_messages (the user's own pop-ups)
 // and admin_alerts (platform admins only). Every source row is handled once (unique source + kind).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { checkBoq } from "./boq_check.ts";
 
 const LOOKBACK_HOURS = 6;
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
@@ -278,5 +279,49 @@ Deno.serve(async (req) => {
     await message(j.created_by, sk, j.id, j.project_id, { kind: "investigating", ...INVESTIGATING, must_read: false });
     await teamNote(j.created_by, teamNoteText(file, false));
   }
+  // ---------------------------------------------------------------- BOQ check agent (2026-11-21, rules only, $0)
+  // Every finished take-off with lines, checked once: junk removed, duplicates merged, suspicious lines marked
+  // "Check this line", a score saved on the run, and any mismatch sent to the admin (Platform alerts).
+  const { data: done } = await admin.from("analysis_runs")
+    .select("id, project_id, drawing_id, triggered_by, is_admin_assisted, summary, run_kind, created_at")
+    // only fresh runs (last 2 hours): a BOQ the user has already been working on is never changed
+    .gte("created_at", new Date(Date.now() - 2 * 3600e3).toISOString()).eq("status", "completed").not("drawing_id", "is", null).order("created_at", { ascending: true }).limit(200);
+  for (const r of done ?? []) {
+    const sum = r.summary ?? {};
+    if (sum.qa || r.run_kind === "design_ifc" || Number(sum.item_count ?? 0) === 0) continue;
+    const { data: items } = await admin.from("boq_items")
+      .select("id, description, unit, quantity, system_category, confidence_score, optimization_status, optimization_note, location, coordinates, source")
+      .eq("analysis_run_id", r.id).eq("source", "ai_drawing_analysis").limit(3000);
+    if (!items || !items.length) continue;
+    const { data: dr } = await admin.from("drawings").select("file_name").eq("id", r.drawing_id).maybeSingle();
+    const file = dr?.file_name ?? "drawing";
+    // lines already commented on or sent out for quotation are left alone
+    const ids = items.map((i: any) => i.id);
+    const [{ data: cm }, { data: rq }] = await Promise.all([
+      admin.from("item_comments").select("boq_item_id").in("boq_item_id", ids),
+      admin.from("rfq_lines").select("boq_item_id").in("boq_item_id", ids),
+    ]);
+    const used = new Set([...(cm ?? []), ...(rq ?? [])].map((x: any) => x.boq_item_id));
+    const c = checkBoq(items.filter((i: any) => !used.has(i.id)).map((i: any) => ({ ...i, page: i.coordinates?.page ?? null })));
+    const qa = { score: c.score, issues: c.issues, removed: c.deleteIds.length, flagged: c.updates.length, lines_before: c.total, lines_after: c.checked, checked_at: new Date().toISOString() };
+    report.push({ boq_check: r.id, ...qa });
+    if (dry) continue;
+    if (c.deleteIds.length) await admin.from("boq_items").delete().in("id", c.deleteIds);
+    for (const u of c.updates) await admin.from("boq_items").update(u.patch).eq("id", u.id);
+    await admin.from("analysis_runs").update({ summary: { ...sum, qa, item_count: Math.max(0, Number(sum.item_count || 0) - c.deleteIds.length) } }).eq("id", r.id);
+    if (c.issues.length || c.score < 85) {
+      const w = await who(r.triggered_by);
+      const fp = "boq:" + r.id;
+      await admin.from("admin_alerts").upsert({
+        fingerprint: fp, service: "boq", status: "open",
+        title: `BOQ check ${c.score}% · ${file}${w.user_email ? " · " + w.user_email : ""}`,
+        error_text: `Sheet ${sum.page_number ?? "?"} of ${file}: ${c.total} lines -> ${c.checked} after the check. ${c.issues.join(" ")} ` +
+          `Lines marked "Check this line": ${c.updates.length}. Nothing was changed on any other run. Decide if the user needs a re-run (Admin Assist) or a message.`,
+        examples: [{ at: new Date().toISOString(), ...w, project_id: r.project_id, file, run_id: r.id, source_kind: "boq_check", admin_run: !!r.is_admin_assisted }],
+        occurrences: 1, last_seen: new Date().toISOString(),
+      }, { onConflict: "fingerprint" });
+    }
+  }
+
   return json({ ok: true, dry_run: dry, since, service_key_kind: serviceKey.startsWith("eyJ") ? "jwt" : "secret", actions: report });
 });
