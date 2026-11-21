@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-21.4";</script>
+<script>window.QUANTORA_BUILD = "2026-11-21.5";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -6358,9 +6358,32 @@ async function qReportError(context, err, details) {
   } catch (_) { /* reporting must never break the page */ }
 }
 // What the user sees for an unexpected failure (and the error is reported). Expected messages pass through.
+// 2026-11-21: the common technical errors in plain words, with what to do. Connection and sign-in problems
+// are the user's side and are not reported; server and permission problems are reported to the team (and the
+// user gets "fixed, please try again" in the chat when the alert is closed).
+const Q_FRIENDLY_ERR = [
+  [/exceeded the maximum allowed size|payload too large|\b413\b|entity too large/i, false,
+    "This file is over the 50 MB upload limit. PDFs are split into parts automatically — upload the PDF again. For DWG or image files, save a smaller copy (or a PDF) and upload that."],
+  [/failed to fetch|networkerror|load failed|network request failed|err_internet|err_network|the internet connection appears to be offline/i, false,
+    "The connection dropped for a moment, so this did not reach the server. Check your internet, press Refresh at the top, then try again. Nothing was lost."],
+  [/jwt expired|invalid jwt|refresh token|not authenticated|auth session missing|\b401\b/i, false,
+    "Your sign-in had expired, so it has been renewed. Please try again. If it happens again, sign out and sign in."],
+  [/\b50[0-4]\b|\b52\d\b|bad gateway|service unavailable|timed out|timeout|temporarily/i, true,
+    "The server was busy for a moment. Please try again in a few seconds. If it keeps happening, our team has already been told and will message you here when it is fixed."],
+  [/duplicate key|already exists/i, true,
+    "This looks already saved. Press Refresh at the top to see it. If it is not there, our team has been told and will message you here."],
+  [/row-level security|permission denied|not allowed|forbidden|\b403\b/i, true,
+    "This item could not be changed — it may have been deleted or moved. Press Refresh at the top. If it continues, our team has been told and will message you here."],
+];
 function qUserError(context, err) {
   const raw = String((err && err.message) || err || "Something went wrong.");
   if (!qIsUnexpected(err)) return raw;
+  for (const [re, report, text] of Q_FRIENDLY_ERR) {
+    if (!re.test(raw)) continue;
+    if (/jwt|refresh token|not authenticated|auth session|\b401\b/i.test(raw)) { try { sb.auth.refreshSession().catch(() => {}); } catch (_) {} }
+    if (report) qReportError(context, err);
+    return text;
+  }
   qReportError(context, err);
   return `Something went wrong on our side while trying to ${context}. Our team has been notified and is fixing it — you'll get a message in the chat as soon as it works again.`;
 }
