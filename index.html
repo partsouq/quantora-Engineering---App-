@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-21.3";</script>
+<script>window.QUANTORA_BUILD = "2026-11-21.4";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -13186,7 +13186,7 @@ function DeleteProjectModal({ project, onClose, onDeleted }) {
 
 function ProjectWorkspace({ project, onBack, onHome, onEdit, onDeleted, initialTab }) {
   // 2026-11-19: the open tab survives a page reload (another browser tab, an update), per browser tab.
-  const [tab, setTab] = useState(() => { if (initialTab) return initialTab; try { return sessionStorage.getItem("q_ptab:" + project.id) || "overview"; } catch (e) { return "overview"; } });
+  const [tab, setTab] = useState(() => { if (initialTab && !(window.__qRefreshing && Date.now() - window.__qRefreshing < 3000)) return initialTab; try { return sessionStorage.getItem("q_ptab:" + project.id) || "overview"; } catch (e) { return "overview"; } });
   useEffect(() => { try { sessionStorage.setItem("q_ptab:" + project.id, tab); } catch (e) { /* blocked */ } }, [tab, project.id]);
   const [welcome, setWelcome] = useState(false);
   useEffect(() => { let a = true; qIsWelcomePack().then(v => { if (a) setWelcome(!!v); }).catch(() => {}); return () => { a = false; }; }, []);
@@ -40477,6 +40477,11 @@ function PortalBody({ view, setView, session, isPlatformAdmin, staffPerms, onOpe
     // Long enough to read as feedback, short enough not to feel like a wait.
     setTimeout(() => setRefreshing(false), 650);
   }
+  useEffect(() => {
+    const h = () => { window.__qRefreshing = Date.now(); refreshPage(); };
+    window.addEventListener("q-refresh", h);
+    return () => window.removeEventListener("q-refresh", h);
+  }, []);
   const openProject = (p, tab) => setView({ name: "project", project: p, tab: typeof tab === "string" ? tab : undefined });
   const go = name => setView({ name });
 
@@ -40484,17 +40489,17 @@ function PortalBody({ view, setView, session, isPlatformAdmin, staffPerms, onOpe
   // already carry their own navigation, and stacking a second one beside them
   // leaves the actual work too narrow to use.
   if (view.name === "project") {
-    return <ProjectWorkspace project={view.project} initialTab={view.tab}
+    return <ProjectWorkspace key={"pw-" + refreshKey} project={view.project} initialTab={view.tab}
       onBack={()=>go("dashboard")} onHome={()=>go("home")}
       onEdit={()=>setView({name:"edit", project:view.project})} onDeleted={()=>go("dashboard")} />;
   }
   if (view.name === "admin" && (isPlatformAdmin || staffPerms)) {
-    return <QAdminOtpGate onBack={()=>go("home")}><AdminPortal onBack={()=>go("home")} staffPerms={isPlatformAdmin ? null : staffPerms} /></QAdminOtpGate>;
+    return <QAdminOtpGate onBack={()=>go("home")}><AdminPortal key={"ap-" + refreshKey} onBack={()=>go("home")} staffPerms={isPlatformAdmin ? null : staffPerms} /></QAdminOtpGate>;
   }
   // The chooser owns the whole width: it is the one page with no rail, because
   // its whole job is to decide which rail you want.
   if (view.name === "chooser") {
-    return <WorkspaceChooser email={session?.user?.email}
+    return <WorkspaceChooser key={"wc-" + refreshKey} email={session?.user?.email}
       onOpenProject={openProject}
       onPick={(ws) => { setWorkspace(ws); go(WORKSPACE_NAV[ws][0][1][0][0]); }} />;
   }
@@ -40974,7 +40979,9 @@ function App() {
   const [authMode, setAuthMode] = useState("signin");
   const [billingModal, setBillingModal] = useState({ open: false, reason: "" });
   const [billingBanner, setBillingBanner] = useState(null);
-  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  // 2026-11-21: remembered on this device, so the Admin button and the admin portal are there straight after a
+  // reload; the server still checks every admin call. A failed check is retried instead of hiding Admin.
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(() => { try { return localStorage.getItem("q_is_admin") === "1"; } catch (_) { return false; } });
   // Admin Team member (2026-11-06): the sections the owner gave this person, or null. The server
   // re-checks every one of them; this only decides what the admin portal shows.
   const [staffPerms, setStaffPerms] = useState(null);
@@ -41033,17 +41040,29 @@ function App() {
   // call, so a non-admin can never actually see admin data even if this
   // check were somehow bypassed client-side.
   useEffect(() => {
-    if (!session) { setIsPlatformAdmin(false); return; }
+    if (!session) { if (session === null) { setIsPlatformAdmin(false); try { localStorage.removeItem("q_is_admin"); } catch (_) {} } return; }
     // the draftsman studio shows its in-browser Design / Drawings tabs to platform admins only (2026-10-26)
     const flag = (v) => { window.__qPlatformAdmin = v; try { window.dispatchEvent(new Event("q-admin")); } catch (_) {} };
-    callAdminAnalytics("is_admin", {}).then((r) => { if (r && r.is_admin === false) throw new Error("not admin"); setIsPlatformAdmin(true); setStaffPerms(null); flag(true); }).catch((e) => {
-      if (!/not admin|403|forbidden|not allowed/i.test(String(e && e.message || e))) { console.warn("admin check failed (kept as is):", e); return; }
-      setIsPlatformAdmin(false); flag(false);
+    const remember = (v) => { try { v ? localStorage.setItem("q_is_admin", "1") : localStorage.removeItem("q_is_admin"); } catch (_) {} };
+    try { if (localStorage.getItem("q_is_admin") === "1") flag(true); } catch (_) {}
+    let alive = true, tries = 0;
+    const ask = () => callAdminAnalytics("is_admin", {}).then((r) => { if (!alive) return; if (r && r.is_admin === false) throw new Error("not admin"); setIsPlatformAdmin(true); setStaffPerms(null); flag(true); remember(true); }).catch((e) => {
+      if (!alive) return;
+      if (!/not admin|403|forbidden|not allowed/i.test(String(e && e.message || e))) {
+        // the network or a cold server: try again (2 s, 5 s, 15 s, 30 s), never hide Admin because of it
+        console.warn("admin check failed, retrying:", e);
+        if (tries < 4) setTimeout(ask, [2000, 5000, 15000, 30000][tries++]);
+        return;
+      }
+      setIsPlatformAdmin(false); flag(false); remember(false);
       Promise.resolve(sb.rpc("q_staff_me")).then(({ data }) => {
         const p = data && data.perms && Object.keys(data.perms).length ? data.perms : null;
         setStaffPerms(p);
       }).catch(() => setStaffPerms(null));
     });
+    ask();
+    // signing out: forget the remembered admin status
+    return () => { alive = false; };
   }, [session]);
 
   // Existing customers (2026-10-20): anyone who has used the platform (their company
@@ -41431,6 +41450,13 @@ function App() {
             </button>
           )}
           {canGoBack && <span className="qtr-sep" aria-hidden="true" />}
+          {/* 2026-11-21: one Refresh for every page -- re-reads the page's data without reloading the browser */}
+          <button type="button" className="qtr-refresh" title="Refresh this page's data (no browser reload)" aria-label="Refresh"
+            onClick={(e) => { const b = e.currentTarget; b.classList.add("spin"); setTimeout(() => b.classList.remove("spin"), 700); window.dispatchEvent(new Event("q-refresh")); }}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+            <span className="lb">Refresh</span>
+          </button>
           {hasAdminPortal && (
             <button onClick={()=>setView({name:"admin"})} title="Admin portal" className="text-xs font-semibold text-violet-700 hover:text-violet-900"
               style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -44678,6 +44704,12 @@ html:root:has(.qx):not(:has(#q-glass[media=all])):not(:has(#q-look-warm[media=al
 html:root:has(.qx):not(:has(#q-glass[media=all])):not(:has(#q-look-warm[media=all])):not(:has(#q-look-light[media=all])) body .qx .qws .qwc-card:hover .qwc-go svg:last-child{background:rgba(255,255,255,.18)!important}
 </style>
 <style id="q-std-shape" data-ql="0">
+.qtr-refresh{font-size:12px;font-weight:600;background:transparent;border:0;cursor:pointer;color:inherit;opacity:.85;padding:6px 8px;border-radius:10px}
+.qtr-refresh:hover{opacity:1;background:rgba(127,140,170,.12)}
+.qtr-refresh.spin svg{animation:qtrspin .7s linear}
+@keyframes qtrspin{to{transform:rotate(360deg)}}
+@media (max-width:640px){.qtr-refresh .lb{display:none}}
+
 .qe-heads{display:flex;flex-direction:column;gap:3px;margin:12px auto 2px;max-width:330px;text-align:left;padding:10px 12px;border-radius:12px;background:rgba(59,91,219,.08);border:1px solid rgba(59,91,219,.22);font-size:12.5px;line-height:1.4}
 .qe-heads b{font-size:12px;font-weight:800;color:#3b5bdb}
 
