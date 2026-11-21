@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-21.1";</script>
+<script>window.QUANTORA_BUILD = "2026-11-21.3";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -5010,6 +5010,36 @@ async function standardizeDrawingFile(file, onStatus) {
 // 2026-11-20: a PDF over 20 MB cannot be sent to the AI whole. When sheets are chosen,
 // cut just those sheets out here in the browser and upload them as a small file.
 const Q_AI_MAX_BYTES = 20 * 1024 * 1024;
+// 2026-11-21: the storage accepts one file up to 50 MB. A bigger PDF is split into parts by sheet before
+// upload (each part becomes its own drawing, named "... (part 1 of 3, sheets 1-20)"), so nobody is stopped
+// by "The object exceeded the maximum allowed size". A single sheet over the limit cannot be split.
+const Q_UPLOAD_MAX = 48 * 1024 * 1024;
+async function qSplitBigPdf(file, onStatus) {
+  if (!(await loadPdfLib())) throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(0)} MB, over the 50 MB upload limit, and the splitter could not load. Check your connection and try again, or upload a smaller PDF.`);
+  const { PDFDocument } = window.PDFLib;
+  onStatus && onStatus(`${file.name} is ${(file.size / 1048576).toFixed(0)} MB — splitting it into parts under 50 MB…`);
+  const src = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
+  const n = src.getPageCount();
+  const make = async (from, to) => {
+    const out = await PDFDocument.create();
+    const pages = await out.copyPages(src, Array.from({ length: to - from + 1 }, (_, i) => from + i));
+    pages.forEach(pg => out.addPage(pg));
+    return out.save({ useObjectStreams: true });
+  };
+  const parts = [];
+  const cut = async (from, to) => {
+    const bytes = await make(from, to);
+    if (bytes.length <= Q_UPLOAD_MAX) { parts.push({ from, to, bytes }); return; }
+    if (from === to) throw new Error(`Sheet ${from + 1} of ${file.name} is ${(bytes.length / 1048576).toFixed(0)} MB on its own, over the 50 MB upload limit. Export that sheet again at a lower resolution (or as vector PDF) and upload it.`);
+    const mid = Math.floor((from + to) / 2);
+    await cut(from, mid); await cut(mid + 1, to);
+  };
+  const guess = Math.max(1, Math.ceil(n / Math.ceil(file.size / (40 * 1024 * 1024))));
+  for (let a = 0; a < n; a += guess) { onStatus && onStatus(`Splitting ${file.name}: sheets ${a + 1}–${Math.min(n, a + guess)} of ${n}…`); await cut(a, Math.min(n, a + guess) - 1); }
+  const base = file.name.replace(/\.pdf$/i, "");
+  return parts.map((p, i) => new File([p.bytes], `${base} (part ${i + 1} of ${parts.length}, sheets ${p.from + 1}-${p.to + 1}).pdf`, { type: "application/pdf" }));
+}
+
 async function qCutChosenSheets(pdf, pages, projectId, drawingId, onStatus) {
   try {
     const data = await pdf.getData();
@@ -13680,10 +13710,23 @@ function DrawingsTab({ project }) {
     const stdReports = [];
     try {
       const user = await qCurrentUser();
-      for (const { file: original, floorLabel } of pendingFiles) {
+      // a PDF over the 50 MB upload limit goes up as several parts, split by sheet (2026-11-21)
+      const queue = [];
+      for (const pf of pendingFiles) {
+        const isPdf = /\.pdf$/i.test(pf.file.name);
+        if (pf.file.size > Q_UPLOAD_MAX && isPdf) {
+          const parts = await qSplitBigPdf(pf.file, setStdStatus);
+          parts.forEach(f => queue.push({ file: f, floorLabel: pf.floorLabel }));
+          qPop({ kind: "info", title: "Large PDF split into parts", message: `${pf.file.name} was over the 50 MB upload limit, so it is uploaded as ${parts.length} parts by sheet. Each part is its own drawing; nothing is lost.` });
+        } else if (pf.file.size > Q_UPLOAD_MAX) {
+          throw new Error(`${pf.file.name} is ${(pf.file.size / 1048576).toFixed(0)} MB, over the 50 MB upload limit. Save it as PDF (it will then be split automatically), or upload a smaller file.`);
+        } else queue.push(pf);
+      }
+      for (const { file: original, floorLabel } of queue) {
         // Mandatory: every drawing is brought to the standard before it is saved.
         const { file, report } = await standardizeDrawingFile(original, setStdStatus);
         stdReports.push(report);
+        if (file.size > Q_UPLOAD_MAX) throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(0)} MB after preparation, over the 50 MB upload limit. Upload it in smaller parts.`);
         setStdStatus(`Uploading ${file.name}…`);
         const ext = file.name.split(".").pop().toLowerCase();
         const fileType = ["pdf"].includes(ext) ? "pdf" : ["dwg"].includes(ext) ? "dwg" : ["dxf"].includes(ext) ? "dxf"
@@ -13717,7 +13760,7 @@ function DrawingsTab({ project }) {
       setPendingFiles([]);
       if (fileRef.current) fileRef.current.value = "";
       setStdSummary(describeStandardReports(stdReports));
-      qPop({ kind: "success", title: "Uploaded \u2713", message: pendingFiles.map(x => x.file.name).join(", ") + (pendingFiles.length === 1 ? " is" : " are") + " saved. Next: click \u201cAnalyze with AI\u201d on it to get the take-off and BOQ." });
+      qPop({ kind: "success", title: "Uploaded \u2713", message: queue.map(x => x.file.name).join(", ") + (queue.length === 1 ? " is" : " are") + " saved. Next: click \u201cAnalyze with AI\u201d on it to get the take-off and BOQ." });
       await qWithTimeout(load(), 15000).catch(() => setTimeout(() => load(), 3000));
     } catch (ex) { setErr(qUserError("upload a drawing", ex)); } finally { setUploading(false); setStdStatus(""); qUpdate.busy = Math.max(0, qUpdate.busy - 1); }
   }
