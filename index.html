@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-21.5";</script>
+<script>window.QUANTORA_BUILD = "2026-11-21.6";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -25124,6 +25124,10 @@ function QCustomersView({ companies: allCompanies, perCompanyById, trialByCompan
   // Where each customer is: what their people told us (profile country / city)
   // and where the latest sign-in came from (browser time zone).
   const [locByCompany, setLocByCompany] = useState({});
+  // 2026-11-21: who is online right now (seen in the last 5 minutes), re-read every minute
+  const [onlineTick, setOnlineTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setOnlineTick(x => x + 1), 60000); return () => clearInterval(t); }, []);
+  const isOnline = (cid) => { const L = locByCompany[cid]; return !!(L && L.last && Date.now() - new Date(L.last.last_seen_at).getTime() < 5 * 60e3); };
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -25151,7 +25155,7 @@ function QCustomersView({ companies: allCompanies, perCompanyById, trialByCompan
       } catch (e) { console.error("customer locations failed (non-fatal):", e); }
     })();
     return () => { alive = false; };
-  }, [allCompanies.length]);
+  }, [allCompanies.length, onlineTick]);
   // Esc closes the pop-up; the page behind it does not scroll while it is open
   useEffect(() => {
     if (!selected) return;
@@ -25194,8 +25198,12 @@ function QCustomersView({ companies: allCompanies, perCompanyById, trialByCompan
                 : (paidStatus === "manual" ? "Active · manual" : isPaidActive ? "Active" : "Inactive");
               const statusClass = c.plan === "trial" ? (daysLeft != null && daysLeft <= 0 ? "pill st-churned" : "pill st-trial") : (isPaidActive ? "pill st-active" : "pill st-churned");
               return (
-                <tr key={c.id} onClick={() => onSelect(selectedId === c.id ? null : c.id)}>
-                  <td className="name">{c.name}</td>
+                <tr key={c.id} onClick={() => onSelect(selectedId === c.id ? null : c.id)} className={isOnline(c.id) ? "q-online-row" : ""}>
+                  <td className="name">
+                    {isOnline(c.id) && <span className="q-online-dot" title="Online now" />}
+                    {c.name}
+                    {isOnline(c.id) && <span className="q-online-tag">Online</span>}
+                  </td>
                   <td style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>
                     {c.created_at ? (<>
                       <div>{new Date(c.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</div>
@@ -44727,6 +44735,12 @@ html:root:has(.qx):not(:has(#q-glass[media=all])):not(:has(#q-look-warm[media=al
 html:root:has(.qx):not(:has(#q-glass[media=all])):not(:has(#q-look-warm[media=all])):not(:has(#q-look-light[media=all])) body .qx .qws .qwc-card:hover .qwc-go svg:last-child{background:rgba(255,255,255,.18)!important}
 </style>
 <style id="q-std-shape" data-ql="0">
+.q-online-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.25);margin-right:8px;vertical-align:1px;animation:qOnPulse 2s ease-in-out infinite}
+.q-online-tag{display:inline-block;margin-left:8px;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:rgba(34,197,94,.15);color:#16a34a;border:1px solid rgba(34,197,94,.4);vertical-align:1px}
+tr.q-online-row td{background:rgba(34,197,94,.07)!important}
+tr.q-online-row td:first-child{box-shadow:inset 3px 0 0 #22c55e}
+@keyframes qOnPulse{50%{box-shadow:0 0 0 6px rgba(34,197,94,.08)}}
+
 .qtr-refresh{font-size:12px;font-weight:600;background:transparent;border:0;cursor:pointer;color:inherit;opacity:.85;padding:6px 8px;border-radius:10px}
 .qtr-refresh:hover{opacity:1;background:rgba(127,140,170,.12)}
 .qtr-refresh.spin svg{animation:qtrspin .7s linear}
