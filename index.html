@@ -37,7 +37,7 @@ window.safeStorageName = function (name) {
   return base + ext.toLowerCase();
 };
 </script>
-<script>window.QUANTORA_BUILD = "2026-11-20.20";</script>
+<script>window.QUANTORA_BUILD = "2026-11-21.1";</script>
 <title>AI BOQ Take-Off Software | MEP, ELV, Electrical &amp; Manual Takeoff | Quantora</title>
 
 <!-- Site icon (favicon) — what Google shows next to the search result -->
@@ -4503,28 +4503,38 @@ try { if (/[?&]r=\d+/.test(location.search)) history.replaceState(history.state,
     } catch (_) {}
   };
   // 2026-11-20: the page used to reload as soon as the tab went to the background, and the site's cache
-  // could hand the old version back -- so it reloaded again and again, and the user lost their place.
-  // Now: only after 15 minutes with nobody using the page, at most once per new version, and with a
-  // cache-busting address so the new version really arrives. An active user gets a small notice instead.
+  // could hand the old version back -- so it reloaded again and again. The reload uses a cache-busting
+  // address so the new version really arrives, and each version is tried at most once.
   const safe = () => !qUpdate.busy && !qUserIsTyping() && !document.querySelector("[data-q-noreload]") && ![...document.querySelectorAll('[role="alertdialog"]')].some(d => !/A new version of Quantora/.test(d.textContent || "")) && !document.querySelector('#q-team-pop');
   const tried = () => { try { return JSON.parse(sessionStorage.getItem("q_upd_try") || "null"); } catch (_) { return null; } };
   const go = () => {
     try { sessionStorage.setItem("q_upd_try", JSON.stringify({ to: qUpdate.pending, at: Date.now() })); } catch (_) {}
     location.replace(location.pathname + "?r=" + Date.now() + (location.hash || ""));
   };
-  let told = "";
+  // 2026-11-21 (owner): no "new version" pop-up any more -- it came up every time we published. The new
+  // version is now taken quietly at a moment the user is not working: right after the page opens (before
+  // they touch anything), when they come back to the tab after 3+ minutes away, or after 15 minutes idle.
+  // Never while typing, with a dialog or the team chat open, and at most once per version (no loops).
+  const loadedAt = Date.now();
+  let lastAct = 0;                  // a real action (click, key, scroll wheel, touch); moving the mouse is not one
+  try { ["pointerdown", "keydown", "wheel", "touchstart"].forEach(ev => window.addEventListener(ev, () => { lastAct = Date.now(); }, { passive: true, capture: true })); } catch (_) {}
+  let hiddenAt = document.hidden ? Date.now() : 0, cameBackAt = 0;
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    if (hiddenAt && Date.now() - hiddenAt > 3 * 60e3) { cameBackAt = Date.now(); check().then(maybe); }
+    hiddenAt = 0;
+  });
   const maybe = () => {
     if (!qUpdate.pending) return;
     const t = tried();
     if (t && t.to === qUpdate.pending && Date.now() - t.at < 30 * 60e3) return;   // already tried: never loop
-    if (Date.now() - qLastInput > 15 * 60e3 && safe()) { go(); return; }
-    if (!document.hidden && told !== qUpdate.pending) {
-      told = qUpdate.pending;
-      qPop({ kind: "info", title: "A new version of Quantora is ready", message: "Save what you are doing, then reload to get it. Nothing changes until you do.",
-        action: { label: "Reload now", onClick: go } });
-    }
+    if (!safe()) return;
+    const untouched = !lastAct;                                                  // opened, not used yet
+    const justBack = cameBackAt && Date.now() - cameBackAt < 20e3 && lastAct <= cameBackAt;
+    const idle = Date.now() - qLastInput > 15 * 60e3;
+    if (untouched || justBack || idle) go();
   };
-  setTimeout(check, 30000); setInterval(check, 300000); setInterval(maybe, 30000);
+  setTimeout(() => check().then(maybe), 3000); setInterval(check, 300000); setInterval(maybe, 30000);
 })();
 // ---- Pop-ups: every error and notice appears as a centred card, not a line of red text ----
 // qPop({ kind: "error" | "warn" | "info" | "success", title, message, action: { label, onClick } })
